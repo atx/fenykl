@@ -164,6 +164,11 @@ static void fui_set(const struct fenykl_cfg_opt *o, int32_t v)
 	fenykl_log_info(&fenykl_ui_log, "set %s = %d", o->name, v);
 }
 
+static void fui_edit_clamp(const struct fenykl_cfg_opt *o, int64_t v)
+{
+	fui.edit_val = (int32_t)(v < o->min ? o->min : v > o->max ? o->max : v);
+}
+
 static enum fui_result fui_edit_key(const struct fenykl_cfg_opt *o, unsigned int code)
 {
 	int64_t step = o->step > 0 ? o->step : 1, v = fui.edit_val;
@@ -175,12 +180,6 @@ static enum fui_result fui_edit_key(const struct fenykl_cfg_opt *o, unsigned int
 	case FUI_KEY_RIGHT:
 		v += step;
 		break;
-	case FUI_DIAL_DOWN:
-		v -= FUI_DIAL_STEPS * step;
-		break;
-	case FUI_DIAL_UP:
-		v += FUI_DIAL_STEPS * step;
-		break;
 	case FUI_KEY_OK:
 		fui.edit = false;
 		fui_set(o, fui.edit_val);
@@ -191,7 +190,7 @@ static enum fui_result fui_edit_key(const struct fenykl_cfg_opt *o, unsigned int
 	default:
 		return FUI_NONE;
 	}
-	fui.edit_val = (int32_t)(v < o->min ? o->min : v > o->max ? o->max : v);
+	fui_edit_clamp(o, v);
 	return FUI_REDRAW;
 }
 
@@ -225,11 +224,9 @@ enum fui_result fui_key(unsigned int code)
 		return fui_edit_key(o, code);
 	switch (code) {
 	case FUI_KEY_UP:
-	case FUI_DIAL_DOWN:
 		fui.cursor = (fui.cursor + fui.nopts - 1) % fui.nopts;
 		return FUI_REDRAW;
 	case FUI_KEY_DOWN:
-	case FUI_DIAL_UP:
 		fui.cursor = (fui.cursor + 1) % fui.nopts;
 		return FUI_REDRAW;
 	case FUI_KEY_MENU:
@@ -240,6 +237,24 @@ enum fui_result fui_key(unsigned int code)
 		return fui_row_key(o, code);
 	}
 	return FUI_NONE;
+}
+
+/* n dial steps: n > 0 moves the cursor down and increases an edited value. */
+enum fui_result fui_dial(int n)
+{
+	const struct fenykl_cfg_opt *o = fui.opts[fui.cursor];
+	int64_t step = o->step > 0 ? o->step : 1;
+	int c;
+
+	if (!n)
+		return FUI_NONE;
+	if (fui.edit) {
+		fui_edit_clamp(o, fui.edit_val + (int64_t)n * FUI_DIAL_STEPS * step);
+		return FUI_REDRAW;
+	}
+	c = ((int)fui.cursor + n) % (int)fui.nopts;
+	fui.cursor = c < 0 ? c + fui.nopts : c;
+	return FUI_REDRAW;
 }
 
 /* --- the list slot --- */
@@ -561,12 +576,15 @@ FENYKL_CALLBACK(gui_action, fui_on_exit);
 unsigned int fui_on_key(void *sm, unsigned int code, unsigned int p, void *p2)
 {
 	unsigned int c = code & 0xFFFF;
+	bool dial = c == FUI_JOG_DIAL || c == FUI_CTRL_RING;
+	/* negated: a positive count moves the stock menus up (checked on the camera) */
+	int n = -(int16_t)(uintptr_t)p2;
 	enum fui_result r;
 	int d = 0;
 
 	fui_count_core();
 	fui.st.keys++;
-	r = fui_key(c);
+	r = dial ? fui_dial(n) : fui_key(c);
 	if (r == FUI_LEAVE) {
 		fui.st.backs++;
 		fui_lang_return();
@@ -575,8 +593,15 @@ unsigned int fui_on_key(void *sm, unsigned int code, unsigned int p, void *p2)
 	}
 	if (r == FUI_REDRAW)
 		d = fui_publish();
-	fenykl_log_dbg(&fenykl_ui_log, "key %04x -> %d: cursor %u, data_set %d", c, r, fui.cursor,
-		       d);
+	if (!dial)
+		fenykl_log_dbg(&fenykl_ui_log, "key %04x -> %d: cursor %u, data_set %d", c, r,
+			       fui.cursor, d);
+	else if (fui.edit)
+		fenykl_log_dbg(&fenykl_ui_log, "dial %04x p2 %08x step %d -> value %d", c,
+			       (unsigned int)(uintptr_t)p2, n, fui.edit_val);
+	else
+		fenykl_log_dbg(&fenykl_ui_log, "dial %04x p2 %08x step %d -> cursor %u", c,
+			       (unsigned int)(uintptr_t)p2, n, fui.cursor);
 	return 0;
 }
 FENYKL_CALLBACK(gui_action, fui_on_key);
@@ -634,7 +659,7 @@ enum { A_KEY = 3, A_SYS, A_IGNORE, A_GENIFA, N_ACTIONS };
 static const uint16_t fui_events[][2] = {
 	{ FUI_KEY_UP, A_KEY }, { FUI_KEY_DOWN, A_KEY }, { FUI_KEY_LEFT, A_KEY },
 	{ FUI_KEY_RIGHT, A_KEY }, { FUI_KEY_OK, A_KEY }, { FUI_KEY_MENU, A_KEY },
-	{ FUI_DIAL_DOWN, A_KEY }, { FUI_DIAL_UP, A_KEY },
+	{ FUI_JOG_DIAL, A_KEY }, { FUI_CTRL_RING, A_KEY },
 	/* system events: StWizardMenu's own action, see fui_on_sys */
 	{ 0x9000, A_SYS },	/* shutter half press */
 	{ 0x9002, A_SYS },	/* full press */

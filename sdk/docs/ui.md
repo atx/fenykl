@@ -74,7 +74,7 @@ reference user.
 | OK | toggle | next name (wraps) | enter edit mode | leave, `cfg_set` |
 | RIGHT | toggle | next name (wraps) | enter edit mode | + `step`, clamped to min..max |
 | LEFT | toggle | previous name (wraps) | - | - `step`, clamped |
-| dials 0x9031 / 0x9032 | cursor up / down (as the stock menus) | cursor | cursor | -/+ 10 x `step`, clamped |
+| dials 0x9031 / 0x9032, n steps | cursor by n (wraps) | cursor | cursor | + n x 10 x `step`, clamped |
 | MENU | back to the Custom list | back | back | cancel the edit |
 
 - No pop-ups, no help text, no confirmations, no Defaults row: every value is edited in place.
@@ -83,8 +83,13 @@ reference user.
   edit mode with the camera font's arrow icons U+A05F / U+A029 around it. Text longer than 14
   characters is cut. The value is stored only by OK in edit mode, so the INT's `on_change` runs
   once; MENU and any other way out of the page drop the edit.
-- Dial direction: 0x9032 moves the cursor down and increases a value (camera-accepted with
-  `projects/main`, 2026-10-16).
+- Dial direction: the rear wheel posts 0x9032 (EVT_ST_CHANGE_CTRL_RING) for both directions;
+  0x9031 (EVT_ST_CHANGE_JOG_DIAL) was never seen on the camera. The direction is the sign of the
+  event's step count, the low 16 bits of the action's `p2` (the stock menu actions read it with
+  `exth`, e.g. StListMenu at 0x6F081D5D). The page negates it, so that the wheel turns the same way
+  as in the stock menus (checked on the camera): step n > 0 moves down and increases. The user
+  setting 0x1BC = 1, which reverses the stock menus, is not read. The page logs each step as
+  `dial 9032 p2 <raw> step <n> -> cursor <c>` (or `value`).
 - The cfg library has no string type (`config.md` 1, "no strings or lists"), so there is nothing to
   edit or show.
 

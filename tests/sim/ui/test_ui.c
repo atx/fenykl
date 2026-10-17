@@ -311,13 +311,14 @@ static void check_slot_sizes(void)
 	fui_build_slot();
 	CHECK(29, slot_ok(20, 14, 2, 6));
 	key(FUI_KEY_UP);
-	key(FUI_DIAL_DOWN);
+	fui_dial(-1);
 	fui_build_slot();
 	CHECK(30, slot_ok(20, 12, 1, 7));
-	key(FUI_DIAL_UP);
-	key(FUI_DIAL_UP);
+	fui_dial(2);
 	fui_build_slot();
 	CHECK(31, slot_ok(20, 14, 2, 6));
+	fui_dial(-16);
+	CHECK(32, fui.cursor == 18 && fui_dial(0) == FUI_NONE);
 }
 
 static void check_value_text(void)
@@ -371,7 +372,7 @@ static void check_edit(void)
 		  fui.slot.row[2].v[1] == '2' && fui.slot.row[2].v[3] == FUI_ARROW_RIGHT &&
 		  fui.slot.row[1].v[0] == 'z');
 	CHECK(48, key(FUI_KEY_UP) == FUI_NONE && fui.cursor == 2);
-	key(FUI_DIAL_DOWN);
+	fui_dial(-1);
 	CHECK(49, fui.edit_val == 0);
 	CHECK(50, key(FUI_KEY_MENU) == FUI_REDRAW && !fui.edit && b_int == 10);
 	key(FUI_KEY_OK);
@@ -390,7 +391,7 @@ static void check_edit(void)
 
 	key(FUI_KEY_DOWN);
 	key(FUI_KEY_OK);
-	key(FUI_DIAL_UP);
+	fui_dial(1);
 	CHECK(54, fui.edit_val == 0x7FFFFFFF);
 	key(FUI_KEY_OK);
 	CHECK(55, b_wide == 0x7FFFFFFF && fui.st.set_fail == 0);
@@ -414,6 +415,11 @@ static void check_lang(void)
 	CHECK(64, sim.sets == 2 && sim.slot.row[1].state == FUI_ROW_SELECTED);
 	fui_on_key(0, 0x9014, 0, 0);
 	CHECK(65, sim.sets == 2 && lang_lent());
+	/* the ring's step is the low half of p2, signed and negated */
+	fui_on_key(0, FUI_CTRL_RING, 1, (void *)0x10001);
+	CHECK(69, sim.sets == 3 && fui.cursor == 0);
+	fui_on_key(0, FUI_CTRL_RING, 0, (void *)0xFFFE);
+	CHECK(88, sim.sets == 4 && fui.cursor == 2);
 
 	/* MENU */
 	SIM_MENU_FLAGS = (uint32_t)sim.flags;

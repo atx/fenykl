@@ -14,8 +14,10 @@
 #define FUI_KEY_RIGHT 0x900Au
 #define FUI_KEY_OK 0x900Cu
 #define FUI_KEY_MENU 0x900Eu
-#define FUI_DIAL_DOWN 0x9031u		/* direction [open]: the camera run logs it */
-#define FUI_DIAL_UP 0x9032u
+/* Dial events: the posted parameter (gui_action p2) is a signed 16-bit step count, read by the
+   stock menu actions with exth (StListMenu 0x6F081D5D). The rear wheel posts CTRL_RING. */
+#define FUI_JOG_DIAL 0x9031u		/* EVT_ST_CHANGE_JOG_DIAL */
+#define FUI_CTRL_RING 0x9032u		/* EVT_ST_CHANGE_CTRL_RING */
 #define FUI_DIAL_STEPS 10
 
 /* GUI data store slot 0xF: the item list the stock menu list view draws, written the way
@@ -91,6 +93,7 @@ extern const uint16_t fui_borrowed_ids[FUI_BORROWED];
 /* Fills the list from the options in [begin, end): 0 or FENYKL_UI_EOPTS. */
 int fui_collect(const struct fenykl_cfg_opt *begin, const struct fenykl_cfg_opt *end);
 enum fui_result fui_key(unsigned int code);
+enum fui_result fui_dial(int n);
 /* The value column of option o (the cursor row shows the edit value with arrows). */
 void fui_value_text(const struct fenykl_cfg_opt *o, uint16_t out[FUI_VALUE_LEN]);
 /* Fills fui.slot from the model. */
