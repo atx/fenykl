@@ -1,0 +1,1 @@
+-Os -ffreestanding -mno-mult-bug -fno-common -ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables -Wall -Wextra

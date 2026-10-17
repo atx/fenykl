@@ -1,0 +1,4 @@
+# Allowlist: stock firmware images are copyrighted and must never be committed.
+*
+!.gitignore
+!README.md

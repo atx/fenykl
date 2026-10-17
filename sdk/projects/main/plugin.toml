@@ -1,0 +1,8 @@
+targets = ["epl3"]
+
+# HUD elements are drawn from a cw_updateDisplay hook (sdk/docs/hud.md). Its CPU1 scope rests on
+# static analysis only; the library counts CPU1 calls and main stops drawing at the first one.
+# The R/B swap hooks img_exec (main_rbswap_hook.c). It reaches CPU1 only through IMG_CALLIMG, which
+# has no client in v1.6; the hook passes CPU1 passes through unchanged and counts them.
+hooks = ["cw_updateDisplay", "img_exec"]
+cpu1_unproven = ["cw_updateDisplay", "img_exec"]

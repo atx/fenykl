@@ -1,0 +1,3 @@
+targets = ["epl3"]
+
+# Logging only: no hooks, RAM reads only. Log C:\FENYKL.LOG (sdk/docs/logging.md).

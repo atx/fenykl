@@ -1,0 +1,4 @@
+targets = ["epl3"]
+
+# Built with FENYKL_CPU1: CPU1 code (CPU0 runs the same stages first), CPU0-only firmware calls do not compile.
+cpu1_sources = ["bench.c", "kernels.c"]

@@ -1,0 +1,20 @@
+# Olympus E-PL3 with the fenykl-loader firmware.
+model = "E-PL3"                        # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
+toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
+cflags = "toolchain/cflags"            # relative to the fenykl checkout
+isa_check = "toolchain/isacheck/check_isa.py"  # rejects AM33 instructions; run by plugin build --isa-check
+elf_machine = 89                       # EM_MN10300
+load = 0x6EA70000                      # the loader reads FENYKL.BIN here (sections 4 and 8)
+max_size = 0x7A000                     # bytes the loader reads; the loader stack follows
+# Hooks the SDK binds itself, generated for every plugin; plugin.toml may not list them.
+# appevent_post: the event layer (sdk/lib/event.c, docs/event.md).
+sdk_hooks = ["appevent_post"]
+
+# The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
+[stock]
+version = "1.6"
+file = "OLY_E_086_1600_0000_0000.BIN"
+sha256 = "89b70dd65c6739de1cd762777205953ee15864df73369b84815df7ed8a0eb4b1"
+size = 46596160
+# Real load address per block kind; header addresses are not trusted.
+load_addresses = { main-code-01 = 0x6E601420 }

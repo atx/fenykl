@@ -1,0 +1,4 @@
+targets = ["epl3"]
+
+# Logging only: no hooks. Calls bchk_ad_read under the battery-check semaphore and reads the
+# battery-check RAM state; writes nothing but its log, C:\FENYKL.LOG (sdk/docs/logging.md).

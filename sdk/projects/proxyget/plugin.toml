@@ -1,0 +1,8 @@
+targets = ["epl3"]
+
+# A clone of the settings proxy's vtable with method +8 (getSetting) replaced (sdk/README.md,
+# Callbacks and slots). The slot gives FENYKL_VTABLE_SET and fw_orig_hfw_setting_proxy_get.
+slots = ["hfw_setting_proxy_get"]
+vtables = ["hfw_setting_proxy"]
+# Both are CPU0-only by static analysis only; the plugin counts calls on CPU1.
+cpu1_unproven = ["hfw_setting_proxy_get", "hfw_setting_proxy"]

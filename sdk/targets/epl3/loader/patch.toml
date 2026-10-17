@@ -1,0 +1,43 @@
+# E-PL3 fenykl-loader patch: the pinned bytes of
+# loader.S linked with loader.ld (disassembly: loader.lst), so that flashing never depends on the local
+# toolchain. tests/test_fenykl_loader.py re-assembles the source and requires exactly these bytes.
+# Addresses are run addresses; the block's load address is target.toml [stock] load_addresses.
+# original_sha256 is the sha256 of the stock bytes each edit overwrites, checked before patching.
+description = "Load and run C:\\FENYKL.BIN from the SD card at boot"
+
+# usr1_task: call OlyTaskSelfEnd,[],8 -> call fenykl_spawn,[d2,d3,a2,a3],0x20
+[[edit]]
+block = "main-code-01"
+address = 0x6E70A0AB
+original_sha256 = "41fec02eed324680cb79e4098733236483b37344ae4d4d9f40058df2a461f1db"
+replacement = "dd d0 02 0b 00 f0 20"
+
+# The stub over fileiftest_write_rec (410 bytes, a test of the serial debug shell).
+[[edit]]
+block = "main-code-01"
+address = 0x6E7BA37B
+original_sha256 = "1ebe7438bb2c4a59c5489f46672f6eeff579e95a3939b23d499673dc27324150"
+replacement = """
+80 0b f8 93 04 2c 00 40 42 08 fc cc 00 a0 ae 6e
+42 0c fc dc a8 a4 7b 6e fc dd ad a3 7b 6e 80 02
+04 dd f1 71 e6 ff f0 30 dd 75 71 e6 ff 00 08 df
+f0 20 cf f0 f8 fe f0 8a 64 fc dc 78 c9 59 60 f0
+6c fc dc af a4 7b 6e fc dd bd a4 7b 6e dd b5 dd
+ff ff 00 10 92 ba 00 c9 18 af 00 c9 0f 80 64 dd
+22 71 e6 ff 80 08 2a ff c9 d1 80 01 cc a1 00 fc
+dc 00 00 a7 ae 80 01 fc cd 00 a0 07 00 99 dd 44
+de ff ff 00 18 83 98 dd a3 dd ff ff 00 0c dd db
+28 13 00 80 08 fc dc 00 00 a7 6e 70 fc c8 46 4e
+4c 32 c9 69 f8 00 14 fc c8 45 2d 50 4c c9 5e f8
+00 18 a0 33 c9 57 f8 00 04 fc c8 00 00 a7 6e c9
+4c f8 04 08 ad c5 46 a5 1c c4 42 f8 ed 03 c9 3d
+f8 00 0c a4 c6 37 a0 1c c4 33 fc dd 1c 00 a7 6e
+fc cc 00 00 a7 6e e4 f1 e3 00 bd c6 07 75 e4 51
+ca fa f8 04 10 a4 c9 15 f8 04 08 f8 00 0c f1 60
+fc cc 00 00 a7 6e f0 f0 00 ca 04 80 02 fc dc bf
+a4 7b 6e dd a6 05 f5 ff a0 18 dd 83 70 e6 ff 00
+08 2c e8 03 dd 5d 70 e6 ff 80 08 ca f6 46 45 4e
+59 4b 4c 00 43 3a 5c 46 45 4e 59 4b 4c 2e 42 49
+4e 00 72 00 5b 66 65 6e 79 6b 6c 5d 20 73 74 61
+74 75 73 00
+"""

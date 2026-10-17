@@ -1,0 +1,637 @@
+# Firmware functions callable from plugins (E-PL3 v1.6 main-code-01 run addresses).
+# `fenykl plugin build` turns this into fenykl_fw.h (prototypes fw_<name>), assembly thunks and the
+# address symbols. One table per function:
+#
+#   address   run address of the function
+#   saves     register list of the CALL that enters it (subset of d2, d3, a2, a3)
+#   frame     frame size of that CALL; saves and frame must equal the callee's own RET/RETF
+#   evidence  confidence of the name/signature: high or medium
+#   returns   C return type (ints come back in D0, pointers in A0 in both ABIs)
+#   args      "<class> <C declaration>", class d = integer (D0, D1, then stack),
+#             a = pointer (A0, A1, then stack); "..." last = variadic (the last named argument
+#             goes to the first stack slot, 8 variadic words are forwarded)
+#   note      where saves/frame/args were read
+#   cores     optional, default ["cpu0"]: the cores that may call it, ["cpu0"] or ["cpu0", "cpu1"];
+#             files in plugin.toml cpu1_sources
+#             cannot call a CPU0-only function (compile error)
+#   cores_evidence  with cores: what the classification rests on
+#
+# Only 32-bit arguments. Add a function only when its CALL encoding and argument registers have
+# been read from the firmware; unknown signatures stay out.
+
+[dbg_puts]
+address = 0x6E606525
+saves = []
+frame = 0x14
+evidence = "high"
+returns = "void"
+args = ["a const char *s"]
+note = "ret [],20 at 0x6E606554; all 2394 CALLs use [],20; string in A0 (0x6EB80DA1)"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: (0x8050) != 0 branch at 0x6E606528 posts to the CPU1-local queue 0x6E691CAA -> DBG_MESSAGE_CPU1 -> DBG_OUT on CPU0"
+
+[dbg_puts_hex]
+address = 0x6E70AA34
+saves = ["d2", "a2"]
+frame = 0x18
+evidence = "high"
+returns = "void"
+args = ["a const char *msg", "d unsigned value"]
+note = "ret [d2,a2],24 at 0x6E70AA5C; all 2489 CALLs use it; prints msg, ' ', hex(value), LF"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: dbg_puts(msg), u32_to_hex 0x6E70DC0A (pure formatting into its own stack buffer), dbg_puts(buf); nothing else (0x6E70AA34..0x6E70AA5C)"
+
+[sprintf]
+address = 0x6E8F78B5
+saves = []
+frame = 0xC
+evidence = "high"
+returns = "void"
+args = ["a char *buf", "a const char *fmt", "..."]
+note = "ret [],12 at 0x6E8F78CD; 1703 CALLs use [],12; fmt at (4,SP); result not characterised"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: pure vformat_core into the caller's buffer"
+
+[OlyTaskSleep]
+address = 0x6E6214FC
+saves = ["d2"]
+frame = 0x8
+evidence = "medium"
+returns = "int"
+args = ["d int ticks"]
+note = "ret [d2],8 at 0x6E621515; all 188 CALLs use it with D0 = ticks (100, 3000); returns 0 or -1 (0x6E62150F); tick length not measured"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: k_slp_tsk 0x6E68403D on the calling core's KCB; the timer queue lock is global"
+
+[OlyTaskCreate]
+address = 0x6E62158D
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x30
+evidence = "high"
+returns = "int"
+args = [
+    "a const char *name",
+    "a fw_task_entry entry",
+    "d int mode",
+    "d int exinf",
+    "d int priority",
+    "d unsigned stack_size",
+    "a void *stack_base",
+]
+note = "ret [d2,d3,a2,a3],48 at 0x6E621665; mode 2 = create and start; returns task id or -1"
+cores = ["cpu0"]
+cores_evidence = "verified: from CPU1 it indexes CPU0's TCB table with a CPU1 id and fills a CPU0 task's stack"
+
+[OlyTaskStart]
+address = 0x6E6213E0
+saves = ["d2", "d3"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int id"]
+note = "ret [d2,d3],12 at 0x6E621429 (only RET); all 130 CALLs use [d2,d3],12 with D0 = id. D0 is the only argument read (mov d0,d2 first, D1/A0 overwritten). CPU1 ids (id & 0x1000): cpu1_mbox_post(0x10001, id) 0x6E62769B, then spins on cpu1_mbox_done 0x6E6276B1 without timeout and returns 0; other ids: k_act_tsk, returns 0 or -1"
+cores = ["cpu0"]
+cores_evidence = "verified: for CPU1 ids it spins on the CPU1 mailbox that only BOOT_CPU1's idle loop serves (deadlock from CPU1); k_act_tsk refuses other-core local ids with E_CTX"
+
+[OlyTaskStop]
+address = 0x6E621458
+saves = ["d2", "d3"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int id"]
+note = "ret [d2,d3],12 at 0x6E6214A1 (only RET); all 4 CALLs use [d2,d3],12 with D0 = id. Same shape as OlyTaskStart: CPU1 ids go through cpu1_mbox_post(0x10002, id) and an unbounded spin, return 0; other ids: k_ter_tsk 0x6E68A1BA, returns 0 or -1"
+cores = ["cpu0"]
+cores_evidence = "verified: as OlyTaskStart, the CPU1 mailbox spin deadlocks on CPU1"
+
+[OlySemaphoreWait]
+address = 0x6E6212FF
+saves = ["d2", "d3"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int id", "d int timeout"]
+note = "ret [d2,d3],12 at 0x6E621352; all 162 CALLs use [d2,d3],12 with D0 = id. D1 = timeout in ticks, -1 = forever (k_wai_sem path 0x6E621325, else k_twai_sem 0x6E68AB39 with D1 passed through); returns 0, -2 on timeout (kernel -50), -1 on another error"
+
+[OlySemaphoreSignal]
+address = 0x6E621355
+saves = ["d2", "d3"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int id"]
+note = "ret [d2,d3],12 at 0x6E62137E; all 162 CALLs use [d2,d3],12 with D0 = id, the only argument read (k_sig_sem 0x6E68937A); returns 0 or -1"
+
+[rpc_fopen]
+address = 0x6E7B817D
+saves = []
+frame = 0x10
+evidence = "high"
+returns = "void *"
+args = ["a const char *path", "a const char *mode"]
+note = "ret [],16 at 0x6E7B81A2; returns FILE* in A0 or 0; drive 0 = SD card, path 'C:' + backslash + name; mode string 'r' verified (0x6E977640)"
+cores = ["cpu0"]
+cores_evidence = "verified: rpc_call posts to CPU0-local queues; from CPU1 k_tsnd_queue returns E_CTX and the RPC fails"
+
+[rpc_fclose]
+address = 0x6E7B81A5
+saves = []
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["a void *fp"]
+note = "ret [],12 at 0x6E7B81D3; returns server result or -1"
+cores = ["cpu0"]
+cores_evidence = "verified: rpc_call posts to CPU0-local queues (E_CTX from CPU1)"
+
+[rpc_fread]
+address = 0x6E7B823D
+saves = []
+frame = 0x18
+evidence = "high"
+returns = "int"
+args = ["a void *buf", "d unsigned size", "d unsigned n", "a void *fp"]
+note = "ret [],24 at 0x6E7B8270; returns items read (bytes with size 1), 0 on RPC error"
+cores = ["cpu0"]
+cores_evidence = "verified: rpc_call posts to CPU0-local queues (E_CTX from CPU1)"
+
+[rpc_fwrite]
+address = 0x6E7B81D6
+saves = []
+frame = 0x18
+evidence = "medium"
+returns = "int"
+args = ["a const void *buf", "d unsigned size", "d unsigned n", "a void *fp"]
+note = "ret [],24 at 0x6E7B8209; same argument packing as rpc_fread (cmd 0x10003); 0 on RPC error"
+cores = ["cpu0"]
+cores_evidence = "verified: rpc_call posts to CPU0-local queues (E_CTX from CPU1)"
+
+[rpc_fremove]
+address = 0x6E7B82D5
+saves = []
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["a const char *path"]
+note = "ret [],12 at 0x6E7B8301; its one CALL 0x6E8C4574 uses [],12 with A0 = path; stores A0 at (8,SP), file-server cmd 0x1000A -> f_remove_entry(path, 0); returns the server result (0 = removed) or -1 on RPC error (0x6E7B816D)"
+cores = ["cpu0"]
+cores_evidence = "verified: rpc_call posts to CPU0-local queues (E_CTX from CPU1)"
+
+[malloc]
+address = 0x6EE1D05B
+saves = []
+frame = 0x4
+evidence = "medium"
+returns = "void *"
+args = ["d unsigned size"]
+note = "ret [],4 at 0x6EE1D060; all 204 CALLs use it; size in D0, result in A0 (0x6EB80D78). -> 0x6EE1F0B0 -> api_memory_alloc 0x6E8639AE: size > 0x3FFC prints 'AllocMemory: Size Over!!!' and returns NULL"
+cores = ["cpu0"]
+cores_evidence = "CPU0 pool allocator api_memory_alloc 0x6E8639AE, locking unverified, pools are CPU0 state"
+
+[free]
+address = 0x6EE1D063
+saves = []
+frame = 0x4
+evidence = "medium"
+returns = "void"
+args = ["a void *p"]
+note = "ret [],4 at 0x6EE1D068; pointer in A0 (0x6EB80DAD), NULL is ignored (0x6EE1F0E3)"
+cores = ["cpu0"]
+cores_evidence = "CPU0 pool allocator, see malloc"
+
+[dcache_purge_all_irqsafe]
+address = 0x6E8ECCE4
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "void"
+args = []
+note = "ret [d2],8 at 0x6E8ECCFD; dcache_purge_all (CHCTR DCINV) with IRQs masked, as main_init after section loads"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: acts on the executing core's D-cache only; the firmware runs dcache_purge_all from CPU1 tasks (face_detect_part, img_callimg_exec)"
+
+# Interrupt and cache primitives for the hook runtime (runtime hooks.c).
+# All callers were counted in a linear disassembly of main-code-01.
+
+[psw_get]
+address = 0x6E623B47
+saves = []
+frame = 0x0
+evidence = "high"
+returns = "unsigned"
+args = []
+note = "retf [],0 at 0x6E623B49 (mov psw,d0); no direct CALL found, the encoding follows from the RETF"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: reads the executing core's PSW"
+
+[irq_disable_all]
+address = 0x6E623B17
+saves = []
+frame = 0x0
+evidence = "high"
+returns = "void"
+args = []
+note = "retf [],0 at 0x6E623B1C; all 4 CALLs use [],0; clears PSW.IE (and 0xF7FF,psw): masks every maskable interrupt on this core"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: masks the executing core's interrupts only"
+
+[irq_mask_restore]
+address = 0x6E623B40
+saves = []
+frame = 0x0
+evidence = "high"
+returns = "void"
+args = ["d unsigned psw"]
+note = "retf [],0 at 0x6E623B44; all 426 CALLs use [],0; PSW = D0 (incl. IE and IM)"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: sets the executing core's PSW"
+
+[cache_invalidate]
+address = 0x6E634C08
+saves = ["d2"]
+frame = 0x8
+evidence = "medium"
+returns = "void"
+args = ["d unsigned dcache"]
+note = "ret [d2],8 at 0x6E634C2B; its one CALL uses [d2],8; disables the cache, waits for busy, sets ICINV 0x10 (D0 = 0) or DCINV 0x20; leaves it disabled. DCINV drops dirty lines: never pass 1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: CHCTR 0x8070 is in the per-core register block; CPU1 runs the same driver in cpu1_dcache_init"
+
+[cache_enable]
+address = 0x6E634BD8
+saves = ["d2"]
+frame = 0x4
+evidence = "medium"
+returns = "void"
+args = ["d unsigned dcache"]
+note = "retf [d2],4 at 0x6E634BE9; its one CALL uses [d2],4; CHCTR |= ICEN 1 (D0 = 0) or DCEN 2"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: CHCTR 0x8070 is in the per-core register block"
+
+[cache_busy]
+address = 0x6E634C2E
+saves = []
+frame = 0x0
+evidence = "medium"
+returns = "unsigned"
+args = ["d unsigned dcache"]
+note = "retf [],0 at 0x6E634C3E; its one CALL (in cache_invalidate) uses [],0; returns CHCTR & ICBUSY 4 (D0 = 0) or DCBUSY 8"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: CHCTR 0x8070 is in the per-core register block"
+
+[ui_key_get_state]
+address = 0x6E70FB4A
+saves = ["d2", "d3", "a2"]
+frame = 0x18
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned code"]
+note = "ret [d2,d3,a2],24 at 0x6E70FBEE; all 101 CALLs use [d2,d3,a2],24 with D0 = key code (low 16 bits); returns D0 = 1 pressed / 0 released / 0xFFFF unknown. Lock-free reads of the key state bytes (0x605519BC.., FUN_6e7110e4), prop_get 0x6E630D6B (table lookup) and an empty stub 0x6E711F17 (retf); safe from a CPU0 task, CPU1 not examined. 0x400 \"UsbC\": 0 = cable in (pcsub_is_usb_connected 0x6EE194E8)"
+
+# Hook targets: a `hook` table makes the function hookable (sdk/README.md, Hooks). Fields:
+#   entry          "call": entered by CALL with the operands above (the only supported kind)
+#   relocate       the stock entry bytes, whole instructions, at least 5 (the jmp); they are checked
+#                  against the stock image by the tests and against RAM before every install
+#   cpu1           "cpu0-only" (with evidence that CPU1 never runs it) or "unproven"
+#   cpu1_evidence  what the scope rests on
+#   note           why the span is safe to relocate (no interior branch target, no stored pointer)
+
+[appevent_post]
+address = 0x6EA6D213
+saves = []
+frame = 0x20
+evidence = "high"
+returns = "int"
+args = ["d unsigned event", "d unsigned param", "a unsigned flag"]
+note = "ret [],32 at 0x6EA6D237; all 48 CALLs use [],32 (44 pass A0 = 0); posts {u16 flag, event, param} to APPEQUE; returns the OlyQueueWrite result (meaning not checked; some callers return it)"
+
+[appevent_post.hook]
+entry = "call"
+relocate = "42 08 46 0c f1 d0"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static: no CPU1 ancestors in the call/ref graph; camera 2026-10-13: a call-counting probe counted 278 calls on CPU0, 0 on CPU1"
+note = "mov d0,(8,sp); mov d1,(12,sp); mov a0,d0. No branch into 0x6EA6D214..0x6EA6D218 and no stored pointer to 0x6EA6D213..0x6EA6D218 (cached or uncached alias) in main-code-01"
+
+[gpi_flush]
+address = 0x6EFDB264
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void"
+args = []
+note = "ret [],4 at 0x6EFDB290; its one CALL (gui_gpi_flush 0x6EFF0917) uses [],4, and both callers of that wrapper (0x6EFE87FD, 0x6EFE8959) overwrite D0 unread. If (u8)gpi_dirty 0x6034D5B5 == 1: gpi_apply_palettes, cw_updateDisplay(0) shows buffer gpi_draw_buf 0x6034D5B4, gpi_draw_buf ^= 1, gpi_dirty = 0"
+
+[gpi_flush.hook]
+entry = "call"
+relocate = "fc a8 b5 d5 34 60"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static: one caller chain gui_gpi_flush <- GUI screen update <- GUI vtable method, no CPU1 ancestor, CPU0-only (GUI) [inferred]; camera 2026-10-13: a probe counted 100 flushes, 0 on CPU1"
+note = "movbu (0x6034D5B5),d0: one absolute-address instruction. The only CALL/CALLS/JMP into 0x6EFDB264..0x6EFDB269 in main-code-01 is the call at 0x6EFF0917, and no firmware block stores a pointer to it (cached or uncached alias) (byte scan)"
+
+[cw_updateDisplay]
+address = 0x6EFDB6E3
+saves = []
+frame = 0x3C
+evidence = "high"
+returns = "void"
+args = ["d int show_front"]
+note = "ret [],60 at 0x6EFDB7F1 (only RET); all 5 CALLs use [],0x3c: 0x6EFDB274 (gpi_flush, clr d0), 0x6EFDB8E1 (gpi_set_layer_mask), 0x6EFDB93F/0x6EFDB949 (gpi_redisplay/2, mov 1,d0), 0x6EFDBD41 (mov d2,d0). D0 is read after exth d0 at 0x6EFDB6F3; 0 shows b[gpi_draw_buf 0x6034D5B4], else the other buffer. D0 == 0 only from gpi_flush, after gpi_apply_palettes has run and waited for the GUI's OSD batch"
+
+[cw_updateDisplay.hook]
+entry = "call"
+relocate = "fc dd cc 32 12 6f"
+cpu1 = "unproven"
+cpu1_evidence = "static only: callers gpi_flush 0x6EFDB264 (camera: CPU0 only), gpi_set_layer_mask 0x6EFDB8D4, gpi_redisplay/2 0x6EFDB93D/0x6EFDB947 and 0x6EFDBCC5, all in the GUI library; static core map: 5 callers, 0 CPU1 ancestors, CPU0-only [inferred]"
+note = "mov 0x6F1232CC,a1: one absolute-immediate instruction. The only CALL/JMP targets in 0x6EFDB6E3..0x6EFDB6E8 in main-code-01 are the 5 CALLs to the entry, no branch in the objdump listing 0x6EFDB600..0x6EFDB800 lands inside the span, and no word in main-code-01 points into it (cached or uncached alias) (byte scan)"
+
+[mov_lv_disp_flip]
+address = 0x6E8AC521
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "void"
+args = []
+note = "ret [d2],8 at 0x6E8AC56D (only RET); all 10 CALLs (0x6E89F72E/0x6E89F757 in mov_lv_frame_still, 0x6E89FA2A/0x6E89FA34, 0x6E89FB04/0x6E89FB0E, 0x6E89FC1B/0x6E89FC25, 0x6E89FEA2/0x6E89FEAC in the movie frame handlers) are `dd .. 80 08` = [d2],8. Unless (u8)0x6060676A != 0: shows display buffer table 0x606067E8[idx 0x60606744] through disp_img1_set_addr_direct, then advances the index"
+
+[mov_lv_disp_flip.hook]
+entry = "call"
+relocate = "fc a8 6a 67 60 60"
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map class cpu0 (task 0x1F MOV_TASK via mov_lv_frame_still), all 10 callers are MOV-task frame handlers, never address-taken"
+note = "movbu (0x6060676A),d0: one absolute-address instruction (same form as gpi_flush). No xref into 0x6E8AC522..0x6E8AC526 and no word in main-code-01 holds 0x6E8AC521..0x6E8AC526 or the uncached alias 0xAE8AC521..0xAE8AC526 (Ghidra xrefs + byte scan)"
+
+[mov_yc_resize_pass]
+address = 0x6E8A41B0
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x14
+evidence = "medium"
+returns = "unsigned"
+args = ["a void *in", "a void *out"]
+note = "ret [d2,d3,a2,a3],20 at 0x6E8A41BC and 0x6E8A4335 (the only RETs); its one CALL 0x6E8A41A7 in mov_clip_disp_pass is `cd 09 00 f0 14` = [d2,d3,a2,a3],0x14 with A0 = SP+8 (input area struct, +0 address 0xADF24F00), A1 = SP+0x1C (output struct, +0 mov_disp_next_buf()); returns exthu D0: 0 = IPU pass done, 1 = no IMG_CTRL (0x6034CACC == 0). Runs only in CLIP on the rear LCD"
+
+[mov_yc_resize_pass.hook]
+entry = "call"
+relocate = "fc a2 cc ca 34 60"
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map class cpu0 (task 0x1F MOV_TASK via mov_image_process -> mov_clip_disp_pass), one direct caller, never address-taken"
+note = "mov (0x6034CACC),a2: one absolute-address instruction (A2 is restored by the RET). No xref into 0x6E8A41B1..0x6E8A41B5 and no word in main-code-01 holds 0x6E8A41B0..0x6E8A41B5 or 0xAE8A41B0..0xAE8A41B5 (Ghidra xrefs + byte scan)"
+
+[img_exec]
+address = 0x6E740EE3
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x14
+evidence = "high"
+returns = "unsigned"
+args = ["a void *ctrl"]
+note = "ret [d2,d3,a2,a3],20 at 0x6E740EFE and 0x6E740FB0 (the only RETs); all 103 CALLs in main-code-01 (11 d16, 92 d32) use [d2,d3,a2,a3],0x14 (byte scan). A0 = IMG_CTRL (+0x54 ulFlag, bit 0x10000000 = engine 2; +0x60 IMG_PARAM; +0xC4 ucMode); returns exthu D0: 0 = OK, 0x2D85 = no ctrl or engine 1 on CPU1, 0x2D10 abort. Synchronous: img_exec_run 0x6E7416C9 builds the shadow (img_ctx_build 0x6E749BCD), starts the IPU and waits for the end event"
+
+[img_exec.hook]
+entry = "call"
+relocate = "93 9a 00 31 50 80"
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map class both. CPU0: ~58 roots (REC_IMAGE, REC_VIEW, PLAY_*, MOV ...). CPU1: only IMG_CALLIMG -> img_callimg_exec 0x6E749103, which has no client in v1.6 (its queue id is read only by the task itself), so CPU1 never runs it [inferred]"
+note = "mov a0,a3; mov 0,a2; mov (0x8050),d1 (abs16 core id load): no control flow, no PC operand. No xref into 0x6E740EE4..0x6E740EE8 (Ghidra xrefs) and no word in main-code-01 holds 0x6E740EE3..0x6E740EE8 or 0xAE740EE3..0xAE740EE8 (byte scan)"
+
+[fd_hw_shutdown]
+address = 0x6E8CB9F3
+saves = []
+frame = 0x8
+evidence = "medium"
+returns = "void"
+args = []
+note = "ret [],8 at 0x6E8CBA2B (the only RET); its one CALL (`cd b8 da 00 08` at 0x6E8CDF3B, the first instruction of the wrapper 0x6E8CDF3B) uses [],8. If (u8)0x60608E20 == 1 it calls 0x6E8CB8E7 and logs error 0x2F000A12; then INTEN = 0, SRST = 1, 0x6E640B21(0x1D, 0). 0x6E8CDF3B runs once per live FD cycle after the last HW pass, right before face_fd_postprocess (face_fd_live_loop 0x6E8CD977), and in face_fd_still 0x6E8CDC65 after its merge. Live cycles are told apart by the live-only counters 0x6034CBF8 (u16, +1 per HW pass) and 0x6034CBFA (u16, +1 per completed pass set), written only at 0x6E8CD8EF / 0x6E8CD94B (byte scan)"
+
+[fd_hw_shutdown.hook]
+entry = "call"
+relocate = "fc a8 20 8e 60 60"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static core map: cpu0, task 000f FACE_FD via 0x6E8CDF3B (callers face_fd_live_loop and face_fd_still, both TSK_FACE_FD)"
+note = "movbu (0x60608E20),d0: absolute load, no control flow, no PC operand. Byte scan of main-code-01 for every PC-relative branch/call form at any offset: no target in 0x6E8CB9F4..0x6E8CB9F8, only CALL 0x6E8CDF3B targets the entry; no word holds 0x6E8CB9F3..0x6E8CB9F8 or 0xAE8CB9F3..0xAE8CB9F8. Stack: TSK_FACE_FD has 0x400 bytes; here the stock depth is ~112 bytes below the live loop, against ~640 for face_fd_postprocess"
+
+[face_fd_postprocess]
+address = 0x6E8CDF6F
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x64
+evidence = "medium"
+returns = "void"
+args = ["a void *desc", "d unsigned passes"]
+note = "ret [d2,d3,a2,a3],100 at 0x6E8CE3D9 (the only RET); its one CALL 0x6E8CD98D (face_fd_live_loop, `cd e2 05 f0 64`) uses [d2,d3,a2,a3],0x64 with A0 = LV descriptor copy, D0 = HW passes of the cycle (u8: 3 in dir-4 mode, else 1..2). Merges/tracks the raw list 0x60608E34 (70 x 14 B) into result buffer type 0 0x60609208 + 0x8C * wr slot; zeroes the outputs if (u8)prop 0x9121 == 0"
+
+[face_fd_postprocess.hook]
+entry = "call"
+relocate = "43 18 f8 92 31"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static core map: cpu0, task 000f FACE_FD via face_fd_live_loop 0x6E8CD6C9 (its only caller, CALL 0x6E8CD98D)"
+note = "STACK: TSK_FACE_FD has a 0x400-byte stack (task record 0x6E68C228) and the stock path through this function peaks at ~740 bytes below the task entry (live loop 100 + this frame 100 + face_normalize 136 + 404 below it); a wrap adds the unused CALL frame (100) plus stub and handler (~140), leaving no margin for interrupts, so plugins hook fd_hw_shutdown instead. mov a0,(24,sp); movbu d0,(49,sp): SP-relative stores into the CALL frame only. Byte scan of main-code-01 for every PC-relative branch/call form (bcc/jmp/call d8/d16/d32, bvc..bns, calls d16/d32) at any offset: no target in 0x6E8CDF70..0x6E8CDF74 (one false hit at 0x6E8CDF6A is an operand byte of the CALL at 0x6E8CDF67), only CALL 0x6E8CD98D targets the entry; no word holds 0x6E8CDF6F..0x6E8CDF74 or 0xAE8CDF6F..0xAE8CDF74"
+
+[gpi_get_glyph]
+address = 0x6EFDC0B2
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x14
+evidence = "medium"
+returns = "void"
+args = ["a const unsigned short *key", "a void *out"]
+note = "ret [d2,d3,a2,a3],20 at 0x6EFDC117 (only RET); both CALLs (0x6EFDB661 gpi_text, 0x6EFDCC50) use it. key in A0 = {u16 font_id, u16 size_key, u16 char} (movhu (a0)/(2,a0)/(4,a0)), out in A1 = {u16 w, u16 h, const void *bitmap} (written through a3 = a1), w = h = 0 if not found. Pure lookup in the font/icon resources"
+
+[gui_post_event]
+address = 0x6F09C150
+saves = ["a2"]
+frame = 0x40
+evidence = "high"
+returns = "int"
+args = ["d unsigned code", "d unsigned param"]
+note = "ret [a2],0x40 at 0x6F09C176; callers use the same CALL, e.g. 0x6F07DF3B (StWizardMenu entry: clr d1, D0 = 0x9ABC). gui_evt_make 0x6EFD960B(target 0, code, param) + gui_evq_post 0x6EFD9637. GUI task only (it is a GUI-internal post)"
+
+[gui_show_panel_ex]
+address = 0x6F09C27A
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x58
+evidence = "high"
+returns = "void"
+args = ["d unsigned panel", "d int force"]
+note = "ret [d2,d3,a2,a3],0x58 at 0x6F09C4DB; callers use the same CALL, e.g. 0x6F073C5B (SS_DEBUGMENU entry), 0x6F0EBE4A. D0 = panel number (u16), D1 = force: same panel and !force only refreshes; otherwise sets gui_cur_panel 0x60352448, purges 0x1002/0x1900/0x1901, queues 0x1100(panel) and 0x9404, sets the layer configuration. GUI task only"
+
+[gui_data_set]
+address = 0x6EFE1903
+saves = ["d2", "a2"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["a const void *buf", "d unsigned id", "d unsigned size", "a int notify"]
+note = "ret [d2,a2],0x10 at 0x6EFE191E; callers use the same CALL, e.g. 0x6F0A04DE (menu_list_slot_set: buf, D0 = 0xF, D1 = 0x2D8, A1 = notify). Returns 0 without a GUI data store (*0x6034DD24 == 0), else the s16 result of 0x6EFE1AC7. Copies buf into GUI data store slot id, marks it changed for every observer and, with notify (s16), posts GUI event 0x1900 to them. GUI task only"
+
+[gui_data_get]
+address = 0x6EFE18EB
+saves = []
+frame = 4
+evidence = "high"
+returns = "int"
+args = ["a void *buf", "d unsigned id", "d unsigned size"]
+note = "ret [],4 at 0x6EFE1900; callers use the same CALL, e.g. 0x6F0A04CA (menu_list_slot_get: D0 = 0xF, D1 = 0x2D8). Returns 0 without a GUI data store, else the s16 result of 0x6EFE1A4E; copies slot id into buf. GUI task only"
+
+[prop_get_obj]
+address = 0x6E630D48
+saves = []
+frame = 0x4
+evidence = "medium"
+returns = "void *"
+args = ["d unsigned prop"]
+note = "ret [],4 at 0x6E630D55 (only RET); the CALLs checked (0x6E635289, 0x6E6356BE, 0x6E62FDC5, 0x6E862B2E, 0x6E862B68, 0x6E71F709, 0x6E825285, 0x6E8181C3, 0x6EB5B503, 0x6E87458C) use [],4. D0 = prop id (exthu); returns A0 = data pointer of the prop's group (registry record +4) or 0. Read-only lookup; the LV IMG_CTRL setup 0x6E8A168A reads (at 0x6E8A1834) u16 [0] (base) and [1] (rate) of prop 0x9812 through it"
+
+[lens_focal_length_now]
+address = 0x6E733FCE
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "unsigned"
+args = []
+note = "ret [],4 at 0x6E733FDC; the only CALL (0x6E734515, lens_get_focal_info) uses [],4 and stores D0 with movhu. Focal length in integer mm of the live lens state 0x605522B0 (lens_focal_length_mm 0x6E733FDF on lens_info_get(0) + 4); without a lens the default of lens_info_default(2), no dereference. Read-only"
+
+[bchk_ad_read]
+address = 0x6E734D9F
+saves = ["d2", "a2", "a3"]
+frame = 0x10
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned ch"]
+note = "ret [d2,a2,a3],16 at 0x6E734DDE; all 7 CALLs use [d2,a2,a3],16 with D0 = A/D channel (extbu; 4 battery voltage, 0x0B battery thermistor). Allocates a request, starts a 5-sample conversion into the static u16[5] 0x6055F4A8, waits forever on event 11 (EBCHKAD, set by the completion callback 0x6E734E7B), returns (s[1] + s[2] + s[3] + s[4]) / 4 zero-extended from 16 bits. Buffer and event are shared: the battery-check commands hold semaphore 5 (bchk_cmd 0x6E735B0B) around every call (only the console debug handlers 0x6E7353E6.. do not), so hold it too"
+
+[recfile_alloc]
+address = 0x6E76EB2A
+saves = ["d2", "d3"]
+frame = 0x20
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned size"]
+note = "ret [d2,d3],32 at 0x6E76EB95 (only RET); the CALLs checked (0x6E8AB989 mov_buff_init, 0x6E8DF494, 0x6E8DF541, 0x6E8E4708, 0x6EB5E550, 0x6F21E8EE) use [d2,d3],0x20. D0 = size (> 0x1E3F480 -> 0); returns D0 = uncached address in RECFILE 0xAA0AA280 (contiguous 0x1E3C0-byte blocks, semaphore 0x6E6918C4). Blocks until space is free (OlyTaskSleep(0) loop): check the block table 0x605753F0 first"
+
+[recfile_free]
+address = 0x6E76EB98
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "void"
+args = ["d unsigned addr"]
+note = "ret [d2],8 at 0x6E76EBDF (only RET); the CALLs checked (0x6E8ABCCB, 0x6E8E31D4, 0x6E8E8310, 0x6EB5E56B, 0x6F21E9D0) use [d2],8. D0 = address returned by recfile_alloc; clears every block entry of 0x60574FF0[256] holding it (and its flag 0x605753F0[i]) under semaphore 0x6E6918C4"
+
+[cam_request]
+address = 0x6E818DA0
+saves = ["d2", "a2"]
+frame = 0xC
+evidence = "high"
+returns = "unsigned"
+args = ["a void *req"]
+note = "ret [d2,a2],0xc at 0x6E818E88 (only RET); the CALLs checked (0x6E8191EE, 0x6E8212EA, 0x6E821313, 0x6E82133C, 0x6E8213DB; all 50 in 0x6E818D00..0x6E832A68) use [d2,a2],0xc. A0 = 0x40-byte request, u16 type at +0; returns u16 (exthu). Type 7 with +0x20 == 0 and +0x24 == 0 posts the request to the CAM_CL state machine *(0x605AED60) and returns 0 (0x6E819023 -> 0x6E8193FA): a contrast attach error (0x4585) is not returned. CPU0, task context (fcs_af_eval_run 0x6E7D4E79)"
+
+# Callbacks: signatures the firmware enters plugin code with (sdk/README.md, Callbacks and slots).
+# FENYKL_CALLBACK(<name>, fn) gives a C function a reverse entry stub for it; fw_call_<name>(addr, ...)
+# calls a firmware function pointer with it. Fields:
+#   entry     "calls" (through a pointer: the callee saves and allocates itself), or "call" with
+#             saves and frame as for functions (the caller's CALL carries the callee's operands)
+#   evidence, returns, args, note as for functions; only 32-bit scalars, no "..."
+#
+# Slots: aligned pointer words the firmware calls through (FENYKL_SLOT_REPLACE). Fields:
+#   address   run address of the word
+#   callback  the signature the firmware calls it with (a [callbacks.<name>] table)
+#   expected  its stock value when a plugin runs, also the original that fw_orig_<slot> calls
+#             (0 = empty slot, no original); the runtime refuses to touch any other value
+#   cpu1, cpu1_evidence, note as for hooks (note: where the calls through the word were read)
+#
+# Vtables: stock tables a plugin may clone for one object (fenykl_vtable_attach). Fields:
+#   address, count (slots, all of them: the whole table is copied), cpu1, cpu1_evidence, note.
+#   A slot whose address lies in a vtable is one of its methods (FENYKL_VTABLE_SET).
+
+[callbacks.hfw_getSetting]
+entry = "calls"
+evidence = "high"
+returns = "int"
+args = ["a void *self", "a unsigned *out", "d unsigned id"]
+note = "hfw_setting_proxy method +8 (0x6EB8D163: movm [a2] .. ret [a2],12, no stack args): id is u16 (exthu at 0x6EB8D178, callers exthu too); writes *out; returns 0 or 0xF0000016. 159 call sites load (8,vptr) after hfw_setting_proxy_get and enter it with calls, A0 = this, A1 = out, D0 = id, e.g. 0x6F10995D, 0x6EFC880D, 0x6F0009D1 (byte scan)"
+
+[callbacks.hfw_setSetting]
+entry = "calls"
+evidence = "high"
+returns = "int"
+args = ["a void *self", "d unsigned id", "d unsigned type", "a unsigned value"]
+note = "hfw_setting_proxy method +4 (0x6EB8D898: movm [d2,d3,a2,a3] .. ret [d2,d3,a2,a3],56): id u16 (movhu d0), type u16 in D1 (0 = direct), value in A1; caller 0x6F109975 loads mov d3,a1; clr d1; 158 call sites (byte scan)"
+
+[callbacks.appevent_hook1]
+entry = "calls"
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned event"]
+note = "appevent_call_hook1 0x6E8606D6: if u16 0x605FD844 != 0 and the slot != 0, calls (a0) at 0x6E8606EA with D0 = event; the D0 it returns replaces the event (0 = swallow). The param is the u32 at 0x605FD364"
+
+[callbacks.usrset_change_cb]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["d unsigned id"]
+note = "usrset_call_change_cb 0x6E8D3411: calls (a0) at 0x6E8D341C with D0 = setting id (exthu); its 3 callers overwrite D0 after it (0x6E8D2751, 0x6E8D2858, 0x6E8D28C2). Stock target usrsetmgr_change_cb 0x6EC0A5DB"
+
+[callbacks.ptp_op_handler]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a void *request", "a void *response"]
+note = "PTP op handler, registered with ptp_op_register: calls (a2) at 0x6F336223 with A0 = request, A1 = response, result unused (bra after it); runs in PTPCOM with a 2 KiB stack"
+
+[callbacks.gui_action]
+entry = "calls"
+evidence = "high"
+returns = "unsigned"
+args = ["a void *sm", "d unsigned code", "d unsigned p", "a void *p2"]
+note = "GUI state-machine action/entry/exit: gui_sm_dispatch 0x6F06F529 enters actions[matrix[row][state]] with calls (A2) at 0x6F06F5A8..0x6F06F5B0, A0 = gui_sm 0x60702278, D0 = event code, D1 = rec[4], A1 = rec[3]; entry/exit tables the same way (0x6F06FB13..0x6F06FB25). Returns u16: 0 = stay, super << 8 | state = transition (0 byte keeps); entry/exit results are ignored. Runs in the GUI task (CPU0)"
+
+[callbacks.cam_cnt_frame_cb]
+entry = "calls"
+evidence = "medium"
+returns = "void"
+args = ["d unsigned unk", "d unsigned events", "a void *req"]
+note = "contrast client frame callback, request +0x2C with the event mask at +0x30. Read from the callee fcs_af_eval_frame_cb 0x6E7D5379 (movm [d2,d3,a2,a3] .. ret [d2,d3,a2,a3],0x24): A0 = the request ((0x14,A0) = contrast_setting, (0x34,A0) = the request's argument), D1 = event bits (0x400 AF_ST, 0x800 AF_CP); D0 is not read; D0 on return is left over (not a result). The driver-side dispatch that enters it was not traced; it may run in interrupt context (the callee checks 0x6E6896DF)"
+
+[callbacks.cam_req_done_cb]
+entry = "calls"
+evidence = "medium"
+returns = "void"
+args = ["d unsigned status", "a void *req"]
+note = "camera request done callback, request +0x28. The type-0xD path enters it at 0x6E8194C2 (calls (a1), D0 = u16 status, A0 = request); the contrast client's (fcs 0x6E7D5791, movm [d2] .. ret [d2],0x1c) takes D0 as a status and sets flag 0x6E691984 with iset_flg in interrupt context"
+
+[slots.hfw_setting_proxy_get]
+address = 0x6EE3F594
+callback = "hfw_getSetting"
+expected = 0x6EB8D163
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map: 0x6EB8D163 cpu0 (BOOT_CPU0 via hfw_setting_proxy_get), call class unreached; GUI/HFW callers"
+note = "vtable 0x6EE3F58C + 8. Writing it in place changes every object of the class; a clone (vtables.hfw_setting_proxy) changes one object"
+
+[slots.hfw_setting_proxy_set]
+address = 0x6EE3F590
+callback = "hfw_setSetting"
+expected = 0x6EB8D898
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map: hfw_setSetting 0x6EB8D898 cpu0 (BOOT_CPU0 via hfw_setting_proxy_get), call class unreached"
+note = "vtable 0x6EE3F58C + 4. Settings set here can persist (power-off save): keep a replacement transparent"
+
+[slots.appevent_hook1]
+address = 0x605FD840
+callback = "appevent_hook1"
+expected = 0
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map: appevent_call_hook1 0x6E8606D6 cpu0 (task HIGHLEVEL_MAIN via appevent__Wait_Event), call class unreached"
+note = "cleared at boot by appevent_hook1_reset 0x6E8606C6 (under usr_start_tasks, before plugins); no code calls its setter 0x6E8606FA, so it stays 0"
+
+[slots.usrset_change_cb]
+address = 0x6034CCB4
+callback = "usrset_change_cb"
+expected = 0x6EC0A5DB
+cpu1 = "unproven"
+cpu1_evidence = "static only: core map: usrset_call_change_cb 0x6E8D3411 cpu0 (task USR_FAST_APP via usrset_store_notify)"
+note = "set once by the usrsetmgr init (mov 0x6EC0A5DB,a0; call usrset_set_change_cb 0x6E8D3408 at 0x6EC08F6C), the only reference to 0x6EC0A5DB in main-code-01. Not set before the HFW starts: check before replacing"
+
+[vtables.hfw_setting_proxy]
+address = 0x6EE3F58C
+count = 28
+cpu1 = "unproven"
+cpu1_evidence = "static only: the core map has the methods (0x6EB8D163, hfw_setSetting) and hfw_setting_proxy_get on cpu0 (BOOT_CPU0), call class unreached"
+note = "vtable of the settings proxy *(void **)0x60357B50, an 8-byte object (vptr, usrsetmgr*) that hfw_setting_proxy_get 0x6EB8CE9E allocates once under a lock; the pointer is never cleared (its 4 references are all in 0x6EB8CE9E). 28 slots: slot 27 is the destructor 0x6EB8CF40 (stores 0x6EE3F58C into the object), the next word is a string, and call sites use offsets up to 104 (byte scan)"

@@ -1,0 +1,182 @@
+Disassembly of section .hook:
+
+6e70a0ab <.hook>:
+6e70a0ab:	dd d0 02 0b 	call	6e7ba37b <fenykl_spawn>,[d2,d3,a2,a3],32
+6e70a0af:	00 f0 20 
+
+Disassembly of section .text:
+
+6e7ba37b <fenykl_spawn>:
+6e7ba37b:	80 0b       	mov	11,d0
+6e7ba37d:	f8 93 04    	movhu	d0,(4,sp)
+6e7ba380:	2c 00 40    	mov	16384,d0
+6e7ba383:	42 08       	mov	d0,(8,sp)
+6e7ba385:	fc cc 00 a0 	mov	1856937984,d0
+6e7ba389:	ae 6e 
+6e7ba38b:	42 0c       	mov	d0,(12,sp)
+6e7ba38d:	fc dc a8 a4 	mov	1853596840,a0
+6e7ba391:	7b 6e 
+6e7ba393:	fc dd ad a3 	mov	1853596589,a1
+6e7ba397:	7b 6e 
+6e7ba399:	80 02       	mov	2,d0
+6e7ba39b:	04          	clr	d1
+6e7ba39c:	dd f1 71 e6 	call	6e62158d <OlyTaskCreate>,[d2,d3,a2,a3],48
+6e7ba3a0:	ff f0 30 
+6e7ba3a3:	dd 75 71 e6 	call	6e621518 <OlyTaskSelfEnd>,[],8
+6e7ba3a7:	ff 00 08 
+6e7ba3aa:	df f0 20    	ret	[d2,d3,a2,a3],32
+
+6e7ba3ad <fenykl_task>:
+6e7ba3ad:	cf f0       	movm	[d2,d3,a2,a3],(sp)
+6e7ba3af:	f8 fe f0    	add	-16,sp
+6e7ba3b2:	8a 64       	mov	100,d2
+
+6e7ba3b4 <.L1^B1>:
+6e7ba3b4:	fc dc 78 c9 	mov	1616497016,a0
+6e7ba3b8:	59 60 
+6e7ba3ba:	f0 6c       	movhu	(a0),d3
+6e7ba3bc:	fc dc af a4 	mov	1853596847,a0
+6e7ba3c0:	7b 6e 
+6e7ba3c2:	fc dd bd a4 	mov	1853596861,a1
+6e7ba3c6:	7b 6e 
+6e7ba3c8:	dd b5 dd ff 	call	6e7b817d <rpc_fopen>,[],16
+6e7ba3cc:	ff 00 10 
+6e7ba3cf:	92          	mov	a0,a2
+6e7ba3d0:	ba 00       	cmp	0,a2
+6e7ba3d2:	c9 18       	bne	6e7ba3ea <.L2^B1>
+6e7ba3d4:	af 00       	cmp	0,d3
+6e7ba3d6:	c9 0f       	bne	6e7ba3e5 <.L6^B1>
+6e7ba3d8:	80 64       	mov	100,d0
+6e7ba3da:	dd 22 71 e6 	call	6e6214fc <OlyTaskSleep>,[d2],8
+6e7ba3de:	ff 80 08 
+6e7ba3e1:	2a ff       	add	-1,d2
+6e7ba3e3:	c9 d1       	bne	6e7ba3b4 <.L1^B1>
+
+6e7ba3e5 <.L6^B1>:
+6e7ba3e5:	80 01       	mov	1,d0
+6e7ba3e7:	cc a1 00    	jmp	6e7ba488 <done>
+
+6e7ba3ea <.L2^B1>:
+6e7ba3ea:	fc dc 00 00 	mov	-1364787200,a0
+6e7ba3ee:	a7 ae 
+6e7ba3f0:	80 01       	mov	1,d0
+6e7ba3f2:	fc cd 00 a0 	mov	499712,d1
+6e7ba3f6:	07 00 
+6e7ba3f8:	99          	mov	a2,a1
+6e7ba3f9:	dd 44 de ff 	call	6e7b823d <rpc_fread>,[],24
+6e7ba3fd:	ff 00 18 
+6e7ba400:	83          	mov	d0,d3
+6e7ba401:	98          	mov	a2,a0
+6e7ba402:	dd a3 dd ff 	call	6e7b81a5 <rpc_fclose>,[],12
+6e7ba406:	ff 00 0c 
+6e7ba409:	dd db 28 13 	call	6e8ecce4 <dcache_purge_all_irqsafe>,[d2],8
+6e7ba40d:	00 80 08 
+6e7ba410:	fc dc 00 00 	mov	1856438272,a0
+6e7ba414:	a7 6e 
+6e7ba416:	70          	mov	(a0),d0
+6e7ba417:	fc c8 46 4e 	cmp	843861574,d0
+6e7ba41b:	4c 32 
+6e7ba41d:	c9 69       	bne	6e7ba486 <bad>
+6e7ba41f:	f8 00 14    	mov	(20,a0),d0
+6e7ba422:	fc c8 45 2d 	cmp	1280322885,d0
+6e7ba426:	50 4c 
+6e7ba428:	c9 5e       	bne	6e7ba486 <bad>
+6e7ba42a:	f8 00 18    	mov	(24,a0),d0
+6e7ba42d:	a0 33       	cmp	51,d0
+6e7ba42f:	c9 57       	bne	6e7ba486 <bad>
+6e7ba431:	f8 00 04    	mov	(4,a0),d0
+6e7ba434:	fc c8 00 00 	cmp	1856438272,d0
+6e7ba438:	a7 6e 
+6e7ba43a:	c9 4c       	bne	6e7ba486 <bad>
+6e7ba43c:	f8 04 08    	mov	(8,a0),d1
+6e7ba43f:	ad          	cmp	d3,d1
+6e7ba440:	c5 46       	bhi	6e7ba486 <bad>
+6e7ba442:	a5 1c       	cmp	28,d1
+6e7ba444:	c4 42       	bcs	6e7ba486 <bad>
+6e7ba446:	f8 ed 03    	btst	3,d1
+6e7ba449:	c9 3d       	bne	6e7ba486 <bad>
+6e7ba44b:	f8 00 0c    	mov	(12,a0),d0
+6e7ba44e:	a4          	cmp	d1,d0
+6e7ba44f:	c6 37       	bcc	6e7ba486 <bad>
+6e7ba451:	a0 1c       	cmp	28,d0
+6e7ba453:	c4 33       	bcs	6e7ba486 <bad>
+6e7ba455:	fc dd 1c 00 	mov	1856438300,a1
+6e7ba459:	a7 6e 
+6e7ba45b:	fc cc 00 00 	mov	1856438272,d0
+6e7ba45f:	a7 6e 
+6e7ba461:	e4          	add	d1,d0
+6e7ba462:	f1 e3       	mov	d0,a3
+6e7ba464:	00          	clr	d0
+
+6e7ba465 <.L3^B1>:
+6e7ba465:	bd          	cmp	a3,a1
+6e7ba466:	c6 07       	bcc	6e7ba46d <.L4^B1>
+6e7ba468:	75          	mov	(a1),d1
+6e7ba469:	e4          	add	d1,d0
+6e7ba46a:	51          	inc4	a1
+6e7ba46b:	ca fa       	bra	6e7ba465 <.L3^B1>
+
+6e7ba46d <.L4^B1>:
+6e7ba46d:	f8 04 10    	mov	(16,a0),d1
+6e7ba470:	a4          	cmp	d1,d0
+6e7ba471:	c9 15       	bne	6e7ba486 <bad>
+6e7ba473:	f8 04 08    	mov	(8,a0),d1
+6e7ba476:	f8 00 0c    	mov	(12,a0),d0
+6e7ba479:	f1 60       	add	d0,a0
+6e7ba47b:	fc cc 00 00 	mov	1856438272,d0
+6e7ba47f:	a7 6e 
+6e7ba481:	f0 f0       	calls	(a0)
+6e7ba483:	00          	clr	d0
+6e7ba484:	ca 04       	bra	6e7ba488 <done>
+
+6e7ba486 <bad>:
+6e7ba486:	80 02       	mov	2,d0
+
+6e7ba488 <done>:
+6e7ba488:	fc dc bf a4 	mov	1853596863,a0
+6e7ba48c:	7b 6e 
+6e7ba48e:	dd a6 05 f5 	call	6e70aa34 <dbg_puts_hex>,[d2,a2],24
+6e7ba492:	ff a0 18 
+6e7ba495:	dd 83 70 e6 	call	6e621518 <OlyTaskSelfEnd>,[],8
+6e7ba499:	ff 00 08 
+
+6e7ba49c <.L5^B1>:
+6e7ba49c:	2c e8 03    	mov	1000,d0
+6e7ba49f:	dd 5d 70 e6 	call	6e6214fc <OlyTaskSleep>,[d2],8
+6e7ba4a3:	ff 80 08 
+6e7ba4a6:	ca f6       	bra	6e7ba49c <.L5^B1>
+
+6e7ba4a8 <tname>:
+6e7ba4a8:	46 45       	mov	d1,(69,sp)
+6e7ba4aa:	4e 59       	mov	d3,(89,sp)
+6e7ba4ac:	4b 4c       	mov	a2,(76,sp)
+6e7ba4ae:	00          	clr	d0
+
+6e7ba4af <path>:
+6e7ba4af:	43 3a       	mov	a0,(58,sp)
+6e7ba4b1:	5c 46       	mov	(70,sp),a0
+6e7ba4b3:	45          	inc	a1
+6e7ba4b4:	4e 59       	mov	d3,(89,sp)
+6e7ba4b6:	4b 4c       	mov	a2,(76,sp)
+6e7ba4b8:	2e 42 49    	mov	18754,d2
+6e7ba4bb:	4e 00       	mov	d3,(sp)
+
+6e7ba4bd <mode_r>:
+6e7ba4bd:	72          	mov	(a2),d0
+6e7ba4be:	00          	clr	d0
+
+6e7ba4bf <msg>:
+6e7ba4bf:	5b 66       	mov	(102,sp),d3
+6e7ba4c1:	65          	mov	d1,(a1)
+6e7ba4c2:	6e          	mov	d3,(a2)
+6e7ba4c3:	79          	mov	(a1),d2
+6e7ba4c4:	6b          	mov	d2,(a3)
+6e7ba4c5:	6c          	mov	d3,(a0)
+6e7ba4c6:	5d 20       	mov	(32,sp),a1
+6e7ba4c8:	73          	mov	(a3),d0
+6e7ba4c9:	74          	mov	(a0),d1
+6e7ba4ca:	61          	mov	d0,(a1)
+6e7ba4cb:	74          	mov	(a0),d1
+6e7ba4cc:	75          	mov	(a1),d1
+6e7ba4cd:	73          	mov	(a3),d0
+6e7ba4ce:	00          	clr	d0

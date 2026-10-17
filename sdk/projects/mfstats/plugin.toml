@@ -1,0 +1,4 @@
+targets = ["epl3"]
+
+# No hooks or slots: the plugin hands two callbacks (cam_cnt_frame_cb, cam_req_done_cb) to
+# cam_request as its own contrast client, writes only its own request, setting and DMA buffer.
