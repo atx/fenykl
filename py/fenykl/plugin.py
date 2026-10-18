@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import fwapi
 from .payload import pack_elf
-from .sdk import SDK, SdkTarget, target
+from .sdk import SDK, SdkTarget, all_targets, target
 
 # The SDK library: runtime, logging, configuration, HUD. Every plugin links all of it that its target
 # supports; --gc-sections drops what the plugin does not use.
@@ -22,6 +22,8 @@ LIB_CAPABILITIES = {
     "hud.c": "hud",
     "ui.c": "ui",
 }
+# Keys of a plugin.toml [capabilities.<name>] table.
+CAPABILITY_KEYS = ("sources", "hooks", "cpu1_unproven")
 # Keeps GCC from turning the runtime's copy/clear loops into calls to memcpy/memset themselves.
 RUNTIME_CFLAGS = ["-fno-tree-loop-distribute-patterns"]
 
@@ -58,6 +60,66 @@ def lib_sources(target: SdkTarget) -> list[Path]:
         for p in sorted(LIB.glob("*.c"))
         if LIB_CAPABILITIES.get(p.name, "") in ("", *target.capabilities)
     ]
+
+
+def _names(value: object, where: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise BuildError(f"{where} must be a list of strings, not {value!r}")
+    return value
+
+
+def select_capabilities(
+    config: dict, plugin_dir: Path, sources: list[Path], target: SdkTarget
+) -> tuple[list[Path], list[str], list[str]]:
+    """Apply plugin.toml's [capabilities.<name>] tables to `target`: the sources without those of the
+    capabilities it lacks, and the top-level hooks and cpu1_unproven plus those of the ones it has."""
+    known = {c for t in all_targets() for c in t.capabilities}
+    hooks = list(_names(config.get("hooks", []), "plugin.toml hooks"))
+    unproven = list(
+        _names(config.get("cpu1_unproven", []), "plugin.toml cpu1_unproven")
+    )
+    tables = config.get("capabilities", {})
+    if not isinstance(tables, dict):
+        raise BuildError(
+            "plugin.toml capabilities must be tables: [capabilities.<name>]"
+        )
+    owner: dict[Path, str] = {}
+    hook_owner = dict.fromkeys(hooks, "the top level")
+    for cap, table in tables.items():
+        where = f"plugin.toml [capabilities.{cap}]"
+        if cap not in known:
+            raise BuildError(
+                f"{where}: no target has capability {cap!r} (known: {', '.join(sorted(known))})"
+            )
+        if not isinstance(table, dict):
+            raise BuildError(f"{where} must be a table, not {table!r}")
+        unknown_keys = sorted(set(table) - set(CAPABILITY_KEYS))
+        if unknown_keys:
+            raise BuildError(
+                f"{where}: unknown key {', '.join(unknown_keys)} (allowed: {', '.join(CAPABILITY_KEYS)})"
+            )
+        for name in _names(table.get("sources", []), f"{where} sources"):
+            path = plugin_dir / name
+            if path not in sources:
+                raise BuildError(
+                    f"{where} lists {name}, not a .c or .S file in {plugin_dir}"
+                )
+            if path in owner:
+                raise BuildError(f"{where} lists {name}, already under {owner[path]}")
+            owner[path] = cap
+        cap_hooks = _names(table.get("hooks", []), f"{where} hooks")
+        cap_unproven = _names(table.get("cpu1_unproven", []), f"{where} cpu1_unproven")
+        for name in cap_hooks:
+            if name in hook_owner:
+                raise BuildError(
+                    f"{where} lists hook {name}, already listed under {hook_owner[name]}"
+                )
+            hook_owner[name] = f"[capabilities.{cap}]"
+        if cap in target.capabilities:
+            hooks += cap_hooks
+            unproven += cap_unproven
+    built = [p for p in sources if owner.get(p, "") in ("", *target.capabilities)]
+    return built, hooks, unproven
 
 
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> str:
@@ -172,7 +234,8 @@ def build(
     plugin_dir: Path, outdir: Path, target: SdkTarget, isa_check: bool = False
 ) -> Path:
     """Build the .c and .S files of `plugin_dir` for `target` into `outdir`/FENYKL.BIN (plus plugin.elf/.map,
-    gen/, obj/); `isa_check` also runs the target's ISA check on plugin.elf."""
+    gen/, obj/), less those of capabilities `target` lacks (select_capabilities); `isa_check` also runs
+    the target's ISA check on plugin.elf."""
     sources = sorted([*plugin_dir.glob("*.c"), *plugin_dir.glob("*.S")])
     if not sources:
         raise BuildError(f"no .c or .S files in {plugin_dir}")
@@ -183,6 +246,10 @@ def build(
         raise BuildError(
             f"cpu1_sources lists {', '.join(unknown)}, not a .c or .S file in {plugin_dir}"
         )
+    sources, hooks, cpu1_unproven = select_capabilities(
+        config, plugin_dir, sources, target
+    )
+    cpu1_sources = [p for p in cpu1_sources if p in sources]
     if cpu1_sources and "cpu1" not in target.capabilities:
         raise BuildError(
             f"plugin.toml lists cpu1_sources, but target {target.name} has no cpu1 capability"
@@ -198,8 +265,8 @@ def build(
         sources,
         outdir,
         target,
-        hooks=config.get("hooks", []),
-        cpu1_unproven=config.get("cpu1_unproven", []),
+        hooks=hooks,
+        cpu1_unproven=cpu1_unproven,
         slots=config.get("slots", []),
         vtables=config.get("vtables", []),
         cpu1_sources=cpu1_sources,

@@ -7,29 +7,36 @@
 #include "main.h"
 #include "main_rbswap.h"
 #include <afc.h>
+#include <body.h>
+#include <key.h>
 #include <ui.h>
 
-#define MAIN_SS_REC 0x02
-#define MAIN_SS_PLAY 0x06
 #define MAIN_GUI_WAIT_TICKS (60000u / MAIN_TICK_MS)	/* for the GUI and its language font */
 #define MAIN_STATUS_FIRST (3000u / MAIN_TICK_MS)
 #define MAIN_STATUS_TICKS (30000u / MAIN_TICK_MS)
 
-/* Each feature in order. */
+/* Each feature in order, those of the target's capabilities (plugin.toml); NULL-terminated, as a
+   target may have none. */
 static const struct main_feat *const main_feats[] = {
+#if FENYKL_HAS_LENS
 	&feat_focus,
 	&feat_dof,
+#endif
+#if FENYKL_HAS_AFC
 	&feat_fmeter,
+#endif
+#if FENYKL_HAS_BATT
 	&feat_batt,
+#endif
+	NULL,
 };
 
-#define MAIN_FEATS (sizeof(main_feats) / sizeof(main_feats[0]))
 
 struct main_state {
 	uint32_t ticks;
 	uint16_t gui;			/* super << 8 | state last logged */
 	bool drawing;			/* HUD up, hook installed, no CPU1 call seen */
-	bool started[MAIN_FEATS];
+	bool started[sizeof(main_feats) / sizeof(main_feats[0])];
 };
 
 static struct main_state main_st = { .gui = 0xFFFF };
@@ -51,8 +58,10 @@ static void main_log_apply(const struct fenykl_cfg_opt *o, int32_t old)
 
 	fenykl_log_set_level(&main_log, level);
 	fenykl_log_set_level(&fenykl_ui_log, level);
+#if FENYKL_HAS_AFC
 	fenykl_log_set_level(&fenykl_afc_log, level);
-	for (unsigned int i = 0; i < MAIN_FEATS; i++)
+#endif
+	for (unsigned int i = 0; main_feats[i]; i++)
 		fenykl_log_set_level(main_feats[i]->log, level);
 	main_fn_set_level(level);
 	main_rbswap_set_level(level);
@@ -61,14 +70,9 @@ static void main_log_apply(const struct fenykl_cfg_opt *o, int32_t old)
 				main_log_names[old]);
 }
 
-static uint8_t main_rd8(uint32_t a)
-{
-	return *(volatile uint8_t *)(uintptr_t)a;
-}
-
 static void main_sleep(void)
 {
-	fw_OlyTaskSleep(MAIN_TICK_MS);
+	fenykl_task_sleep(MAIN_TICK_MS);
 	main_st.ticks++;
 }
 
@@ -92,9 +96,7 @@ static void main_start_cfg(void)
 static bool main_wait_gui(void)
 {
 	for (unsigned int i = 0; i < MAIN_GUI_WAIT_TICKS; i++) {
-		uint8_t super = main_rd8(FW_GUI_SUPER);
-
-		if ((super == MAIN_SS_REC || super == MAIN_SS_PLAY) && fenykl_hud_font())
+		if ((fenykl_gui_live_view() || fenykl_gui_playback()) && fenykl_hud_font())
 			return true;
 		main_sleep();
 	}
@@ -108,8 +110,8 @@ static bool main_start_hud(void)
 	int r;
 
 	if (!main_wait_gui()) {
-		fenykl_log_err(&main_log, "no GUI after %u ticks (super %02x, font %u): no HUD",
-			       main_st.ticks, main_rd8(FW_GUI_SUPER), fenykl_hud_font());
+		fenykl_log_err(&main_log, "no GUI after %u ticks (gui %04x, font %u): no HUD",
+			       main_st.ticks, fenykl_gui_state(), fenykl_hud_font());
 		return false;
 	}
 	fenykl_log_info(&main_log, "GUI after %u ticks, font id %u", main_st.ticks,
@@ -151,7 +153,7 @@ static void main_start_ui(void)
 
 static void main_start_feats(void)
 {
-	for (unsigned int i = 0; i < MAIN_FEATS; i++) {
+	for (unsigned int i = 0; main_feats[i]; i++) {
 		int r = main_feats[i]->start();
 
 		main_st.started[i] = r == 0;
@@ -166,7 +168,7 @@ static void main_check_cpu1(const struct fenykl_hud_stats *hs)
 		return;
 	main_st.drawing = false;
 	main_hooks_draw_off();
-	for (unsigned int i = 0; i < MAIN_FEATS; i++)
+	for (unsigned int i = 0; main_feats[i]; i++)
 		if (main_st.started[i])
 			main_feats[i]->stop();
 	fenykl_log_err(&main_log, "cw_updateDisplay ran on CPU1 (%u calls): drawing stopped",
@@ -176,7 +178,7 @@ static void main_check_cpu1(const struct fenykl_hud_stats *hs)
 
 static void main_log_gui(void)
 {
-	uint16_t gui = (uint16_t)(main_rd8(FW_GUI_SUPER) << 8 | main_rd8(FW_GUI_STATE));
+	uint16_t gui = fenykl_gui_state();
 
 	if (gui == main_st.gui)
 		return;
@@ -200,7 +202,7 @@ static void main_status(const struct fenykl_hud_stats *hs)
 			us.sets, us.set_fail);
 	fenykl_log_info(&main_log, "  ui refused %u stray %u cpu1 %u", us.refused, us.lang_stray,
 			us.cpu1_actions);
-	for (unsigned int i = 0; i < MAIN_FEATS; i++)
+	for (unsigned int i = 0; main_feats[i]; i++)
 		if (main_st.started[i])
 			main_feats[i]->status();
 	main_fn_status();
@@ -236,7 +238,7 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 		main_rbswap_tick();
 		if (slow)
 			fenykl_ui_tick();
-		for (unsigned int i = 0; main_st.drawing && i < MAIN_FEATS; i++)
+		for (unsigned int i = 0; main_st.drawing && main_feats[i]; i++)
 			if (main_st.started[i] && main_st.ticks % main_feats[i]->period == 0)
 				main_feats[i]->tick();
 		if (slow)

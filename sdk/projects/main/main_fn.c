@@ -7,17 +7,27 @@
 #include "main.h"
 #include <key.h>
 
+/* The actions of the target's capabilities (plugin.toml). */
 enum main_fn_action {
 	MAIN_FN_NONE,
+#if FENYKL_HAS_SHOT
 	MAIN_FN_SHOT,
+#endif
 	MAIN_FN_ACTIONS,
 };
 
-static const char *const main_fn_names[] = { "none", "screenshot" };
+static const char *const main_fn_names[] = {
+	[MAIN_FN_NONE] = "none",
+#if FENYKL_HAS_SHOT
+	[MAIN_FN_SHOT] = "screenshot",
+#endif
+};
 
 static const struct main_fn_act *const main_fn_acts[] = {
 	[MAIN_FN_NONE] = NULL,
+#if FENYKL_HAS_SHOT
 	[MAIN_FN_SHOT] = &act_shot,
+#endif
 };
 
 _Static_assert(sizeof(main_fn_names) / sizeof(main_fn_names[0]) == MAIN_FN_ACTIONS, "names");
@@ -53,8 +63,9 @@ static bool main_fn_claim(enum fenykl_key key, uint16_t gui, void *arg)
 	const struct main_fn_act *act = main_fn_cur();
 
 	(void)key;
+	(void)gui;
 	(void)arg;
-	return act && act->claim(gui);
+	return act && act->claim();
 }
 
 static void main_fn_on_key(const struct fenykl_key_event *ev, void *arg)

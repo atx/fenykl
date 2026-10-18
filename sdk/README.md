@@ -98,6 +98,7 @@ carries on as stock. `fenykl.h` provides:
 | `FENYKL_LOAD_BASE`, `FENYKL_REGION_END` | `load` and `load + max_size` from `target.toml`; epl3: 0x6EA70000, 0x6EAEA000 |
 | `FENYKL_TASK(fn);` | declares `void fn(void)` and defines the task entry `fn_task` to pass to `fw_OlyTaskCreate` (see below); epl3 `fenykl_target.h` |
 | `FENYKL_UNCACHED(p)` | uncached alias of a DRAM address (`(p & 0x3FFFFFFF) \| 0x80000000`); epl3 `fenykl_target.h` |
+| `fenykl_task_sleep`, `fenykl_fopen`, `fenykl_fwrite`, `fenykl_fclose`, `fenykl_sprintf`, `FENYKL_ORIG(name)` | the same firmware services under SDK names (every target has them), for plugins that name no `fw_` symbol (Body API) |
 | `memcpy`, `memmove`, `memset`, `memcmp` | linked in (GCC emits calls to them even with `-ffreestanding`) |
 
 There is no libc: no `printf`, `malloc` comes from the firmware (`fw_malloc`/`fw_free`), formatted text
@@ -184,6 +185,43 @@ Status: unproven. The signals come from static analysis; no camera test yet.
 | `cpu1_unproven` | hooks/slots/vtables whose CPU1 use is unproven, acknowledged (Hooks) |
 | `cpu1_sources` | source files built as CPU1 code (CPU1; needs the target's `cpu1` capability) |
 | `run_on_usb` | `true`: also run on a boot started by the USB cable (default `false`, Startup and USB boots) |
+| `[capabilities.<name>]` | per-capability part of the plugin (Body API): `sources` (plugin files built only for targets with capability `<name>`; files listed nowhere are built for every target), `hooks` and `cpu1_unproven` (added to the top-level lists for those targets only). `<name>` must be a capability of some target; a file or a hook may be listed in one place only |
+
+### Body API (`include/body.h`)
+
+A plugin meant for several cameras names no firmware symbol (`fw_*`, `FW_*`) itself: it uses the
+library APIs, the services above and `body.h`, whose functions read the camera's state (GUI, lens,
+battery, the firmware's AF statistics, display and OSD buffers, the `img_exec` pass layout). The API
+is the same everywhere; each camera implements it in `arch/<camera>/fenykl_body.h` (static inline).
+Every group but the GUI predicates is a capability in `target.toml`, so `FENYKL_HAS_<NAME>` gates the
+plugin code that uses it, and `plugin.toml` builds the files that need it only where it exists:
+
+```toml
+targets = ["epl3"]
+hooks = ["cw_updateDisplay"]            # every target
+
+[capabilities.img_exec]                 # only targets with img_exec
+sources = ["rbswap.c", "rbswap_hook.c"]
+hooks = ["img_exec"]
+cpu1_unproven = ["img_exec"]
+```
+
+| capability | API | E-PL3 source |
+|---|---|---|
+| (all) | `fenykl_gui_live_view`, `fenykl_gui_playback` | `gui_super` |
+| `lens` | `fenykl_lens_attached`, `_focus_mm`, `_focal_mm`, `_av`, `_iris_av` | `lens_attached`, `lens_obj_dst`, `lens_focal_length_now`, prop 0xA03A, `av_effect` |
+| `batt` | `fenykl_batt_read`, `fenykl_power_src`, `fenykl_power_src_batt` | `bchk_ad_read` under semaphore 5, `power_src(_check)` |
+| `afc` | also `fenykl_af_mf`, `_half`, `_target_area`, `_all_targets`, `_grid` | `take_focus`, `trg_snapshot`, props 0x88B2/0x84D1, `take_fcs_af_mode2fcs`, fcs's contrast context and DMA buffer |
+| `shot` | `fenykl_disp_*`, `fenykl_osd_*`, `fenykl_recfile_*`, `fenykl_dram`, `fenykl_cached`, `FENYKL_DISP_*`, `FENYKL_OSD_*` | `mov_img1_shadow`, `mov_disp_flip_tbl`, display registers, `gpi_*`, `osd_shadow`, `osd_palettes`, `recfile_*` |
+| `img_exec` | `FENYKL_IMG_*` (IMG_CTRL, IMG_PARAM offsets), `fenykl_img_mode_class` | img_mode_class's table |
+
+`projects/main` is written this way (`tests/test_plugin_build.py` fails on any `fw_`/`FW_` name in it);
+the probes keep using the firmware directly. The test sees main's own files only: SDK headers main
+includes still carry target values (`log.h`'s `FENYKL_LOG_TIMER_NOW` reads `FW_TIMER_NOW`, `hud.h`'s
+`FENYKL_HUD_*` canvas, states and palette indices are the E-PL3's). The `afc` capability covers both
+the own contrast client (`lib/afc.c`) and the firmware client's reads (`fenykl_af_*`). The `shot`,
+`img_exec` and AF grid groups mirror the E-PL3's encodings and will be reshaped when a second camera
+implements them.
 
 ### Getting output: write a file
 
@@ -293,8 +331,8 @@ calling it from a `cpu1_sources` file is a compile error (CPU1).
 
 Firmware addresses the SDK uses as values (globals, tables, MMIO registers, address-range bounds) are
 `[data.<name>]` tables in `firmware.toml`, not constants in the C files. Each becomes
-`#define FW_<NAME> 0x...u` in `fenykl_fw.h`, so the libraries and `projects/main` name the address and
-each camera's `firmware.toml` supplies it:
+`#define FW_<NAME> 0x...u` in `fenykl_fw.h`, so the libraries and `arch/<camera>/fenykl_body.h` name
+the address and each camera's `firmware.toml` supplies it:
 
 ```toml
 [data.gui_super]
@@ -354,10 +392,11 @@ cpu1_unproven = ["cw_updateDisplay"]   # required to build a target whose CPU1 s
 #include <fenykl.h>
 
 /* The handler has the hook's C signature (fw_hook_cw_updateDisplay_fn). It may change the
-   arguments, call the original via fw_orig_<name>(...), change the result, or skip the original. */
+   arguments, call the original via FENYKL_ORIG(<name>)(...) (fw_orig_<name>), change the result,
+   or skip the original. */
 static void on_update(int show_front)
 {
-	fw_orig_cw_updateDisplay(show_front);   /* transparent wrap */
+	FENYKL_ORIG(cw_updateDisplay)(show_front);   /* transparent wrap */
 }
 FENYKL_HOOK(cw_updateDisplay, on_update);
 
@@ -651,7 +690,7 @@ example.
 1. generates `gen/fenykl_fw.h`, `gen/fw_thunks.S`, `gen/fw_symbols.ld` from `firmware.toml`
    (function addresses are link-time symbols, as an assembler `.equ` would encode the CALLs wrongly;
    `[data]` addresses are `FW_<NAME>` constants in the header);
-2. compiles `crt0.S`, `arch/<camera>/*.c`, the `lib/*.c` files of its capabilities, the thunks and `DIR/*.c`, `DIR/*.S` with the target's `cflags`
+2. compiles `crt0.S`, `arch/<camera>/*.c`, the `lib/*.c` files of its capabilities, the thunks and `DIR/*.c`, `DIR/*.S` (less those under a `[capabilities.<name>]` the camera lacks) with the target's `cflags`
    (epl3: `toolchain/cflags`), `-D FENYKL_LOAD_BASE/FENYKL_REGION_END` from `target.toml`,
    `-DFENYKL_RUN_ON_USB=0|1` from `plugin.toml` `run_on_usb`, `-DFENYKL_TARGET_<CAMERA>=1` and
    `-DFENYKL_HAS_<CAPABILITY>=1` for each of the target's `capabilities`, and
@@ -696,6 +735,7 @@ payload. Loaders older than this format reject `FNL2` files as well.
 |---|---|
 | `include/fenykl.h` | SDK header, camera-independent; includes `fenykl_fw.h` and `fenykl_target.h` |
 | `include/log.h`, `include/cfg.h`, `include/event.h`, `include/key.h`, `include/hud.h`, `include/ui.h` | logging, configuration, event layer, key layer, HUD and settings page library APIs |
+| `include/body.h` | body API: camera state by capability, implemented per camera in `arch/<camera>/fenykl_body.h` (Body API) |
 | `lib/` | SDK library, linked into every plugin (`--gc-sections` drops what is unused) |
 | `lib/start.c` | clears `.bss`, skips a USB boot (`fenykl_usb_attached`, `run_on_usb`), calls `plugin_main` |
 | `lib/string.c` | `memcpy`, `memmove`, `memset`, `memcmp` |
@@ -711,6 +751,7 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | `arch/epl3/firmware.toml` | hand-curated firmware API: functions, hooks, callbacks, slots, vtables, data addresses |
 | `arch/epl3/link.ld` | payload linker script (must agree with `load`/`max_size`; packing checks it) |
 | `arch/epl3/crt0.S` | entry `_start`: frame for C, calls `fenykl_start` |
+| `arch/epl3/fenykl_body.h` | the E-PL3 body API (`include/body.h`) on `firmware.toml` data and functions |
 | `arch/epl3/fenykl_target.h` | `FENYKL_UNCACHED`, `FENYKL_TASK`, `struct fenykl_slot`, `struct fenykl_vtable`, the CPU1 API (`FENYKL_SHARED`, `FENYKL_CPU1_WORKER`) |
 | `arch/epl3/hooks.c` | `fenykl_hook_install` / `..._remove` (compiled into every plugin) |
 | `arch/epl3/cpu1.c` | `fenykl_cpu1_start` / `..._state` / `..._stop`, the worker stack and the shared stop flag (compiled into every plugin) |
@@ -734,8 +775,11 @@ payload. Loaders older than this format reject `FNL2` files as well.
    CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.
    `event`, `hud`, `ui` and `afc` select library files (`LIB_CAPABILITIES` in `py/fenykl/plugin.py`):
    without them `lib/event.c` + `key.c`, `hud.c`, `ui.c`, `afc.c` + `afc_sm.c` are not built.
+   `afc`, `lens`, `batt`, `shot` and `img_exec` are groups of `include/body.h`: list one once
+   `arch/<camera>/fenykl_body.h` implements it (the file must exist, with the GUI predicates, before
+   a plugin including `body.h` builds). Plugin files under `[capabilities.<name>]` follow them.
 5. Give `firmware.toml` a `[data.<name>]` entry for every `FW_<NAME>` the libraries and
-   `projects/main` use (the build fails on a missing one), and `target.toml` an `[assets]` table if
+   `arch/<camera>/fenykl_body.h` use (the build fails on a missing one), and `target.toml` an `[assets]` table if
    `fenykl assets dump` should read its stock image.
 6. Add `<camera>` to the `targets` of the plugins that were written for it.
 

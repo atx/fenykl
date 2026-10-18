@@ -33,7 +33,7 @@ static uint8_t *const param = (uint8_t *)param_mem;
 
 static int16_t *mat(void)
 {
-	return (int16_t *)(param + MAIN_RBSWAP_PARAM_MAT);
+	return (int16_t *)(param + FENYKL_IMG_PARAM_MAT);
 }
 
 static int same(const volatile int16_t *a, const int16_t *b)
@@ -47,9 +47,9 @@ static int same(const volatile int16_t *a, const int16_t *b)
 /* One pass with ucMode `mode`, engine 2 if `eng2`, ashMat = `m`; returns the img_exec result. */
 static unsigned pass(unsigned mode, int eng2, const int16_t *m)
 {
-	ctrl[MAIN_RBSWAP_CTRL_MODE] = (uint8_t)mode;
-	*(uint32_t *)(ctrl + MAIN_RBSWAP_CTRL_FLAG) = eng2 ? MAIN_RBSWAP_FLAG_ENGINE2 : 0;
-	*(uint8_t **)(ctrl + MAIN_RBSWAP_CTRL_PARAM) = param;
+	ctrl[FENYKL_IMG_CTRL_MODE] = (uint8_t)mode;
+	*(uint32_t *)(ctrl + FENYKL_IMG_CTRL_FLAG) = eng2 ? FENYKL_IMG_FLAG_ENGINE2 : 0;
+	*(uint8_t **)(ctrl + FENYKL_IMG_CTRL_PARAM) = param;
 	memcpy(mat(), m, sizeof(camera));
 	for (int i = 0; i < 9; i++)
 		seen_mat[i] = 0x7777;
@@ -115,7 +115,7 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	if (!saw(pxm, updated) || s->kept != 1)
 		fail |= 64;
 
-	*(uint8_t **)(ctrl + MAIN_RBSWAP_CTRL_PARAM) = 0;
+	*(uint8_t **)(ctrl + FENYKL_IMG_CTRL_PARAM) = 0;
 	if (call_fw_exec_caller(ctrl) != 0x2d00 || s->no_param != 1)
 		fail |= 128;
 

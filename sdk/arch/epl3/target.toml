@@ -13,7 +13,9 @@ sdk_hooks = ["appevent_post"]
 # FENYKL_TARGET_EPL3=1). cpu1: the CPU1 worker runtime (cpu1.c); plugin.toml cpu1_sources needs it.
 # event, hud, ui, afc: the library files of those features (lib/event.c + key.c, hud.c, ui.c,
 # afc.c + afc_sm.c; py/fenykl/plugin.py LIB_CAPABILITIES) are built only for targets that list them.
-capabilities = ["cpu1", "event", "hud", "ui", "afc"]
+# afc, lens, batt, shot, img_exec: the groups of include/body.h this camera implements
+# (fenykl_body.h); plugin.toml [capabilities.<name>] builds plugin files only where they exist.
+capabilities = ["cpu1", "event", "hud", "ui", "afc", "lens", "batt", "shot", "img_exec"]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]

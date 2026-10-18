@@ -34,14 +34,14 @@ Header `sdk/include/hud.h` (the reference). Errors are `FENYKL_HUD_E*` (negative
 | `fenykl_hud_font()`, `fenykl_hud_visible()`, `fenykl_hud_get_stats(st)` | any CPU0 context | font id (0 = none yet), the visibility gate, counters |
 | `fenykl_hud_frame(show_front)` | the plugin's `cw_updateDisplay` hook | copies the elements for `show_front == 0`; counts and skips CPU1 calls |
 
-Hooks stay in the plugin (`FENYKL_HOOK_*` and `fw_orig_*` are generated per plugin from
-`plugin.toml`), so the plugin owns the two-line adapter:
+Hooks stay in the plugin (`FENYKL_HOOK_*` and the originals, `FENYKL_ORIG(name)`, are generated per
+plugin from `plugin.toml`), so the plugin owns the two-line adapter:
 
 ```c
 static void on_update(int show_front)
 {
 	fenykl_hud_frame(show_front);
-	fw_orig_cw_updateDisplay(show_front);
+	FENYKL_ORIG(cw_updateDisplay)(show_front);
 }
 FENYKL_HOOK(cw_updateDisplay, on_update);
 ```

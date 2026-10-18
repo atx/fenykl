@@ -3,6 +3,7 @@ toolchain, the ISA check tests also GHIDRA_INSTALL_DIR and JAVA_HOME; they are s
 
 import dataclasses
 import os
+import re
 
 import pytest
 from conftest import needs_toolchain
@@ -225,3 +226,113 @@ def test_fw_sprintf_with_more_than_eight_variadic_words_does_not_build(tmp_path)
 @needs_toolchain
 def test_fw_sprintf_with_eight_variadic_words_builds(tmp_path):
     assert check_image(sprintf_plugin(tmp_path, 8).read_bytes()) is None
+
+
+# ---- capability tables and the shared main plugin ----
+
+MAIN_DIR = sdk.SDK / "projects" / "main"
+BODY_CAPABILITIES = ("afc", "lens", "batt", "shot", "img_exec")
+
+
+def test_main_names_no_firmware_symbol():
+    """main reaches the firmware only through the SDK (include/body.h and fenykl.h), so that every
+    body with the capabilities builds it unchanged. Only main's own files are scanned: target values
+    that SDK headers carry (log.h's timer, hud.h's canvas and palette) are not seen here."""
+    found = [
+        f"{p.name}:{n}: {m.group()}"
+        for p in sorted(MAIN_DIR.glob("*.[chS]"))
+        for n, line in enumerate(p.read_text().splitlines(), 1)
+        for m in re.finditer(r"\b(?:fw|FW)_\w+", line)
+    ]
+    assert found == []
+
+
+def capability_plugin(tmp_path, tables):
+    (tmp_path / "plugin.toml").write_text(
+        f'targets = ["epl3"]\nhooks = ["cw_updateDisplay"]\n{tables}'
+    )
+    for name in ("main.c", "lens.c", "shot.S"):
+        (tmp_path / name).write_text("")
+    config = plugin._plugin_toml(tmp_path)
+    sources = sorted(tmp_path.glob("*.[cS]"))
+    return config, sources
+
+
+def test_capability_tables_select_sources_and_hooks(tmp_path):
+    config, sources = capability_plugin(
+        tmp_path,
+        '[capabilities.lens]\nsources = ["lens.c"]\n'
+        '[capabilities.img_exec]\nsources = ["shot.S"]\nhooks = ["img_exec"]\n'
+        'cpu1_unproven = ["img_exec"]\n',
+    )
+    epl3 = sdk.target("epl3")
+    built, hooks, unproven = plugin.select_capabilities(config, tmp_path, sources, epl3)
+    assert [p.name for p in built] == ["lens.c", "main.c", "shot.S"]
+    assert (hooks, unproven) == (["cw_updateDisplay", "img_exec"], ["img_exec"])
+    lens_only = dataclasses.replace(epl3, capabilities=("lens",))
+    built, hooks, unproven = plugin.select_capabilities(
+        config, tmp_path, sources, lens_only
+    )
+    assert [p.name for p in built] == ["lens.c", "main.c"]
+    assert (hooks, unproven) == (["cw_updateDisplay"], [])
+
+
+@pytest.mark.parametrize(
+    ("tables", "error"),
+    [
+        (
+            '[capabilities.lenz]\nsources = ["lens.c"]\n',
+            "no target has capability 'lenz'",
+        ),
+        ('[capabilities.lens]\nfiles = ["lens.c"]\n', "unknown key files"),
+        (
+            '[capabilities.lens]\nsources = ["lens.h"]\n',
+            "lists lens.h, not a .c or .S file",
+        ),
+        (
+            '[capabilities.lens]\nsources = ["lens.c"]\n[capabilities.batt]\nsources = ["lens.c"]\n',
+            "lists lens.c, already under lens",
+        ),
+        (
+            '[capabilities.img_exec]\nhooks = ["cw_updateDisplay"]\n',
+            "lists hook cw_updateDisplay, already listed under the top level",
+        ),
+        (
+            '[capabilities.lens]\nsources = "lens.c"\n',
+            "[capabilities.lens] sources must be a list of strings, not 'lens.c'",
+        ),
+        ('capabilities = ["lens"]\n', "plugin.toml capabilities must be tables"),
+        (
+            "[capabilities.img_exec]\nhooks = [1]\n",
+            "[capabilities.img_exec] hooks must be a list of strings",
+        ),
+    ],
+)
+def test_capability_tables_are_checked(tmp_path, tables, error):
+    config, sources = capability_plugin(tmp_path, tables)
+    with pytest.raises(plugin.BuildError, match=re.escape(error)):
+        plugin.select_capabilities(config, tmp_path, sources, sdk.target("epl3"))
+
+
+@needs_toolchain
+def test_main_builds_without_the_body_capabilities(tmp_path):
+    """A body with the HUD, settings page and key layer but none of main's body capabilities builds
+    main with no feature, no Fn action and no R/B swap."""
+    epl3 = sdk.target("epl3")
+    bare = dataclasses.replace(
+        epl3,
+        capabilities=tuple(c for c in epl3.capabilities if c not in BODY_CAPABILITIES),
+    )
+    image = plugin.build(MAIN_DIR, tmp_path, bare)
+    assert check_image(image.read_bytes()) is None
+    symbols = (tmp_path / "plugin.map").read_text()
+    assert " plugin_main\n" in symbols
+    for name in (
+        "feat_focus",
+        "feat_batt",
+        "feat_fmeter",
+        "act_shot",
+        "main_rbswap_hk",
+    ):
+        assert f" {name}\n" not in symbols
+    assert " fenykl_hook_img_exec\n" not in symbols

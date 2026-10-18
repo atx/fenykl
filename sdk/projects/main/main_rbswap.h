@@ -7,20 +7,14 @@
 #define _MAIN_RBSWAP_H
 
 #include <stdbool.h>
-#include <fenykl.h>
+#include <body.h>
 
-/* IMG_CTRL (A0 of img_exec) and IMG_PARAM fields */
-#define MAIN_RBSWAP_CTRL_FLAG 0x54u	/* u32 ulFlag */
-#define MAIN_RBSWAP_CTRL_PARAM 0x60u	/* IMG_PARAM *pImgParam */
-#define MAIN_RBSWAP_CTRL_MODE 0xC4u	/* u8 ucMode */
-#define MAIN_RBSWAP_FLAG_ENGINE2 0x10000000u
-#define MAIN_RBSWAP_PARAM_MAT 0x18u	/* s16 ashMat[9], row major, 0x80 = 1.0 */
-#define MAIN_RBSWAP_MAT_N 9
-
+/* Built for targets with img_exec only (plugin.toml); elsewhere the task side does nothing. */
+#if FENYKL_HAS_IMG_EXEC
 /* Written by the hook, read by the plugin task; FENYKL_SHARED_PTR(main_rbswap_hk) only. */
 struct main_rbswap_hook_state {
 	uint32_t enable;	/* written by the task (the option): swap while non-zero */
-	uint32_t cls[4];	/* CPU0 passes by img_mode_class 0..3 */
+	uint32_t cls[4];	/* CPU0 passes by fenykl_img_mode_class 0..3 */
 	uint32_t eng1;		/* CPU0 engine-1 passes (stills, review, playback) */
 	uint32_t cpu1;		/* passes on CPU1, never swapped */
 	uint32_t swaps[2];	/* swapped passes: [0] engine 1, [1] engine 2 */
@@ -29,7 +23,7 @@ struct main_rbswap_hook_state {
 	uint32_t kept;		/* ashMat changed during a swapped pass, so it was not restored */
 	uint32_t m_seq;		/* +1 per swapped engine-1 pass; m_mode and m hold its input */
 	uint32_t m_mode;
-	int16_t m[MAIN_RBSWAP_MAT_N];
+	int16_t m[FENYKL_IMG_MAT_N];
 };
 
 extern struct main_rbswap_hook_state main_rbswap_hk;
@@ -42,5 +36,24 @@ int main_rbswap_start(void);
 void main_rbswap_tick(void);
 void main_rbswap_set_level(unsigned int level);
 void main_rbswap_status(void);
+#else
+static inline int main_rbswap_start(void)
+{
+	return 0;
+}
+
+static inline void main_rbswap_tick(void)
+{
+}
+
+static inline void main_rbswap_set_level(unsigned int level)
+{
+	(void)level;
+}
+
+static inline void main_rbswap_status(void)
+{
+}
+#endif
 
 #endif

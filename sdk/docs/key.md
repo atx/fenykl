@@ -44,7 +44,7 @@ DEBUG lines: set `fenykl_key_log.level = FENYKL_LOG_DEBUG` to see them).
 | `fenykl_key_inject(k)` | CPU0 task or handler | press + release of a button through the stock entry (`fenykl_event_inject`): the firmware acts, `ui_key_get_state` keeps reporting the key up; `EARG` for NONE and the mode dial |
 | `fenykl_key_pressed(k)` | any CPU0 context | `fw_ui_key_get_state(code) == 1`; false for NONE and the mode dial |
 | `fenykl_key_mode_dial()` | any CPU0 context | `fw_ui_key_get_state(0x02021901)`: the hardware mode dial value (1 P, 2 A, 3 S, 4 M, 0x0A movie, 0x31 iAUTO, 0x33 ART, 0x2A SCN) |
-| `fenykl_gui_state()` | any | GUI super state << 8 \| state (u8 bytes at 0x60702278); `FENYKL_GUI_SUPER()`, `FENYKL_GUI_SS_REC` (0x02, every live-view screen), `_MENU` (0x03), `_PLAY` (0x06) |
+| `fenykl_gui_state()` | any | GUI super state << 8 \| state (u8 bytes at 0x60702278); `FENYKL_GUI_SUPER()`, `FENYKL_GUI_SS_REC` (0x02, every live-view screen), `_MENU` (0x03), `_PLAY` (0x06). The E-PL3's encoding: a plugin for several cameras asks `body.h`'s `fenykl_gui_live_view()` / `fenykl_gui_playback()` instead |
 
 A handler node is the plugin's static storage and stays added for the boot; `enabled = false`
 stops new claims and deliveries (a key it already holds still completes). The fields under
@@ -52,9 +52,10 @@ stops new claims and deliveries (a key it already holds still completes). The fi
 a release handed to the tick, and the counters `shorts`, `longs`, `replays`, `busy`.
 
 ```c
+/* claim runs in the event hook call that read gui, so the GUI now is the GUI at the press */
 static bool feat_claim(enum fenykl_key key, uint16_t gui, void *arg)
 {
-	return FENYKL_GUI_SUPER(gui) == FENYKL_GUI_SS_REC;
+	return fenykl_gui_live_view();		/* <body.h> */
 }
 
 static void feat_on_key(const struct fenykl_key_event *ev, void *arg)

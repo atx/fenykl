@@ -8,8 +8,8 @@
 #include "main_dof.h"
 #include "main_fmt.h"
 #include "feat_focus_filter.h"
+#include <body.h>
 
-#define FEAT_DOF_PROP_AV 0xA03Au	/* setting 3001: shooting Av, u16 APEX x 256 */
 #define FEAT_DOF_COC_UM 15u		/* ExifTool's c for 4/3: diagonal 21.6 mm / 1440 */
 #define FEAT_DOF_PAIR_MS 2
 #define FEAT_DOF_LABEL "DoF\n"
@@ -39,14 +39,6 @@ static struct feat_dof_state feat_dof_st = {
 static FENYKL_LOG_MODULE(feat_dof_log, "dof", FENYKL_LOG_INFO);
 
 FENYKL_CFG_BOOL(feat_dof_show, "main.dof.show", "Depth of field", &main_grp_hud, 1);
-
-/* Shooting Av, 0 if the prop is not there */
-static uint32_t feat_dof_av(void)
-{
-	const volatile uint16_t *p = fw_prop_get_obj(FEAT_DOF_PROP_AV);
-
-	return p ? p[0] : 0;
-}
 
 static int feat_dof_start(void)
 {
@@ -81,7 +73,7 @@ static void feat_dof_tick(void)
 	int r;
 
 	a = feat_focus_read();
-	fw_OlyTaskSleep(FEAT_DOF_PAIR_MS);
+	fenykl_task_sleep(FEAT_DOF_PAIR_MS);
 	b = feat_focus_read();
 	if (feat_focus_filter(&st->filter, a, b, feat_dof_show, &s))
 		st->filter.shown = s;
@@ -90,8 +82,8 @@ static void feat_dof_tick(void)
 		feat_dof_hide();
 		return;
 	}
-	f = fw_lens_focal_length_now() & 0xFFFFu;
-	av = feat_dof_av();
+	f = fenykl_lens_focal_mm();
+	av = fenykl_lens_av();
 	/* Av 0 is f/1.0, but also the prop before AE has set it */
 	if (!av || !main_dof_calc(&d, s, f, av, FEAT_DOF_COC_UM)) {
 		feat_dof_hide();
@@ -111,7 +103,7 @@ static void feat_dof_tick(void)
 		st->text[i] = text[i];
 	st->changes++;
 	fenykl_log_dbg(&feat_dof_log, "s %u f %u av %u iris %u", s, f, av,
-		       *(volatile uint16_t *)FW_AV_EFFECT);
+		       fenykl_lens_iris_av());
 	fenykl_log_dbg(&feat_dof_log, "  N1000 %u near %u far %u dof %u", d.n1000, d.near, d.far,
 		       d.depth);
 }

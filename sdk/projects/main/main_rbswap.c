@@ -57,7 +57,7 @@ void main_rbswap_tick(void)
 {
 	volatile struct main_rbswap_hook_state *s = FENYKL_SHARED_PTR(main_rbswap_hk);
 	struct main_rbswap_state *st = &main_rbswap_st;
-	uint16_t m[MAIN_RBSWAP_MAT_N];
+	uint16_t m[FENYKL_IMG_MAT_N];
 	uint32_t seq = s->m_seq, mode = s->m_mode;
 
 	if (!st->installed)
@@ -69,7 +69,7 @@ void main_rbswap_tick(void)
 	}
 	if (seq == st->m_seq)
 		return;
-	for (unsigned int i = 0; i < MAIN_RBSWAP_MAT_N; i++)
+	for (unsigned int i = 0; i < FENYKL_IMG_MAT_N; i++)
 		m[i] = (uint16_t)s->m[i];
 	if (s->m_seq != seq)
 		return;

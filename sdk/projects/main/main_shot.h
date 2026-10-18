@@ -1,16 +1,15 @@
 /*
  * main: the screenshot's pixel work, free of firmware calls so that the simulator test
  * (tests/sim/main/) runs the real code: live view YUYV and the OSD palettes to RGB, the OSD layers
- * blended over the live view on the 720x480 canvas, the 16:9 stretch and the PPM header.
+ * blended over the live view on the canvas (MAIN_SHOT_W x MAIN_SHOT_H, main_layout.h), the 16:9
+ * stretch and the PPM header.
  */
 #ifndef _MAIN_SHOT_H
 #define _MAIN_SHOT_H
 
 #include <stdint.h>
+#include "main_layout.h"
 
-#define MAIN_SHOT_W 720u		/* OSD canvas = shown part of the LV buffer */
-#define MAIN_SHOT_H 480u
-#define MAIN_SHOT_OUT_W 853u		/* 720 * 32 / 27: the canvas is shown stretched to 16:9 */
 #define MAIN_SHOT_LAYERS 3u
 #define MAIN_SHOT_ALPHA_MAX 15u		/* OSD palette alpha 0..15 */
 #define MAIN_SHOT_HDR_MAX 24u
@@ -36,7 +35,8 @@ struct main_shot_frame {
 void main_shot_ycc_rgb(unsigned int y, unsigned int cb, unsigned int cr, uint8_t *rgb);
 /* n palette entries {Y, Cb, Cr, alpha} -> {R, G, B, alpha} (alpha masked to 0..15). */
 void main_shot_palette(const uint8_t *ycca, unsigned int n, uint8_t *rgba);
-/* Canvas row y of the frame: live view, then each drawn layer blended in order. rgb: 720 * 3. */
+/* Canvas row y of the frame: live view, then each drawn layer blended in order. rgb:
+   MAIN_SHOT_W * 3. */
 void main_shot_compose(const struct main_shot_frame *f, unsigned int y, uint8_t *rgb);
 /* Linear horizontal resample of an RGB row from in_w to out_w pixels (pixel centres aligned). */
 void main_shot_stretch(const uint8_t *in, unsigned int in_w, uint8_t *out, unsigned int out_w);

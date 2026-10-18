@@ -6,19 +6,10 @@
  * decoded at start, in the stock scale's joined black bar.
  */
 #include <afc.h>
+#include <body.h>
 #include "main.h"
 #include "main_fmeter.h"
 
-#define FEAT_FMETER_TF_MODE 0x05u	/* u8 mode_focus: 1 MF [camera] */
-#define FEAT_FMETER_TF_MF 1u
-#define FEAT_FMETER_PROP_AREA 0x84D1u	/* AF area mode, 2 = all targets */
-#define FEAT_FMETER_PROP_TARGET 0x88B2u	/* AF target index */
-#define FEAT_FMETER_AREA_ALL 2u
-#define FEAT_FMETER_TARGETS 35u
-#define FEAT_FMETER_CTX_COLS 0x5Du
-#define FEAT_FMETER_CTX_ROWS 0x5Eu
-#define FEAT_FMETER_CTX_PATTERN 0x2D0u
-#define FEAT_FMETER_CTX_CUT3 0x2D6u	/* u16 HPF3 cut-off: switches between framing and scan */
 #define FEAT_FMETER_ROWS_MAX 6u
 #define FEAT_FMETER_H3 2u		/* channel: HPF1, HPF2, HPF3, HPFV */
 #define FEAT_FMETER_KEY_MF 0xFFFF0000u	/* log key of the own client's values */
@@ -26,15 +17,8 @@
 #define FEAT_FMETER_MF_HIDE (FENYKL_AFC_G_SNAP | FENYKL_AFC_G_LV | FENYKL_AFC_G_MOVIE | \
 			     FENYKL_AFC_G_DRV | FENYKL_AFC_G_OFF)
 
-/* Exposure-row cells (8 x 9, 1 px transparent ring) and their kinds in the bar. */
-#define FEAT_FMETER_IMG_WHITE 1095u
-#define FEAT_FMETER_IMG_YELLOW 1096u
-#define FEAT_FMETER_IMG_GREEN 1098u
-#define FEAT_FMETER_IMG_FILL 0x04u	/* 1095's white fill */
-#define FEAT_FMETER_IMG_BORDER 0x7Eu	/* 1095's translucent border */
-#define FEAT_FMETER_CELL_W 8
-#define FEAT_FMETER_CELL_H 9
-#define FEAT_FMETER_CELL_PX (FEAT_FMETER_CELL_W * FEAT_FMETER_CELL_H)
+/* The stock cells (main_layout.h) and their kinds in the bar. */
+#define FEAT_FMETER_CELL_PX (MAIN_LAYOUT_FMETER_CELL_W * MAIN_LAYOUT_FMETER_CELL_H)
 
 enum feat_fmeter_kind { FEAT_FMETER_UNLIT, FEAT_FMETER_LIT, FEAT_FMETER_PEAK, FEAT_FMETER_GREEN,
 			FEAT_FMETER_KINDS };
@@ -67,27 +51,7 @@ static FENYKL_LOG_MODULE(feat_fmeter_log, "fmeter", FENYKL_LOG_INFO);
 
 FENYKL_CFG_BOOL(feat_fmeter_show, "main.fmeter.show", "Focus meter", &main_grp_hud, 1);
 
-static uint32_t feat_fmeter_rd8(uint32_t a)
-{
-	return *(volatile uint8_t *)(uintptr_t)a;
-}
-
-static uint32_t feat_fmeter_rd16(uint32_t a)
-{
-	return *(volatile uint16_t *)(uintptr_t)a;
-}
-
-static uint32_t feat_fmeter_rd32(uint32_t a)
-{
-	return *(volatile uint32_t *)(uintptr_t)a;
-}
-
-static uint32_t feat_fmeter_prop_u8(unsigned int prop)
-{
-	const volatile uint8_t *p = fw_prop_get_obj(prop);
-
-	return p ? p[0] : 0xFFu;
-}
+_Static_assert(FENYKL_AF_AREA_NONE == MAIN_FMETER_AREA_NONE, "area none");
 
 /* Decodes image id into kind k's cell, the borders made black as in the stock scale's bar. */
 static int feat_fmeter_cell(unsigned int k, uint16_t id, uint8_t fill)
@@ -95,14 +59,14 @@ static int feat_fmeter_cell(unsigned int k, uint16_t id, uint8_t fill)
 	uint8_t *px = feat_fmeter_st.cell[k];
 	int w, h, r = fenykl_hud_image(id, px, FEAT_FMETER_CELL_PX, &w, &h);
 
-	if (r || w != FEAT_FMETER_CELL_W || h != FEAT_FMETER_CELL_H) {
+	if (r || w != MAIN_LAYOUT_FMETER_CELL_W || h != MAIN_LAYOUT_FMETER_CELL_H) {
 		fenykl_log_err(&feat_fmeter_log, "image %u: %d, %dx%d", id, r, w, h);
 		return r ? r : FENYKL_HUD_EGLYPH;
 	}
 	for (int i = 0; i < FEAT_FMETER_CELL_PX; i++) {
-		if (px[i] == FEAT_FMETER_IMG_BORDER)
+		if (px[i] == MAIN_LAYOUT_FMETER_IMG_BORDER)
 			px[i] = FENYKL_HUD_BLACK;
-		else if (px[i] == FEAT_FMETER_IMG_FILL)
+		else if (px[i] == MAIN_LAYOUT_FMETER_IMG_FILL)
 			px[i] = fill;
 	}
 	return 0;
@@ -114,13 +78,17 @@ static int feat_fmeter_start(void)
 	int r;
 
 	fenykl_afc_init();
-	r = feat_fmeter_cell(FEAT_FMETER_UNLIT, FEAT_FMETER_IMG_WHITE, MAIN_LAYOUT_FMETER_UNLIT);
+	r = feat_fmeter_cell(FEAT_FMETER_UNLIT, MAIN_LAYOUT_FMETER_IMG_WHITE,
+			     MAIN_LAYOUT_FMETER_UNLIT);
 	if (!r)
-		r = feat_fmeter_cell(FEAT_FMETER_LIT, FEAT_FMETER_IMG_WHITE, FEAT_FMETER_IMG_FILL);
+		r = feat_fmeter_cell(FEAT_FMETER_LIT, MAIN_LAYOUT_FMETER_IMG_WHITE,
+				     MAIN_LAYOUT_FMETER_IMG_FILL);
 	if (!r)
-		r = feat_fmeter_cell(FEAT_FMETER_PEAK, FEAT_FMETER_IMG_YELLOW, FEAT_FMETER_IMG_FILL);
+		r = feat_fmeter_cell(FEAT_FMETER_PEAK, MAIN_LAYOUT_FMETER_IMG_YELLOW,
+				     MAIN_LAYOUT_FMETER_IMG_FILL);
 	if (!r)
-		r = feat_fmeter_cell(FEAT_FMETER_GREEN, FEAT_FMETER_IMG_GREEN, FEAT_FMETER_IMG_FILL);
+		r = feat_fmeter_cell(FEAT_FMETER_GREEN, MAIN_LAYOUT_FMETER_IMG_GREEN,
+				     MAIN_LAYOUT_FMETER_IMG_FILL);
 	if (r)
 		return r;
 	r = fenykl_hud_add(e);
@@ -145,11 +113,11 @@ static int feat_fmeter_paint(uint8_t *box, int w, int h, void *arg)
 		else if (k + 1 == b->peak)
 			kind = FEAT_FMETER_PEAK;
 		c = feat_fmeter_st.cell[kind];
-		for (int y = 0; y < FEAT_FMETER_CELL_H; y++)
-			for (int x = 0; x < FEAT_FMETER_CELL_W; x++)
-				if (c[y * FEAT_FMETER_CELL_W + x])
+		for (int y = 0; y < MAIN_LAYOUT_FMETER_CELL_H; y++)
+			for (int x = 0; x < MAIN_LAYOUT_FMETER_CELL_W; x++)
+				if (c[y * MAIN_LAYOUT_FMETER_CELL_W + x])
 					box[y * w + MAIN_LAYOUT_FMETER_PITCH * k + x] =
-						c[y * FEAT_FMETER_CELL_W + x];
+						c[y * MAIN_LAYOUT_FMETER_CELL_W + x];
 	}
 	return 0;
 }
@@ -160,14 +128,10 @@ static void feat_fmeter_sample(struct main_fmeter_in *in, const volatile uint32_
 {
 	struct feat_fmeter_state *st = &feat_fmeter_st;
 	uint32_t cw = rows * MAIN_FMETER_ROW_WORDS;
-	uint32_t t, word;
-	int area = MAIN_FMETER_AREA_NONE;
-	bool fresh = false, all;
+	uint32_t word;
+	int area = fenykl_af_target_area();
+	bool fresh = false, all = fenykl_af_all_targets();
 
-	t = feat_fmeter_prop_u8(FEAT_FMETER_PROP_TARGET);
-	if (t < FEAT_FMETER_TARGETS && feat_fmeter_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t + 1))
-		area = (int)feat_fmeter_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t);
-	all = feat_fmeter_prop_u8(FEAT_FMETER_PROP_AREA) == FEAT_FMETER_AREA_ALL;
 	st->area = main_fmeter_area((const uint32_t *)(buf + FEAT_FMETER_H3 * cw), cols, rows, all,
 				    area);
 	word = main_fmeter_word(st->area, cols);
@@ -185,22 +149,15 @@ static void feat_fmeter_sample(struct main_fmeter_in *in, const volatile uint32_
 /* AF: the firmware's client, fcs's buffer. */
 static void feat_fmeter_read_af(struct main_fmeter_in *in)
 {
-	uint32_t ctx = feat_fmeter_rd32(FW_FCS_CONTRAST_CTX);
-	uint32_t cw = feat_fmeter_rd32(FW_FCS_AREA_SIZE);
-	uint32_t cols, rows;
-	uint8_t pattern;
+	struct fenykl_af_grid g;
 
-	if (!ctx)
+	if (!fenykl_af_grid(&g))
 		return;
-	cols = feat_fmeter_rd8(ctx + FEAT_FMETER_CTX_COLS);
-	rows = feat_fmeter_rd8(ctx + FEAT_FMETER_CTX_ROWS);
-	if (!cols || cols > MAIN_FMETER_ROW_WORDS || !rows || rows > FEAT_FMETER_ROWS_MAX ||
-	    cw != rows * MAIN_FMETER_ROW_WORDS)
+	if (!g.cols || g.cols > MAIN_FMETER_ROW_WORDS || !g.rows || g.rows > FEAT_FMETER_ROWS_MAX ||
+	    g.chan_words != g.rows * MAIN_FMETER_ROW_WORDS)
 		return;
-	pattern = (uint8_t)feat_fmeter_rd8(ctx + FEAT_FMETER_CTX_PATTERN);
-	feat_fmeter_sample(in, (const volatile uint32_t *)FW_FCS_DMA_BUF, cols, rows, pattern);
-	feat_fmeter_st.key = feat_fmeter_rd16(ctx + FEAT_FMETER_CTX_CUT3) << 16 |
-			     feat_fmeter_st.area << 8 | pattern;
+	feat_fmeter_sample(in, g.buf, g.cols, g.rows, g.pattern);
+	feat_fmeter_st.key = (uint32_t)g.cut3 << 16 | feat_fmeter_st.area << 8 | g.pattern;
 }
 
 /*
@@ -227,12 +184,10 @@ static void feat_fmeter_read_mf(struct main_fmeter_in *in)
 /* The statistics of this tick; in->fresh false if none. */
 static void feat_fmeter_read(struct main_fmeter_in *in)
 {
-	uint32_t tf = feat_fmeter_rd32(FW_TAKE_FOCUS_PTR);
-
 	in->hide = false;
-	in->half = !(feat_fmeter_rd8(FW_TRG_SNAPSHOT) & 1u);
+	in->half = fenykl_af_half();
 	in->fresh = false;
-	if (tf && feat_fmeter_rd8(tf + FEAT_FMETER_TF_MODE) == FEAT_FMETER_TF_MF)
+	if (fenykl_af_mf())
 		feat_fmeter_read_mf(in);
 	else
 		feat_fmeter_read_af(in);

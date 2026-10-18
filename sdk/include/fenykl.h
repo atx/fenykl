@@ -21,6 +21,32 @@ int memcmp(const void *a, const void *b, size_t n);
    after .bss is cleared. Returning ends the task. Never busy-wait (watchdog, see README). */
 void plugin_main(uint32_t load_base, uint32_t image_size);
 
+/* Firmware services every target has, for plugins that name no firmware symbol themselves. The
+   firmware.toml entries of OlyTaskSleep, rpc_fopen, rpc_fwrite, rpc_fclose and sprintf hold their
+   exact semantics; the file functions are CPU0-only. */
+static inline int fenykl_task_sleep(int ticks)
+{
+	return fw_OlyTaskSleep(ticks);
+}
+
+static inline void *fenykl_fopen(const char *path, const char *mode)
+{
+	return fw_rpc_fopen(path, mode);
+}
+
+static inline int fenykl_fwrite(const void *buf, unsigned int size, unsigned int n, void *fp)
+{
+	return fw_rpc_fwrite(buf, size, n, fp);
+}
+
+static inline int fenykl_fclose(void *fp)
+{
+	return fw_rpc_fclose(fp);
+}
+
+/* fw_sprintf: at most 8 variadic words. */
+#define fenykl_sprintf(...) fw_sprintf(__VA_ARGS__)
+
 /* Target: nonzero if this boot was started by plugging in the USB cable. The runtime then returns
    without calling plugin_main, unless plugin.toml sets run_on_usb = true (README, Startup). */
 int fenykl_usb_attached(void);
@@ -33,9 +59,11 @@ bool fenykl_usb_cable_present(void) FENYKL_CPU0_ONLY("fenykl_usb_cable_present")
 bool fenykl_card_io_allowed(void) FENYKL_CPU0_ONLY("fenykl_card_io_allowed");
 
 /* Hooks (README, Hooks): FENYKL_HOOK(name, fn) makes `fn` the replacement of firmware function
-   `name`, which plugin.toml must list in `hooks`. `fn` has the signature fw_hook_<name>_fn and may
-   call the original as fw_orig_<name>(...). Nothing changes until fenykl_hook_install. */
+   `name`, which plugin.toml must list in `hooks` (top level or a [capabilities.<cap>] table). `fn`
+   has the signature fw_hook_<name>_fn and may call the original as FENYKL_ORIG(name)(...), which
+   is fw_orig_<name>. Nothing changes until fenykl_hook_install. */
 #define FENYKL_HOOK(name, fn) FENYKL_HOOK_##name(fn)
+#define FENYKL_ORIG(name) fw_orig_##name
 
 /* Descriptor of a hook (fenykl_hook_<name>, generated from firmware.toml by fenykl's fwapi.hook_asm,
    which emits this layout). Installed with fenykl_hook_install (arch/<camera>/hooks.c). */

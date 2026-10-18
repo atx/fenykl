@@ -2,7 +2,25 @@ targets = ["epl3"]
 
 # HUD elements are drawn from a cw_updateDisplay hook (sdk/docs/hud.md). Its CPU1 scope rests on
 # static analysis only; the library counts CPU1 calls and main stops drawing at the first one.
+hooks = ["cw_updateDisplay"]
+cpu1_unproven = ["cw_updateDisplay"]
+
+# Features built only for targets with the body capability they read (include/body.h).
+[capabilities.lens]
+sources = ["feat_focus.c", "feat_dof.c"]
+
+[capabilities.afc]
+sources = ["feat_fmeter.c"]
+
+[capabilities.batt]
+sources = ["feat_batt.c"]
+
+[capabilities.shot]
+sources = ["act_shot.c"]
+
 # The R/B swap hooks img_exec (main_rbswap_hook.c). It reaches CPU1 only through IMG_CALLIMG, which
 # has no client in v1.6; the hook passes CPU1 passes through unchanged and counts them.
-hooks = ["cw_updateDisplay", "img_exec"]
-cpu1_unproven = ["cw_updateDisplay", "img_exec"]
+[capabilities.img_exec]
+sources = ["main_rbswap.c", "main_rbswap_hook.c"]
+hooks = ["img_exec"]
+cpu1_unproven = ["img_exec"]

@@ -1,20 +1,15 @@
 /*
  * main: battery charge element, e.g. "73%", in the top-left corner of the info screens. Once a
- * second in live view it reads the battery voltage as the firmware's own checks do (bchk_ad_read
- * under the battery-check semaphore, only while the 1 s source check is on), feeds the model
- * (main_batt.c) and renders on change only: green above 50 %, yellow above 25 %, red below.
+ * second in live view it reads the battery voltage as the firmware's own checks do
+ * (fenykl_batt_read), feeds the model (main_batt.c) and renders on change only: green above 50 %,
+ * yellow above 25 %, red below.
  * Hidden on the AC adapter or DC coupler. The stock battery icon is left alone: on these screens
  * the GUI shows it only at its own "low" level.
  */
 #include "main.h"
 #include "main_batt.h"
-#include <key.h>
+#include <body.h>
 
-#define FEAT_BATT_SEM 5			/* SBCHKCORE: buffer and event of bchk_ad_read are shared */
-#define FEAT_BATT_SEM_MS 20		/* lock and read take 5-7 ms [camera] */
-#define FEAT_BATT_CH 4u			/* A/D channel of the battery voltage */
-#define FEAT_BATT_SRC_BATT 0x200u
-#define FEAT_BATT_SRC_BATT2 0x400u	/* also a battery for hfw_get_battery_state; 0x100 is AC or DC */
 #define FEAT_BATT_GREEN 50u		/* % above which the text is green, then yellow */
 #define FEAT_BATT_YELLOW 25u
 #define FEAT_BATT_WIDEST "100%"
@@ -23,12 +18,12 @@
 struct feat_batt_state {
 	struct fenykl_hud_elem elem;
 	struct main_batt model;
-	uint16_t src;		/* power source of the last tick */
+	uint32_t src;		/* power source of the last tick */
 	uint8_t shown;		/* % on screen, MAIN_BATT_NONE while hidden */
 	uint32_t vbat;		/* last read */
 	uint32_t reads;
 	uint32_t standby;	/* reads skipped: source check off */
-	uint32_t busy;		/* reads skipped: semaphore not taken in FEAT_BATT_SEM_MS */
+	uint32_t busy;		/* reads skipped: the battery check held the A/D */
 	uint32_t changes;	/* values drawn */
 	uint32_t refused;	/* renders refused by the library */
 };
@@ -94,19 +89,16 @@ static void feat_batt_hide(void)
 static bool feat_batt_read(uint32_t *v)
 {
 	struct feat_batt_state *st = &feat_batt_st;
+	int r = fenykl_batt_read(v);
 
-	if (fw_OlySemaphoreWait(FEAT_BATT_SEM, FEAT_BATT_SEM_MS)) {
+	if (r == FENYKL_BATT_EBUSY) {
 		st->busy++;
 		return false;
 	}
-	/* bchk_ad_read waits forever on its event, so read only while the stock check does */
-	if (!*(volatile uint8_t *)FW_POWER_SRC_CHECK) {
-		fw_OlySemaphoreSignal(FEAT_BATT_SEM);
+	if (r == FENYKL_BATT_ESTANDBY) {
 		st->standby++;
 		return false;
 	}
-	*v = fw_bchk_ad_read(FEAT_BATT_CH);
-	fw_OlySemaphoreSignal(FEAT_BATT_SEM);
 	st->reads++;
 	return true;
 }
@@ -129,7 +121,7 @@ static void feat_batt_text(char *s, unsigned int pct)
 static void feat_batt_tick(void)
 {
 	struct feat_batt_state *st = &feat_batt_st;
-	uint16_t src = *(volatile uint16_t *)FW_POWER_SRC;
+	uint32_t src = fenykl_power_src();
 	char text[FEAT_BATT_TEXT_SIZE];
 	unsigned int pct, ink;
 	int r;
@@ -139,12 +131,12 @@ static void feat_batt_tick(void)
 		st->src = src;
 		main_batt_reset(&st->model);
 	}
-	if (!feat_batt_show || (src != FEAT_BATT_SRC_BATT && src != FEAT_BATT_SRC_BATT2)) {
+	if (!feat_batt_show || !fenykl_power_src_batt(src)) {
 		feat_batt_hide();
 		return;
 	}
 	/* the model's load compensation is the live view's */
-	if (FENYKL_GUI_SUPER(fenykl_gui_state()) != FENYKL_GUI_SS_REC || !feat_batt_read(&st->vbat))
+	if (!fenykl_gui_live_view() || !feat_batt_read(&st->vbat))
 		return;
 	pct = main_batt_add(&st->model, st->vbat);
 	if (pct == st->shown)

@@ -1,11 +1,12 @@
 /*
- * main: focus distance element. Reads obj_dst twice per tick, filters
+ * main: focus distance element. Reads the focus distance twice per tick, filters
  * (feat_focus_filter.c), formats (main_fmt.c) and renders on change only, under an "FD" label
  * like the DoF element's.
  */
 #include "main.h"
 #include "main_fmt.h"
 #include "feat_focus_filter.h"
+#include <body.h>
 
 #define FEAT_FOCUS_PAIR_MS 2		/* between the two reads */
 #define FEAT_FOCUS_LABEL "FD\n"
@@ -37,12 +38,12 @@ static FENYKL_LOG_MODULE(feat_focus_log, "focus", FENYKL_LOG_INFO);
 
 FENYKL_CFG_BOOL(feat_focus_show, "main.focus.show", "Focus distance", &main_grp_hud, 1);
 
-/* obj_dst in mm, FEAT_FOCUS_HIDDEN without a lens */
+/* Focus distance in mm, FEAT_FOCUS_HIDDEN without a lens */
 uint32_t feat_focus_read(void)
 {
-	if (*(volatile uint16_t *)FW_LENS_ATTACHED == 0)
+	if (!fenykl_lens_attached())
 		return FEAT_FOCUS_HIDDEN;
-	return *(volatile uint32_t *)FW_LENS_OBJ_DST;
+	return fenykl_lens_focus_mm();
 }
 
 /* Width of the widest line of any main_fmt_dist text in the layout style, or FENYKL_HUD_E*.
@@ -118,7 +119,7 @@ static void feat_focus_tick(void)
 	int r;
 
 	a = feat_focus_read();
-	fw_OlyTaskSleep(FEAT_FOCUS_PAIR_MS);
+	fenykl_task_sleep(FEAT_FOCUS_PAIR_MS);
 	b = feat_focus_read();
 	if (!feat_focus_filter(&st->filter, a, b, feat_focus_show, &v))
 		return;
@@ -126,7 +127,7 @@ static void feat_focus_tick(void)
 		fenykl_hud_hide(&st->elem);
 		st->filter.shown = v;
 		fenykl_log_dbg(&feat_focus_log, "hidden (lens %u, show %d)",
-			       *(volatile uint16_t *)FW_LENS_ATTACHED, feat_focus_show);
+			       fenykl_lens_attached(), feat_focus_show);
 		return;
 	}
 	main_fmt_dist(st->text + sizeof(FEAT_FOCUS_LABEL) - 1, v);

@@ -7,21 +7,11 @@
  */
 #include "main.h"
 #include "main_shot.h"
-#include <key.h>
+#include <body.h>
 
-/* live view display */
-#define ACT_SHOT_FLIP_ENTRIES 3u
-#define ACT_SHOT_LV_PITCH 1600u		/* 800x600 YUYV */
-#define ACT_SHOT_LV_BYTES (ACT_SHOT_LV_PITCH * 600u)
 #define ACT_SHOT_LV_TRIES 3u
 #define ACT_SHOT_FLIP_WAIT_MS 200u
-/* GUI OSD */
-#define ACT_SHOT_PLANE_W 896u
-#define ACT_SHOT_PLANE_H 600u
 #define ACT_SHOT_OSD_TRIES 5u
-/* RECFILE */
-#define ACT_SHOT_RECFILE_BLOCKS 256u
-#define ACT_SHOT_RECFILE_BLOCK 0x1E3C0u
 
 #define ACT_SHOT_STRIP_ROWS 24u
 #define ACT_SHOT_STRIPS (MAIN_SHOT_H / ACT_SHOT_STRIP_ROWS)
@@ -35,13 +25,8 @@
 #define ACT_SHOT_OFF_L2 (ACT_SHOT_OFF_L1 + MAIN_SHOT_W * MAIN_SHOT_H)
 #define ACT_SHOT_OFF_STRIP (ACT_SHOT_OFF_L2 + MAIN_SHOT_W / 2 * MAIN_SHOT_H)
 #define ACT_SHOT_BYTES (ACT_SHOT_OFF_STRIP + ACT_SHOT_OUT_ROW * ACT_SHOT_STRIP_ROWS)
-#define ACT_SHOT_NBLOCKS ((ACT_SHOT_BYTES + ACT_SHOT_RECFILE_BLOCK - 1) / ACT_SHOT_RECFILE_BLOCK)
 
-struct act_shot_vram {
-	uint32_t plane;
-	uint16_t width, height;
-	uint32_t pdata;
-};
+_Static_assert(MAIN_SHOT_LAYERS == FENYKL_OSD_LAYERS, "layers");
 
 struct act_shot_state {
 	bool scanned;			/* next_file found on the card */
@@ -52,7 +37,7 @@ struct act_shot_state {
 	uint32_t t0, capture_ms;
 	unsigned int file;
 	struct main_shot_frame frame;
-	uint8_t pal[(256 + 16 + 8) * 4];	/* RGBA */
+	uint8_t pal[FENYKL_OSD_PAL_TOTAL * 4];	/* RGBA */
 	uint8_t canvas[3 * MAIN_SHOT_W];
 	/* counters for the status */
 	uint32_t shots, failed, lv_torn, osd_torn, no_lv;
@@ -62,63 +47,32 @@ static struct act_shot_state act_shot_st;
 
 static FENYKL_LOG_MODULE(act_shot_log, "shot", FENYKL_LOG_INFO);
 
-/* bottom to top [inferred from camera OSD dumps; L1 on top (osdcard)]; 0x1A4 is logged at debug */
-static const uint8_t act_shot_stack[MAIN_SHOT_LAYERS] = { 2, 0, 1 };
-static const uint8_t act_shot_bpp[MAIN_SHOT_LAYERS] = { 4, 8, 4 };
-static const uint16_t act_shot_entries[MAIN_SHOT_LAYERS] = { 16, 256, 8 };
-static const uint16_t act_shot_pal_off[MAIN_SHOT_LAYERS] = { 256, 0, 272 };	/* entries */
+static const uint8_t act_shot_stack[MAIN_SHOT_LAYERS] = FENYKL_OSD_STACK;
+static const uint8_t act_shot_bpp[MAIN_SHOT_LAYERS] = FENYKL_OSD_BPP;
+static const uint16_t act_shot_entries[MAIN_SHOT_LAYERS] = FENYKL_OSD_PAL_ENTRIES;
+static const uint16_t act_shot_pal_off[MAIN_SHOT_LAYERS] = FENYKL_OSD_PAL_FIRST;
 static const uint32_t act_shot_off[MAIN_SHOT_LAYERS] = {
 	ACT_SHOT_OFF_L0, ACT_SHOT_OFF_L1, ACT_SHOT_OFF_L2,
 };
-/* display shadow slot per layer: osd0 = L1, osd1 = L0, osd2 = L2 */
-static const uint8_t act_shot_shadow_slot[MAIN_SHOT_LAYERS] = { 1, 0, 2 };
 
-static uint8_t act_shot_rd8(uint32_t a)
+static bool act_shot_claim(void)
 {
-	return *(volatile uint8_t *)(uintptr_t)a;
-}
-
-static uint16_t act_shot_rd16(uint32_t a)
-{
-	return *(volatile uint16_t *)(uintptr_t)a;
-}
-
-static uint32_t act_shot_rd32(uint32_t a)
-{
-	return *(volatile uint32_t *)(uintptr_t)a;
-}
-
-static uint32_t act_shot_cached(uint32_t a)
-{
-	return (a & 0x3FFFFFFFu) | 0x40000000u;
-}
-
-static bool act_shot_dram(uint32_t a, uint32_t bytes)
-{
-	uint32_t c = act_shot_cached(a);
-
-	return (a & 3) == 0 && ((a >> 28) == 0x6 || (a >> 28) == 0xA) && c + bytes <= FW_IMAGE_START;
-}
-
-static bool act_shot_claim(uint16_t gui)
-{
-	return FENYKL_GUI_SUPER(gui) == FENYKL_GUI_SS_REC;
+	return fenykl_gui_live_view();
 }
 
 /* --- copies --- */
 
 /*
- * Copies rows of words from src (cached alias, between two purges) to dst (uncached) and returns
- * how often the masked word at watch changed, checked after each row.
+ * Copies rows of words from src (cached alias, between two flushes) to dst (uncached) and returns
+ * how often watch() changed, checked after each row.
  */
 static unsigned int act_shot_copy(uint32_t dst, uint32_t src, uint32_t pitch, uint32_t dst_pitch,
-				  unsigned int words, unsigned int rows, uint32_t watch,
-				  uint32_t mask)
+				  unsigned int words, unsigned int rows, uint32_t (*watch)(void))
 {
-	uint32_t last = act_shot_rd32(watch) & mask;
+	uint32_t last = watch();
 	unsigned int changes = 0;
 
-	fw_dcache_purge_all_irqsafe();
+	fenykl_dcache_flush();
 	for (unsigned int y = 0; y < rows; y++) {
 		const volatile uint32_t *s = (const volatile uint32_t *)(uintptr_t)(src + y * pitch);
 		volatile uint32_t *d = (volatile uint32_t *)(uintptr_t)(dst + y * dst_pitch);
@@ -126,12 +80,12 @@ static unsigned int act_shot_copy(uint32_t dst, uint32_t src, uint32_t pitch, ui
 
 		for (unsigned int x = 0; x < words; x++)
 			d[x] = s[x];
-		now = act_shot_rd32(watch) & mask;
+		now = watch();
 		if (now != last)
 			changes++;
 		last = now;
 	}
-	fw_dcache_purge_all_irqsafe();
+	fenykl_dcache_flush();
 	return changes;
 }
 
@@ -140,15 +94,7 @@ static void act_shot_lv_place(struct main_shot_frame *f, uint32_t lv)
 {
 	uint32_t x = 0, y = 0;
 
-	for (unsigned int i = 0; i < ACT_SHOT_FLIP_ENTRIES; i++) {
-		uint32_t e = FW_MOV_DISP_FLIP_TBL + 16 * i;
-
-		if ((act_shot_rd32(e) & 0x1FFFFFFFu) != (lv & 0x1FFFFFFFu))
-			continue;
-		x = act_shot_rd32(e + 4);
-		y = act_shot_rd32(e + 8);
-		break;
-	}
+	fenykl_disp_lv_pos(lv, &x, &y);
 	f->lv_x = (uint16_t)((x < MAIN_SHOT_W ? x : MAIN_SHOT_W) & ~1u);
 	f->lv_y = (uint16_t)(y < MAIN_SHOT_H ? y : MAIN_SHOT_H);
 	f->lv_w = (uint16_t)(MAIN_SHOT_W - f->lv_x);
@@ -156,19 +102,18 @@ static void act_shot_lv_place(struct main_shot_frame *f, uint32_t lv)
 	fenykl_log_dbg(&act_shot_log, "lv %08x at %u,%u width %u", lv, f->lv_x, f->lv_y,
 		       f->lv_w);
 	fenykl_log_dbg(&act_shot_log, "img1 regs x %08x y %08x mix %08x",
-		       act_shot_rd32(FW_DISP_IMG1_X), act_shot_rd32(FW_DISP_IMG1_Y),
-		       act_shot_rd32(FW_DISP_MIX));
+		       fenykl_disp_img1_x(), fenykl_disp_img1_y(), fenykl_disp_mix());
 }
 
 static uint32_t act_shot_wait_flip(void)
 {
-	uint32_t lv = act_shot_rd32(FW_MOV_IMG1_SHADOW);
+	uint32_t lv = fenykl_disp_lv();
 
 	for (unsigned int i = 0; i < ACT_SHOT_FLIP_WAIT_MS; i++) {
 		uint32_t now;
 
-		fw_OlyTaskSleep(1);
-		now = act_shot_rd32(FW_MOV_IMG1_SHADOW);
+		fenykl_task_sleep(1);
+		now = fenykl_disp_lv();
 		if (now != lv)
 			return now;
 	}
@@ -188,16 +133,15 @@ static void act_shot_copy_lv(struct act_shot_state *st)
 	f->lv = NULL;
 	for (tries = 1; tries <= ACT_SHOT_LV_TRIES; tries++) {
 		lv = act_shot_wait_flip();
-		if (!act_shot_dram(lv, ACT_SHOT_LV_BYTES)) {
+		if (!fenykl_dram(lv, FENYKL_DISP_LV_BYTES)) {
 			st->no_lv++;
 			fenykl_log_warn(&act_shot_log, "img1 %08x not a DRAM buffer: OSD only", lv);
 			return;
 		}
 		act_shot_lv_place(f, lv);
 		t = FENYKL_LOG_TIMER_NOW();
-		flips = act_shot_copy(st->buf, act_shot_cached(lv), ACT_SHOT_LV_PITCH,
-				      ACT_SHOT_LV_ROW, f->lv_w / 2, f->lv_h, FW_MOV_IMG1_SHADOW,
-				      0xFFFFFFFFu);
+		flips = act_shot_copy(st->buf, fenykl_cached(lv), FENYKL_DISP_LV_PITCH,
+				      ACT_SHOT_LV_ROW, f->lv_w / 2, f->lv_h, fenykl_disp_lv);
 		t = FENYKL_LOG_ELAPSED(t, FENYKL_LOG_TIMER_NOW());
 		if (flips <= 1)
 			break;
@@ -212,29 +156,18 @@ static void act_shot_copy_lv(struct act_shot_state *st)
 	}
 }
 
-static uint32_t act_shot_osd_pdata(unsigned int l, unsigned int b)
+/* Shown buffer of layer l: the one the display shows, else draw ^ 1. */
+static uint32_t act_shot_osd_shown(unsigned int l, uint32_t draw)
 {
-	uint32_t h = act_shot_rd32(FW_GPI_LAYER_VRAM + 4 * (l * 2 + b));
-	const volatile struct act_shot_vram *v = (const volatile struct act_shot_vram *)(uintptr_t)h;
-
-	if (!act_shot_dram(h, sizeof(*v)) || v->width != ACT_SHOT_PLANE_W ||
-	    v->height != ACT_SHOT_PLANE_H || !act_shot_dram(v->pdata, 0)) {
-		fenykl_log_err(&act_shot_log, "L%u buffer %u: handle %08x not an OSD plane", l, b, h);
-		return 0;
-	}
-	return v->pdata;
-}
-
-/* Shown buffer of layer l: the one its display shadow points at, else draw ^ 1. */
-static uint32_t act_shot_osd_shown(unsigned int l, uint8_t draw)
-{
-	uint32_t shadow = act_shot_rd32(FW_OSD_SHADOW + 4 * act_shot_shadow_slot[l]);
+	uint32_t shadow = fenykl_osd_shown(l);
 	uint32_t p[2];
 
 	for (unsigned int b = 0; b < 2; b++) {
-		p[b] = act_shot_osd_pdata(l, b);
-		if (!p[b])
+		p[b] = fenykl_osd_buf(l, b);
+		if (!p[b]) {
+			fenykl_log_err(&act_shot_log, "L%u buffer %u: not an OSD plane", l, b);
 			return 0;
+		}
 	}
 	for (unsigned int b = 0; b < 2; b++)
 		if ((shadow & 0x1FFFFFFFu) == (p[b] & 0x1FFFFFFFu))
@@ -247,35 +180,35 @@ static bool act_shot_copy_osd(struct act_shot_state *st)
 {
 	uint32_t src[MAIN_SHOT_LAYERS];
 	unsigned int flips = 0, tries;
-	uint16_t hide = 0;
+	uint32_t hide = 0;
 
 	for (unsigned int l = 0; l < MAIN_SHOT_LAYERS; l++)
-		if (act_shot_rd8(FW_GPI_LAYER_BPP + l) != act_shot_bpp[l]) {
+		if (fenykl_osd_bpp(l) != act_shot_bpp[l]) {
 			fenykl_log_err(&act_shot_log, "layer %u bpp %u, expected %u", l,
-				       act_shot_rd8(FW_GPI_LAYER_BPP + l), act_shot_bpp[l]);
+				       fenykl_osd_bpp(l), act_shot_bpp[l]);
 			return false;
 		}
 	for (tries = 1; tries <= ACT_SHOT_OSD_TRIES; tries++) {
-		uint8_t draw = act_shot_rd8(FW_GPI_DRAW_BUF);
+		uint32_t draw = fenykl_osd_draw_buf();
 
 		flips = 0;
-		hide = act_shot_rd16(FW_GPI_HIDE_MASK);
+		hide = fenykl_osd_hide_mask();
 		for (unsigned int l = 0; l < MAIN_SHOT_LAYERS; l++) {
 			unsigned int row = MAIN_SHOT_W * act_shot_bpp[l] / 8;
 
 			src[l] = act_shot_osd_shown(l, draw);
 			if (!src[l])
 				return false;
-			flips += act_shot_copy(st->buf + act_shot_off[l], act_shot_cached(src[l]),
-					       ACT_SHOT_PLANE_W * act_shot_bpp[l] / 8, row, row / 4,
-					       MAIN_SHOT_H, FW_GPI_DRAW_BUF, 0xFFu);
+			flips += act_shot_copy(st->buf + act_shot_off[l], fenykl_cached(src[l]),
+					       FENYKL_OSD_PLANE_W * act_shot_bpp[l] / 8, row, row / 4,
+					       MAIN_SHOT_H, fenykl_osd_draw_buf);
 		}
-		if (act_shot_rd8(FW_GPI_DRAW_BUF) != draw)
+		if (fenykl_osd_draw_buf() != draw)
 			flips++;
 		if (!flips)
 			break;
 	}
-	main_shot_palette((const uint8_t *)FW_OSD_PALETTES, sizeof(st->pal) / 4, st->pal);
+	main_shot_palette(fenykl_osd_palettes(), sizeof(st->pal) / 4, st->pal);
 	for (unsigned int i = 0; i < MAIN_SHOT_LAYERS; i++) {
 		unsigned int l = act_shot_stack[i];
 		struct main_shot_layer *o = &st->frame.layer[i];
@@ -300,7 +233,7 @@ static bool act_shot_copy_osd(struct act_shot_state *st)
 
 static void act_shot_path(char *out, unsigned int n)
 {
-	fw_sprintf(out, "C:\\SHOT%04u.PPM", n);
+	fenykl_sprintf(out, "C:\\SHOT%04u.PPM", n);
 }
 
 static bool act_shot_exists(unsigned int n)
@@ -309,10 +242,10 @@ static bool act_shot_exists(unsigned int n)
 	void *fp;
 
 	act_shot_path(path, n);
-	fp = fw_rpc_fopen(path, "r");
+	fp = fenykl_fopen(path, "r");
 	if (!fp)
 		return false;
-	fw_rpc_fclose(fp);
+	fenykl_fclose(fp);
 	return true;
 }
 
@@ -339,25 +272,13 @@ static unsigned int act_shot_scan(void)
 	return hi;
 }
 
-static bool act_shot_free_run(void)
-{
-	unsigned int run = 0;
-
-	for (unsigned int i = 0; i < ACT_SHOT_RECFILE_BLOCKS; i++) {
-		run = act_shot_rd8(FW_RECFILE_USED + i) ? 0 : run + 1;
-		if (run >= ACT_SHOT_NBLOCKS)
-			return true;
-	}
-	return false;
-}
-
 static void act_shot_end(struct act_shot_state *st)
 {
 	if (st->fp)
-		fw_rpc_fclose(st->fp);
+		fenykl_fclose(st->fp);
 	st->fp = NULL;
 	if (st->buf)
-		fw_recfile_free(st->buf);
+		fenykl_recfile_free(st->buf);
 	st->buf = 0;
 }
 
@@ -371,7 +292,7 @@ static int act_shot_fail(struct act_shot_state *st, const char *what)
 
 static bool act_shot_write(struct act_shot_state *st, uint32_t data, unsigned int len)
 {
-	return fw_rpc_fwrite(FENYKL_UNCACHED(data), 1, len, st->fp) == (int)len;
+	return fenykl_fwrite(FENYKL_UNCACHED(data), 1, len, st->fp) == (int)len;
 }
 
 /* --- action --- */
@@ -399,13 +320,13 @@ static int act_shot_start(uint32_t press_us)
 		return -1;
 	}
 	st->file = st->next_file;
-	if (!act_shot_free_run()) {
-		fenykl_log_warn(&act_shot_log, "RECFILE has no %u free blocks: no screenshot",
-				ACT_SHOT_NBLOCKS);
+	if (!fenykl_recfile_fits(ACT_SHOT_BYTES)) {
+		fenykl_log_warn(&act_shot_log, "RECFILE has no free run of %u bytes: no screenshot",
+				ACT_SHOT_BYTES);
 		return -1;
 	}
-	n = fw_recfile_alloc(ACT_SHOT_BYTES);
-	if (!act_shot_dram(n, ACT_SHOT_BYTES)) {
+	n = fenykl_recfile_alloc(ACT_SHOT_BYTES);
+	if (!fenykl_dram(n, ACT_SHOT_BYTES)) {
 		fenykl_log_err(&act_shot_log, "recfile_alloc returned %08x", n);
 		return act_shot_fail(st, "no buffer");
 	}
@@ -415,7 +336,7 @@ static int act_shot_start(uint32_t press_us)
 		return act_shot_fail(st, "no OSD planes");
 	st->capture_ms = FENYKL_LOG_ELAPSED(st->t0, FENYKL_LOG_TIMER_NOW()) / 1000u;
 	act_shot_path(path, st->file);
-	st->fp = fw_rpc_fopen(path, "w");
+	st->fp = fenykl_fopen(path, "w");
 	if (!st->fp)
 		return act_shot_fail(st, "cannot open");
 	st->next_file++;

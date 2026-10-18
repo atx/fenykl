@@ -35,7 +35,7 @@
 struct main_fmeter_in {
 	bool fresh;		/* a new frame since the last step; v and key are valid */
 	uint32_t v;		/* the area's value */
-	uint8_t pattern;	/* grid pattern (ctx+0x2D0) */
+	uint8_t pattern;	/* grid pattern */
 	bool half;		/* shutter half-pressed */
 	bool hide;		/* no statistics source (MF without the own client): hidden at once */
 };

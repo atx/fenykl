@@ -5,7 +5,7 @@ minimal examples of SDK features that no other plugin uses, and the probes and p
 
 | project | what it is |
 |---|---|
-| `main/` | the daily-use plugin (focus distance, depth of field, focus meter, battery percentage, Fn screenshot, R/B swap, settings page); reference user of the cfg, log, ui, HUD and key libraries |
+| `main/` | the daily-use plugin (focus distance, depth of field, focus meter, battery percentage, Fn screenshot, R/B swap, settings page); reference user of the cfg, log, ui, HUD and key libraries; names no firmware symbol: camera state through `include/body.h`, features per body capability (`plugin.toml`), screen layout per camera in `main_layout.h` |
 | `hello/` | smallest plugin: writes `C:\FENYKL.LOG` and returns; the first plugin to try after flashing (E-M10 II: through the log library) |
 | `bootprobe/` | E-M10 II diagnostic probe: logs boot gate, loaded sections, card and USB key state, tick and timer rate into `C:\FENYKL.LOG` and `C:\FENYKL.TCK` (deletes and rewrites only those two files); the first plugin for that camera |
 | `icprobe/` | E-M10 II I-cache probe: rewrites a tiny function in payload RAM and calls it without and with `fenykl_icache_invalidate`, logging results, CHCTR values and poll counts; patches no firmware code. Must pass before `hookprobe` |
