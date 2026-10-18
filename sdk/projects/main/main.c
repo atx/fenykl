@@ -9,8 +9,6 @@
 #include <afc.h>
 #include <ui.h>
 
-#define MAIN_GUI_SUPER 0x60702278u	/* u8 gui_sm super state */
-#define MAIN_GUI_STATE 0x60702279u	/* u8 gui_sm state */
 #define MAIN_SS_REC 0x02
 #define MAIN_SS_PLAY 0x06
 #define MAIN_GUI_WAIT_TICKS (60000u / MAIN_TICK_MS)	/* for the GUI and its language font */
@@ -94,7 +92,7 @@ static void main_start_cfg(void)
 static bool main_wait_gui(void)
 {
 	for (unsigned int i = 0; i < MAIN_GUI_WAIT_TICKS; i++) {
-		uint8_t super = main_rd8(MAIN_GUI_SUPER);
+		uint8_t super = main_rd8(FW_GUI_SUPER);
 
 		if ((super == MAIN_SS_REC || super == MAIN_SS_PLAY) && fenykl_hud_font())
 			return true;
@@ -111,7 +109,7 @@ static bool main_start_hud(void)
 
 	if (!main_wait_gui()) {
 		fenykl_log_err(&main_log, "no GUI after %u ticks (super %02x, font %u): no HUD",
-			       main_st.ticks, main_rd8(MAIN_GUI_SUPER), fenykl_hud_font());
+			       main_st.ticks, main_rd8(FW_GUI_SUPER), fenykl_hud_font());
 		return false;
 	}
 	fenykl_log_info(&main_log, "GUI after %u ticks, font id %u", main_st.ticks,
@@ -178,7 +176,7 @@ static void main_check_cpu1(const struct fenykl_hud_stats *hs)
 
 static void main_log_gui(void)
 {
-	uint16_t gui = (uint16_t)(main_rd8(MAIN_GUI_SUPER) << 8 | main_rd8(MAIN_GUI_STATE));
+	uint16_t gui = (uint16_t)(main_rd8(FW_GUI_SUPER) << 8 | main_rd8(FW_GUI_STATE));
 
 	if (gui == main_st.gui)
 		return;

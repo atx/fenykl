@@ -67,7 +67,8 @@ def link(
     the target's `sdk_hooks` and the descriptors of `slots` and `vtables` and link them. Sources in
     `cpu1_sources` are built with FENYKL_CPU1 (CPU1 code: CPU0-only firmware calls do not
     compile). The sdk/lib files get FENYKL_PLUGIN_CPU1 = 1 if the plugin has `cpu1_sources`, else
-    0. `firmware` replaces the target's firmware.toml (simulator tests).
+    0. Every file gets FENYKL_TARGET_<NAME> and FENYKL_HAS_<CAPABILITY> (target.toml).
+    `firmware` replaces the target's firmware.toml (simulator tests).
     `run_on_usb` lets the runtime call plugin_main on a boot started by the USB cable."""
     gen = outdir / "gen"
     try:
@@ -93,6 +94,8 @@ def link(
         f"-DFENYKL_LOAD_BASE=0x{target.load:X}u",
         f"-DFENYKL_REGION_END=0x{target.region_end:X}u",
         f"-DFENYKL_RUN_ON_USB={1 if run_on_usb else 0}",
+        f"-DFENYKL_TARGET_{target.name.upper()}=1",
+        *(f"-DFENYKL_HAS_{c.upper()}=1" for c in target.capabilities),
     ]
     lib_flags = [*RUNTIME_CFLAGS, f"-DFENYKL_PLUGIN_CPU1={1 if cpu1_sources else 0}"]
     lib_sources = sorted(LIB.glob("*.c"))
@@ -161,6 +164,10 @@ def build(
     if unknown:
         raise BuildError(
             f"cpu1_sources lists {', '.join(unknown)}, not a .c or .S file in {plugin_dir}"
+        )
+    if cpu1_sources and "cpu1" not in target.capabilities:
+        raise BuildError(
+            f"plugin.toml lists cpu1_sources, but target {target.name} has no cpu1 capability"
         )
     run_on_usb = config.get("run_on_usb", False)
     if not isinstance(run_on_usb, bool):

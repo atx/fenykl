@@ -1,0 +1,47 @@
+# Olympus E-PL3 with the fenykl-loader firmware.
+model = "E-PL3"                        # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
+toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
+cflags = "toolchain/cflags"            # relative to the fenykl checkout
+isa_check = "toolchain/isacheck/check_isa.py"  # rejects AM33 instructions; run by plugin build --isa-check
+elf_machine = 89                       # EM_MN10300
+load = 0x6EA70000                      # the loader reads FENYKL.BIN here (sections 4 and 8)
+max_size = 0x7A000                     # bytes the loader reads; the loader stack follows
+# Hooks the SDK binds itself, generated for every plugin; plugin.toml may not list them.
+# appevent_post: the event layer (sdk/lib/event.c, docs/event.md).
+sdk_hooks = ["appevent_post"]
+# SDK features of this camera, each passed to every compile as -DFENYKL_HAS_<NAME>=1 (next to
+# FENYKL_TARGET_EPL3=1). cpu1: the CPU1 worker runtime (cpu1.c); plugin.toml cpu1_sources needs it.
+capabilities = ["cpu1"]
+
+# The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
+[stock]
+version = "1.6"
+file = "OLY_E_086_1600_0000_0000.BIN"
+sha256 = "89b70dd65c6739de1cd762777205953ee15864df73369b84815df7ed8a0eb4b1"
+size = 46596160
+# Real load address per block kind; header addresses are not trusted.
+load_addresses = { main-code-01 = 0x6E601420 }
+
+# Where the [stock] image keeps its GUI assets (`fenykl assets dump`, py/fenykl/assets.py AssetLayout).
+# Addresses are runtime (DRAM) addresses unless noted.
+[assets]
+lang_block = "main-lang"
+lang_flash_base = 0x42700020     # flash address of the lang block body: dir table "osd_addr", header 0x800, 0x6E858929
+common_dir = 0x00
+common_addr = 0xAF966000         # imm in osd_img_load 0x6E858C7A
+icon_table = 0x00                # common-resource header offset of the icon table pointer
+icon_count = 0xEF                # gpi_glyph_lookup 0x6EFDC1B9 accepts 0xA000..0xA0EE
+icon_code_base = 0xA000
+image_table = 0x10               # header offset of the image table pointer ([0] unused), gui_res_image 0x6EFF1C39
+image_count = 2193               # table u32[2194], [0] = 0
+string_dirs = [0x01, 0x23]       # range start, stop; osd_res_load 0x6E858D33
+string_addr = 0xAFF7D000         # osd_res_load 0x6E858D33
+font_dir_offset = 0x22           # font resource dir = string dir + this
+font_addr = 0xAFF21000           # imm in res_font_load 0x6E858BB8
+font_desc_size = 0x4A            # gui_res_fontdesc 0x6EFF1C20
+font_list_end = 0x93             # gpi_glyph_lookup 0x6EFDC1B9
+code_block = "main-code-01"
+palette_table = 0x6EAF7D34       # code-block address of the GUI palette pointer table: .data image of gui_palette_tab 0x60351AB4 (gui_res_palette 0x6EFF1C69)
+palette_count = 48
+palette_4bpp = 2                 # 16-colour layer palette (gui_set_palette 0x6F09C864)
+palette_8bpp = 7                 # 256-colour layer palette, matches the camera's icon colours

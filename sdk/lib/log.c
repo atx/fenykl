@@ -26,14 +26,12 @@
 #define FLOG_TEE_POLL_MS 20u
 #define FLOG_IDLE_POLL_MS 100u
 #define FLOG_ERR_FILE "C:\\FENYKL.ERR"
-#define FLOG_BOOT_CAUSE (*(volatile uint8_t *)0x6044151Au) /* firmware boot cause, FUN_6e6340c0 */
+#define FLOG_BOOT_CAUSE (*(volatile uint8_t *)FW_BOOT_CAUSE)
 #define FLOG_BUILD_ID (*(const uint32_t *)(FENYKL_LOAD_BASE + 0x10u)) /* FENYKL.BIN header sum */
-#define FLOG_FW_TEXT_START 0x6E601420u /* main-code-01 as loaded by main_init */
-#define FLOG_FW_TEXT_END 0x6EA6D29Cu
 /* Firmware console capture: uart_putchar's boot capture buffer. */
-#define FLOG_TEE_BUF ((const volatile uint8_t *)0xA07C5E80u)
-#define FLOG_TEE_COUNT (*(volatile uint16_t *)0x8FF00088u)
-#define FLOG_TEE_STATE1 (*(volatile uint8_t *)0x8FF00082u)
+#define FLOG_TEE_BUF ((const volatile uint8_t *)FW_UART_TEE_BUF)
+#define FLOG_TEE_COUNT (*(volatile uint16_t *)FW_UART_TEE_COUNT)
+#define FLOG_TEE_STATE1 (*(volatile uint8_t *)FW_UART_TEE_STATE1)
 
 extern char fenykl_bss_end[];
 
@@ -73,7 +71,7 @@ static int flog_str_len(uint32_t p, unsigned int max)
 {
 	const char *s = (const char *)p;
 
-	if (!flog_in_image(p) && !(p >= FLOG_FW_TEXT_START && p < FLOG_FW_TEXT_END))
+	if (!flog_in_image(p) && !(p >= FW_MAIN_CODE_START && p < FW_MAIN_CODE_END))
 		return -1;
 	for (unsigned int i = 0; i < max; i++)
 		if (!s[i])

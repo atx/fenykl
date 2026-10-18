@@ -18,7 +18,7 @@ from .firmware import (
     pack_firmware,
     unpack_firmware,
 )
-from .sdk import TARGETS as SDK_TARGETS
+from .sdk import ARCH
 
 
 class PatchError(ValueError):
@@ -113,7 +113,7 @@ def apply_patches(stock: bytes, patches: list[Patch]) -> bytes:
     return output
 
 
-# The FENYKL.BIN boot loader of each camera: sdk/targets/<name>/loader/patch.toml,
+# The FENYKL.BIN boot loader of each camera: sdk/arch/<name>/loader/patch.toml,
 # registered as "<name>/fenykl-loader".
 
 LOADER = "fenykl-loader"
@@ -136,5 +136,5 @@ def _load_loader(path: Path) -> Patch:
 
 PATCHES = {
     f"{patch.target.name}/{patch.name}": patch
-    for patch in map(_load_loader, sorted(SDK_TARGETS.glob("*/loader/patch.toml")))
+    for patch in map(_load_loader, sorted(ARCH.glob("*/loader/patch.toml")))
 }

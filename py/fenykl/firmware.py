@@ -32,7 +32,7 @@ from array import array
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .sdk import TARGETS as SDK_TARGETS
+from .sdk import ARCH
 
 HEAD_TAIL_SIZE = 32
 _STRUCT = struct.Struct("<2s2s4sII H2sH6sI")
@@ -315,7 +315,7 @@ class Target:
     """One exact stock firmware `.BIN` (decompressed), identified by its hash.
 
     Its identity (model, version, file name, sha256, size) is the `[stock]` table of the camera's
-    `sdk/targets/<name>/target.toml`; the user drops the image itself into `firmware/`.
+    `sdk/arch/<name>/target.toml`; the user drops the image itself into `firmware/`.
     """
 
     name: str
@@ -347,7 +347,7 @@ def _load_target(path: Path) -> Target:
 
 TARGETS = {
     target.name: target
-    for target in map(_load_target, sorted(SDK_TARGETS.glob("*/target.toml")))
+    for target in map(_load_target, sorted(ARCH.glob("*/target.toml")))
 }
 
 

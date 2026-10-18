@@ -7,19 +7,8 @@
  */
 #include <hud.h>
 
-#define VRAM_TABLE 0x6066ED88u		/* gpi_layer_vram: struct osd_vram *[layer * 2 + buf] */
-#define LAYER_BPP 0x6F1232C8u		/* u8 bpp[3] */
-#define GPI_DRAW_BUF 0x6034D5B4u	/* u8: buffer cw_updateDisplay(0) shows */
-/* cw_updateDisplay one-layer override: if MODE == 2 and LAYER == l, layer l shows b[BUF ^ 1] */
-#define GPI_ONE_MODE 0x6034D5D2u	/* u8 */
-#define GPI_ONE_LAYER 0x6034D5D4u	/* s16 */
-#define GPI_ONE_BUF 0x6034D5D6u		/* u8 */
-#define GPI_HIDE_MASK 0x6034D5D0u	/* u16, bit 0x10 hides layer 1 */
-#define GPI_FONT_RES 0x6066EDACu	/* -> per-language font resource; +4 -> glyph_list, +0 u32 font id */
-#define GUI_SUPER 0x60702278u		/* u8 gui_sm super state */
-#define GUI_STATE 0x60702279u		/* u8 gui_sm state */
 #define SS_REC 0x02
-#define CORE_ID 0x8050u			/* 0 on CPU0 */
+#define HUD_DRAM_OFF(a) ((a) & 0x0FFFFFFFu)	/* the same for the cached and uncached alias */
 
 #define LAYER 1
 #define PLANE 2
@@ -28,7 +17,6 @@
 #define ROWS 600
 #define GLYPH_FMT 0x09
 #define IMAGE_FMT 0x03
-#define GUI_IMAGE_TABLE 0xAF966010u	/* common resource +0x10: -> u32 [id] -> struct gui_image */
 #define IMAGE_BITMAP 0x10		/* struct gui_image: -> RLE bitmap */
 #define LV_SPACE 11			/* unmapped character: half the line, as gui_imgstr_layout */
 #define LV_IMAGE_H 22			/* stock live-view value images */
@@ -113,7 +101,7 @@ static bool dram_pointer(uint32_t p)
 /* Re-read at every render: a language change replaces the resource. */
 uint32_t fenykl_hud_font(void)
 {
-	uint32_t res = rd32(GPI_FONT_RES);
+	uint32_t res = rd32(FW_GPI_FONT_RES);
 
 	if (!dram_pointer(res))
 		return 0;
@@ -200,7 +188,7 @@ static uint16_t lv_image_id(char c)
    (*0xAF966010 -> id table -> record +0x10); false if missing or not fmt 0x03. */
 INLINE bool stock_image(uint16_t id, struct glyph *g)
 {
-	uint32_t table = rd32(GUI_IMAGE_TABLE);
+	uint32_t table = rd32(FW_GUI_IMAGE_TABLE);
 
 	if (!dram_pointer(table))
 		return false;
@@ -582,11 +570,11 @@ static void clear_box(const struct fenykl_hud_elem *e, volatile uint8_t *c)
 
 bool fenykl_hud_visible(void)
 {
-	if (rd16(GPI_HIDE_MASK) & 0x10)
+	if (rd16(FW_GPI_HIDE_MASK) & 0x10)
 		return false;
-	if (rd8(GUI_SUPER) != SS_REC)
+	if (rd8(FW_GUI_SUPER) != SS_REC)
 		return false;
-	unsigned int state = rd8(GUI_STATE);
+	unsigned int state = rd8(FW_GUI_STATE);
 
 	return state < 32 && (hud.states & FENYKL_HUD_STATE(state));
 }
@@ -596,11 +584,11 @@ bool fenykl_hud_visible(void)
 /* The layer-1 buffer cw_updateDisplay(0) shows (0x6EFDB6E3). */
 static unsigned int shown_buffer(void)
 {
-	if (rd8(GPI_ONE_MODE) == 2 && (int16_t)rd16(GPI_ONE_LAYER) == LAYER) {
+	if (rd8(FW_GPI_ONE_MODE) == 2 && (int16_t)rd16(FW_GPI_ONE_LAYER) == LAYER) {
 		hud.st.overrides++;
-		return (rd8(GPI_ONE_BUF) ^ 1u) & 1u;
+		return (rd8(FW_GPI_ONE_BUF) ^ 1u) & 1u;
 	}
-	return rd8(GPI_DRAW_BUF) & 1u;
+	return rd8(FW_GPI_DRAW_BUF) & 1u;
 }
 
 static void draw_shown(struct fenykl_hud_elem *e)
@@ -630,7 +618,7 @@ static void draw_shown(struct fenykl_hud_elem *e)
 void fenykl_hud_frame(int show_front)
 {
 	hud.st.updates++;
-	if (rd32(CORE_ID) != 0) {
+	if (rd32(FW_CORE_ID) != 0) {
 		hud.st.cpu1++;
 		return;
 	}
@@ -734,10 +722,10 @@ void fenykl_hud_tick(void)
 
 static int check_buf(unsigned int b, struct fenykl_hud_buf *out)
 {
-	uint32_t p = rd32(VRAM_TABLE + 4 * (LAYER * 2 + b));
+	uint32_t p = rd32(FW_GPI_LAYER_VRAM + 4 * (LAYER * 2 + b));
 
 	*out = (struct fenykl_hud_buf){ .handle = p };
-	if (p < 0x60000000u || p >= 0x6E600000u || (p & 3))
+	if (p < FW_DRAM_START || p >= FW_IMAGE_START || (p & 3))
 		return FENYKL_HUD_EHANDLE;
 	const volatile struct osd_vram *v = (const volatile struct osd_vram *)(uintptr_t)p;
 	uint32_t a = v->pdata;
@@ -749,9 +737,10 @@ static int check_buf(unsigned int b, struct fenykl_hud_buf *out)
 	if (v->plane != PLANE || v->width != PITCH || v->height != ROWS)
 		return FENYKL_HUD_EPLANE;
 	/* cached or uncached DRAM outside the firmware image and the payload */
-	uint32_t off = a & 0x0FFFFFFFu, end = off + PITCH * ROWS;
+	uint32_t off = HUD_DRAM_OFF(a), end = off + PITCH * ROWS;
 
-	if (!dram_pointer(a) || (end > 0x0E600000u && (off < 0x0F381400u || end > 0x10000000u)))
+	if (!dram_pointer(a) || (end > HUD_DRAM_OFF(FW_IMAGE_START) &&
+				 (off < HUD_DRAM_OFF(FW_IMAGE_END) || end > FW_DRAM_END - FW_DRAM_START)))
 		return FENYKL_HUD_EPDATA;
 	return 0;
 }
@@ -766,7 +755,7 @@ int fenykl_hud_init(uint32_t states, struct fenykl_hud_buf buf[2])
 
 	if (a < b + PITCH * ROWS && b < a + PITCH * ROWS)
 		return FENYKL_HUD_EOVERLAP;
-	if (rd8(LAYER_BPP + LAYER) != BPP)
+	if (rd8(FW_GPI_LAYER_BPP + LAYER) != BPP)
 		return FENYKL_HUD_EBPP;
 	hud.canvas[0] = FENYKL_UNCACHED(buf[0].pdata);
 	hud.canvas[1] = FENYKL_UNCACHED(buf[1].pdata);

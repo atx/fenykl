@@ -7,8 +7,6 @@
 #include "main_fmt.h"
 #include "feat_focus_filter.h"
 
-#define FEAT_FOCUS_OBJ_DST 0x605522B8u	/* u32 mm, 0xFFFFFFFF = infinity */
-#define FEAT_FOCUS_LENS 0x60552252u	/* u16, 0 = no electronic lens */
 #define FEAT_FOCUS_PAIR_MS 2		/* between the two reads */
 #define FEAT_FOCUS_LABEL "FD\n"
 #define FEAT_FOCUS_TEXT_SIZE (sizeof(FEAT_FOCUS_LABEL) - 1 + MAIN_FMT_DIST_SIZE)
@@ -42,9 +40,9 @@ FENYKL_CFG_BOOL(feat_focus_show, "main.focus.show", "Focus distance", &main_grp_
 /* obj_dst in mm, FEAT_FOCUS_HIDDEN without a lens */
 uint32_t feat_focus_read(void)
 {
-	if (*(volatile uint16_t *)FEAT_FOCUS_LENS == 0)
+	if (*(volatile uint16_t *)FW_LENS_ATTACHED == 0)
 		return FEAT_FOCUS_HIDDEN;
-	return *(volatile uint32_t *)FEAT_FOCUS_OBJ_DST;
+	return *(volatile uint32_t *)FW_LENS_OBJ_DST;
 }
 
 /* Width of the widest line of any main_fmt_dist text in the layout style, or FENYKL_HUD_E*.
@@ -128,7 +126,7 @@ static void feat_focus_tick(void)
 		fenykl_hud_hide(&st->elem);
 		st->filter.shown = v;
 		fenykl_log_dbg(&feat_focus_log, "hidden (lens %u, show %d)",
-			       *(volatile uint16_t *)FEAT_FOCUS_LENS, feat_focus_show);
+			       *(volatile uint16_t *)FW_LENS_ATTACHED, feat_focus_show);
 		return;
 	}
 	main_fmt_dist(st->text + sizeof(FEAT_FOCUS_LABEL) - 1, v);

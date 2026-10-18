@@ -7,12 +7,14 @@ blitter reads natively. The dumped PNGs are copyrighted firmware content.
 
 import csv
 import struct
+import tomllib
 import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from .firmware import TARGETS, Target, identify, unpack_firmware
+from .sdk import ARCH
 
 type Rgba = tuple[int, int, int, int]
 type Palette = tuple[Rgba, ...]
@@ -62,30 +64,28 @@ class AssetLayout:
     palette_8bpp: int
 
 
-ASSET_LAYOUTS = {
-    "epl3": AssetLayout(
-        lang_block="main-lang",
-        lang_flash_base=0x42700020,  # dir table "osd_addr", header 0x800, 0x6E858929
-        common_dir=0x00,
-        common_addr=0xAF966000,  # imm in osd_img_load 0x6E858C7A
-        icon_table=0x00,
-        icon_count=0xEF,  # gpi_glyph_lookup 0x6EFDC1B9 accepts 0xA000..0xA0EE
-        icon_code_base=0xA000,
-        image_table=0x10,  # gui_res_image 0x6EFF1C39
-        image_count=2193,  # table u32[2194], [0] = 0
-        string_dirs=range(0x01, 0x23),  # osd_res_load 0x6E858D33
-        string_addr=0xAFF7D000,  # osd_res_load 0x6E858D33
-        font_dir_offset=0x22,
-        font_addr=0xAFF21000,  # imm in res_font_load 0x6E858BB8
-        font_desc_size=0x4A,  # gui_res_fontdesc 0x6EFF1C20
-        font_list_end=0x93,  # gpi_glyph_lookup 0x6EFDC1B9
-        code_block="main-code-01",
-        palette_table=0x6EAF7D34,  # .data image of gui_palette_tab 0x60351AB4 (gui_res_palette 0x6EFF1C69)
-        palette_count=48,
-        palette_4bpp=2,  # 16-colour layer palette (gui_set_palette 0x6F09C864)
-        palette_8bpp=7,  # 256-colour layer palette, matches the camera's icon colours
-    ),
-}
+def _load_layouts() -> dict[str, AssetLayout]:
+    """The `[assets]` table of each sdk/arch/<camera>/target.toml that has one."""
+    layouts = {}
+    for path in sorted(ARCH.glob("*/target.toml")):
+        toml = tomllib.loads(path.read_text()).get("assets")
+        if toml is None:
+            continue
+        start, stop = toml.pop("string_dirs")
+        layouts[path.parent.name] = AssetLayout(**toml, string_dirs=range(start, stop))
+    return layouts
+
+
+ASSET_LAYOUTS = _load_layouts()
+
+
+def default_target() -> Target:
+    """The camera `assets dump` reads when given no file: the only one with an asset layout."""
+    if len(ASSET_LAYOUTS) != 1:
+        raise AssetError(
+            f"cameras with an asset layout: {', '.join(ASSET_LAYOUTS)}; give the stock FILE.BIN"
+        )
+    return TARGETS[next(iter(ASSET_LAYOUTS))]
 
 
 @dataclass(frozen=True)

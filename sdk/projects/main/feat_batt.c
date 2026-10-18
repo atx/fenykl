@@ -13,10 +13,8 @@
 #define FEAT_BATT_SEM 5			/* SBCHKCORE: buffer and event of bchk_ad_read are shared */
 #define FEAT_BATT_SEM_MS 20		/* lock and read take 5-7 ms [camera] */
 #define FEAT_BATT_CH 4u			/* A/D channel of the battery voltage */
-#define FEAT_BATT_SRC 0x6055F4B8u	/* u16 power source, 0 unknown */
 #define FEAT_BATT_SRC_BATT 0x200u
 #define FEAT_BATT_SRC_BATT2 0x400u	/* also a battery for hfw_get_battery_state; 0x100 is AC or DC */
-#define FEAT_BATT_SRC_ON 0x6055F4BAu	/* u8 1 s source check on (0 in standby) */
 #define FEAT_BATT_GREEN 50u		/* % above which the text is green, then yellow */
 #define FEAT_BATT_YELLOW 25u
 #define FEAT_BATT_WIDEST "100%"
@@ -102,7 +100,7 @@ static bool feat_batt_read(uint32_t *v)
 		return false;
 	}
 	/* bchk_ad_read waits forever on its event, so read only while the stock check does */
-	if (!*(volatile uint8_t *)FEAT_BATT_SRC_ON) {
+	if (!*(volatile uint8_t *)FW_POWER_SRC_CHECK) {
 		fw_OlySemaphoreSignal(FEAT_BATT_SEM);
 		st->standby++;
 		return false;
@@ -131,7 +129,7 @@ static void feat_batt_text(char *s, unsigned int pct)
 static void feat_batt_tick(void)
 {
 	struct feat_batt_state *st = &feat_batt_st;
-	uint16_t src = *(volatile uint16_t *)FEAT_BATT_SRC;
+	uint16_t src = *(volatile uint16_t *)FW_POWER_SRC;
 	char text[FEAT_BATT_TEXT_SIZE];
 	unsigned int pct, ink;
 	int r;

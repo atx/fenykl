@@ -4,7 +4,7 @@ Write C, run one command, copy `FENYKL.BIN` to the card root. The boot loader (f
 `epl3/fenykl-loader`, v3) reads `C:\FENYKL.BIN` into RAM at every normal boot, checks it and calls
 it. No reflashing per plugin: the firmware is flashed once.
 
-The SDK is split per camera (`targets/<camera>/`, see Layout). The only target so far is `epl3`
+The SDK is split per camera (`arch/<camera>/`, see Layout). The only target so far is `epl3`
 (E-PL3, MN10300); the firmware API, ABI, payload and FENYKL.BIN sections below describe it.
 
 ## Status
@@ -110,7 +110,7 @@ Why: without a card reader the card is reached through the camera in USB mass-st
 plugging in the cable boots the camera. A plugin started on that boot writes to the card while the PC
 mounts it (two FAT writers; a plugin once overwrote its own log this way).
 
-The epl3 signal (`targets/epl3/usb.c`), static analysis only:
+The epl3 signal (`arch/epl3/usb.c`), static analysis only:
 
 | what | evidence |
 |---|---|
@@ -147,7 +147,7 @@ Plugging the cable into a running camera switches it to USB **in place** (no reb
 running. In Storage mode the PC's sector reads and writes go through the same file server task
 (FILECLBK) as `fw_rpc_fopen`/`fw_rpc_fwrite`, and the camera's FAT stays mounted, so a plugin write while
 the PC owns the card corrupts the FAT [static analysis]. Two target
-functions (`targets/epl3/usb.c`, CPU0 task context, not CPU1; linked only when used):
+functions (`arch/epl3/usb.c`, CPU0 task context, not CPU1; linked only when used):
 
 - `fenykl_usb_cable_present()`: `fw_ui_key_get_state(0x400) == 0`, the test the firmware itself
   uses (`pcsub_is_usb_connected` 0x6EE194E8). The key state is set by the GIO interrupt, before USB
@@ -176,7 +176,7 @@ Status: unproven. The signals come from static analysis; no camera test yet.
 | `targets` | cameras the plugin is written for (required), e.g. `["epl3"]` |
 | `hooks`, `slots`, `vtables` | firmware functions to hook (not the SDK's own, `sdk_hooks` in `target.toml`), pointer slots to replace, vtables to clone (Hooks; Callbacks and slots) |
 | `cpu1_unproven` | hooks/slots/vtables whose CPU1 use is unproven, acknowledged (Hooks) |
-| `cpu1_sources` | source files built as CPU1 code (CPU1) |
+| `cpu1_sources` | source files built as CPU1 code (CPU1; needs the target's `cpu1` capability) |
 | `run_on_usb` | `true`: also run on a boot started by the USB cable (default `false`, Startup and USB boots) |
 
 ### Getting output: write a file
@@ -222,7 +222,7 @@ Settings page: the **ui library** (`sdk/docs/ui.md`), `#include "ui.h"`; the "Fe
 menu tab J opens one scrolling list of every grouped cfg option (at most 20), drawn by the camera's
 own menu list view. `projects/main` uses it.
 
-### Firmware API (`targets/epl3/firmware.toml`)
+### Firmware API (`arch/epl3/firmware.toml`)
 
 | C function | address | evidence | CPU1 |
 |---|---|---|---|
@@ -283,6 +283,30 @@ firmware; unknown signatures stay out.
 above; the PSW and cache primitives are also per core). Without `cores` a function is CPU0-only, and
 calling it from a `cpu1_sources` file is a compile error (CPU1).
 
+#### Firmware data
+
+Firmware addresses the SDK uses as values (globals, tables, MMIO registers, address-range bounds) are
+`[data.<name>]` tables in `firmware.toml`, not constants in the C files. Each becomes
+`#define FW_<NAME> 0x...u` in `fenykl_fw.h`, so the libraries and `projects/main` name the address and
+each camera's `firmware.toml` supplies it:
+
+```toml
+[data.gui_super]
+address = 0x60702278          # the address (unsigned 32-bit)
+type = "u8"                   # what lives there; "code" for a function address, "bound" for a range limit
+evidence = "high"             # high or medium, as for functions
+note = "gui_sm super state (0x02 every live-view screen, 0x03 menu, 0x06 playback); ..."
+```
+
+```c
+/* gui_super, u8, evidence high: gui_sm super state (...) */
+#define FW_GUI_SUPER 0x60702278u
+```
+
+The layout behind an address stays in C (a struct, or offsets next to the code that reads them).
+`FENYKL_CORE_ID()`, `FENYKL_UNCACHED()` and the other memory-map macros are in `fenykl_target.h`. The
+experiment plugins in `projects/` (all but `main`) are E-PL3-only and keep their addresses inline.
+
 ### Tasks
 
 ```c
@@ -309,7 +333,7 @@ inline five-byte jump at the function's entry to a generated Panasonic→GCC stu
 that runs the relocated entry instructions and jumps back (so the original is still callable). This
 is the reviewed way to patch firmware code in RAM (Payload rules).
 
-A function is hookable only if `targets/<camera>/firmware.toml` gives it a `hook` table (the target's
+A function is hookable only if `arch/<camera>/firmware.toml` gives it a `hook` table (the target's
 data decides what may be hooked, with the exact stock entry bytes and a CPU1-safety field). A plugin
 then declares the hooks it uses in `plugin.toml` and binds a handler in C:
 
@@ -557,7 +581,7 @@ example.
   instruction carries the callee's register list and frame size. The thunks handle both.
 - **Never CALL C code with a non-empty register list or frame** (e.g. from a firmware patch): use
   `call x,[],0` or `calls`, from a stub that provides 12 bytes (return slot and GCC's home area for
-  D0/D1), as `targets/epl3/crt0.S` does.
+  D0/D1), as `arch/epl3/crt0.S` does.
 - Callbacks from the firmware into C need a reverse entry stub, `FENYKL_CALLBACK` (Callbacks and
   slots), even with integer arguments only: a `calls` caller provides no GCC home area.
 - Struct and 64-bit arguments to firmware functions are not characterised.
@@ -592,14 +616,16 @@ example.
 ## What the build does
 
 `fenykl plugin build DIR [--target CAMERA] [-o OUTDIR]` (default `DIR/build`), for each camera in
-`DIR/plugin.toml` (or only `CAMERA`), into `OUTDIR/<camera>/`, with the files of `targets/<camera>/`:
+`DIR/plugin.toml` (or only `CAMERA`), into `OUTDIR/<camera>/`, with the files of `arch/<camera>/`:
 
 1. generates `gen/fenykl_fw.h`, `gen/fw_thunks.S`, `gen/fw_symbols.ld` from `firmware.toml`
-   (firmware addresses are link-time symbols; an assembler `.equ` would encode the CALLs wrongly);
-2. compiles `crt0.S`, `targets/<camera>/*.c`, `lib/*.c`, the thunks and `DIR/*.c`, `DIR/*.S` with the target's `cflags`
+   (function addresses are link-time symbols, as an assembler `.equ` would encode the CALLs wrongly;
+   `[data]` addresses are `FW_<NAME>` constants in the header);
+2. compiles `crt0.S`, `arch/<camera>/*.c`, `lib/*.c`, the thunks and `DIR/*.c`, `DIR/*.S` with the target's `cflags`
    (epl3: `toolchain/cflags`), `-D FENYKL_LOAD_BASE/FENYKL_REGION_END` from `target.toml`,
-   `-DFENYKL_RUN_ON_USB=0|1` from `plugin.toml` `run_on_usb`, and
-   `include/`, `targets/<camera>/` on the include path; the files in `cpu1_sources` also get
+   `-DFENYKL_RUN_ON_USB=0|1` from `plugin.toml` `run_on_usb`, `-DFENYKL_TARGET_<CAMERA>=1` and
+   `-DFENYKL_HAS_<CAPABILITY>=1` for each of the target's `capabilities`, and
+   `include/`, `arch/<camera>/` on the include path; the files in `cpu1_sources` also get
    `-DFENYKL_CPU1`; the `lib/*.c` files get `-DFENYKL_PLUGIN_CPU1=0|1` (whether the plugin has
    `cpu1_sources`);
 3. links with `link.ld` (`--gc-sections`, which drops the library code a plugin does not use,
@@ -650,29 +676,35 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | `lib/key.c` | key layer: named keys, claimed presses completed as SHORT/LONG or replayed to the firmware, optional tick; doc `docs/key.md` |
 | `lib/hud.c` | HUD library: live-view text elements on OSD layer 1, drawn from the plugin's `cw_updateDisplay` hook; doc `docs/hud.md` |
 | `lib/ui.c`, `lib/ui_int.h` | settings page library: Custom J "Fenykl" row, one list of the cfg options in super state 0x0D, drawn by the stock menu list view from GUI data slot 0xF; doc `docs/ui.md` |
-| `targets/epl3/target.toml` | model (FENYKL.BIN header), toolchain, cflags file, ISA check, ELF machine, payload `load` and `max_size`, `sdk_hooks`, `[stock]` firmware identity |
-| `targets/epl3/loader/` | the camera's boot loader patch: `loader.S`, `loader.ld`, `loader.lst`, `patch.toml` (pinned bytes) |
-| `targets/epl3/firmware.toml` | hand-curated firmware API |
-| `targets/epl3/link.ld` | payload linker script (must agree with `load`/`max_size`; packing checks it) |
-| `targets/epl3/crt0.S` | entry `_start`: frame for C, calls `fenykl_start` |
-| `targets/epl3/fenykl_target.h` | `FENYKL_UNCACHED`, `FENYKL_TASK`, `struct fenykl_hook`, `struct fenykl_slot`, `struct fenykl_vtable`, the CPU1 API (`FENYKL_SHARED`, `FENYKL_CPU1_WORKER`) |
-| `targets/epl3/hooks.c` | `fenykl_hook_install` / `..._remove` (compiled into every plugin) |
-| `targets/epl3/cpu1.c` | `fenykl_cpu1_start` / `..._state` / `..._stop`, the worker stack and the shared stop flag (compiled into every plugin) |
-| `targets/epl3/slots.c` | `fenykl_slot_replace` / `..._restore`, `fenykl_vtable_attach` / `..._detach` (compiled into every plugin) |
-| `targets/epl3/usb.c` | `fenykl_usb_attached`: power-on factor 0x60551630 == 0x400 (compiled into every plugin) |
+| `arch/epl3/target.toml` | model (FENYKL.BIN header), toolchain, cflags file, ISA check, ELF machine, payload `load` and `max_size`, `sdk_hooks`, `capabilities`, `[stock]` firmware identity, `[assets]` GUI asset layout of the stock image |
+| `arch/epl3/loader/` | the camera's boot loader patch: `loader.S`, `loader.ld`, `loader.lst`, `patch.toml` (pinned bytes) |
+| `arch/epl3/firmware.toml` | hand-curated firmware API: functions, hooks, callbacks, slots, vtables, data addresses |
+| `arch/epl3/link.ld` | payload linker script (must agree with `load`/`max_size`; packing checks it) |
+| `arch/epl3/crt0.S` | entry `_start`: frame for C, calls `fenykl_start` |
+| `arch/epl3/fenykl_target.h` | `FENYKL_UNCACHED`, `FENYKL_TASK`, `struct fenykl_hook`, `struct fenykl_slot`, `struct fenykl_vtable`, the CPU1 API (`FENYKL_SHARED`, `FENYKL_CPU1_WORKER`) |
+| `arch/epl3/hooks.c` | `fenykl_hook_install` / `..._remove` (compiled into every plugin) |
+| `arch/epl3/cpu1.c` | `fenykl_cpu1_start` / `..._state` / `..._stop`, the worker stack and the shared stop flag (compiled into every plugin) |
+| `arch/epl3/slots.c` | `fenykl_slot_replace` / `..._restore`, `fenykl_vtable_attach` / `..._detach` (compiled into every plugin) |
+| `arch/epl3/usb.c` | `fenykl_usb_attached`: power-on factor 0x60551630 == 0x400 (compiled into every plugin) |
 | `projects/*/plugin.toml` | cameras the example is written for (all: `epl3`) |
 | `projects/` | the example and experiment plugins, indexed in `projects/README.md` |
 
 ### Adding a camera
 
-1. Create `targets/<camera>/` with the five files above; `<camera>` is the short id (`epl3`, ...).
+1. Create `arch/<camera>/` with the five files above; `<camera>` is the short id (`epl3`, ...).
    `load` must differ from every other target's (`payload info`/`pack` identify the camera by it).
 2. A different CPU also needs its toolchain (`toolchain = "<prefix>"`), its own `crt0.S`,
    `FENYKL_TASK`, `hooks.c` and a thunk/hook generator: `py/fenykl/fwapi.py` only knows MN10300 GCC->Panasonic thunks.
    Omit `isa_check` if there is none.
-3. Implement `int fenykl_usb_attached(void)` (`include/fenykl.h`) in `targets/<camera>/`; it returns
+3. Implement `int fenykl_usb_attached(void)` (`include/fenykl.h`) in `arch/<camera>/`; it returns
    0 if the camera cannot tell a boot started by the USB cable.
-4. Add `<camera>` to the `targets` of the plugins that were written for it.
+4. List the SDK features it supports in `capabilities` (`target.toml`). Each becomes
+   `FENYKL_HAS_<NAME>=1` in every compile, next to `FENYKL_TARGET_<CAMERA>=1`. epl3 has `cpu1` (the
+   CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.
+5. Give `firmware.toml` a `[data.<name>]` entry for every `FW_<NAME>` the libraries and
+   `projects/main` use (the build fails on a missing one), and `target.toml` an `[assets]` table if
+   `fenykl assets dump` should read its stock image.
+6. Add `<camera>` to the `targets` of the plugins that were written for it.
 
 Tests: `tests/test_payload.py` (format, packing, loader checks), `tests/test_fwapi.py` (argument
 placement, declaration checks), `tests/test_sim.py` + `tests/sim/` (in `mn10300-elf-run`:
@@ -716,7 +748,8 @@ fenykl assets dump [FILE.BIN] [-o DIR]  # built-in fonts, icons, GUI images as P
 
 `fenykl assets dump` decodes the GUI graphics built into a stock firmware, so plugins can reuse
 them. Without `FILE.BIN` it reads the stock image from `firmware/`; any other image is identified
-by sha256 and rejected unless its layout is known (only E-PL3 v1.6 so far). Output, by default in
+by sha256 and rejected unless its camera's `target.toml` has an `[assets]` layout (only E-PL3 v1.6
+so far). Output, by default in
 the git-ignored `out/assets/`:
 
 ```
@@ -734,14 +767,14 @@ own copy instead of embedding one. Glyph addresses are valid only while that lan
 selected; the font resource is reloaded on a language change.
 
 **The output is copyrighted firmware content: never commit it.** The bitmap formats, tables and
-palettes are decoded by `py/fenykl/assets.py`; the per-firmware addresses are in its
-`ASSET_LAYOUTS`.
+palettes are decoded by `py/fenykl/assets.py`; the per-firmware addresses are the `[assets]` table
+of `sdk/arch/<camera>/target.toml`.
 
 ### Patches
 
 A patch targets one exact stock firmware (`fenykl.firmware.Target`: model,
 version, file name, sha256 and size of the decompressed `.BIN` and the real load address of each
-block once known, from the `[stock]` table of `sdk/targets/<camera>/target.toml`).
+block once known, from the `[stock]` table of `sdk/arch/<camera>/target.toml`).
 `patch apply`:
 
 1. refuses an input whose sha256 is not the patch target's,
@@ -756,12 +789,12 @@ Patches are `Patch` objects in `py/fenykl/patching.py`, registered in `PATCHES`.
 `fenykl info` (`main-code-01`, `main-lang`, ...), the offset into the unscrambled body.
 
 The only patch is the FENYKL.BIN boot loader, one per camera, registered as `<camera>/fenykl-loader`
-(e.g. `epl3/fenykl-loader`). Everything camera-specific about it is in `sdk/targets/<camera>/`:
+(e.g. `epl3/fenykl-loader`). Everything camera-specific about it is in `sdk/arch/<camera>/`:
 `loader/loader.S`, `loader/loader.ld` and `loader/loader.lst` (source, linker script with the hook site,
 cave and firmware symbols, disassembly), `loader/patch.toml` (description and the pinned edits: block,
 run address, sha256 of the stock bytes, replacement bytes), and `target.toml` (`model` checked by the loader in the
 FENYKL.BIN header, payload `load`/`max_size`, `[stock]` firmware identity and block load addresses).
-A second camera is a new `sdk/targets/<camera>/` with these files; no Python changes. Its loader test
+A second camera is a new `sdk/arch/<camera>/` with these files; no Python changes. Its loader test
 (`tests/test_fenykl_loader.py` and the simulator harness in `tests/loader_sim/`) is E-PL3-specific.
 
 ### Python layout
@@ -770,15 +803,15 @@ A second camera is a new `sdk/targets/<camera>/` with these files; no Python cha
 py/fenykl/
   cli.py            fenykl command
   firmware.py       .BIN block format, (un)scrambling, checksums, (un)packing, unpacked
-                    directory format, known stock firmwares (sdk/targets/*/target.toml [stock])
+                    directory format, known stock firmwares (sdk/arch/*/target.toml [stock])
   patching.py       ByteEdit, Patch, apply_patches, the per-camera fenykl-loader patches
   payload.py        FENYKL.BIN format, ELF packing, loader checks
-  sdk.py            SDK cameras (sdk/targets/<camera>/target.toml)
+  sdk.py            SDK cameras (sdk/arch/<camera>/target.toml)
   fwapi.py          firmware.toml -> C header, MN10300 thunks, address symbols
   plugin.py         plugin build (plugin.toml, per camera)
   assets.py         GUI font/icon/image decoder and PNG dump (assets dump)
 firmware/           drop-in dir for stock images (git-ignored)
-sdk/                C plugin SDK, camera parts in sdk/targets/<camera>/ (this file)
+sdk/                C plugin SDK, camera parts in sdk/arch/<camera>/ (this file)
 toolchain/          mn10300-elf toolchain build and checks (toolchain/README.md)
 tests/
 ```

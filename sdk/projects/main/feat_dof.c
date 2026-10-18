@@ -10,7 +10,6 @@
 #include "feat_focus_filter.h"
 
 #define FEAT_DOF_PROP_AV 0xA03Au	/* setting 3001: shooting Av, u16 APEX x 256 */
-#define FEAT_DOF_AV_EFFECT 0x605522BCu	/* u16 live iris Av, logged only */
 #define FEAT_DOF_COC_UM 15u		/* ExifTool's c for 4/3: diagonal 21.6 mm / 1440 */
 #define FEAT_DOF_PAIR_MS 2
 #define FEAT_DOF_LABEL "DoF\n"
@@ -112,7 +111,7 @@ static void feat_dof_tick(void)
 		st->text[i] = text[i];
 	st->changes++;
 	fenykl_log_dbg(&feat_dof_log, "s %u f %u av %u iris %u", s, f, av,
-		       *(volatile uint16_t *)FEAT_DOF_AV_EFFECT);
+		       *(volatile uint16_t *)FW_AV_EFFECT);
 	fenykl_log_dbg(&feat_dof_log, "  N1000 %u near %u far %u dof %u", d.n1000, d.near, d.far,
 		       d.depth);
 }

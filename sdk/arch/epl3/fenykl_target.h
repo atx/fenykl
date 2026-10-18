@@ -54,7 +54,7 @@ struct fenykl_vtable {
 /* --- CPU1 (README, CPU1) --- */
 
 /* Core id of the executing core: 0 = CPU0, 1 = CPU1. */
-#define FENYKL_CORE_ID() (*(volatile uint32_t *)0x8050u)
+#define FENYKL_CORE_ID() (*(volatile uint32_t *)FW_CORE_ID)
 
 /* Data both cores use: in .shared (whole 64-byte lines, zeroed by the loader). Access it only through
    FENYKL_SHARED_PTR(var), the uncached alias, on both cores: there is no cache coherency. */

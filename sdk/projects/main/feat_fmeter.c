@@ -9,17 +9,11 @@
 #include "main.h"
 #include "main_fmeter.h"
 
-#define FEAT_FMETER_CTX_PTR 0x605AED1Cu	/* u32 fcs contrast ctx, 0 when freed */
-#define FEAT_FMETER_DMA_BUF 0xACD377C0u	/* AF statistics, uncached, HPF1/2/3/V channels */
-#define FEAT_FMETER_AREA_SIZE 0x605A8C40u	/* u32 g_area_size: channel stride in u32 */
-#define FEAT_FMETER_TF_PTR 0x60575E50u	/* u32 take_focus */
 #define FEAT_FMETER_TF_MODE 0x05u	/* u8 mode_focus: 1 MF [camera] */
 #define FEAT_FMETER_TF_MF 1u
-#define FEAT_FMETER_TRG 0x605519A4u	/* u8 trigger snapshot: 03 released, 02 half [camera] */
 #define FEAT_FMETER_PROP_AREA 0x84D1u	/* AF area mode, 2 = all targets */
 #define FEAT_FMETER_PROP_TARGET 0x88B2u	/* AF target index */
 #define FEAT_FMETER_AREA_ALL 2u
-#define FEAT_FMETER_MODE2FCS 0x60575F5Du	/* u8 {area, valid}[35] (take_fcs_af_mode2fcs) */
 #define FEAT_FMETER_TARGETS 35u
 #define FEAT_FMETER_CTX_COLS 0x5Du
 #define FEAT_FMETER_CTX_ROWS 0x5Eu
@@ -171,8 +165,8 @@ static void feat_fmeter_sample(struct main_fmeter_in *in, const volatile uint32_
 	bool fresh = false, all;
 
 	t = feat_fmeter_prop_u8(FEAT_FMETER_PROP_TARGET);
-	if (t < FEAT_FMETER_TARGETS && feat_fmeter_rd8(FEAT_FMETER_MODE2FCS + 2 * t + 1))
-		area = (int)feat_fmeter_rd8(FEAT_FMETER_MODE2FCS + 2 * t);
+	if (t < FEAT_FMETER_TARGETS && feat_fmeter_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t + 1))
+		area = (int)feat_fmeter_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t);
 	all = feat_fmeter_prop_u8(FEAT_FMETER_PROP_AREA) == FEAT_FMETER_AREA_ALL;
 	st->area = main_fmeter_area((const uint32_t *)(buf + FEAT_FMETER_H3 * cw), cols, rows, all,
 				    area);
@@ -191,8 +185,8 @@ static void feat_fmeter_sample(struct main_fmeter_in *in, const volatile uint32_
 /* AF: the firmware's client, fcs's buffer. */
 static void feat_fmeter_read_af(struct main_fmeter_in *in)
 {
-	uint32_t ctx = feat_fmeter_rd32(FEAT_FMETER_CTX_PTR);
-	uint32_t cw = feat_fmeter_rd32(FEAT_FMETER_AREA_SIZE);
+	uint32_t ctx = feat_fmeter_rd32(FW_FCS_CONTRAST_CTX);
+	uint32_t cw = feat_fmeter_rd32(FW_FCS_AREA_SIZE);
 	uint32_t cols, rows;
 	uint8_t pattern;
 
@@ -204,7 +198,7 @@ static void feat_fmeter_read_af(struct main_fmeter_in *in)
 	    cw != rows * MAIN_FMETER_ROW_WORDS)
 		return;
 	pattern = (uint8_t)feat_fmeter_rd8(ctx + FEAT_FMETER_CTX_PATTERN);
-	feat_fmeter_sample(in, (const volatile uint32_t *)FEAT_FMETER_DMA_BUF, cols, rows, pattern);
+	feat_fmeter_sample(in, (const volatile uint32_t *)FW_FCS_DMA_BUF, cols, rows, pattern);
 	feat_fmeter_st.key = feat_fmeter_rd16(ctx + FEAT_FMETER_CTX_CUT3) << 16 |
 			     feat_fmeter_st.area << 8 | pattern;
 }
@@ -233,10 +227,10 @@ static void feat_fmeter_read_mf(struct main_fmeter_in *in)
 /* The statistics of this tick; in->fresh false if none. */
 static void feat_fmeter_read(struct main_fmeter_in *in)
 {
-	uint32_t tf = feat_fmeter_rd32(FEAT_FMETER_TF_PTR);
+	uint32_t tf = feat_fmeter_rd32(FW_TAKE_FOCUS_PTR);
 
 	in->hide = false;
-	in->half = !(feat_fmeter_rd8(FEAT_FMETER_TRG) & 1u);
+	in->half = !(feat_fmeter_rd8(FW_TRG_SNAPSHOT) & 1u);
 	in->fresh = false;
 	if (tf && feat_fmeter_rd8(tf + FEAT_FMETER_TF_MODE) == FEAT_FMETER_TF_MF)
 		feat_fmeter_read_mf(in);

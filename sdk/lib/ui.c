@@ -14,46 +14,25 @@
  */
 #include "ui_int.h"
 
-/* --- firmware addresses (v1.6) --- */
+/* --- firmware layouts (v1.6) --- */
 
-#define GUI_SM 0x60702278u		/* gui_sm: u8 super, u8 state, ..., +4 descriptor table */
-#define GUI_SUPER 0x60702278u
-#define GUI_CUR_PANEL 0x60352448u	/* s16 */
-#define GUI_APP 0x6034E4D8u		/* app object; +0x19C = the panel object on screen */
 #define GUI_APP_PANEL 0x19Cu
-#define MENULIST_VTABLE 0x6F150894u	/* class of the menu list view (panel 0x3B, resource 0x6028) */
-#define SS_DESCS 0x6F1B9910u
 #define SS_FENYKL 0x0D
-#define SLOT_0D (SS_DESCS + 4 * (SS_FENYKL - 1))
-#define DESC_0D_STUB 0x6F1C54B8u
-#define DESC_MENU 0x6F1C9EE0u		/* SS_MENU_MAIN */
-#define MENU_MATRIX 0x6F1C9A6Cu
-#define MENU_ACTIONS 0x6F1C96FCu
-#define MENU_EVMAP 0x6F1C94DCu
+#define SLOT_0D (FW_SS_DESCS + 4 * (SS_FENYKL - 1))
 #define MENU_STATES 15
 #define MENU_ROWS 68
 #define MENU_NACT 220
 #define ST_WIZARD 4
 #define ROW_RIGHT 5
 #define ROW_OK 6
-#define CELL_RIGHT (MENU_MATRIX + ROW_RIGHT * MENU_STATES + ST_WIZARD - 1)
-#define CELL_OK (MENU_MATRIX + ROW_OK * MENU_STATES + ST_WIZARD - 1)
-#define ACT_RIGHT 12			/* 0x6F07E961: on_key(3) */
-#define ACT_OK 13			/* 0x6F07EE33: on_key(4) */
+#define CELL_RIGHT (FW_MENU_MATRIX + ROW_RIGHT * MENU_STATES + ST_WIZARD - 1)
+#define CELL_OK (FW_MENU_MATRIX + ROW_OK * MENU_STATES + ST_WIZARD - 1)
+#define ACT_RIGHT 12			/* FW_MENU_ACT_RIGHT: on_key(3) */
+#define ACT_OK 13			/* FW_MENU_ACT_OK: on_key(4) */
 #define ACT_GENIFA 200
-#define NOOP0 0x6F06F20Du
-#define NOOP1 0x6F06F211u
-#define NOOP2 0x6F06F215u
 
-#define MENU_CUR_PANEL 0x603526A0u	/* menu_cur_panel */
-#define CUSTOM_PANEL 0x603537B8u	/* Custom panel singleton, 0 before the first visit */
-#define CUSTOM_CUR_ITEM 0x603537BEu	/* s16 cursor: index into the 71 records */
 #define FENYKL_ROW 70
-#define ITEMS 0x6F1E8EB0u		/* custom_menu_items: 16-byte records, u16 tab, title; ... */
-#define REC (ITEMS + 16 * FENYKL_ROW)	/* u32 setting +4; help +0xA */
-#define KID 0x6F1EA084u			/* kid list entry 70: u32 node, u32 avail */
-#define MENU_FLAGS_PTR 0x603530C8u	/* singleton; +0x14 = warning-return flag */
-#define LANG_CUR 0x605FC9C0u		/* osd_lang_cur: word 0 -> string pointers, word 1 -> their end */
+#define REC (FW_CUSTOM_MENU_ITEMS + 16 * FENYKL_ROW)	/* u32 setting +4; help +0xA */
 #define LANG_COUNT 1341u
 #define LANG_HELP 0x1DFu
 #define LANG_STABLE_TICKS 3u
@@ -352,7 +331,7 @@ static int fui_publish(void)
    entries ours or inside it. Its array, or 0. */
 static uint32_t fui_lang_table(void)
 {
-	uint32_t b = rd32(LANG_CUR), a, e, t, h;
+	uint32_t b = rd32(FW_OSD_LANG_CUR), a, e, t, h;
 
 	if (!dram_pointer(b))
 		return 0;
@@ -460,7 +439,7 @@ static void fui_count_core(void)
 /* Class vtable of the panel object on screen, 0 if there is none. */
 static uint32_t fui_panel_vtable(void)
 {
-	uint32_t app = rd32(GUI_APP), panel;
+	uint32_t app = rd32(FW_GUI_APP), panel;
 
 	if (!dram_pointer(app))
 		return 0;
@@ -472,13 +451,13 @@ static uint32_t fui_panel_vtable(void)
 static unsigned int fui_wizard_action(unsigned int code)
 {
 	for (unsigned int i = 0; i < MENU_ROWS; i++) {
-		if (rd32(MENU_EVMAP + 8 * i) != code)
+		if (rd32(FW_MENU_EVMAP + 8 * i) != code)
 			continue;
-		unsigned int row = rd32(MENU_EVMAP + 8 * i + 4);
+		unsigned int row = rd32(FW_MENU_EVMAP + 8 * i + 4);
 
 		if (row >= MENU_ROWS)
 			return 0;
-		unsigned int act = rd8(MENU_MATRIX + row * MENU_STATES + ST_WIZARD - 1);
+		unsigned int act = rd8(FW_MENU_MATRIX + row * MENU_STATES + ST_WIZARD - 1);
 
 		return act <= 2 || act >= MENU_NACT ? 0 : act;
 	}
@@ -490,7 +469,7 @@ static unsigned int fui_wizard_action(unsigned int code)
    which rebuilds the Custom list (slots 0xE/0xF) with the cursor unchanged. */
 static unsigned int fui_back_to_list(void)
 {
-	uint32_t flags = rd32(MENU_FLAGS_PTR);
+	uint32_t flags = rd32(FW_MENU_FLAGS_PTR);
 
 	if (flags)
 		wr32(flags + 0x14, 1);
@@ -510,25 +489,25 @@ static unsigned int fui_on_wrap(void *sm, unsigned int code, unsigned int p, voi
 		fui.st.cpu1_actions++;
 		return fw_call_gui_action(stock, sm, code, p, p2);
 	}
-	panel = rd32(CUSTOM_PANEL);
-	if (!panel || rd32(MENU_CUR_PANEL) != panel || rd16s(CUSTOM_CUR_ITEM) != FENYKL_ROW) {
+	panel = rd32(FW_CUSTOM_PANEL);
+	if (!panel || rd32(FW_MENU_CUR_PANEL) != panel || rd16s(FW_CUSTOM_CUR_ITEM) != FENYKL_ROW) {
 		r = fw_call_gui_action(stock, sm, code, p, p2);
 		fui.st.wrap_pass++;
 		fenykl_log_dbg(&fenykl_ui_log, "wrapper pass %04x -> %04x, cur %d", c, r & 0xFFFF,
-			       rd16s(CUSTOM_CUR_ITEM));
+			       rd16s(FW_CUSTOM_CUR_ITEM));
 		return r;
 	}
 	vt = fui_panel_vtable();
 	arr = fui_lang_table();
-	if (vt != MENULIST_VTABLE || !arr) {
+	if (vt != FW_MENULIST_VTABLE || !arr) {
 		fui.st.refused++;
 		fenykl_log_err(&fenykl_ui_log, "NOT opened: panel %d vtable %08x (want %08x), lang %08x",
-			       rd16s(GUI_CUR_PANEL), vt, MENULIST_VTABLE, arr);
+			       rd16s(FW_GUI_CUR_PANEL), vt, FW_MENULIST_VTABLE, arr);
 		return 0;
 	}
 	fui.st.wrap_in++;
 	fenykl_log_info(&fenykl_ui_log, "open (key %04x, panel %d, vtable %08x)", c,
-			rd16s(GUI_CUR_PANEL), vt);
+			rd16s(FW_GUI_CUR_PANEL), vt);
 	return TO_FENYKL;
 }
 FENYKL_CALLBACK(gui_action, fui_on_wrap);
@@ -551,7 +530,7 @@ unsigned int fui_on_entry(void *sm, unsigned int code, unsigned int p, void *p2)
 		fenykl_log_err(&fenykl_ui_log, "entry: no language table, titles NOT lent");
 	r = fui_publish();
 	fenykl_log_info(&fenykl_ui_log, "entry %04x: panel %d vtable %08x, lang %08x", code & 0xFFFF,
-			rd16s(GUI_CUR_PANEL), fui_panel_vtable(), arr);
+			rd16s(FW_GUI_CUR_PANEL), fui_panel_vtable(), arr);
 	fenykl_log_info(&fenykl_ui_log, "entry: %u rows, cursor %u, data_set %d", fui.nopts,
 			fui.cursor, r);
 	return 0;
@@ -699,14 +678,14 @@ static struct gui_ss_desc fui_desc;
 
 static void fui_build_tables(void)
 {
-	memcpy(fui_menu_actions, (const void *)MENU_ACTIONS, MENU_NACT * 4);
+	memcpy(fui_menu_actions, (const void *)FW_MENU_ACTIONS, MENU_NACT * 4);
 	fui_menu_actions[MENU_NACT] = FENYKL_CB(gui_action, fui_on_wrap);
 	fui.stock_ok = fui_menu_actions[ACT_OK];
 	fui.stock_right = fui_menu_actions[ACT_RIGHT];
 
-	fui_actions[0] = NOOP0;
-	fui_actions[1] = NOOP1;
-	fui_actions[2] = NOOP2;
+	fui_actions[0] = FW_MENU_NOOP0;
+	fui_actions[1] = FW_MENU_NOOP1;
+	fui_actions[2] = FW_MENU_NOOP2;
 	fui_actions[A_KEY] = FENYKL_CB(gui_action, fui_on_key);
 	fui_actions[A_SYS] = FENYKL_CB(gui_action, fui_on_sys);
 	fui_actions[A_IGNORE] = FENYKL_CB(gui_action, fui_on_ignore);
@@ -741,37 +720,37 @@ struct fui_expect {
 };
 
 static const struct fui_expect fui_stock[] = {
-	{ GUI_SM + 4, 4, SS_DESCS, "gui_sm descs" },
-	{ SS_DESCS + 4 * 2, 4, DESC_MENU, "desc SS_MENU_MAIN" },
-	{ SLOT_0D, 4, DESC_0D_STUB, "desc slot 0x0D" },
-	{ DESC_MENU + 0x0, 1, MENU_STATES, "menu n_states" },
-	{ DESC_MENU + 0x2, 2, MENU_ROWS, "menu n_rows" },
-	{ DESC_MENU + 0x4, 2, MENU_NACT, "menu n_actions" },
-	{ DESC_MENU + 0x6, 2, MENU_ROWS, "menu n_map" },
-	{ DESC_MENU + 0x8, 4, MENU_MATRIX, "menu matrix" },
-	{ DESC_MENU + 0xC, 4, MENU_ACTIONS, "menu actions" },
-	{ DESC_MENU + 0x10, 4, MENU_EVMAP, "menu evmap" },
-	{ DESC_MENU + 0x1C, 1, 0, "menu wide" },
-	{ MENU_EVMAP + 8 * ROW_RIGHT, 4, FUI_KEY_RIGHT, "evmap RIGHT" },
-	{ MENU_EVMAP + 8 * ROW_RIGHT + 4, 4, ROW_RIGHT, "evmap RIGHT row" },
-	{ MENU_EVMAP + 8 * ROW_OK, 4, FUI_KEY_OK, "evmap OK" },
-	{ MENU_EVMAP + 8 * ROW_OK + 4, 4, ROW_OK, "evmap OK row" },
+	{ FW_GUI_SUPER + 4, 4, FW_SS_DESCS, "gui_sm descs" },
+	{ FW_SS_DESCS + 4 * 2, 4, FW_SS_DESC_MENU, "desc SS_MENU_MAIN" },
+	{ SLOT_0D, 4, FW_SS_DESC_0D_STUB, "desc slot 0x0D" },
+	{ FW_SS_DESC_MENU + 0x0, 1, MENU_STATES, "menu n_states" },
+	{ FW_SS_DESC_MENU + 0x2, 2, MENU_ROWS, "menu n_rows" },
+	{ FW_SS_DESC_MENU + 0x4, 2, MENU_NACT, "menu n_actions" },
+	{ FW_SS_DESC_MENU + 0x6, 2, MENU_ROWS, "menu n_map" },
+	{ FW_SS_DESC_MENU + 0x8, 4, FW_MENU_MATRIX, "menu matrix" },
+	{ FW_SS_DESC_MENU + 0xC, 4, FW_MENU_ACTIONS, "menu actions" },
+	{ FW_SS_DESC_MENU + 0x10, 4, FW_MENU_EVMAP, "menu evmap" },
+	{ FW_SS_DESC_MENU + 0x1C, 1, 0, "menu wide" },
+	{ FW_MENU_EVMAP + 8 * ROW_RIGHT, 4, FUI_KEY_RIGHT, "evmap RIGHT" },
+	{ FW_MENU_EVMAP + 8 * ROW_RIGHT + 4, 4, ROW_RIGHT, "evmap RIGHT row" },
+	{ FW_MENU_EVMAP + 8 * ROW_OK, 4, FUI_KEY_OK, "evmap OK" },
+	{ FW_MENU_EVMAP + 8 * ROW_OK + 4, 4, ROW_OK, "evmap OK row" },
 	{ CELL_RIGHT, 1, ACT_RIGHT, "cell RIGHT/WIZARD" },
 	{ CELL_OK, 1, ACT_OK, "cell OK/WIZARD" },
-	{ MENU_ACTIONS + 4 * 0, 4, NOOP0, "action 0" },
-	{ MENU_ACTIONS + 4 * 1, 4, NOOP1, "action 1" },
-	{ MENU_ACTIONS + 4 * 2, 4, NOOP2, "action 2" },
-	{ MENU_ACTIONS + 4 * ACT_RIGHT, 4, 0x6F07E961u, "action RIGHT" },
-	{ MENU_ACTIONS + 4 * ACT_OK, 4, 0x6F07EE33u, "action OK" },
-	{ MENU_ACTIONS + 4 * ACT_GENIFA, 4, 0x6F0867B0u, "action GENIFA" },
+	{ FW_MENU_ACTIONS + 4 * 0, 4, FW_MENU_NOOP0, "action 0" },
+	{ FW_MENU_ACTIONS + 4 * 1, 4, FW_MENU_NOOP1, "action 1" },
+	{ FW_MENU_ACTIONS + 4 * 2, 4, FW_MENU_NOOP2, "action 2" },
+	{ FW_MENU_ACTIONS + 4 * ACT_RIGHT, 4, FW_MENU_ACT_RIGHT, "action RIGHT" },
+	{ FW_MENU_ACTIONS + 4 * ACT_OK, 4, FW_MENU_ACT_OK, "action OK" },
+	{ FW_MENU_ACTIONS + 4 * ACT_GENIFA, 4, FW_MENU_ACT_GENIFA, "action GENIFA" },
 	{ REC + 0x0, 2, 9, "rec tab" },
 	{ REC + 0x2, 2, FUI_TITLE, "rec title" },
 	{ REC + 0x4, 4, 0x223, "rec setting" },
 	{ REC + 0xA, 2, LANG_HELP, "rec help" },
 	{ REC + 0xC, 2, 0, "rec fmt" },
 	{ REC + 0x10, 2, 0x92, "end of records" },
-	{ KID + 0, 4, 0xA9, "kid node" },
-	{ KID + 4, 4, 0x223, "kid avail" },
+	{ FW_CUSTOM_MENU_KID70 + 0, 4, 0xA9, "kid node" },
+	{ FW_CUSTOM_MENU_KID70 + 4, 4, 0x223, "kid avail" },
 };
 #define FUI_STOCK (sizeof(fui_stock) / sizeof(fui_stock[0]))
 
@@ -790,7 +769,7 @@ static bool fui_check_stock(void)
 			       e->addr, v, e->value);
 	}
 	for (unsigned int k = 0; k < FUI_BORROWED; k++) {
-		uint32_t a = ITEMS + 16 * k + 2;
+		uint32_t a = FW_CUSTOM_MENU_ITEMS + 16 * k + 2;
 
 		if (rd16(a) == fui_borrowed_ids[k])
 			continue;
@@ -811,7 +790,7 @@ static void fui_write32(const char *what, uint32_t addr, uint32_t v)
 
 int fenykl_ui_install(void)
 {
-	unsigned int super = rd8(GUI_SUPER);
+	unsigned int super = rd8(FW_GUI_SUPER);
 	uint32_t arr;
 	int r;
 
@@ -833,13 +812,13 @@ int fenykl_ui_install(void)
 	fui_build_tables();
 	/* the clone before the cells that index past the stock table */
 	fui_write32("slot 0x0D", SLOT_0D, (uint32_t)&fui_desc);
-	fui_write32("menu actions", DESC_MENU + 0xC, (uint32_t)fui_menu_actions);
+	fui_write32("menu actions", FW_SS_DESC_MENU + 0xC, (uint32_t)fui_menu_actions);
 	fenykl_log_info(&fenykl_ui_log, "write cells OK %u RIGHT %u -> %u", rd8(CELL_OK),
 			rd8(CELL_RIGHT), MENU_NACT);
 	wr8(CELL_OK, MENU_NACT);
 	wr8(CELL_RIGHT, MENU_NACT);
 	fui_write32("rec setting", REC + 4, SETTING_NONE);
-	fui_write32("kid avail", KID + 4, AVAIL_ALWAYS);
+	fui_write32("kid avail", FW_CUSTOM_MENU_KID70 + 4, AVAIL_ALWAYS);
 	fui_write32("lang title", arr + 4 * FUI_TITLE, (uint32_t)fui_s_title);
 	fui_write32("lang help", arr + 4 * LANG_HELP, (uint32_t)fui_s_help);
 	fui.lang_arr = arr;
@@ -852,14 +831,14 @@ int fenykl_ui_install(void)
    did not see): given back here and logged as an error. */
 static void fui_check_lent(void)
 {
-	if (!fui.lent_arr || rd8(GUI_SUPER) == SS_FENYKL) {
+	if (!fui.lent_arr || rd8(FW_GUI_SUPER) == SS_FENYKL) {
 		fui.stray_ticks = 0;
 		return;
 	}
 	if (++fui.stray_ticks < LANG_STABLE_TICKS)
 		return;
 	fenykl_log_err(&fenykl_ui_log, "lang ids still lent in GUI %02x: returned by the tick",
-		       rd8(GUI_SUPER));
+		       rd8(FW_GUI_SUPER));
 	fui_lang_return();
 	fui.st.lang_stray++;
 }

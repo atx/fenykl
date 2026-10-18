@@ -1,25 +1,14 @@
 /*
  * The plugin's own contrast client (afc.h, docs/afc.md): snapshot of fcs's contrast_setting,
  * gates, attach with cam_request, detach by number = 0, callbacks. Firmware
- * addresses and layouts are those of v1.6.
+ * layouts are those of v1.6.
  */
 #include <fenykl.h>
 #include <afc.h>
 #include "afc_int.h"
 
-#define AFC_EVAL_STATE 0x605A8C38u	/* u8 fcs_af_eval_state: 0 idle, 2 running, 3 stop, 1 last, 4 update */
-#define AFC_CTX_PTR 0x605AED1Cu		/* u32 fcs contrast ctx, 0 when freed */
-#define AFC_FCS_DMA 0xACD377C0u		/* fcs's DMA buffer, uncached */
-#define AFC_CLIENT 0x605AEFA0u		/* u32 contrast driver: current client */
-#define AFC_QUEUED 0x605AEFA4u		/* u32 contrast driver: queued client */
 #define AFC_CL_SETTING 0x08u		/* driver client +8: its contrast_setting */
-#define AFC_DRV_DBG 0x605AEFD4u		/* u16 driver debug mode: 3 converts windows in cam_cnt_apply */
-#define AFC_TF_PTR 0x60575E50u		/* u32 take_focus */
-#define AFC_TRG 0x605519A4u		/* u8 trigger snapshot: bit 0 clear = half or full press */
-#define AFC_GUI_SUPER 0x60702278u
-#define AFC_GUI_STATE 0x60702279u
 #define AFC_SS_REC 0x02u
-#define AFC_KCTX 0x8FF00004u		/* per-core kernel block; *(*(+0x1C)) != 0: interrupt context */
 
 /* take_focus offsets (u8) */
 #define AFC_TF_MODE 0x05u		/* 0 S-AF, 1 MF, 2 C-AF */
@@ -104,13 +93,13 @@ static struct afc_req *afc_req(void)
 
 static bool afc_half(void)
 {
-	return !(afc_rd8(AFC_TRG) & 1u);
+	return !(afc_rd8(FW_TRG_SNAPSHOT) & 1u);
 }
 
 /* As 0x6E6896DF, which the firmware's contrast callbacks use to pick iset_flg. */
 static uint32_t afc_in_irq(void)
 {
-	uint32_t k = afc_rd32(AFC_KCTX + 4u * FENYKL_CORE_ID());
+	uint32_t k = afc_rd32(FW_KERNEL_CORE_CTX + 4u * FENYKL_CORE_ID());
 
 	return afc_rd8(afc_rd32(k + 0x1Cu)) != 0;
 }
@@ -179,7 +168,7 @@ static bool afc_snap_ready(uint32_t tf, uint32_t ctx)
 	uint32_t set = ctx + AFC_CTX_SETTING;
 	uint32_t pat;
 
-	if (!tf || !ctx || afc_rd8(AFC_EVAL_STATE) != 2 || afc_half())
+	if (!tf || !ctx || afc_rd8(FW_FCS_AF_EVAL_STATE) != 2 || afc_half())
 		return false;
 	if (afc_rd8(tf + AFC_TF_MODE) == AFC_TF_MF || afc_rd8(tf + AFC_TF_MOVIE))
 		return false;
@@ -188,7 +177,7 @@ static bool afc_snap_ready(uint32_t tf, uint32_t ctx)
 	    afc_rd8(ctx + AFC_CTX_ROWS) != AFC_ROWS)
 		return false;
 	return afc_rd16(set + AFC_SET_NUMBER) == AFC_SET_ENDLESS &&
-	       afc_rd32(set + AFC_SET_DMA) == AFC_FCS_DMA &&
+	       afc_rd32(set + AFC_SET_DMA) == FW_FCS_DMA_BUF &&
 	       afc_rd32(ctx + AFC_CTX_REQ + 0x14u) == set;
 }
 
@@ -226,9 +215,9 @@ static void afc_snap_poll(uint32_t tf, uint32_t ctx)
 /* GUI super 0x02 (SS_REC), stills screens: Basic, Histogram, H&S, STILL_OFF, STILL_OVER, level gauge. */
 static bool afc_lv_screen(void)
 {
-	uint32_t st = afc_rd8(AFC_GUI_STATE);
+	uint32_t st = afc_rd8(FW_GUI_STATE);
 
-	if (afc_rd8(AFC_GUI_SUPER) != AFC_SS_REC)
+	if (afc_rd8(FW_GUI_SUPER) != AFC_SS_REC)
 		return false;
 	return (st >= 0x03 && st <= 0x05) || (st >= 0x09 && st <= 0x0B);
 }
@@ -256,11 +245,11 @@ static uint32_t afc_gates(uint32_t tf, bool enable)
 		g |= FENYKL_AFC_G_MOVIE;
 	if (afc_half())
 		g |= FENYKL_AFC_G_HALF;
-	if (afc_rd8(AFC_EVAL_STATE))
+	if (afc_rd8(FW_FCS_AF_EVAL_STATE))
 		g |= FENYKL_AFC_G_FCS;
-	if (fenykl_afc_slot_owner(AFC_CLIENT) == 2 || fenykl_afc_slot_owner(AFC_QUEUED) == 2)
+	if (fenykl_afc_slot_owner(FW_CNT_CLIENT) == 2 || fenykl_afc_slot_owner(FW_CNT_QUEUED) == 2)
 		g |= FENYKL_AFC_G_SLOT;
-	if (afc_rd16(AFC_DRV_DBG))
+	if (afc_rd16(FW_CNT_DRV_DBG))
 		g |= FENYKL_AFC_G_DRV;
 	if (!enable)
 		g |= FENYKL_AFC_G_OFF;
@@ -417,13 +406,13 @@ void fenykl_afc_init(void)
 
 void fenykl_afc_poll(bool enable)
 {
-	uint32_t tf = afc_rd32(AFC_TF_PTR);
+	uint32_t tf = afc_rd32(FW_TAKE_FOCUS_PTR);
 	enum fenykl_afc_state from = afc.sm.state;
 	uint32_t done = afc.sm.done;
 	struct fenykl_afc_in in;
 
 	afc_clock();
-	afc_snap_poll(tf, afc_rd32(AFC_CTX_PTR));
+	afc_snap_poll(tf, afc_rd32(FW_FCS_CONTRAST_CTX));
 	afc.gates = afc_gates(tf, enable);
 	in = afc_input();
 	afc_do(fenykl_afc_sm_step(&afc.sm, &in), &in);

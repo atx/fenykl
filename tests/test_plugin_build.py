@@ -1,6 +1,7 @@
 """Builds the example plugins end to end (compile, link, pack). The build tests need the cross
 toolchain, the ISA check tests also GHIDRA_INSTALL_DIR and JAVA_HOME; they are skipped without them."""
 
+import dataclasses
 import os
 
 import pytest
@@ -81,7 +82,7 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 """
 
 
-def cpu1_plugin(tmp_path, call, cpu1_sources='["work.c"]'):
+def cpu1_plugin(tmp_path, call, cpu1_sources='["work.c"]', target=None):
     src = tmp_path / "src"
     src.mkdir()
     (src / "plugin.toml").write_text(
@@ -89,7 +90,7 @@ def cpu1_plugin(tmp_path, call, cpu1_sources='["work.c"]'):
     )
     (src / "work.c").write_text(WORKER.replace("CALL", call))
     (src / "main.c").write_text(MAIN)
-    return plugin.build(src, tmp_path / "out", sdk.target("epl3"))
+    return plugin.build(src, tmp_path / "out", target or sdk.target("epl3"))
 
 
 @needs_toolchain
@@ -120,6 +121,23 @@ def test_cpu1_worker_outside_cpu1_sources_does_not_build(tmp_path):
 def test_cpu1_sources_must_be_plugin_files(tmp_path):
     with pytest.raises(plugin.BuildError, match="cpu1_sources lists nope.c"):
         cpu1_plugin(tmp_path, "(void)arg", cpu1_sources='["work.c", "nope.c"]')
+
+
+def test_cpu1_sources_need_a_target_with_the_cpu1_capability(tmp_path):
+    no_cpu1 = dataclasses.replace(sdk.target("epl3"), capabilities=())
+    with pytest.raises(plugin.BuildError, match="target epl3 has no cpu1 capability"):
+        cpu1_plugin(tmp_path, "(void)arg", target=no_cpu1)
+
+
+@needs_toolchain
+def test_target_and_capability_macros_reach_the_plugin(tmp_path):
+    (tmp_path / "plugin.toml").write_text('targets = ["epl3"]\n')
+    (tmp_path / "main.c").write_text(
+        "#include <fenykl.h>\n"
+        '_Static_assert(FENYKL_TARGET_EPL3 && FENYKL_HAS_CPU1, "target macros");\n'
+        "void plugin_main(uint32_t b, uint32_t s) { (void)b; (void)s; }\n"
+    )
+    plugin.build(tmp_path, tmp_path / "out", sdk.target("epl3"))
 
 
 @needs_toolchain

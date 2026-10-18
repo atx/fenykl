@@ -206,7 +206,7 @@ def test_relocator_accepts_the_reviewed_span(tmp_path):
 
 
 def test_select_hooks_needs_an_acknowledgement_for_an_unproven_cpu1_scope():
-    api = fwapi.Api([hooked(cpu1="unproven")], {}, {}, {})
+    api = fwapi.Api([hooked(cpu1="unproven")], {}, {}, {}, {})
     with pytest.raises(fwapi.ApiError, match="CPU1 never runs it"):
         fwapi.select(api, hooks=["f"])
     sel = fwapi.select(api, hooks=["f"], cpu1_unproven=["f"])
@@ -372,3 +372,36 @@ def test_declared_slots_and_vtables_match_the_stock_image():
     for vt in api.vtables.values():
         assert all(is_code(word(vt.address + 4 * i)) for i in range(vt.count)), vt.name
         assert not is_code(word(vt.address + 4 * vt.count)), vt.name
+
+
+# ---- Data ----
+
+DATA = """
+[data.gui_super]
+address = 0x60702278
+type = "u8"
+evidence = "high"
+note = "gui_sm super state"
+"""
+
+
+@pytest.mark.parametrize(
+    "edit, match",
+    [
+        (("[data.gui_super]", "[data.GUI_SUPER]"), "name must be lower case"),
+        (("0x60702278", "0x160702278"), "not 32-bit"),
+        (('evidence = "high"', 'evidence = "sure"'), "evidence must be one of"),
+        (('type = "u8"', 'type = " "'), "type must say"),
+        (('note = "gui_sm super state"', ""), "fields must be exactly"),
+    ],
+)
+def test_bad_data_declarations(tmp_path, edit, match):
+    with pytest.raises(fwapi.ApiError, match=match):
+        load_toml(tmp_path, DATA.replace(*edit))
+
+
+def test_data_becomes_an_unsigned_address_constant(tmp_path):
+    api = load_toml(tmp_path, DATA)
+    header = fwapi.header(api, fwapi.select(api))
+    assert "/* gui_super, u8, evidence high: gui_sm super state */" in header
+    assert "#define FW_GUI_SUPER 0x60702278u" in header

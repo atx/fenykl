@@ -1,4 +1,4 @@
-/* Startup decision on a USB boot (lib/start.c, targets/epl3/usb.c), run by test_sim.py with
+/* Startup decision on a USB boot (lib/start.c, arch/epl3/usb.c), run by test_sim.py with
    sim_start.S and the mocks of ../mocks.S. */
 #include <fenykl.h>
 

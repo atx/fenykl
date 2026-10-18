@@ -6,7 +6,6 @@
  */
 #include <event.h>
 
-#define CORE_ID 0x8050u		/* 0 on CPU0 */
 
 FENYKL_LOG_MODULE(fenykl_event_log, "event", FENYKL_LOG_INFO);
 
@@ -47,7 +46,7 @@ int fenykl_event_dispatch(uint32_t event, uint32_t param, uint32_t flag)
 	uint32_t psw;
 	int r;
 
-	if (*(volatile uint32_t *)CORE_ID != 0) {
+	if (FENYKL_CORE_ID() != 0) {
 		evl.st.cpu1++;
 		return fw_orig_appevent_post(event, param, flag);
 	}

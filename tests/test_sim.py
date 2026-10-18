@@ -41,7 +41,7 @@ firmware functions placed at their real firmware addresses. Every C test program
   way out of the page.
 - birddetect_hook: birddetect's fd_hw_shutdown hook (sdk/projects/birddetect/hook.c) on the
   function's real entry bytes: install, a live cycle and a still call through the original, remove.
-- cpu1: the API contract of the CPU1 worker runtime (sdk/targets/epl3/cpu1.c): start, state,
+- cpu1: the API contract of the CPU1 worker runtime (sdk/arch/epl3/cpu1.c): start, state,
   stop and its timeout, restart, refusals; against a fake TCB and mocks of OlyTaskStart/Stop/Sleep.
 - usb: a boot started by the USB cable skips plugin_main unless plugin.toml sets run_on_usb.
 - hooks: the hook generator and runtime, plus a synthetic stack-argument hook target.

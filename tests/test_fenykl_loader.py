@@ -1,4 +1,4 @@
-"""The E-PL3 FENYKL.BIN boot loader patch (sdk/targets/epl3/loader/, py/fenykl/patching.py).
+"""The E-PL3 FENYKL.BIN boot loader patch (sdk/arch/epl3/loader/, py/fenykl/patching.py).
 
 The pinned bytes must be what the source assembles to; every CALL in the stub must use the register
 list and frame of the firmware's own call sites; the pinned bytes must behave as specified in the

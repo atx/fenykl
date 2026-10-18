@@ -155,11 +155,11 @@ struct fenykl_log_stats {
 void fenykl_log_get_stats(struct fenykl_log_stats *out);
 
 /*
- * timer_now 0x98900074: free-running 30-bit counter at 1 MHz (counts down; this counts up), both
+ * FW_TIMER_NOW: free-running 30-bit counter at 1 MHz (counts down; this counts up), both
  * cores. FENYKL_LOG_ELAPSED is the wrap-safe difference.
  */
 #define FENYKL_LOG_TIMER_MASK 0x3FFFFFFFu
-#define FENYKL_LOG_TIMER_NOW() (FENYKL_LOG_TIMER_MASK - *(volatile uint32_t *)0x98900074u)
+#define FENYKL_LOG_TIMER_NOW() (FENYKL_LOG_TIMER_MASK - *(volatile uint32_t *)FW_TIMER_NOW)
 #define FENYKL_LOG_ELAPSED(from, to) (((to) - (from)) & FENYKL_LOG_TIMER_MASK)
 
 #endif /* _FENYKL_LOG_H */

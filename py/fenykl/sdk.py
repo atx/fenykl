@@ -1,4 +1,4 @@
-"""Cameras the plugin SDK builds for: one directory per camera in sdk/targets/ (sdk/README.md)."""
+"""Cameras the plugin SDK builds for: one directory per camera in sdk/arch/ (sdk/README.md)."""
 
 import os
 import tomllib
@@ -7,7 +7,7 @@ from pathlib import Path
 
 FENYKL_ROOT = Path(__file__).resolve().parents[2]
 SDK = FENYKL_ROOT / "sdk"
-TARGETS = SDK / "targets"
+ARCH = SDK / "arch"
 TOOLCHAIN_INSTALL = FENYKL_ROOT / "toolchain" / "install"
 
 
@@ -24,7 +24,7 @@ def toolchain_prefix() -> Path:
 
 @dataclass(frozen=True)
 class SdkTarget:
-    """sdk/targets/<name>/: target.toml, firmware.toml, link.ld, crt0.S, fenykl_target.h, loader/."""
+    """sdk/arch/<name>/: target.toml, firmware.toml, link.ld, crt0.S, fenykl_target.h, loader/."""
 
     name: str
     dir: Path
@@ -38,6 +38,8 @@ class SdkTarget:
     max_size: int
     sdk_hooks: tuple[str, ...]
     """Hooks the SDK library binds itself, generated for every plugin (sdk/README.md, Hooks)."""
+    capabilities: tuple[str, ...]
+    """SDK features this camera supports; each becomes FENYKL_HAS_<NAME> (sdk/README.md, Layout)."""
 
     @property
     def region_end(self) -> int:
@@ -62,7 +64,7 @@ class SdkTarget:
 
 
 def target(name: str) -> SdkTarget:
-    path = TARGETS / name / "target.toml"
+    path = ARCH / name / "target.toml"
     if not path.is_file():
         raise TargetError(f"unknown target {name!r} (no {path})")
     t = tomllib.loads(path.read_text())
@@ -78,11 +80,12 @@ def target(name: str) -> SdkTarget:
         load=t["load"],
         max_size=t["max_size"],
         sdk_hooks=tuple(t.get("sdk_hooks", [])),
+        capabilities=tuple(t["capabilities"]),
     )
 
 
 def all_targets() -> list[SdkTarget]:
-    return [target(p.parent.name) for p in sorted(TARGETS.glob("*/target.toml"))]
+    return [target(p.parent.name) for p in sorted(ARCH.glob("*/target.toml"))]
 
 
 def target_at(load: int) -> SdkTarget | None:

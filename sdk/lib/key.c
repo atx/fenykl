@@ -9,7 +9,6 @@
  */
 #include <key.h>
 
-#define GUI_SUPER 0x60702278u	/* u8 gui_sm super state, u8 state at +1 */
 #define MODE_DIAL_VALUE (FENYKL_EVENT_KEY_VALUE | 0x1901u)
 #define KEY_ALL ((FENYKL_KEY_BIT(FENYKL_KEY_COUNT) - 1) & ~FENYKL_KEY_BIT(FENYKL_KEY_NONE))
 
@@ -363,7 +362,7 @@ unsigned int fenykl_key_mode_dial(void)
 
 uint16_t fenykl_gui_state(void)
 {
-	const volatile uint8_t *sm = (const volatile uint8_t *)GUI_SUPER;
+	const volatile uint8_t *sm = (const volatile uint8_t *)FW_GUI_SUPER;
 
 	return sm[0] << 8 | sm[1];
 }

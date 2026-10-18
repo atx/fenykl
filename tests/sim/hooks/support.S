@@ -1,4 +1,4 @@
-/* Firmware helpers the hook runtime (sdk/targets/epl3/hooks.c) calls, as mocks placed at their real
+/* Firmware helpers the hook runtime (sdk/arch/epl3/hooks.c) calls, as mocks placed at their real
    addresses with the jmp trick. Minimal: they only have to return and let the runtime proceed.
    mock_args[] (from test_hooks.c) records what the runtime passed, so a check could inspect it. */
 	.macro	MOCK name

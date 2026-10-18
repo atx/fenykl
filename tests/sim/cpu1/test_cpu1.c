@@ -1,4 +1,4 @@
-/* The API contract of the CPU1 worker runtime (sdk/targets/epl3/cpu1.c) in the GDB simulator: start,
+/* The API contract of the CPU1 worker runtime (sdk/arch/epl3/cpu1.c) in the GDB simulator: start,
    state, stop with its timeout, restart and the refusals, against a fake TCB of task 0x1002 and the
    mocks in fw.S. plugin_main sets sim_exit_code to 0 (pass) or 1 + the number of the
    lowest failed check. */

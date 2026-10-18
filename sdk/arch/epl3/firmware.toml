@@ -18,6 +18,9 @@
 #
 # Only 32-bit arguments. Add a function only when its CALL encoding and argument registers have
 # been read from the firmware; unknown signatures stay out.
+#
+# Further down, each with its own field list: hooks, callbacks, slots, vtables and data (addresses
+# the SDK uses as values, FW_<NAME>).
 
 [dbg_puts]
 address = 0x6E606525
@@ -635,3 +638,438 @@ count = 28
 cpu1 = "unproven"
 cpu1_evidence = "static only: the core map has the methods (0x6EB8D163, hfw_setSetting) and hfw_setting_proxy_get on cpu0 (BOOT_CPU0), call class unreached"
 note = "vtable of the settings proxy *(void **)0x60357B50, an 8-byte object (vptr, usrsetmgr*) that hfw_setting_proxy_get 0x6EB8CE9E allocates once under a lock; the pointer is never cleared (its 4 references are all in 0x6EB8CE9E). 28 slots: slot 27 is the destructor 0x6EB8CF40 (stores 0x6EE3F58C into the object), the next word is a string, and call sites use offsets up to 104 (byte scan)"
+
+# Data: firmware addresses the SDK and its plugins use as values (sdk/README.md, Firmware data).
+# `[data.<name>]` becomes `#define FW_<NAME> 0x...u` in fenykl_fw.h. Fields:
+#   address   the address (RAM, table, MMIO register or the bound of an address range)
+#   type      what lives there, in C terms ("u8", "u32 -> take_focus", "struct osd_vram *[6]",
+#             "code" for a function address compared against, "bound" for a range limit)
+#   evidence  high or medium, as for functions
+#   note      meaning and where it was read
+# Layouts behind the address stay C structs or offsets in the code that reads them.
+
+# --- address map ---
+
+[data.dram_start]
+address = 0x60000000
+type = "bound"
+evidence = "high"
+note = "start of cached DRAM (uncached alias 0xA0000000); firmware RAM up to image_start"
+
+[data.image_start]
+address = 0x6E600000
+type = "bound"
+evidence = "high"
+note = "start of the firmware code image in DRAM (main-code-01 loads at 0x6E601420; the FENYKL.BIN payload sits in a hole inside the image)"
+
+[data.image_end]
+address = 0x6F381400
+type = "bound"
+evidence = "high"
+note = "end of the firmware code image; GUI resources, fonts and the language table follow up to dram_end"
+
+[data.dram_end]
+address = 0x70000000
+type = "bound"
+evidence = "high"
+note = "end of the cached DRAM window"
+
+[data.main_code_start]
+address = 0x6E601420
+type = "bound"
+evidence = "high"
+note = "main-code-01 text as loaded by main_init"
+
+[data.main_code_end]
+address = 0x6EA6D29C
+type = "bound"
+evidence = "high"
+note = "end of main-code-01 text"
+
+# --- kernel, console, timer ---
+
+[data.core_id]
+address = 0x8050
+type = "u32"
+evidence = "high"
+note = "core id of the executing core: 0 CPU0, 1 CPU1 (read through FENYKL_CORE_ID in fenykl_target.h)"
+
+[data.kernel_core_ctx]
+address = 0x8FF00004
+type = "u32 [core]"
+evidence = "high"
+note = "per-core kernel block pointer; *(*(block + 0x1C)) != 0: interrupt context"
+
+[data.boot_cause]
+address = 0x6044151A
+type = "u8"
+evidence = "high"
+note = "firmware boot cause byte (FUN_6e6340c0)"
+
+[data.uart_tee_buf]
+address = 0xA07C5E80
+type = "u8 []"
+evidence = "high"
+note = "uart_putchar's boot capture buffer (uncached)"
+
+[data.uart_tee_count]
+address = 0x8FF00088
+type = "u16"
+evidence = "high"
+note = "bytes in uart_tee_buf"
+
+[data.uart_tee_state1]
+address = 0x8FF00082
+type = "u8"
+evidence = "high"
+note = "uart_state[1]: >= 2 means the console capture is off (UART1 camera?)"
+
+[data.timer_now]
+address = 0x98900074
+type = "u32 MMIO"
+evidence = "high"
+note = "timer_now: free-running 30-bit counter at 1 MHz, counting down, readable from both cores"
+
+# --- GUI state machine and menus ---
+
+[data.gui_super]
+address = 0x60702278
+type = "u8"
+evidence = "high"
+note = "gui_sm super state (0x02 every live-view screen, 0x03 menu, 0x06 playback); u8 state at +1, descriptor table pointer (ss_descs) at +4"
+
+[data.gui_state]
+address = 0x60702279
+type = "u8"
+evidence = "high"
+note = "gui_sm state within the super state"
+
+[data.gui_cur_panel]
+address = 0x60352448
+type = "s16"
+evidence = "high"
+note = "current GUI panel"
+
+[data.gui_app]
+address = 0x6034E4D8
+type = "u32 -> app object"
+evidence = "high"
+note = "GUI app object; +0x19C = the panel object on screen"
+
+[data.menulist_vtable]
+address = 0x6F150894
+type = "u32 [] vtable"
+evidence = "high"
+note = "class of the menu list view (panel 0x3B, resource 0x6028)"
+
+[data.ss_descs]
+address = 0x6F1B9910
+type = "u32 [super state - 1] -> descriptor"
+evidence = "high"
+note = "gui_sm super-state descriptor table, pointed at by gui_sm +4"
+
+[data.ss_desc_0d_stub]
+address = 0x6F1C54B8
+type = "descriptor"
+evidence = "high"
+note = "stock descriptor in ss_descs slot 0x0D"
+
+[data.ss_desc_menu]
+address = 0x6F1C9EE0
+type = "descriptor"
+evidence = "high"
+note = "SS_MENU_MAIN descriptor (super state 0x03)"
+
+[data.menu_matrix]
+address = 0x6F1C9A6C
+type = "u8 [68 rows][15 states]"
+evidence = "high"
+note = "menu event matrix: action index per event row and state (state 1-based)"
+
+[data.menu_actions]
+address = 0x6F1C96FC
+type = "u32 [220] -> code"
+evidence = "high"
+note = "menu action handlers"
+
+[data.menu_evmap]
+address = 0x6F1C94DC
+type = "{u32 key, u32 row} [68]"
+evidence = "high"
+note = "menu event map: key code -> matrix row"
+
+[data.menu_noop0]
+address = 0x6F06F20D
+type = "code"
+evidence = "high"
+note = "stock menu_actions[0]"
+
+[data.menu_noop1]
+address = 0x6F06F211
+type = "code"
+evidence = "high"
+note = "stock menu_actions[1]"
+
+[data.menu_noop2]
+address = 0x6F06F215
+type = "code"
+evidence = "high"
+note = "stock menu_actions[2]"
+
+[data.menu_act_right]
+address = 0x6F07E961
+type = "code"
+evidence = "high"
+note = "stock menu_actions[12]: on_key(3)"
+
+[data.menu_act_ok]
+address = 0x6F07EE33
+type = "code"
+evidence = "high"
+note = "stock menu_actions[13]: on_key(4)"
+
+[data.menu_act_genifa]
+address = 0x6F0867B0
+type = "code"
+evidence = "high"
+note = "stock menu_actions[200]"
+
+[data.menu_cur_panel]
+address = 0x603526A0
+type = "u32"
+evidence = "high"
+note = "menu_cur_panel"
+
+[data.menu_flags_ptr]
+address = 0x603530C8
+type = "u32 -> menu flags"
+evidence = "high"
+note = "menu flags singleton; +0x14 = warning-return flag"
+
+[data.custom_panel]
+address = 0x603537B8
+type = "u32 -> panel"
+evidence = "high"
+note = "Custom menu panel singleton, 0 before the first visit"
+
+[data.custom_cur_item]
+address = 0x603537BE
+type = "s16"
+evidence = "high"
+note = "Custom menu cursor: index into the 71 custom_menu_items records"
+
+[data.custom_menu_items]
+address = 0x6F1E8EB0
+type = "16-byte records [71]"
+evidence = "high"
+note = "custom_menu_items: u16 tab, u16 title, u32 setting +4, u16 help +0xA, ..."
+
+[data.custom_menu_kid70]
+address = 0x6F1EA084
+type = "{u32 node, u32 avail}"
+evidence = "high"
+note = "kid list entry 70"
+
+[data.osd_lang_cur]
+address = 0x605FC9C0
+type = "{u32 -> strings, u32 end}"
+evidence = "high"
+note = "osd_lang_cur: word 0 -> the current language's string pointers, word 1 -> their end"
+
+# --- OSD drawing ---
+
+[data.gpi_layer_vram]
+address = 0x6066ED88
+type = "struct osd_vram *[layer * 2 + buf]"
+evidence = "high"
+note = "gpi_layer_vram: the two buffers of each OSD layer"
+
+[data.gpi_layer_bpp]
+address = 0x6F1232C8
+type = "u8 [3]"
+evidence = "high"
+note = "bits per pixel of each OSD layer"
+
+[data.gpi_draw_buf]
+address = 0x6034D5B4
+type = "u8"
+evidence = "high"
+note = "OSD buffer index the GUI draws into and cw_updateDisplay(0) shows next; between frames the one on screen is index ^ 1"
+
+[data.gpi_hide_mask]
+address = 0x6034D5D0
+type = "u16"
+evidence = "high"
+note = "hidden OSD layers: 0x001 layer 0, 0x010 layer 1, 0x100 layer 2"
+
+[data.gpi_one_mode]
+address = 0x6034D5D2
+type = "u8"
+evidence = "high"
+note = "cw_updateDisplay one-layer override: if one_mode == 2 and one_layer == l, layer l shows buffer one_buf ^ 1"
+
+[data.gpi_one_layer]
+address = 0x6034D5D4
+type = "s16"
+evidence = "high"
+note = "layer of the one-layer override (gpi_one_mode)"
+
+[data.gpi_one_buf]
+address = 0x6034D5D6
+type = "u8"
+evidence = "high"
+note = "buffer of the one-layer override (gpi_one_mode)"
+
+[data.gpi_font_res]
+address = 0x6066EDAC
+type = "u32 -> font resource"
+evidence = "high"
+note = "per-language font resource; +4 -> glyph_list, whose word 0 is the font id"
+
+[data.gui_image_table]
+address = 0xAF966010
+type = "u32 -> u32 [id] -> struct gui_image"
+evidence = "high"
+note = "common GUI resource +0x10: the image table"
+
+[data.osd_shadow]
+address = 0x6034C870
+type = "u32 [3]"
+evidence = "high"
+note = "osd0/1/2 display shadows = the shown buffers of layers 1, 0, 2"
+
+[data.osd_palettes]
+address = 0x60605930
+type = "{u8 Y, Cb, Cr, A} []"
+evidence = "high"
+note = "layer palettes: layer 1 256 entries, layer 0 16 (+0x400), layer 2 8 (+0x440)"
+
+# --- live view and display ---
+
+[data.mov_img1_shadow]
+address = 0x6034C880
+type = "u32"
+evidence = "high"
+note = "live-view buffer on the display's img1 plane"
+
+[data.mov_disp_flip_tbl]
+address = 0x606067E8
+type = "{u32 addr, u32 x, u32 y, u8} [3]"
+evidence = "high"
+note = "mov_disp_flip_tbl: the live-view display buffers"
+
+[data.disp_img1_x]
+address = 0x9A9000A4
+type = "u32 MMIO"
+evidence = "medium"
+note = "display controller img1: x start << 16 | width"
+
+[data.disp_img1_y]
+address = 0x9A9000A8
+type = "u32 MMIO"
+evidence = "medium"
+note = "display controller img1: y counterpart of disp_img1_x"
+
+[data.disp_mix]
+address = 0x9A9001A4
+type = "u32 MMIO"
+evidence = "medium"
+note = "display controller OSD mix order, bits 0-2"
+
+[data.recfile_used]
+address = 0x605753F0
+type = "u8 [256]"
+evidence = "high"
+note = "RECFILE used flags, one per 0x1E3C0-byte block"
+
+# --- focus, AF, lens, power ---
+
+[data.trg_snapshot]
+address = 0x605519A4
+type = "u8"
+evidence = "high"
+note = "trigger snapshot: bit 0 clear = half or full press (0x03 released, 0x02 half, seen on the camera)"
+
+[data.take_focus_ptr]
+address = 0x60575E50
+type = "u32 -> take_focus"
+evidence = "high"
+note = "take_focus; u8 mode_focus at +5 (0 S-AF, 1 MF, 2 C-AF)"
+
+[data.take_fcs_af_mode2fcs]
+address = 0x60575F5D
+type = "{u8 area, u8 valid} [35]"
+evidence = "high"
+note = "take_fcs_af_mode2fcs: fcs area of each AF target"
+
+[data.fcs_af_eval_state]
+address = 0x605A8C38
+type = "u8"
+evidence = "high"
+note = "fcs_af_eval_state: 0 idle, 2 running, 3 stop, 1 last, 4 update"
+
+[data.fcs_area_size]
+address = 0x605A8C40
+type = "u32"
+evidence = "high"
+note = "g_area_size: channel stride of the AF statistics in u32"
+
+[data.fcs_contrast_ctx]
+address = 0x605AED1C
+type = "u32 -> fcs contrast ctx"
+evidence = "high"
+note = "fcs contrast ctx, 0 when freed"
+
+[data.fcs_dma_buf]
+address = 0xACD377C0
+type = "u32 []"
+evidence = "high"
+note = "fcs's AF statistics DMA buffer (uncached): HPF1/2/3/V channels"
+
+[data.cnt_client]
+address = 0x605AEFA0
+type = "u32 -> client"
+evidence = "high"
+note = "contrast driver: current client"
+
+[data.cnt_queued]
+address = 0x605AEFA4
+type = "u32 -> client"
+evidence = "high"
+note = "contrast driver: queued client"
+
+[data.cnt_drv_dbg]
+address = 0x605AEFD4
+type = "u16"
+evidence = "high"
+note = "contrast driver debug mode: 3 converts windows in cam_cnt_apply"
+
+[data.lens_obj_dst]
+address = 0x605522B8
+type = "u32"
+evidence = "high"
+note = "object (focus) distance in mm, 0xFFFFFFFF = infinity"
+
+[data.lens_attached]
+address = 0x60552252
+type = "u16"
+evidence = "high"
+note = "0 = no electronic lens"
+
+[data.av_effect]
+address = 0x605522BC
+type = "u16"
+evidence = "medium"
+note = "live iris Av; logged only, not checked against the shooting Av"
+
+[data.power_src]
+address = 0x6055F4B8
+type = "u16"
+evidence = "high"
+note = "power source: 0 unknown, 0x200 and 0x400 battery, 0x100 AC or DC"
+
+[data.power_src_check]
+address = 0x6055F4BA
+type = "u8"
+evidence = "high"
+note = "1 s power source check on (0 in standby)"

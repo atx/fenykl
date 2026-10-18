@@ -23,6 +23,10 @@ Cores: a function's `cores` says which cores may call
 it (default ["cpu0"]). Plugin files built for CPU1 (plugin.toml `cpu1_sources`) get -DFENYKL_CPU1,
 under which the prototype of every CPU0-only function carries an `error` attribute: a call from CPU1
 code fails to compile.
+
+Data: `[data.<name>]` is a firmware address the SDK uses as a value (a global, a table, an MMIO
+register, an address-range bound). The header gets it as FW_<NAME>, an unsigned constant, so shared
+C names the address and each camera's firmware.toml supplies it.
 """
 
 import dataclasses
@@ -55,6 +59,8 @@ _HOOK_FIELDS = {"entry", "relocate", "cpu1", "cpu1_evidence", "note"}
 _CALLBACK_FIELDS = {"entry", "evidence", "returns", "args", "note"}
 _SLOT_FIELDS = {"address", "callback", "expected", "cpu1", "cpu1_evidence", "note"}
 _VTABLE_FIELDS = {"address", "count", "cpu1", "cpu1_evidence", "note"}
+_DATA_FIELDS = {"address", "type", "evidence", "note"}
+_DATA_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 CPU1_SCOPES = {"cpu0-only", "unproven"}
 JMP_SIZE = 5  # jmp d32: dc <displacement32>
 MAX_RELOCATE = 16  # size of fenykl_hook.original (fenykl_target.h)
@@ -152,11 +158,27 @@ class Vtable:
 
 
 @dataclass(frozen=True)
+class Data:
+    """Firmware address used as a value; `type` says what lives there."""
+
+    name: str
+    address: int
+    type: str
+    evidence: str
+    note: str
+
+    @property
+    def macro(self) -> str:
+        return f"FW_{self.name.upper()}"
+
+
+@dataclass(frozen=True)
 class Api:
     functions: list[Function]
     callbacks: dict[str, Callback]
     slots: dict[str, Slot]
     vtables: dict[str, Vtable]
+    data: dict[str, Data]
 
 
 def _parse_arg(func: str, text: str) -> Arg:
@@ -342,19 +364,36 @@ def _parse_vtable(name: str, d: dict) -> Vtable:
     )
 
 
+def _parse_data(name: str, d: dict) -> Data:
+    where = f"data.{name}"
+    _check_fields(where, d, _DATA_FIELDS)
+    if not _DATA_NAME.match(name):
+        raise ApiError(
+            f"{where}: name must be lower case [a-z0-9_] (it becomes FW_<NAME>)"
+        )
+    if not 0 <= d["address"] <= 0xFFFFFFFF:
+        raise ApiError(f"{where}: address 0x{d['address']:X} is not 32-bit")
+    if d["evidence"] not in EVIDENCE:
+        raise ApiError(f"{where}: evidence must be one of {sorted(EVIDENCE)}")
+    if not d["type"].strip():
+        raise ApiError(f"{where}: type must say what lives at the address")
+    return Data(name, d["address"], d["type"], d["evidence"], d["note"])
+
+
 def load(path: Path) -> Api:
     with path.open("rb") as f:
         doc = tomllib.load(f)
     callbacks = {n: _parse_callback(n, d) for n, d in doc.pop("callbacks", {}).items()}
     slots = {n: _parse_slot(n, d, callbacks) for n, d in doc.pop("slots", {}).items()}
     vtables = {n: _parse_vtable(n, d) for n, d in doc.pop("vtables", {}).items()}
+    data = {n: _parse_data(n, d) for n, d in doc.pop("data", {}).items()}
     functions = [_parse_function(name, d) for name, d in doc.items()]
     # Slots share fw_orig_<name> with hooks; cpu1_unproven names functions, slots and vtables.
     names = [f.name for f in functions] + list(slots) + list(vtables)
     clash = sorted({n for n in names if names.count(n) > 1})
     if clash:
         raise ApiError(f"names used twice in functions, slots and vtables: {clash}")
-    return Api(functions, callbacks, slots, vtables)
+    return Api(functions, callbacks, slots, vtables, data)
 
 
 @dataclass(frozen=True)
@@ -659,6 +698,17 @@ def header(api: Api, sel: Selection) -> str:
         "#endif",
         "",
     ]
+    if api.data:
+        out += [
+            "/* Firmware data (firmware.toml [data]): addresses used as values. */",
+            "",
+        ]
+    for d in api.data.values():
+        out += [
+            f"/* {d.name}, {d.type}, evidence {d.evidence}: {d.note} */",
+            f"#define {d.macro} 0x{d.address:08X}u",
+            "",
+        ]
     if any(f.variadic for f in api.functions):
         out += NARGS
     for f in api.functions:

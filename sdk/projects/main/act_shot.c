@@ -10,29 +10,16 @@
 #include <key.h>
 
 /* live view display */
-#define ACT_SHOT_IMG1_SHADOW 0x6034C880u	/* u32: LV buffer on img1 */
-#define ACT_SHOT_FLIP_TBL 0x606067E8u	/* mov_disp_flip_tbl[3]: {addr, x, y, u8} */
 #define ACT_SHOT_FLIP_ENTRIES 3u
 #define ACT_SHOT_LV_PITCH 1600u		/* 800x600 YUYV */
 #define ACT_SHOT_LV_BYTES (ACT_SHOT_LV_PITCH * 600u)
 #define ACT_SHOT_LV_TRIES 3u
 #define ACT_SHOT_FLIP_WAIT_MS 200u
 /* GUI OSD */
-#define ACT_SHOT_VRAM_TABLE 0x6066ED88u	/* struct act_shot_vram *[layer * 2 + buf] */
-#define ACT_SHOT_LAYER_BPP 0x6F1232C8u	/* u8 bpp[3] */
-#define ACT_SHOT_DRAW_BUF 0x6034D5B4u	/* u8: buffer the GUI draws into; shown = index ^ 1 */
-#define ACT_SHOT_HIDE_MASK 0x6034D5D0u	/* u16: 0x001 L0, 0x010 L1, 0x100 L2 hidden */
-#define ACT_SHOT_OSD_SHADOW 0x6034C870u	/* u32 osd0/1/2 display shadows = shown L1/L0/L2 */
-#define ACT_SHOT_PALETTES 0x60605930u	/* L1 256, L0 16 (+0x400), L2 8 (+0x440) x {Y,Cb,Cr,A} */
 #define ACT_SHOT_PLANE_W 896u
 #define ACT_SHOT_PLANE_H 600u
 #define ACT_SHOT_OSD_TRIES 5u
-/* display controller, logged at debug for the camera check */
-#define ACT_SHOT_REG_IMG1_X 0x9A9000A4u	/* x start << 16 | width */
-#define ACT_SHOT_REG_IMG1_Y 0x9A9000A8u
-#define ACT_SHOT_REG_MIX 0x9A9001A4u	/* OSD mix order, bits 0-2 */
 /* RECFILE */
-#define ACT_SHOT_RECFILE_FLAGS 0x605753F0u	/* u8 used[256] */
 #define ACT_SHOT_RECFILE_BLOCKS 256u
 #define ACT_SHOT_RECFILE_BLOCK 0x1E3C0u
 
@@ -110,7 +97,7 @@ static bool act_shot_dram(uint32_t a, uint32_t bytes)
 {
 	uint32_t c = act_shot_cached(a);
 
-	return (a & 3) == 0 && ((a >> 28) == 0x6 || (a >> 28) == 0xA) && c + bytes <= 0x6E600000u;
+	return (a & 3) == 0 && ((a >> 28) == 0x6 || (a >> 28) == 0xA) && c + bytes <= FW_IMAGE_START;
 }
 
 static bool act_shot_claim(uint16_t gui)
@@ -154,7 +141,7 @@ static void act_shot_lv_place(struct main_shot_frame *f, uint32_t lv)
 	uint32_t x = 0, y = 0;
 
 	for (unsigned int i = 0; i < ACT_SHOT_FLIP_ENTRIES; i++) {
-		uint32_t e = ACT_SHOT_FLIP_TBL + 16 * i;
+		uint32_t e = FW_MOV_DISP_FLIP_TBL + 16 * i;
 
 		if ((act_shot_rd32(e) & 0x1FFFFFFFu) != (lv & 0x1FFFFFFFu))
 			continue;
@@ -169,19 +156,19 @@ static void act_shot_lv_place(struct main_shot_frame *f, uint32_t lv)
 	fenykl_log_dbg(&act_shot_log, "lv %08x at %u,%u width %u", lv, f->lv_x, f->lv_y,
 		       f->lv_w);
 	fenykl_log_dbg(&act_shot_log, "img1 regs x %08x y %08x mix %08x",
-		       act_shot_rd32(ACT_SHOT_REG_IMG1_X), act_shot_rd32(ACT_SHOT_REG_IMG1_Y),
-		       act_shot_rd32(ACT_SHOT_REG_MIX));
+		       act_shot_rd32(FW_DISP_IMG1_X), act_shot_rd32(FW_DISP_IMG1_Y),
+		       act_shot_rd32(FW_DISP_MIX));
 }
 
 static uint32_t act_shot_wait_flip(void)
 {
-	uint32_t lv = act_shot_rd32(ACT_SHOT_IMG1_SHADOW);
+	uint32_t lv = act_shot_rd32(FW_MOV_IMG1_SHADOW);
 
 	for (unsigned int i = 0; i < ACT_SHOT_FLIP_WAIT_MS; i++) {
 		uint32_t now;
 
 		fw_OlyTaskSleep(1);
-		now = act_shot_rd32(ACT_SHOT_IMG1_SHADOW);
+		now = act_shot_rd32(FW_MOV_IMG1_SHADOW);
 		if (now != lv)
 			return now;
 	}
@@ -209,7 +196,7 @@ static void act_shot_copy_lv(struct act_shot_state *st)
 		act_shot_lv_place(f, lv);
 		t = FENYKL_LOG_TIMER_NOW();
 		flips = act_shot_copy(st->buf, act_shot_cached(lv), ACT_SHOT_LV_PITCH,
-				      ACT_SHOT_LV_ROW, f->lv_w / 2, f->lv_h, ACT_SHOT_IMG1_SHADOW,
+				      ACT_SHOT_LV_ROW, f->lv_w / 2, f->lv_h, FW_MOV_IMG1_SHADOW,
 				      0xFFFFFFFFu);
 		t = FENYKL_LOG_ELAPSED(t, FENYKL_LOG_TIMER_NOW());
 		if (flips <= 1)
@@ -227,7 +214,7 @@ static void act_shot_copy_lv(struct act_shot_state *st)
 
 static uint32_t act_shot_osd_pdata(unsigned int l, unsigned int b)
 {
-	uint32_t h = act_shot_rd32(ACT_SHOT_VRAM_TABLE + 4 * (l * 2 + b));
+	uint32_t h = act_shot_rd32(FW_GPI_LAYER_VRAM + 4 * (l * 2 + b));
 	const volatile struct act_shot_vram *v = (const volatile struct act_shot_vram *)(uintptr_t)h;
 
 	if (!act_shot_dram(h, sizeof(*v)) || v->width != ACT_SHOT_PLANE_W ||
@@ -241,7 +228,7 @@ static uint32_t act_shot_osd_pdata(unsigned int l, unsigned int b)
 /* Shown buffer of layer l: the one its display shadow points at, else draw ^ 1. */
 static uint32_t act_shot_osd_shown(unsigned int l, uint8_t draw)
 {
-	uint32_t shadow = act_shot_rd32(ACT_SHOT_OSD_SHADOW + 4 * act_shot_shadow_slot[l]);
+	uint32_t shadow = act_shot_rd32(FW_OSD_SHADOW + 4 * act_shot_shadow_slot[l]);
 	uint32_t p[2];
 
 	for (unsigned int b = 0; b < 2; b++) {
@@ -263,16 +250,16 @@ static bool act_shot_copy_osd(struct act_shot_state *st)
 	uint16_t hide = 0;
 
 	for (unsigned int l = 0; l < MAIN_SHOT_LAYERS; l++)
-		if (act_shot_rd8(ACT_SHOT_LAYER_BPP + l) != act_shot_bpp[l]) {
+		if (act_shot_rd8(FW_GPI_LAYER_BPP + l) != act_shot_bpp[l]) {
 			fenykl_log_err(&act_shot_log, "layer %u bpp %u, expected %u", l,
-				       act_shot_rd8(ACT_SHOT_LAYER_BPP + l), act_shot_bpp[l]);
+				       act_shot_rd8(FW_GPI_LAYER_BPP + l), act_shot_bpp[l]);
 			return false;
 		}
 	for (tries = 1; tries <= ACT_SHOT_OSD_TRIES; tries++) {
-		uint8_t draw = act_shot_rd8(ACT_SHOT_DRAW_BUF);
+		uint8_t draw = act_shot_rd8(FW_GPI_DRAW_BUF);
 
 		flips = 0;
-		hide = act_shot_rd16(ACT_SHOT_HIDE_MASK);
+		hide = act_shot_rd16(FW_GPI_HIDE_MASK);
 		for (unsigned int l = 0; l < MAIN_SHOT_LAYERS; l++) {
 			unsigned int row = MAIN_SHOT_W * act_shot_bpp[l] / 8;
 
@@ -281,14 +268,14 @@ static bool act_shot_copy_osd(struct act_shot_state *st)
 				return false;
 			flips += act_shot_copy(st->buf + act_shot_off[l], act_shot_cached(src[l]),
 					       ACT_SHOT_PLANE_W * act_shot_bpp[l] / 8, row, row / 4,
-					       MAIN_SHOT_H, ACT_SHOT_DRAW_BUF, 0xFFu);
+					       MAIN_SHOT_H, FW_GPI_DRAW_BUF, 0xFFu);
 		}
-		if (act_shot_rd8(ACT_SHOT_DRAW_BUF) != draw)
+		if (act_shot_rd8(FW_GPI_DRAW_BUF) != draw)
 			flips++;
 		if (!flips)
 			break;
 	}
-	main_shot_palette((const uint8_t *)ACT_SHOT_PALETTES, sizeof(st->pal) / 4, st->pal);
+	main_shot_palette((const uint8_t *)FW_OSD_PALETTES, sizeof(st->pal) / 4, st->pal);
 	for (unsigned int i = 0; i < MAIN_SHOT_LAYERS; i++) {
 		unsigned int l = act_shot_stack[i];
 		struct main_shot_layer *o = &st->frame.layer[i];
@@ -357,7 +344,7 @@ static bool act_shot_free_run(void)
 	unsigned int run = 0;
 
 	for (unsigned int i = 0; i < ACT_SHOT_RECFILE_BLOCKS; i++) {
-		run = act_shot_rd8(ACT_SHOT_RECFILE_FLAGS + i) ? 0 : run + 1;
+		run = act_shot_rd8(FW_RECFILE_USED + i) ? 0 : run + 1;
 		if (run >= ACT_SHOT_NBLOCKS)
 			return true;
 	}

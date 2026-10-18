@@ -45,7 +45,7 @@ MOCK_BODY = 0x6EB00000
 # The runtime patches and reads .shared through the uncached alias (addr & 0x3FFFFFFF) | 0x80000000;
 # on hardware it aliases the same DRAM, so the simulator maps both to the same cells.
 DRAM_ALIAS = ("--memory-alias", "0x6e600000,0xa00000,0xae600000")
-# The power-on factor word the runtime reads at startup (targets/epl3/usb.c); zero = not a USB boot.
+# The power-on factor word the runtime reads at startup (arch/epl3/usb.c); zero = not a USB boot.
 POWERON = ("--memory-region", "0x60551000,0x1000")
 
 
