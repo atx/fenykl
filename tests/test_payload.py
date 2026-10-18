@@ -141,7 +141,7 @@ def _flip_body_bit() -> bytes:
         (bytes(_valid()[:0x10]), "shorter than the header"),
         (_with_header(0, 0x334C4E46), "magic"),
         (_fnl1(), "old FNL1 format"),
-        (_with_model(b"E-PL5\0\0\0"), "model 'E-PL5' is no target's (E-PL3)"),
+        (_with_model(b"E-PL5\0\0\0"), "model 'E-PL5' is no target's (E-M10II, E-PL3)"),
         (_with_model(b"E-PL3\0\0 "), "is no target's"),
         (_with_header(1, LOAD + 0x1000), "load address"),
         (_with_header(2, 0x10), "< header"),

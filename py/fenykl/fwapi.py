@@ -63,7 +63,7 @@ _DATA_FIELDS = {"address", "type", "evidence", "note"}
 _DATA_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 CPU1_SCOPES = {"cpu0-only", "unproven"}
 JMP_SIZE = 5  # jmp d32: dc <displacement32>
-MAX_RELOCATE = 16  # size of fenykl_hook.original (fenykl_target.h)
+MAX_RELOCATE = 16  # size of fenykl_hook.original (fenykl.h)
 # Mnemonics that behave the same at any address, if no special register is an operand. Everything
 # else (branches, calls, returns, loops, traps) is refused rather than re-encoded.
 RELOCATABLE = {
@@ -905,7 +905,7 @@ def vtable_asm(vt: Vtable) -> str:
 
 def hook_asm(func: Function) -> str:
     """Entry stub, trampoline, fw_orig_<name> and the fenykl_hook_<name> descriptor (layout:
-    struct fenykl_hook in fenykl_target.h)."""
+    struct fenykl_hook in fenykl.h)."""
     n, h = func.name, func.hook
     assert h is not None
     saves = f"[{','.join(func.saves)}],{func.frame}"

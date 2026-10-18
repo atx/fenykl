@@ -12,7 +12,7 @@
 #define FCFG_CRC_POLY 0xEDB88320u	/* CRC-32 (zlib), reflected */
 #define FCFG_MSG_MAX 96u
 #define FCFG_DEC_MAX 12u		/* "-2147483648" and NUL */
-#define FCFG_TASK_PRIO 12
+#define FCFG_TASK_PRIO FENYKL_LIB_TASK_PRIO
 #define FCFG_TASK_STACK 0x1000u	/* on_change may run in this task (late load) */
 #define FCFG_POLL_MS 100u
 #define FCFG_RETRY_MS 10000u		/* after a failed save */
@@ -469,7 +469,7 @@ static int fcfg_read(const char *path)
 	if (!fp)
 		return -1;
 	/* No dirty line of buf may be written back over what the file server stores. */
-	fw_dcache_purge_all_irqsafe();
+	fenykl_dcache_flush();
 	n = fw_rpc_fread(FENYKL_UNCACHED(fcfg.buf), 1, FENYKL_CFG_BUF, fp);
 	fw_rpc_fclose(fp);
 	return n < 0 ? 0 : n;
@@ -709,7 +709,7 @@ static int fcfg_write_slot(int slot, unsigned int len)
 		return FENYKL_CFG_EIO;
 	}
 	/* The file server reads DRAM: write buf back first. */
-	fw_dcache_purge_all_irqsafe();
+	fenykl_dcache_flush();
 	n = fw_rpc_fwrite(FENYKL_UNCACHED(fcfg.buf), 1, len, fp);
 	c = fw_rpc_fclose(fp);
 	if (n != (int)len || c) {

@@ -21,12 +21,16 @@
 #define FLOG_FLUSH_MS 2000u	/* default flusher period */
 #define FLOG_APPEND_TRIES 3
 #define FLOG_APPEND_RETRY_MS 100u
-#define FLOG_TASK_PRIO 12
+#define FLOG_TASK_PRIO FENYKL_LIB_TASK_PRIO
 #define FLOG_TASK_STACK 0x1000u
 #define FLOG_TEE_POLL_MS 20u
 #define FLOG_IDLE_POLL_MS 100u
 #define FLOG_ERR_FILE "C:\\FENYKL.ERR"
+#if FENYKL_TARGET_EM10II
+#define FLOG_BOOT_CAUSE (*(volatile uint32_t *)FW_POWERON_FACTOR) /* 12 = power switch */
+#else
 #define FLOG_BOOT_CAUSE (*(volatile uint8_t *)FW_BOOT_CAUSE)
+#endif
 #define FLOG_BUILD_ID (*(const uint32_t *)(FENYKL_LOAD_BASE + 0x10u)) /* FENYKL.BIN header sum */
 /* Firmware console capture: uart_putchar's boot capture buffer. */
 #define FLOG_TEE_BUF ((const volatile uint8_t *)FW_UART_TEE_BUF)
@@ -73,6 +77,11 @@ static int flog_str_len(uint32_t p, unsigned int max)
 
 	if (!flog_in_image(p) && !(p >= FW_MAIN_CODE_START && p < FW_MAIN_CODE_END))
 		return -1;
+#if FENYKL_TARGET_EM10II
+	/* sec6 is under the section-load guard until it is loaded (bit 5): no scan may reach it. */
+	if (p + max > FW_SEC6_START && !(*(volatile uint8_t *)FW_SECTION_LOADED & 0x20u))
+		return -1;
+#endif
 	for (unsigned int i = 0; i < max; i++)
 		if (!s[i])
 			return i;

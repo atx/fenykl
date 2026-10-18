@@ -12,9 +12,9 @@ from fenykl.firmware import TARGETS, StockMissingError
 
 
 @cache
-def stock_image() -> bytes:
-    """The stock E-PL3 v1.6 image from firmware/; skips the test when it is absent."""
-    target = TARGETS["epl3"]
+def stock_image(name: str = "epl3") -> bytes:
+    """The stock image of target `name` from firmware/; skips the test when it is absent."""
+    target = TARGETS[name]
     try:
         path = target.stock_path()
     except StockMissingError as e:
@@ -62,17 +62,18 @@ def run_in_simulator(
     ldflags: Sequence[str] = (),
     firmware: Path | None = None,
     timeout: int = 60,
+    target: sdk.SdkTarget = EPL3,
     **link,
 ) -> subprocess.CompletedProcess:
-    """Link `sources` with the plugin runtime and run them in the GDB simulator. Entry is _sim_start, `.mock` goes to MOCK_BODY and the `mocked` firmware functions to
+    """Link `sources` with the plugin runtime of `target` and run them in the GDB simulator. Entry is _sim_start, `.mock` goes to MOCK_BODY and the `mocked` firmware functions to
     their firmware.toml addresses."""
-    funcs = fwapi.load(firmware or EPL3.dir / "firmware.toml").functions
+    funcs = fwapi.load(firmware or target.dir / "firmware.toml").functions
     address = {f.name: f.address for f in funcs}
     placement = [f"-Wl,--section-start=.fw.{n}=0x{address[n]:x}" for n in mocked]
     elf = plugin.link(
         sources,
         workdir,
-        EPL3,
+        target,
         name=name,
         firmware=firmware,
         extra_ldflags=(
@@ -86,7 +87,7 @@ def run_in_simulator(
         **link,
     )
     return subprocess.run(
-        [EPL3.tool("run"), *(arg for r in memory for arg in r), str(elf)],
+        [target.tool("run"), *(arg for r in memory for arg in r), str(elf)],
         check=False,
         capture_output=True,
         timeout=timeout,

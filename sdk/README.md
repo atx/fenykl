@@ -4,8 +4,13 @@ Write C, run one command, copy `FENYKL.BIN` to the card root. The boot loader (f
 `epl3/fenykl-loader`, v3) reads `C:\FENYKL.BIN` into RAM at every normal boot, checks it and calls
 it. No reflashing per plugin: the firmware is flashed once.
 
-The SDK is split per camera (`arch/<camera>/`, see Layout). The only target so far is `epl3`
-(E-PL3, MN10300); the firmware API, ABI, payload and FENYKL.BIN sections below describe it.
+The SDK is split per camera (`arch/<camera>/`, see Layout). The main target is `epl3` (E-PL3,
+MN10300); the firmware API, ABI, payload and FENYKL.BIN sections below describe it. `em10ii` (OM-D
+E-M10 Mark II v1.4, three MN10300 cores) has the runtime, `string`, `log`, `cfg`, slots (data pointer
+words, `arch/em10ii/slots.c`; no vtable clones) and code hooks (`arch/em10ii/hooks.c`);
+`projects/bootprobe` is its diagnostic probe (camera-run), `hello` builds for it on the log library,
+`menuprobe1`, `menuprobe2` and `guiprobe` are its menu and GUI probes, and `icprobe` and `hookprobe` the
+probes of its hook path, in that order (not yet run on the camera).
 
 ## Status
 
@@ -23,6 +28,7 @@ The SDK is split per camera (`arch/<camera>/`, see Layout). The only target so f
 | event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`); **on the camera** through `projects/main`, counters clean (`docs/key.md` 4) |
 | USB boot skip (`fenykl_usb_attached`, power-on factor 0x60551630 == 0x400) | **works on the camera**: a cable-started boot skips the plugin, a power-button boot runs it |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | static analysis and simulator (`tests/test_log_sim.py`); not run on the camera |
+| E-M10 II hooks (`arch/em10ii/hooks.c`, CPU0 I-cache invalidate) | simulator (`tests/test_sim.py`, `hooks_em10ii`); camera probes `icprobe` then `hookprobe` not run |
 
 ## Development loop
 
@@ -386,6 +392,22 @@ Rules and limits:
   `cpu1_unproven` in `plugin.toml`, and the plugin must watch for CPU1 execution (count by core id at
   `0x8050`). Closing the hole needs a cross-core publication protocol, and none was found in the
   firmware.
+- **E-M10 II** (`arch/em10ii/hooks.c`, three cores; `cpu1` scope "unproven" covers CPU1 and CPU2). The
+  install masks CPU0's interrupts and dispatch (`irq_lock(0)`), writes the D-cache back
+  (`dcache_flush_all`), checks and writes the entry through the uncached alias, writes the D-cache back
+  again and invalidates CPU0's I-cache (`fenykl_icache_invalidate`: CHCTR 0x8070 ICEN off, wait for
+  ICBUSY clear, ICINV, wait, entry value back; explicit values, the INV bits are never written back as
+  read; both waits bounded to 20000 reads). If the readback differs (`FENYKL_HOOK_EVERIFY`) or the
+  invalidate times out (`FENYKL_HOOK_EICACHE`, -3), the old bytes are put back. ICBUSY (bit 2) is inferred
+  from the E-PL3 cache driver; `projects/icprobe` checks it on the camera, and must pass before any
+  hook is installed. CPU1/CPU2 are not invalidated: a hook may target a function they can run only if
+  (a) the target's 5 patched bytes lie in one aligned 8-byte block (one I-cache line; `firmware.toml`
+  hook tables are checked by `tests/test_fwapi.py`), so a core with a stale line runs the complete
+  stock entry, (b) the plugin installs and removes it while no other core can be running it (the
+  write is not atomic), and (c) the hook passes their calls through. Stubs stay resident for the boot,
+  so a stale line holding the jump still works after a remove. A CPU0 task preempted between two
+  instructions inside the 5 bytes would resume in the middle of the jump: prefer entries without an
+  instruction boundary there (`cw_updateDisplay`); `appevent_post` has two (+1, +3).
 - The generator **refuses** at build time: non-`call` entries, variadic targets, a `relocate` span
   shorter than the jump or not ending on an instruction boundary, and any entry instruction with
   control flow (branches, calls, returns, loops) or a PC/special-register operand — it re-encodes
@@ -427,6 +449,14 @@ signature, the `expected` stock value (0 = empty), `cpu1`/`cpu1_evidence` and `n
 | `gui_action` | `calls` | `unsigned action(void *sm, unsigned code, unsigned p, void *p2)`: GUI state-machine action/entry/exit |
 | `cam_cnt_frame_cb` | `calls` | `void cb(unsigned unk, unsigned events, void *req)`: contrast client frame callback (request +0x2C; `projects/mfstats`) |
 | `cam_req_done_cb` | `calls` | `void cb(unsigned status, void *req)`: camera request done callback (request +0x28) |
+
+Declared on the E-M10 II (`arch/em10ii/slots.c`: slots only, the word is written with the D-cache
+written back before and after; no vtable clones):
+
+| name | kind | what |
+|---|---|---|
+| `mode_cond` / slot `mode_cond_eyefi` 0x60AFF404 | `calls`, stock 0x6071DDE0 | `unsigned cond(void)`: mode-check condition 113 of setting 0x193 (Eye-Fi); 0 = allowed |
+| `menu_row` / slots `eyefi_ok_fn` 0x60D2F5A4, `eyefi_right_fn` 0x60D2F484 | `calls`, empty | `int fn(void *actuator)`: row callback of the Eye-Fi row's OK/RIGHT dispatch records in Custom menu tab K; 4 = continue with the stock pop-up |
 
 The C API (`fenykl.h`):
 
@@ -621,7 +651,7 @@ example.
 1. generates `gen/fenykl_fw.h`, `gen/fw_thunks.S`, `gen/fw_symbols.ld` from `firmware.toml`
    (function addresses are link-time symbols, as an assembler `.equ` would encode the CALLs wrongly;
    `[data]` addresses are `FW_<NAME>` constants in the header);
-2. compiles `crt0.S`, `arch/<camera>/*.c`, `lib/*.c`, the thunks and `DIR/*.c`, `DIR/*.S` with the target's `cflags`
+2. compiles `crt0.S`, `arch/<camera>/*.c`, the `lib/*.c` files of its capabilities, the thunks and `DIR/*.c`, `DIR/*.S` with the target's `cflags`
    (epl3: `toolchain/cflags`), `-D FENYKL_LOAD_BASE/FENYKL_REGION_END` from `target.toml`,
    `-DFENYKL_RUN_ON_USB=0|1` from `plugin.toml` `run_on_usb`, `-DFENYKL_TARGET_<CAMERA>=1` and
    `-DFENYKL_HAS_<CAPABILITY>=1` for each of the target's `capabilities`, and
@@ -681,12 +711,13 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | `arch/epl3/firmware.toml` | hand-curated firmware API: functions, hooks, callbacks, slots, vtables, data addresses |
 | `arch/epl3/link.ld` | payload linker script (must agree with `load`/`max_size`; packing checks it) |
 | `arch/epl3/crt0.S` | entry `_start`: frame for C, calls `fenykl_start` |
-| `arch/epl3/fenykl_target.h` | `FENYKL_UNCACHED`, `FENYKL_TASK`, `struct fenykl_hook`, `struct fenykl_slot`, `struct fenykl_vtable`, the CPU1 API (`FENYKL_SHARED`, `FENYKL_CPU1_WORKER`) |
+| `arch/epl3/fenykl_target.h` | `FENYKL_UNCACHED`, `FENYKL_TASK`, `struct fenykl_slot`, `struct fenykl_vtable`, the CPU1 API (`FENYKL_SHARED`, `FENYKL_CPU1_WORKER`) |
 | `arch/epl3/hooks.c` | `fenykl_hook_install` / `..._remove` (compiled into every plugin) |
 | `arch/epl3/cpu1.c` | `fenykl_cpu1_start` / `..._state` / `..._stop`, the worker stack and the shared stop flag (compiled into every plugin) |
 | `arch/epl3/slots.c` | `fenykl_slot_replace` / `..._restore`, `fenykl_vtable_attach` / `..._detach` (compiled into every plugin) |
 | `arch/epl3/usb.c` | `fenykl_usb_attached`: power-on factor 0x60551630 == 0x400 (compiled into every plugin) |
-| `projects/*/plugin.toml` | cameras the example is written for (all: `epl3`) |
+| `projects/*/plugin.toml` | cameras the example is written for (`epl3`; `hello`: both; `bootprobe`, `menuprobe1`, `menuprobe2`, `guiprobe`, `icprobe`, `hookprobe`: `em10ii`) |
+| `arch/em10ii/` | E-M10 II: `target.toml`, `firmware.toml`, `loader/`, `crt0.S`, `link.ld` (0x60DA501C, 0x67000 incl. header), `fenykl_target.h` (`FENYKL_LIB_TASK_PRIO` 55, `fenykl_dcache_flush`, `struct fenykl_slot`, the I-cache API), `usb.c` (card gate), `slots.c` (slot replace/restore), `hooks.c` (hook install/remove, CPU0 I-cache invalidate) |
 | `projects/` | the example and experiment plugins, indexed in `projects/README.md` |
 
 ### Adding a camera
@@ -701,6 +732,8 @@ payload. Loaders older than this format reject `FNL2` files as well.
 4. List the SDK features it supports in `capabilities` (`target.toml`). Each becomes
    `FENYKL_HAS_<NAME>=1` in every compile, next to `FENYKL_TARGET_<CAMERA>=1`. epl3 has `cpu1` (the
    CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.
+   `event`, `hud`, `ui` and `afc` select library files (`LIB_CAPABILITIES` in `py/fenykl/plugin.py`):
+   without them `lib/event.c` + `key.c`, `hud.c`, `ui.c`, `afc.c` + `afc_sm.c` are not built.
 5. Give `firmware.toml` a `[data.<name>]` entry for every `FW_<NAME>` the libraries and
    `projects/main` use (the build fails on a missing one), and `target.toml` an `[assets]` table if
    `fenykl assets dump` should read its stock image.

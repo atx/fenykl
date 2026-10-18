@@ -1,0 +1,24 @@
+# Olympus OM-D E-M10 Mark II with the fenykl-loader firmware. Plugin runtime: start, string, log and
+# cfg libraries, data slots (slots.c) and code hooks (hooks.c, CPU0 I-cache only); no CPU1 runtime,
+# event/key layers, HUD, settings page or AF control yet.
+model = "E-M10II"                      # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
+toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
+cflags = "toolchain/cflags"            # relative to the fenykl checkout
+isa_check = "toolchain/isacheck/check_isa.py"  # rejects AM33 instructions; the core is MN103 base ISA too
+elf_machine = 89                       # EM_MN10300
+load = 0x60DA5000                      # the loader reads FENYKL.BIN here: the never-loaded gap between sec4 and sec5
+max_size = 0x67000                     # bytes the loader reads; the loader stack follows, up to sec5 at 0x60E10000
+# Hooks the SDK binds itself: none (the event layer is not built for this camera; plugins may hook
+# appevent_post themselves).
+sdk_hooks = []
+# SDK features of this camera (see epl3/target.toml): none yet.
+capabilities = []
+
+# The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
+[stock]
+version = "1.4"
+file = "OLY_E_120_1400_0000_0000.BIN"
+sha256 = "ff9d302318ecf6e06c0b31c181fc6a185e93623e819749db31cec7977fa92052"
+size = 69599232
+# Real load address per block kind; header addresses are not trusted.
+load_addresses = { main-code-01 = 0x60021020 }

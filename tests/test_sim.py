@@ -45,6 +45,9 @@ firmware functions placed at their real firmware addresses. Every C test program
   stop and its timeout, restart, refusals; against a fake TCB and mocks of OlyTaskStart/Stop/Sleep.
 - usb: a boot started by the USB cable skips plugin_main unless plugin.toml sets run_on_usb.
 - hooks: the hook generator and runtime, plus a synthetic stack-argument hook target.
+- hooks_em10ii: the E-M10 II hook runtime (sdk/arch/em10ii/hooks.c) on the real appevent_post and
+  cw_updateDisplay spans: install, calls through stub and trampoline, remove, EBYTES and the
+  bounded I-cache wait (stuck ICBUSY -> EICACHE, stock bytes back).
 - slots: callbacks, slots and cloned vtables, plus synthetic callback shapes.
 """
 
@@ -413,6 +416,31 @@ def test_hooks_run_in_the_simulator(tmp_path):
         cpu1_unproven=["gpi_flush", "mov_yc_resize_pass"],
     )
     assert_exit(result, 0, "tests/sim/hooks/test_hooks.c")
+
+
+EM10II = sdk.target("em10ii")
+
+
+def test_em10ii_hooks_run_in_the_simulator(tmp_path):
+    """E-M10 II hooks.c on the real appevent_post and cw_updateDisplay spans, incl. the I-cache path."""
+    hooks = SIM / "hooks_em10ii"
+    result = run_in_simulator(
+        tmp_path,
+        "hooksim_em10ii",
+        [hooks / "test_hooks.c", hooks / "sim_start.S", hooks / "fw.S"],
+        # DRAM (targets, payload, stack) with its uncached alias, the byte appevent_post's span
+        # reads, the mock bodies. CHCTR 0x8070 is in the simulator's default memory.
+        [
+            ("--memory-alias", "0x60000000,0x1000000,0xa0000000"),
+            region("0xa1c18000,0x1000"),
+            region("0x6eb00000,0x10000"),
+        ],
+        mocked=["appevent_post", "cw_updateDisplay", "irq_lock", "irq_unlock", "dcache_flush_all"],
+        target=EM10II,
+        hooks=["appevent_post", "cw_updateDisplay"],
+        cpu1_unproven=["appevent_post", "cw_updateDisplay"],
+    )
+    assert_exit(result, 0, "tests/sim/hooks_em10ii/test_hooks.c")
 
 
 SLOTS_TOML = """

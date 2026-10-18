@@ -114,8 +114,9 @@ int fenykl_log_init(const struct fenykl_log_config *cfg);
  */
 int fenykl_log_flush(void);
 /*
- * Creates the flusher task "FNLLOG" (priority 12, 4 KiB stack): flushes every flush_ms, or early
- * when a ring is half full, and polls the console tee every 20 ms.
+ * Creates the flusher task "FYKLOG" (priority FENYKL_LIB_TASK_PRIO: E-PL3 12, E-M10 II 55; 4 KiB
+ * stack): flushes every flush_ms, or early when a ring is half full, and polls the console tee every
+ * 20 ms.
  */
 int fenykl_log_task_start(void);
 void fenykl_log_set_level(struct fenykl_log_module *mod, unsigned int level);
@@ -145,7 +146,7 @@ struct fenykl_log_stats {
 	/* bytes in the file before this boot's header (0 after a cap delete) */
 	uint32_t file_size;
 	uint32_t removed_size;	/* size of the file the cap deleted at init, else 0 */
-	uint32_t boot_cause;	/* the firmware's boot cause byte 0x6044151A at init */
+	uint32_t boot_cause;	/* at init: E-PL3 boot cause byte 0x6044151A, E-M10 II power-on factor */
 	uint32_t tee_bytes;
 	uint32_t tee_records;	/* console lines logged */
 	uint32_t tee_slots;	/* ring 0 slots they took (20 text bytes each) */

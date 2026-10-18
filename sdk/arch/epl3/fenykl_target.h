@@ -22,15 +22,14 @@
 		"\tbra 1b\n"                                                              \
 		"\t.previous\n")
 
-/* Descriptor of a hook (fenykl_hook_<name>, generated from firmware.toml by fenykl's fwapi.hook_asm,
-   which emits this layout). Installed with fenykl_hook_install (hooks.c). */
-struct fenykl_hook {
-	uint32_t entry;       /* firmware function; its first 5 bytes become `jmp stub` */
-	uint32_t stub;        /* generated entry stub */
-	uint32_t installed;
-	uint8_t length;       /* bytes of original[] that must be at the entry */
-	uint8_t original[16]; /* stock entry bytes, also the trampoline's relocated instructions */
-};
+/* Priority of the library tasks (log flusher, cfg saver). */
+#define FENYKL_LIB_TASK_PRIO 12
+
+/* Writes the D-cache back to DRAM and invalidates it. */
+static inline void fenykl_dcache_flush(void)
+{
+	fw_dcache_purge_all_irqsafe();
+}
 
 /* Descriptor of a slot (fenykl_slot_<name>, generated from firmware.toml by fwapi.slot_asm).
    Replaced with FENYKL_SLOT_REPLACE (slots.c). */

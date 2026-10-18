@@ -6,8 +6,18 @@ minimal examples of SDK features that no other plugin uses, and the probes and p
 | project | what it is |
 |---|---|
 | `main/` | the daily-use plugin (focus distance, depth of field, focus meter, battery percentage, Fn screenshot, R/B swap, settings page); reference user of the cfg, log, ui, HUD and key libraries |
-| `hello/` | smallest plugin: writes `C:\FENYKL.LOG` and returns; the first plugin to try after flashing |
-| `proxyget/` | cloned vtable on the settings proxy object; the only user of slots and vtable clones |
+| `hello/` | smallest plugin: writes `C:\FENYKL.LOG` and returns; the first plugin to try after flashing (E-M10 II: through the log library) |
+| `bootprobe/` | E-M10 II diagnostic probe: logs boot gate, loaded sections, card and USB key state, tick and timer rate into `C:\FENYKL.LOG` and `C:\FENYKL.TCK` (deletes and rewrites only those two files); the first plugin for that camera |
+| `icprobe/` | E-M10 II I-cache probe: rewrites a tiny function in payload RAM and calls it without and with `fenykl_icache_invalidate`, logging results, CHCTR values and poll counts; patches no firmware code. Must pass before `hookprobe` |
+| `hookprobe/` | E-M10 II pass-through hooks on `cw_updateDisplay` and `appevent_post` plus an input map: calls per core, call rate, `cw_updateDisplay` D0, every CPU0 event (code, param, flag, task, and the dial counters, touch record or eye state with it), and a 20 ms poll of the raw key bytes, mode dial, dial counters, eye and touch state and `ui_key_get_state` of every known code, logged on change; removes both hooks after 15 minutes |
+| `menuprobe1/` | E-M10 II: why the Eye-Fi row of Custom menu tab K is grayed; condition 113 of its mode-check rule as a logging pass-through (data slot, restored after 5 min) |
+| `menuprobe2/` | E-M10 II: the Eye-Fi row as an entry point; condition 113 allowed, the row's OK/RIGHT records get a logging callback that continues to the stock pop-up (data slots, restored after 5 min) |
+| `guiprobe/` | E-M10 II: read-only poller of the GUI state machine, display request and OSD state, logged on change, plus dumps of GUI data slot 0x38 in the menu |
+| `lvpoll/` | E-M10 II: read-only poller of live-view flips (MVR flip records, img1 shadow, buffer pool, display controller address/format registers behind the driver's own state gate), flips per second |
+| `peakpoll/` | E-M10 II: read-only poller of the stock focus peaking (DSP request, MVR gate and frame record, stored peak request, the four peaking settings read as properties) |
+| `afpoll/` | E-M10 II: read-only poller of autofocus (take_focus, contrast evaluation state and grid, FCS command log, contrast clients, lens record, centre statistics) |
+| `facepoll/` | E-M10 II: read-only poller of face detection (FD rates, frame descriptor, live results, eyes, fcs face selection, AF packet and point) |
+| `proxyget/` | cloned vtable on the settings proxy object; the only E-PL3 user of slots and vtable clones |
 | `mfstats/` | the plugin's own contrast client in MF: AF statistics without AF, attach/detach safety (focus meter in MF) |
 | `caflog/` | per-frame trace of continuous AF hunting (C-AF) |
 | `bchklog/` | battery voltage and thermistor A/D once a second with the battery-check state (voltage readout calibration) |

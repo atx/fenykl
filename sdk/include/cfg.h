@@ -95,7 +95,7 @@ struct fenykl_cfg_opt {
  * saver task loads at the first open gate; options set before that keep their value), or <0.
  */
 int fenykl_cfg_init(void);
-/* Creates the saver task "FNLCFG" (priority 12, 4 KiB stack). */
+/* Creates the saver task "FYKCFG" (priority FENYKL_LIB_TASK_PRIO: E-PL3 12, E-M10 II 55; 4 KiB stack). */
 int fenykl_cfg_task_start(void);
 /*
  * Validates (range, enum index), stores, marks dirty and calls on_change if the value changed.

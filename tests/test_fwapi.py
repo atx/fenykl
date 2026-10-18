@@ -4,7 +4,7 @@ import pytest
 from conftest import EPL3, needs_toolchain, stock_image
 
 from fenykl import fwapi, sdk
-from fenykl.firmware import unpack_firmware
+from fenykl.firmware import TARGETS, unpack_firmware
 
 
 def func(args: list[str], saves=(), frame=4, returns="int") -> fwapi.Function:
@@ -219,16 +219,44 @@ def test_select_hooks_rejects_an_undeclared_target():
         fwapi.select(api, hooks=["dbg_puts"])
 
 
-def test_declared_relocate_bytes_match_the_stock_image():
+@pytest.mark.parametrize("name", ["epl3", "em10ii"])
+def test_declared_relocate_bytes_match_the_stock_image(name):
     """Every hook's relocate span must be the bytes actually at the entry in the stock firmware."""
-    fw = unpack_firmware(stock_image())
+    fw = unpack_firmware(stock_image(name))
     code = fw.blocks[fw.find_block("main-code-01")].body
-    base = 0x6E601420
-    for f in fwapi.load(sdk.target("epl3").dir / "firmware.toml").functions:
+    base = TARGETS[name].load_addresses["main-code-01"]
+    for f in fwapi.load(sdk.target(name).dir / "firmware.toml").functions:
         if f.hook is None:
             continue
         off = f.address - base
         assert code[off : off + len(f.hook.relocate)] == f.hook.relocate, f.name
+
+
+EM10II_TOML = sdk.target("em10ii").dir / "firmware.toml"
+
+
+@needs_toolchain
+def test_relocator_accepts_the_em10ii_spans(tmp_path):
+    funcs = {f.name: f for f in fwapi.load(EM10II_TOML).functions}
+    objdump = sdk.target("em10ii").tool("objdump")
+    assert fwapi.relocated_instructions(funcs["appevent_post"], objdump, tmp_path) == [
+        "mov d0,d3",
+        "mov d1,a2",
+        "movbu (0xa1c184da),d1",
+    ]
+    assert fwapi.relocated_instructions(funcs["cw_updateDisplay"], objdump, tmp_path) == [
+        f"mov {0x60BC53C4},a1"  # objdump prints this immediate in decimal
+    ]
+
+
+def test_em10ii_unproven_hooks_patch_one_aligned_8_byte_block():
+    """A core with a stale I-cache line must see the whole stock entry: the jmp may not straddle an
+    aligned 8-byte block (one line at any line size >= 8)."""
+    hooks = [f for f in fwapi.load(EM10II_TOML).functions if f.hook is not None]
+    assert hooks
+    for f in hooks:
+        if f.hook.cpu1 == "unproven":
+            assert f.address % 8 + fwapi.JMP_SIZE <= 8, f.name
 
 
 # ---- Callbacks, slots and vtables ----

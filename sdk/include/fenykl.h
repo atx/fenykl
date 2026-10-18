@@ -37,6 +37,16 @@ bool fenykl_card_io_allowed(void) FENYKL_CPU0_ONLY("fenykl_card_io_allowed");
    call the original as fw_orig_<name>(...). Nothing changes until fenykl_hook_install. */
 #define FENYKL_HOOK(name, fn) FENYKL_HOOK_##name(fn)
 
+/* Descriptor of a hook (fenykl_hook_<name>, generated from firmware.toml by fenykl's fwapi.hook_asm,
+   which emits this layout). Installed with fenykl_hook_install (arch/<camera>/hooks.c). */
+struct fenykl_hook {
+	uint32_t entry;       /* firmware function; its first 5 bytes become `jmp stub` */
+	uint32_t stub;        /* generated entry stub */
+	uint32_t installed;
+	uint8_t length;       /* bytes of original[] that must be at the entry */
+	uint8_t original[16]; /* stock entry bytes, also the trampoline's relocated instructions */
+};
+
 #define FENYKL_HOOK_EBYTES (-1)  /* the entry does not hold the expected bytes: nothing was written */
 #define FENYKL_HOOK_EVERIFY (-2) /* the entry did not read back as written */
 

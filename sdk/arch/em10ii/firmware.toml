@@ -1,0 +1,617 @@
+# Firmware functions callable from plugins (OM-D E-M10 Mark II v1.4 main-code-01 run addresses).
+# `fenykl plugin build` turns this into fenykl_fw.h (prototypes fw_<name>), assembly thunks and the
+# address symbols. One table per function:
+#
+#   address   run address of the function
+#   saves     register list of the CALL that enters it (subset of d2, d3, a2, a3)
+#   frame     frame size of that CALL; saves and frame must equal the callee's own RET/RETF
+#   evidence  confidence of the name/signature: high or medium
+#   returns   C return type (ints come back in D0, pointers in A0 in both ABIs)
+#   args      "<class> <C declaration>", class d = integer (D0, D1, then stack),
+#             a = pointer (A0, A1, then stack); "..." last = variadic (the last named argument
+#             goes to the first stack slot, 8 variadic words are forwarded)
+#   note      where saves/frame/args were read, and the code section the function lives in
+#   cores     optional, default ["cpu0"]: the cores that may call it, ["cpu0"] or ["cpu0", "cpu1"];
+#             files in plugin.toml cpu1_sources
+#             cannot call a CPU0-only function (compile error)
+#   cores_evidence  with cores: what the classification rests on
+#
+# This body has three cores (core id 0, 1, 2); the SDK only builds for CPU0 and CPU1.
+#
+# Code sections: main-code-01 is not loaded in one piece. boot0 (0x60021020..0x60030000) and boot1
+# (0x60030000..0x60128800, incl. boot1b) are loaded at reset and always callable. sec1
+# (0x60130000..0x601C9000) is loaded on demand by the Usr0 boot stage, sec2 by Usr1, sec3 by Usr1/Usr2,
+# sec4..sec6 (0x60673000..0x610F2000) by Usr4. A function in secN is callable only after that load;
+# each note names the section.
+#
+# Only 32-bit arguments. Add a function only when its CALL encoding and argument registers have
+# been read from the firmware; unknown signatures stay out.
+#
+# Hook targets: a `hook` table, fields as in epl3/firmware.toml (sdk/README.md, Hooks). On this body
+# cpu1 = "unproven" covers CPU1 and CPU2, and such an entry must have its 5 patched bytes in one
+# aligned 8-byte block (one I-cache line), so that a core with a stale line runs the stock entry
+# (tests/test_fwapi.py checks it).
+#
+# Further down: data (addresses the SDK uses as values, FW_<NAME>).
+
+[dbg_puts]
+address = 0x6002306C
+saves = ["a2"]
+frame = 0x18
+evidence = "high"
+returns = "void"
+args = ["a const char *s"]
+note = "boot0; ret [a2],24 at 0x600230C6; all 3053 CALLs use [a2],24; string in A0 (mov a0,a2 first). A first byte 0xFF/0xFE does not print: it sets/clears the mute flag 0x615DC966 (1/0); while muted the text only goes to 0x60ECB501 (sec5) if (0x615DC968) != 0. CPU0 writes the text itself (0x600230C9: LF -> CR LF, uart_putchar 0x6006D171) under irq_lock(0)"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: (0x8050) != 0 at 0x6002306D: OlyQueueWrite 0x60069429 of {s, 0x80} to the CPU0 console queue (id at 0x60041282) with timeout -1, so from CPU1 a message is cut to 128 bytes and the call blocks until queued; in a CPU1 ISR the write fails (E_CTX) and 0x600230BB prints '!!!!!!!!!! 1' through the direct path instead"
+
+[sprintf]
+address = 0x60132595
+saves = []
+frame = 0xC
+evidence = "high"
+returns = "void"
+args = ["a char *buf", "a const char *fmt", "..."]
+note = "sec1 (callable after Usr0 loaded it); ret [],12 at 0x601325AD; all 2382 CALLs use [],12; buf in A0, fmt at (4,SP) (read as (0x10,sp) inside), varargs from (8,SP) passed as a pointer to the formatter 0x6013121D with mode 1; result not characterised"
+cores = ["cpu0"]
+cores_evidence = "CPU0 only: the formatter's call tree reaches the stdio stubs that print '[SC]call putc()' through the console writer 0x600230C9 (irq_lock, UART), so it is not shown to be pure"
+
+[OlyTaskSleep]
+address = 0x6006992F
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "int"
+args = ["d int ticks"]
+note = "boot1b; ret [d2],8 at 0x60069948; all 228 CALLs use [d2],8; D0 = ticks passed unchanged to dly_tsk 0x6003172B (wakes at the (n+1)-th tick); returns 0, or -1 when the kernel result is negative (E_CTX in an ISR or with dispatch disabled, E_PAR for n >= 0x7FFFFFFF). Tick = 1000 counts of the 0x98900000 timer, 1 ms inferred from the prescaler setup, not measured"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: dly_tsk acts on the calling core's own KCB; CPU1 has its own tick (timer ch2, IRQ 0x3B)"
+
+[OlyTaskCreate]
+address = 0x60069CAD
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x34
+evidence = "high"
+returns = "int"
+args = [
+    "a const char *name",
+    "a fw_task_entry entry",
+    "d int mode",
+    "d int exinf",
+    "d int priority",
+    "d unsigned stack_size",
+    "a void *stack_base",
+]
+note = "boot1b; ret [d2,d3,a2,a3],52 at 0x60069EC7; all 9 CALLs use [d2,d3,a2,a3],52. A0 name, A1 entry, D0 mode (2 = create and start), D1 exinf, priority as u16 at (0x38,sp) = caller (4,SP), stack size (0x3C,sp) = (8,SP), stack base (0x40,sp) = (12,SP) (0 = kernel heap). Priorities 8/9/10/11 are rewritten to 45/46/54/55 with a print; 1..128 valid. Returns task id or -1"
+cores = ["cpu0"]
+cores_evidence = "verified: the task is created on the calling core (acre_tsk on the own KCB, Oly task table 0xA1BE33D0 + core * 0x480 at 0x60069DC4); from CPU1 it would be a CPU1 task"
+
+[malloc]
+address = 0x600233DF
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void *"
+args = ["d unsigned size"]
+note = "boot0 scheap_alloc; ret [],4 at 0x6002341B; all 597 CALLs use [],4; size in D0, result in A0. Size classes <= 0x80, <= 0x800, <= 0x4000; size > 0x4000 prints 'scheap_alloc: Size Over :' and returns NULL (the limit is 0x4000, not 0x3FFC); behaviour on an exhausted class not read"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: 0x600235BF takes irq_lock(1) and the cross-core hwlock 0x0A09000A (spin) around the class allocator; task context (irq_lock disables dispatch there)"
+
+[free]
+address = 0x6002341E
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void"
+args = ["a void *p"]
+note = "boot0 scheap_free; ret [],4 at 0x60023478; all 617 CALLs use [],4; pointer in A0, pool chosen by address range (0x61153FC0.., 0x614B9000.., 0x6120A540..). A pointer outside the pools, NULL included, prints 'scheap_free: not allocated pointer :' and returns"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: 0x600235F2 takes irq_lock(1) and the cross-core hwlock 0x0A09000A, as malloc"
+
+[get_tid]
+address = 0x60031BE2
+saves = ["a2"]
+frame = 0x4
+evidence = "high"
+returns = "int"
+args = ["a uint16_t *tid"]
+note = "boot1 (kernel); retf [a2],4 at 0x60031C23; all 69 CALLs use [a2],4. Stores the u16 id of the executing core's running task (KCB 0x8FF00004 + 4 * core, current TCB at +0x60, id at TCB+0x10) to *A0 and returns 0; returns -0x19 (E_CTX) without storing when the KCB context bytes (+0x1C)[0] or [1] say interrupt or dispatch-disabled context"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: reads the executing core's own KCB by (0x8050); no lock, no store but *A0"
+
+# Interrupt and cache primitives. All CALLs were counted by a byte scan of main-code-01.
+
+[psw_get]
+address = 0x6006D547
+saves = []
+frame = 0x0
+evidence = "high"
+returns = "unsigned"
+args = []
+note = "boot1b; retf [],0 at 0x6006D549 (mov psw,d0); its 1 CALL (0x600726CF) uses [],0. A byte-identical copy at 0x600329F2 is not used here"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: reads the executing core's PSW"
+
+[irq_disable_all]
+address = 0x6006D517
+saves = []
+frame = 0x0
+evidence = "high"
+returns = "void"
+args = []
+note = "boot1b; retf [],0 at 0x6006D51C; its 1 CALL (0x60088500) uses [],0; and 0xF7FF,psw clears PSW.IE: every maskable interrupt off on this core. The firmware itself masks with irq_lock"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: masks the executing core's interrupts only"
+
+[irq_mask_restore]
+address = 0x6006D540
+saves = []
+frame = 0x0
+evidence = "high"
+returns = "void"
+args = ["d unsigned psw"]
+note = "boot1b; retf [],0 at 0x6006D544; its 1 CALL (in irq_unlock 0x600884CD) uses [],0; PSW = D0 (incl. IE and IM)"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "per core: sets the executing core's PSW"
+
+[irq_lock]
+address = 0x60088483
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned level"]
+note = "boot1b; ret [d2],8 at 0x600884C9; all 518 CALLs use [d2],8. PSW.IM = level if lower (0x6006D51F); returns the old PSW. In task context after kernel start ((0x8FF003FC) == 0x77777777, sns_ctx 0) it also calls dis_dsp 0x600316CB and sets bit 31 of the cookie. Level 0 masks all maskable interrupts"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: PSW and dis_dsp act on the executing core only; the firmware calls it on every core and in ISRs"
+
+[irq_unlock]
+address = 0x600884CC
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "void"
+args = ["d unsigned cookie"]
+note = "boot1b; ret [d2],8 at 0x600884FD; all 539 CALLs use [d2],8; PSW = cookie (psw_set 0x6006D540), then ena_dsp 0x600317B3 if bit 31 is set and not in an ISR"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: as irq_lock, executing core only"
+
+[dcache_flush_all]
+address = 0x6007F577
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "void"
+args = []
+note = "boot1b; ret [d2],8 at 0x6007F63B; all 8 CALLs use [d2],8. CHCTR (0x8070) &= ~2 (DCEN off), wait for bit 3, 0x400 dummy word reads at 0x28A00000 and 0x28A80000, bit 0x10 of the core's bus block 0x98100000 + 0x400 * core set and waited for, CHCTR |= 0x20 (DCINV), CHCTR |= 2. No interrupt masking inside: the callers at 0x60022A82, 0x60022AE2 and 0x6007388F bracket it with irq_lock(0)/irq_unlock (0x6007600F calls it inside a hwlock section, the four sec3/sec5 callers were not read). No I-cache operation"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: CHCTR is the executing core's register and the bus block is chosen by (0x8050); acts on the executing core only"
+
+# --- keys and application events ---
+
+[ui_key_get_state]
+address = 0x6017F252
+saves = ["d2", "d3", "a2"]
+frame = 0x18
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned code"]
+note = "sec1; ret [d2,d3,a2],24 at 0x6017F32A; all 113 CALLs use [d2,d3,a2],24 (102 d32, 11 d16). D0 = key code, compared in full (0x60180DA9 compares all 32 bits). Returns 0 active (pressed, cable in) / 1 inactive / 0xFFFF code in no key table: the state reader 0x60180E0A returns (input bit != the map entry's active level). Mode dial: 0x1901 alone returns the level of one bit of the resistor ladder, not the dial; the full code 0x02021901 returns the dial value (0x6017F32D); 0x100 (half press) comes from the trigger state byte 0xA1C1801C. Overrides: 0x500/0x501 read 1 while 0x501/0x400 are 0; codes 2 and 0xC can be forced by settings 0x1F72/0x1FC2 (0x60180119). 0x400 UsbC (USB cable, 0 = cable in, as 0x602F0689 maps 0 to connected), 0x1506 MdaC (card detect: non-zero makes 0x60577601 report the card not ready). Reads key state bytes and tables only (0x60180DA6, 0x60180E0A, 0x6017F202) plus a settings read; safe from a CPU0 task"
+
+[appevent_post]
+address = 0x60042428
+saves = ["d2", "d3", "a2"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["d unsigned event", "d unsigned param", "a unsigned flag"]
+note = "boot1 code that calls sec2 (0x602C9735, 0x602C95E5, 0x602C9836, 0x602C95AB): callable once sec2 is loaded. ret [d2,d3,a2],16 at 0x6004248F; all 52 CALLs use [d2,d3,a2],16, plus 114 through 0x6004241B (event, flag; param 0). No stored pointer to it. Drops the event unless the init byte 0xA1C184DA == 0x77; drops 0x040D00B5/B6 while 0x602CB5F2(0x5E4) != 0, and 0x04030020, 0x04125000; filters 0x602C9735 (0x02021710, 0x02022301), the key-combination stage 0x602C95E5 (may hold an event back and post it later through 0x602C95AB) and the duplicate filter 0x602C9836; then posts {u16 flag, event, param} (12 bytes) to the queue whose id is at 0x60040FF8 with no timeout. D0 on return is meaningless (no caller reads it)"
+
+[appevent_post.hook]
+entry = "call"
+relocate = "83 f1 e6 fc a9 da 84 c1 a1"
+cpu1 = "unproven"
+cpu1_evidence = "static: reached on CPU1 through 0x6004241B by the Wi-Fi tasks WIFI_RELEASE_PUSH (0x60E3B068 posts 0x041B0029) and WIFI_REMOCON_CGI (0x60E3EC1D, event from the remote command); every key event comes from CPU0 (UI_IN, PWR_STANDBY, USRSTART_THIRD). Not run on the camera"
+note = "mov d0,d3; mov d1,a2; movbu (0xA1C184DA),d1 (absolute). No call, jmp or branch into 0x60042429..0x60042430 and no stored pointer to 0x60042428..0x60042430 (cached or uncached alias) in main-code-01. Instruction boundaries at +1 and +3 lie inside the 5 patched bytes (a CPU0 task preempted there must not resume after a patch). 8-byte aligned entry: the patched bytes share one I-cache line"
+
+# --- GUI drawing ---
+
+[cw_updateDisplay]
+address = 0x609308D8
+saves = ["d2", "a2"]
+frame = 0x54
+evidence = "high"
+returns = "void"
+args = ["d int show_front"]
+note = "sec4 (callable once section_loaded bit 3 is set); ret [d2,a2],0x54 at 0x60930A41 (only RET); all 5 CALLs use [d2,a2],0x54: 0x6093013B (gpi_flush 0x6093012B, clr d0), 0x60930B4A (gpi_set_layer_mask 0x60930B3E, mov 1,d0), 0x60930BA8 / 0x60930BB2 (re-show wrappers, mov 1,d0), 0x60930FAE (one-layer flip, D0 = 1). D0 is read after exth d0 at 0x609308E8: 0 shows the draw buffer (gpi_draw_buf 0x615E6DC0) of each layer, else the other one; hands the layer handles to the display API 0x6069C579. D0 == 0 only from gpi_flush. D0 at return is not read by gpi_flush"
+
+[cw_updateDisplay.hook]
+entry = "call"
+relocate = "fc dd c4 53 bc 60"
+cpu1 = "unproven"
+cpu1_evidence = "static only: the 5 callers are GPI code in sec4 (gpi_flush has one CALL, from 0x609451FA); all ancestors in the call graph are sec4 GUI code, none a task entry, and sec4 holds only CPU0 task entries (HIGHLEVEL_MAIN 0x60673069, CA_MAIN 0x6090BF65); no stored pointer to it. Not run on the camera"
+note = "mov 0x60BC53C4,a1: one 6-byte instruction, so no instruction boundary inside the 5 patched bytes. Byte scan of main-code-01 for bcc/bra d8, bvc..bns d8, jmp/call d16/d32 and calls d16/d32: no target in 0x609308D9..0x609308DD; no 32-bit word equals 0x609308D8..0x609308DD or 0xA09308D8..0xA09308DD. 8-byte aligned entry: the patched bytes share one I-cache line"
+
+# Data: firmware addresses the SDK and its plugins use as values (sdk/README.md, Firmware data).
+# `[data.<name>]` becomes `#define FW_<NAME> 0x...u` in fenykl_fw.h. Fields:
+#   address   the address (RAM, table, MMIO register or the bound of an address range)
+#   type      what lives there ("u8", "u32", "u8 []", "bound" for a range limit)
+#   evidence  high or medium, as for functions
+#   note      meaning and where it was read
+# Layouts behind the address stay C structs or offsets in the code that reads them.
+
+# --- address map ---
+# Unlike the E-PL3, the code image sits at the bottom of DRAM and the firmware's RAM (variables,
+# pools, bss, kernel stacks, OSD and image buffers) lies above it.
+
+[data.dram_start]
+address = 0x60000000
+type = "bound"
+evidence = "high"
+note = "start of cached DRAM (uncached alias 0xA0000000; alias rule (a & 0x3FFFFFFF) | 0x80000000 in to_uncached 0x6007F686); only exception scratch 0x60000008..0x60000013 lies below image_start"
+
+[data.image_start]
+address = 0x60021000
+type = "bound"
+evidence = "high"
+note = "start of the firmware code image: the .BIN block head copy (0x60021000..0x60021020), then boot0 from 0x60021020"
+
+[data.image_end]
+address = 0x610F2000
+type = "bound"
+evidence = "high"
+note = "end of sec6, the last loaded code section; firmware RAM (.data0 0x61150FE0, pools 0x61153FC0.., bss up to 0x61DB6C00, uncached buffers 0xA2000000..0xBFFFFFFF) follows. The image has never-loaded gaps (0x60128800.., 0x601C9000.., 0x603D8000.., 0x60662000.., 0x60DA5000.., 0x60F8A800..)"
+
+[data.dram_end]
+address = 0x80000000
+type = "bound"
+evidence = "medium"
+note = "end of the cached DRAM window: to_uncached/to_cached accept 0x60000000..0x7FFFFFFF and buffers reach 0xBFFxxxxx (0xBFABE600 at 0x60074958); installed DRAM size not proven"
+
+[data.sec6_start]
+address = 0x61010000
+type = "bound"
+evidence = "high"
+note = "run address of sec6 (section table 0x60026CD0; sec6 0x61010000..0x610F2000). After section_wait(5) the section-load guard covers [0x61010000, 0x61104000) until section_wait(6) moves it to run(7) = 0x61100000; bit 5 of section_loaded marks that"
+
+[data.main_code_start]
+address = 0x60021020
+type = "bound"
+evidence = "high"
+note = "first byte of main-code-01 (boot0 at its run address); together with main_code_end a superset of all code and rodata sections boot0..sec6"
+
+[data.main_code_end]
+address = 0x610F2000
+type = "bound"
+evidence = "high"
+note = "end of sec6. The range includes never-loaded gaps and sections loaded on demand: before Usr0/Usr1/Usr4 have run, sec1..sec6 hold no firmware text yet"
+
+# --- kernel, console, timer ---
+
+[data.core_id]
+address = 0x8050
+type = "u32"
+evidence = "high"
+note = "core id of the executing core: 0 CPU0, 1 CPU1, 2 CPU2 (abs16 per-core register; read by dbg_puts 0x6002306D and dcache_flush_all 0x6007F5B5)"
+
+[data.chctr]
+address = 0x8070
+type = "u16 MMIO"
+evidence = "high"
+note = "CHCTR, the executing core's cache control (abs16 per-core register, 16-bit accesses): ICEN 1, DCEN 2, DCBUSY 8, ICINV 0x10, DCINV 0x20 [verified: reset 0x600210F9 or 3; CPU1/CPU2 entries 0x60026F7F/0x6002743B write 0x30 then 3; dcache_flush_all 0x6007F57D..0x6007F638: and 0xfffd, btst 8 loop, or 0x20, or 2]. ICBUSY 4 is inferred: no stock code of this body reads it; the E-PL3 cache driver 0x6E634C2E returns CHCTR & 4 (I) or & 8 (D)"
+
+[data.timer_now]
+address = 0x98900074
+type = "u32 MMIO"
+evidence = "medium"
+note = "free-running 30-bit down counter: freerun_count 0x60022F11 returns 0x3FFFFFFF - (0x98900074). 1 MHz (1000 counts per tick) is inferred from the timer setup, not measured; one MMIO block for all cores"
+
+[data.uart_tee_buf]
+address = 0xA1BB309C
+type = "u8 []"
+evidence = "high"
+note = "uart_putchar 0x6006D171's capture buffer (uncached): stores each character at 0xA1BB309C[count] while uart_tee_state1 < 2 and count < 0x2FF (767 bytes)"
+
+[data.uart_tee_count]
+address = 0x8FF00084
+type = "u16"
+evidence = "high"
+note = "bytes in uart_tee_buf, incremented by uart_putchar 0x6006D1A5, zeroed by the console init 0x6006CFD8; 0x6006D13B copies it to the per-channel replay counts 0x8FF00080 + 2 * channel"
+
+[data.uart_tee_state1]
+address = 0x8FF0007E
+type = "u8"
+evidence = "high"
+note = "uart_state[1] (states at 0x8FF0007D + channel): capture runs only while it is < 2. The console init 0x6006CFD1 sets it to 3 and main-code-01 only ever writes 2 or 3 (0x6006D15B, 0x6006D101), so the capture is never on in this firmware"
+
+[data.poweron_factor]
+address = 0xA1C17C14
+type = "u32"
+evidence = "medium"
+note = "power-on factor word: power_on_factor_init 0x60181C84 (sec1, called from 0x6017F156) stores table 0x601A8D28 {0x1000001, 12, 0x100, 0x1506, 0x121C, 0x400, 0x1000003, 0x1000003, 0x1000002, 0x1000001} indexed by the wake index; read by power_on_factor_get 0x6017F586; 12 = normal power-on. Which value a USB-cable start gives is not established (0x400 is index 5 here, index 4 on the E-PL3)"
+
+[data.section_loaded]
+address = 0xA1C18044
+type = "u8"
+evidence = "high"
+note = "loaded mask of the on-demand code sections: bit n-1 = section n. Only writer: section_wait 0x6004206F, `movbu d0,(0xA1C18044)` at 0x6004211D with d0 |= 1 << (pending - 1) (0x60042082..0x6004208D), after the section's guard and constructors; byte scan finds the absolute operand only there (0x60042117, 0x6004211F) and in the reader 0x60041F97 (section_loaded(n)). In the bss zeroed at reset. Test a section's bit before calling into it; never section_request a loaded section: 0x60041FAF then sets u8 0xA1C18045 = 1 and every later section_wait returns at 0x6004207F without waiting"
+
+# --- card file I/O (fileif.c client wrappers, sec3) ---
+# The wrappers run the file operation directly when called by the file task FILECLBK (task id 0x11 at
+# 0x60040C52) and otherwise post it to FILECLBK's queue 0x22 (half word 0x60041030) through the
+# synchronous RPC 0x6006D2DA (one reply queue created and deleted per call, infinite timeouts), so
+# all callers' requests are served one at a time by FILECLBK. FILECLBK is started by the Usr3 stage
+# and the code lives in sec3: callable only after Usr3 started FILECLBK. Paths are "<letter>:\NAME",
+# drive = letter - 'C' (or - 'c'), drive 0 = the SD card; the stock code formats "%c:\%s".
+# Errors set the file errno word 0x618A19E0 (0x9415 media not mounted, 0x9414 not found or not
+# allowed, 0x9417 internal/context).
+
+[rpc_fopen]
+address = 0x60564829
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void *"
+args = ["a const char *path", "a const char *mode"]
+note = "sec3; ret [],4 at 0x6056482F, 49 CALLs [],4; body: clr d0 and call fopen_opt 0x6056570C,[d2,d3,a2,a3],44 (option 0); RPC cmd 0x10001 -> server 0x60570DC0. Returns A0 = FILE* or 0 (stock callers test A0, e.g. 0x60172615). Mode chars r (1), w (2), a (0xA), + (3), b, c, d (sector-direct reads into the caller's buffer), e, h; 'r' reads through a 0x4000 bounce buffer with memcpy, so any buffer works. Open on an unmounted drive fails at once with errno 0x9415 (media status bit 0x100 clear, no I/O); a write mode on a protected card fails with 0x9414"
+cores = ["cpu0"]
+cores_evidence = "verified: on CPU0 a non-FILECLBK task takes the RPC path (0x6056FBDF returns 1); other cores take a copy-to-heap RPC path (returns 2) that is not exercised by the SDK"
+
+[rpc_fclose]
+address = 0x60564832
+saves = ["d2", "a2", "a3"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["a void *fp"]
+note = "sec3; ret [d2,a2,a3],16 at 0x605648AC, 65 CALLs [d2,a2,a3],0x10; RPC cmd 0x10002 -> 0x60571318; returns the server result, -1 on RPC/context error"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[rpc_fread]
+address = 0x605649BB
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x18
+evidence = "high"
+returns = "int"
+args = ["a void *buf", "d unsigned size", "d unsigned n", "a void *fp"]
+note = "sec3; ret [d2,d3,a2,a3],24 at 0x60564A47, 33 CALLs [d2,d3,a2,a3],0x18; A0 buf, D0 size, D1 n, A1 fp (moved to (4,SP) by the callee); RPC cmd 0x10005 -> f_read 0x60571FB1: size*n clamped to the file size, read 0x20 sectors at a time into a 0x4000 bounce buffer and memcpy'd (mode without 'd'); returns items read (bytes with size 1), 0 on error"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[rpc_fwrite]
+address = 0x605648AF
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x18
+evidence = "high"
+returns = "int"
+args = ["a const void *buf", "d unsigned size", "d unsigned n", "a void *fp"]
+note = "sec3; ret [d2,d3,a2,a3],24 at 0x6056493B, 38 CALLs [d2,d3,a2,a3],0x18; same packing as rpc_fread (stock 0x60172620: A0 buf, D0 1, D1 n, A1 fp); RPC cmd 0x10003 -> 0x60571917; returns items written, 0 on error"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[rpc_fremove]
+address = 0x60564BF2
+saves = ["d2", "a2", "a3"]
+frame = 0x18
+evidence = "medium"
+returns = "int"
+args = ["a const char *path"]
+note = "sec3; ret [d2,a2,a3],24 at 0x60564C11 and 0x60564C8A, 16 CALLs [d2,a2,a3],0x18; RPC cmd 0x1000A -> 0x6057256F -> 0x6057244A(path, 0) (directory operation via dosfile_dir_op 0x605589CE); -1 on error; 0 = removed is inferred from the shared dosfile status convention, not traced to the end"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[fileif_exists]
+address = 0x6056561E
+saves = []
+frame = 0x8
+evidence = "high"
+returns = "int"
+args = ["a const char *path"]
+note = "sec3; ret [],8 at 0x60565635, 36 CALLs [],8; calls fileif_attributes_read 0x60564E3E (RPC cmd 0x20004) and returns 1 when it succeeds and the attribute has neither 0x08 (volume) nor 0x10 (directory) set, else 0. Exact names only (no wildcard)"
+cores = ["cpu0"]
+cores_evidence = "verified: attributes_read uses the core dispatch 0x6056FBDF"
+
+[fileif_filesize_get]
+address = 0x60565133
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x2C
+evidence = "medium"
+returns = "int"
+args = ["a const char *path", "a uint32_t *size_hi", "d unsigned size_lo_addr"]
+note = "sec3; ret [d2,d3,a2,a3],44 at 0x6056515B/0x60565186, 26 CALLs [d2,d3,a2,a3],0x2C; A0 path, A1 -> upper 32 bits, D0 = address of the lower 32 bits (stock 0x6056407A); RPC cmd 0x20008 -> 0x60572831; 0 on success, -1 on error. Exact meaning of the two halves read from the fileiftest print only (size_U, size_L)"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[fileif_get_media_status]
+address = 0x6056556D
+saves = ["d2", "a2"]
+frame = 0xC
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned drive"]
+note = "sec3; ret [d2,a2],12 at 0x605655E9, 24 CALLs [d2,a2],0xC; on CPU0 calls 0x60572BD1 directly (no RPC). D0 = drive (0 = SD). Bits: 0x100 FAT mounted (fat_mounted[drive] == 1), 0x4000 DCF mount sequence running (bit set/cleared by dcf_mount 0x6054BD09), 0x4 / 0x8 last mount error 0xE08 / other, 0x1000 / 0x2000 mount steps done, 0x10 or 0x2 write refused for 'w' opens, 0x600 always set. Returns 1 alone in one state of 0x60577601 (setting 0x1506 query), meaning not traced"
+cores = ["cpu0"]
+cores_evidence = "verified: direct read path for core 0; other cores use RPC cmd 0x2000F"
+
+[data.fat_mounted]
+address = 0xA1C46D10
+type = "u16"
+evidence = "high"
+note = "fat_mounted[0] (u16 per drive, uncached alias): 0x60551D86 reads movhu (0xA1C46D10 + 2*drive) and reports 0x100 when it is 1; cleared by the file-system init 0x60551DD4. Drive 0 = SD"
+
+[data.boot_card_mount_requested]
+address = 0x61843F64
+type = "u16"
+evidence = "high"
+note = "set to 1 by usr3_mount_request 0x6018E207 (sec1, Usr3 stage) only when it posted api_media_Mount_Media(0, 1): power-on factor == 12, wake input bit 0 clear and the battery-like check 0x60078867() == 0x100 or 0x6007883C() >= 50; cleared at its start. 0 on battery or card insertion wake boots (factor 0x1000001 / 0x1506), playback-button, USB and other wake boots"
+
+# --- application events, USB storage ---
+
+[data.appevent_queue_id]
+address = 0x60040FF8
+type = "u16"
+evidence = "high"
+note = "id of the application event queue (boot1 data word): appevent_post's queue write 0x602C95AB and the direct writers 0x60183437, 0x602CB155, 0x602F0E5E, 0x605604CF, 0x60E3925F (CPU1 Wi-Fi), 0x60E9C080 read it, OlyQueueWrite(id, {u16 flag, event, param}, 12 bytes)"
+
+[data.usb_storage_flags]
+address = 0x61A66260
+type = "u16"
+evidence = "medium"
+note = "USB host media flags (bss). 0x60E68143 (PC/USB init) clears the word; api_media_Mount_USB_Strage 0x602CC73E -> 0x60E68D9B: mount request clears bit 0 and loads the card's geometry for the host, release sets bit 0 and prints 'Media UnMount'; 0x60E68E61 sets/clears bit 1. While the word is non-zero the host request handler 0x60E68250 answers 0x1301 (not ready). Zero at boot, so bit 0 clear does not mean a host is attached"
+
+# --- user settings, mode check, Custom menu tab K (sec4 data, writable RAM after Usr4 loaded it) ---
+
+[usrset_get]
+address = 0x602CB5F2
+saves = []
+frame = 0x4
+evidence = "medium"
+returns = "unsigned"
+args = ["d unsigned id"]
+note = "sec2; `exthu d0; call 0x602CB5FB,[d2,d3,a2],20; ret [],4`; all 2023 CALLs use [],4; D0 = user setting id, value in D0 (the mode-check conditions compare it with setting values: 0x6071DB05 reads 0x5E4, 0x6071DB45 reads 0x131). Ids below 0x1770 go through the lookup 0x602CB723 and 0x602CB93A, whose locking was not read: call it only where the firmware does, in the GUI task (e.g. from a mode_cond or menu_row callback)"
+
+[eyefi_status]
+address = 0x60678A45
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x1C
+evidence = "high"
+returns = "unsigned"
+args = ["a void *dev"]
+note = "sec4; all 3 CALLs (0x60678CF1, 0x6067B6DF, condition 113 at 0x6071DDFA) use [d2,d3,a2,a3],0x1C with A0 = the Eye-Fi device (data.eyefi_dev); no NULL check. Reads only the u32 at dev+0xC and maps it in 0x60678D20: 0 -> 0 (no Eye-Fi card), bit 0x20 -> 6, bit 2 clear -> 1, bit 0x10 -> 5, bit 8 -> 4, bit 4 -> 3, else 2. No writes, locks or posts"
+
+[data.eyefi_dev]
+address = 0x615E090C
+type = "u32 -> Eye-Fi device (0x5C bytes)"
+evidence = "high"
+note = "singleton of the Eye-Fi device ('OlyHfwDevEyeFi.cpp'): the getter 0x606789ED returns it and, while it is 0, creates it (with its task HLS_EYEFI) and stores it at 0x60678A2A; NULL if that allocation failed. Read the word instead of calling the getter"
+
+[callbacks.mode_cond]
+entry = "calls"
+evidence = "high"
+returns = "unsigned"
+args = []
+note = "mode-check condition: mode_check 0x6071CA34 enters cond_table[n] with `calls (a0)` at 0x6071CA9E, no arguments (the condition reads the arguments mode_check stored at data.mode_check_args); D0 as u16 (exthu at 0x6071CAB2), 0 = allowed, else blocked; the first non-zero result ends the rule. Also entered from 0x6071CB78 (evaluator 0x6071CB3D, called only by conditions) and 0x6071DE7F (condition 114). Conditions entered with calls end with ret or retf (e.g. 0x6071DE10, 0x6071D390)"
+
+[callbacks.menu_row]
+entry = "calls"
+evidence = "high"
+returns = "int"
+args = ["a void *actuator"]
+note = "row callback of a Custom-menu dispatch record {u32 level, u16 row, u16 sub, u32 fn, u32 group, u32 target, u32 fn2}: ctl_row_dispatch 0x609E9236 stores fn at actuator+0x78 (0x609E92C0) and enters it with `calls (a1)` at 0x609E92C5, A0 = the tab's sub-actuator. D0 == 4: the dispatcher opens the record's controller (fn2(...) if set, else 0x609E43C0(group, target), 0x609E92CD..0x609E92FD) and returns 4, exactly as for fn == 0 (0x609E9304..0x609E933A); any other value is returned at once (0x609E92C9). The stock row callback 0x609E94AA returns 4"
+
+[data.mode_cond_table]
+address = 0x60AFF240
+type = "u32 [] -> condition function"
+evidence = "high"
+note = "sec4 rodata, indexed by the u8 condition numbers of the mode-check rules; read only by the three evaluators (absolute operand 0x60AFF240 at 0x6071CA95, 0x6071CB6F, 0x6071DE76 only; no store, no uncached alias operand). The rule of setting 0x193 (0x60B01548 = {0x193, 0, list 0x60B000EB, count 8}) uses conditions 47 0x6071D228, 48 0x6071D248, 52 0x6071D2EA, 56 0x6071D376, 96 0x6071DAFC, 98 0x6071DB30, 113 0x6071DDE0, 123 0x6071E098"
+
+[data.mode_check_args]
+address = 0x618B22A0
+type = "u16 id, u8 [3] flags, u16 +6, u16 +8"
+evidence = "high"
+note = "arguments of the running mode check for its conditions: mode_check 0x6071CA34 stores id (u16 +0), D1/A0/A1 as u8 at +2/+3/+4, 0x6071E438() at +6 and 0x6071E488() at +8 (0x6071CA3B..0x6071CA64); evaluator 0x6071CB3D rewrites +0. Valid only inside a condition"
+
+[slots.mode_cond_eyefi]
+address = 0x60AFF404
+callback = "mode_cond"
+expected = 0x6071DDE0
+cpu1 = "unproven"
+cpu1_evidence = "static only: the condition table is read by mode_check (callers mode_enabled 0x6071AF54 via ModeCheck vtable[0] 0x606B3786, about 110 GUI-code callers of the getter 0x606B3717, app boot, debug shell) and two evaluators reached only from conditions; all CPU0 task code, GUI_TASK (priority 54) for the menu; no CPU1/CPU2 or interrupt path found"
+note = "condition 113 = data.mode_cond_table + 4 * 113, used by no rule but 0x193 (Eye-Fi). Stock 0x6071DDE0: blocked (1) when 0x6071E488(0) == 0x2001 or eyefi_status(eyefi_dev) is 0, 5 or 6 (no card: 0). The Custom tab K row list (builder 0x609EDCBA) grays row 0x193 while it blocks; the flags are computed when the tab list is built"
+
+[slots.eyefi_ok_fn]
+address = 0x60D2F5A4
+callback = "menu_row"
+expected = 0
+cpu1 = "unproven"
+cpu1_evidence = "static only: ctl_row_dispatch 0x609E9236 is called from the tab K sub-actuator's key handlers 0x609E83BB, 0x609E85A6, 0x609E86BA, 0x609E8989, menu-app code in GUI_TASK (CPU0)"
+note = "fn of the OK dispatch record 0x60D2F59C of the Eye-Fi row ({1, 0x193, 0, fn 0, group 8, target 0x50, 0}) in tab K's OK table 0x60D2F53C (9 records; referenced only by the config record 0x60D316A8 +0x1C). OK 0x900C reaches it through the K handler 0x609E8970 (installed at sub-actuator +0x44 by 0x609E80C7). Stock (group 8, 0x50) = actuator 5 param 0x193: the On/Off pop-up of setting 0x193, which writes the setting only on OK (0x609EF652..0x609EF66A)"
+
+[slots.eyefi_right_fn]
+address = 0x60D2F484
+callback = "menu_row"
+expected = 0
+cpu1 = "unproven"
+cpu1_evidence = "static only: as eyefi_ok_fn (same dispatcher, GUI_TASK)"
+note = "fn of the RIGHT dispatch record 0x60D2F47C of the Eye-Fi row (same content as 0x60D2F59C) in table 0x60D2F434 (11 records; referenced only by 0x60D316A8 +0x14). RIGHT 0x900A: base handler 0x609E44EB -> class vtable 0x60D31C8C +0x38 -> instance +0x38 = 0x609E83AF (copied from .data 0x615F3FDC by 0x609E7F05), which dispatches over +0x64"
+
+# --- GUI state and OSD (read-only for plugins; GUI_TASK, priority 54, CPU0, writes them) ---
+
+[data.gui_super]
+address = 0x619A3740
+type = "u8"
+evidence = "high"
+note = "gui_sm super state; sm_init 0x60946AC2 (called at 0x609DCB01, super 1 state 2); else only gui_sm_dispatch 0x60946B3E writes it (0x60946C1B, then the state at 0x60946C25, no call between). Live view = super 0x01 state 0x08, 0x11 = main menu (SsMenu)"
+
+[data.gui_state]
+address = 0x619A3741
+type = "u8"
+evidence = "high"
+note = "gui_sm state within gui_super (gui_super + 1)"
+
+[data.gui_disp_req]
+address = 0x615F3EA8
+type = "u32"
+evidence = "high"
+note = "display request of SsCommon state 8: its entry 0x609E0ED2 stores param2 at 0x609E0EED when it matches table 0x60D25C24 (0xF001..0xF005, 0xF712, 0x962C, 0xF007..0xF009); action 31 replaces it (0x609E1091); cleared at 0x609E0A05, 0x609E0FB2, 0x609E107A. Code meanings are inferred"
+
+[data.gpi_out_mode]
+address = 0x615E6DE4
+type = "u16"
+evidence = "high"
+note = "output window mode: setter 0x60931364 (`extbu d0; movhu d0`), only call 0x60A73865 with 3; read only by 0x60931138 (one-layer flip helper 0x60930FDC): 3 -> 728x546, 2 -> 800x600, 1 -> 720x480, else 640x480. 0 in .data"
+
+[data.gpi_layer_vram]
+address = 0x618C8484
+type = "u32 [layer * 2 + buf] -> struct osd_vram, work handle at +0x18"
+evidence = "high"
+note = "only writer gpi_init (0x6092F1BF, work 0x6092F2A5; one caller 0x6092F12C at GUI start): 0 before it, a failed allocation stores NULL and ends the init. struct osd_vram here is {u32 pdata; u32 plane; u16 w, h, x, y} (osd_vram_register 0x60E15829); w/h/x/y change on a one-layer flip, pdata reads 0 while 0x60930A44 (OSD off show) runs"
+
+[data.gpi_draw_buf]
+address = 0x615E6DC0
+type = "u8"
+evidence = "high"
+note = "OSD buffer index the GUI draws into: 0 at gpi_init (0x6092F177), toggled only by gpi_flush 0x6093012B (0x6093014A)"
+
+[data.gpi_hide_mask]
+address = 0x615E6DDC
+type = "u16"
+evidence = "high"
+note = "hidden OSD layers (0x001 layer 0, 0x010 layer 1, 0x100 layer 2); only writer gpi_set_layer_mask 0x60930B3E"
+
+[data.gpi_one_mode]
+address = 0x615E6DDE
+type = "u8"
+evidence = "high"
+note = "one-layer override: 1 begin (0x60930F01), 2 active (0x60930F29), 0 end (0x60930FB4); cw_updateDisplay shows one_buf ^ 1 on one_layer while 2"
+
+[data.gpi_one_layer]
+address = 0x615E6DE0
+type = "s16"
+evidence = "high"
+note = "layer of the one-layer override, -1..2; written only at 0x60930EED"
+
+[data.gpi_one_buf]
+address = 0x615E6DE2
+type = "u8"
+evidence = "high"
+note = "buffer of the one-layer override: 0x60930EF9 (= draw_buf), 0x60930F21, 0x60930F50 (xor 1)"
+
+[data.gpi_ext_out]
+address = 0x615E6DF0
+type = "u32"
+evidence = "high"
+note = "1 while an external output is connected: setter 0x609313DF, called from ConnectChangePlay 0x60948364/0x60948397; cw_updateDisplay then also shows layer 2 on display 1. 0 in .data"
+
+[data.gpi_ext_main]
+address = 0x615E6DF4
+type = "u32"
+evidence = "high"
+note = "with gpi_ext_out: 0 = display 0 gets no layers; setter 0x609313E8 (callers 0x6094838D, 0x60A6C6CA, 0x60A6C6DD); 1 in .data"
+
+[data.gui_data_slot38]
+address = 0x618CDCD4
+type = "u8 [0xC6E]"
+evidence = "high"
+note = "storage of GUI data slot 0x38 (Custom list model): record 0x615E78B4 = {get 0, set 0, data 0x618CDCD4, size 0xC6E} in the slot table 0x615E7534 (0xCA records); gui_data_set copies into it with memcpy, no lock, so a reader in another task can see a half-written copy. No code references the address but through the table"

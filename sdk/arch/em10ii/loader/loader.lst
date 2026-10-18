@@ -1,0 +1,192 @@
+Disassembly of section .hook:
+
+6018d73a <.hook>:
+6018d73a:	dd c6 08 ed 	call	6005e000 <fenykl_spawn>,[d2,d3,a2,a3],32
+6018d73e:	ff f0 20 
+
+Disassembly of section .text:
+
+6005e000 <fenykl_spawn>:
+6005e000:	fc ac 64 3f 	movhu	(61843f64 <GATE>),d0
+6005e004:	84 61 
+6005e006:	a0 01       	cmp	1,d0
+6005e008:	c9 49       	bne	6005e051 <.L2^B1>
+6005e00a:	2e 2c 01    	mov	300,d2
+
+6005e00d <.L1^B1>:
+6005e00d:	fc a8 44 80 	movbu	(a1c18044 <MOUNTED+0xfffd1334>),d0
+6005e011:	c1 a1 
+6005e013:	f8 e0 18    	and	24,d0
+6005e016:	a0 18       	cmp	24,d0
+6005e018:	c8 11       	beq	6005e029 <.L3^B1>
+6005e01a:	80 64       	mov	100,d0
+6005e01c:	dd 13 b9 00 	call	6006992f <OlyTaskSleep>,[d2],8
+6005e020:	00 80 08 
+6005e023:	2a ff       	add	-1,d2
+6005e025:	c9 e8       	bne	6005e00d <.L1^B1>
+6005e027:	ca 2a       	bra	6005e051 <.L2^B1>
+
+6005e029 <.L3^B1>:
+6005e029:	80 37       	mov	55,d0
+6005e02b:	f8 93 04    	movhu	d0,(4,sp)
+6005e02e:	2c 00 40    	mov	16384,d0
+6005e031:	42 08       	mov	d0,(8,sp)
+6005e033:	fc cc 00 c0 	mov	1625341952,d0
+6005e037:	e0 60 
+6005e039:	42 0c       	mov	d0,(12,sp)
+6005e03b:	fc dc 63 e1 	mov	1610998115,a0
+6005e03f:	05 60 
+6005e041:	fc dd 5b e0 	mov	1610997851,a1
+6005e045:	05 60 
+6005e047:	80 02       	mov	2,d0
+6005e049:	04          	clr	d1
+6005e04a:	dd 63 bc 00 	call	60069cad <OlyTaskCreate>,[d2,d3,a2,a3],52
+6005e04e:	00 f0 34 
+
+6005e051 <.L2^B1>:
+6005e051:	dd fa b8 00 	call	6006994b <task_self_end>,[],8
+6005e055:	00 00 08 
+6005e058:	df f0 20    	ret	[d2,d3,a2,a3],32
+
+6005e05b <fenykl_task>:
+6005e05b:	cf f0       	movm	[d2,d3,a2,a3],(sp)
+6005e05d:	f8 fe f0    	add	-16,sp
+6005e060:	8a 64       	mov	100,d2
+
+6005e062 <.L1^B2>:
+6005e062:	fc dc 10 6d 	mov	-1580962544,a0
+6005e066:	c4 a1 
+6005e068:	f0 60       	movhu	(a0),d0
+6005e06a:	a0 01       	cmp	1,d0
+6005e06c:	c8 12       	beq	6005e07e <.L2^B2>
+6005e06e:	80 64       	mov	100,d0
+6005e070:	dd bf b8 00 	call	6006992f <OlyTaskSleep>,[d2],8
+6005e074:	00 80 08 
+6005e077:	2a ff       	add	-1,d2
+6005e079:	c9 e9       	bne	6005e062 <.L1^B2>
+6005e07b:	cc d5 00    	jmp	6005e150 <done>
+
+6005e07e <.L2^B2>:
+6005e07e:	fc dc 6a e1 	mov	1610998122,a0
+6005e082:	05 60 
+6005e084:	fc dd 78 e1 	mov	1610998136,a1
+6005e088:	05 60 
+6005e08a:	dd 9f 67 50 	call	60564829 <rpc_fopen>,[],4
+6005e08e:	00 00 04 
+6005e091:	92          	mov	a0,a2
+6005e092:	ba 00       	cmp	0,a2
+6005e094:	c9 05       	bne	6005e099 <.L0^A_0>
+6005e096:	cc ba 00    	jmp	6005e150 <done>
+
+6005e099 <.L0^A_0>:
+6005e099:	fc dc 00 50 	mov	1624920064,a0
+6005e09d:	da 60 
+6005e09f:	80 01       	mov	1,d0
+6005e0a1:	fc cd 00 70 	mov	421888,d1
+6005e0a5:	06 00 
+6005e0a7:	99          	mov	a2,a1
+6005e0a8:	dd 13 69 50 	call	605649bb <rpc_fread>,[d2,d3,a2,a3],24
+6005e0ac:	00 f0 18 
+6005e0af:	83          	mov	d0,d3
+6005e0b0:	98          	mov	a2,a0
+6005e0b1:	dd 81 67 50 	call	60564832 <rpc_fclose>,[d2,a2,a3],16
+6005e0b5:	00 b0 10 
+6005e0b8:	fc dc 00 50 	mov	1624920064,a0
+6005e0bc:	da 60 
+6005e0be:	70          	mov	(a0),d0
+6005e0bf:	fc c8 46 4e 	cmp	843861574,d0
+6005e0c3:	4c 32 
+6005e0c5:	c8 05       	beq	6005e0ca <.L0^A_1>
+6005e0c7:	cc 89 00    	jmp	6005e150 <done>
+
+6005e0ca <.L0^A_1>:
+6005e0ca:	f8 00 14    	mov	(20,a0),d0
+6005e0cd:	fc c8 45 2d 	cmp	827141445,d0
+6005e0d1:	4d 31 
+6005e0d3:	c9 7d       	bne	6005e150 <done>
+6005e0d5:	f8 00 18    	mov	(24,a0),d0
+6005e0d8:	fc c8 30 49 	cmp	4802864,d0
+6005e0dc:	49 00 
+6005e0de:	c9 72       	bne	6005e150 <done>
+6005e0e0:	f8 00 04    	mov	(4,a0),d0
+6005e0e3:	fc c8 00 50 	cmp	1624920064,d0
+6005e0e7:	da 60 
+6005e0e9:	c9 67       	bne	6005e150 <done>
+6005e0eb:	f8 04 08    	mov	(8,a0),d1
+6005e0ee:	ad          	cmp	d3,d1
+6005e0ef:	c5 61       	bhi	6005e150 <done>
+6005e0f1:	a5 1c       	cmp	28,d1
+6005e0f3:	c4 5d       	bcs	6005e150 <done>
+6005e0f5:	f8 ed 03    	btst	3,d1
+6005e0f8:	c9 58       	bne	6005e150 <done>
+6005e0fa:	f8 00 0c    	mov	(12,a0),d0
+6005e0fd:	a4          	cmp	d1,d0
+6005e0fe:	c6 52       	bcc	6005e150 <done>
+6005e100:	a0 1c       	cmp	28,d0
+6005e102:	c4 4e       	bcs	6005e150 <done>
+6005e104:	fc dd 1c 50 	mov	1624920092,a1
+6005e108:	da 60 
+6005e10a:	fc cc 00 50 	mov	1624920064,d0
+6005e10e:	da 60 
+6005e110:	e4          	add	d1,d0
+6005e111:	f1 e3       	mov	d0,a3
+6005e113:	00          	clr	d0
+
+6005e114 <.L3^B2>:
+6005e114:	bd          	cmp	a3,a1
+6005e115:	c6 07       	bcc	6005e11c <.L4^B1>
+6005e117:	75          	mov	(a1),d1
+6005e118:	e4          	add	d1,d0
+6005e119:	51          	inc4	a1
+6005e11a:	ca fa       	bra	6005e114 <.L3^B2>
+
+6005e11c <.L4^B1>:
+6005e11c:	f8 04 10    	mov	(16,a0),d1
+6005e11f:	a4          	cmp	d1,d0
+6005e120:	c9 30       	bne	6005e150 <done>
+6005e122:	00          	clr	d0
+6005e123:	dd 60 a3 02 	call	60088483 <irq_lock>,[d2],8
+6005e127:	00 80 08 
+6005e12a:	82          	mov	d0,d2
+6005e12b:	dd 4c 14 02 	call	6007f577 <dcache_flush_all>,[d2],8
+6005e12f:	00 80 08 
+6005e132:	88          	mov	d2,d0
+6005e133:	dd 99 a3 02 	call	600884cc <irq_unlock>,[d2],8
+6005e137:	00 80 08 
+6005e13a:	fc dc 00 50 	mov	1624920064,a0
+6005e13e:	da 60 
+6005e140:	f8 04 08    	mov	(8,a0),d1
+6005e143:	f8 00 0c    	mov	(12,a0),d0
+6005e146:	f1 60       	add	d0,a0
+6005e148:	fc cc 00 50 	mov	1624920064,d0
+6005e14c:	da 60 
+6005e14e:	f0 f0       	calls	(a0)
+
+6005e150 <done>:
+6005e150:	dd fb b7 00 	call	6006994b <task_self_end>,[],8
+6005e154:	00 00 08 
+
+6005e157 <.L7^B1>:
+6005e157:	2c e8 03    	mov	1000,d0
+6005e15a:	dd d5 b7 00 	call	6006992f <OlyTaskSleep>,[d2],8
+6005e15e:	00 80 08 
+6005e161:	ca f6       	bra	6005e157 <.L7^B1>
+
+6005e163 <tname>:
+6005e163:	46 45       	mov	d1,(69,sp)
+6005e165:	4e 59       	mov	d3,(89,sp)
+6005e167:	4b 4c       	mov	a2,(76,sp)
+6005e169:	00          	clr	d0
+
+6005e16a <path>:
+6005e16a:	43 3a       	mov	a0,(58,sp)
+6005e16c:	5c 46       	mov	(70,sp),a0
+6005e16e:	45          	inc	a1
+6005e16f:	4e 59       	mov	d3,(89,sp)
+6005e171:	4b 4c       	mov	a2,(76,sp)
+6005e173:	2e 42 49    	mov	18754,d2
+6005e176:	4e 00       	mov	d3,(sp)
+
+6005e178 <mode_r>:
+6005e178:	72          	mov	(a2),d0
+6005e179:	00          	clr	d0

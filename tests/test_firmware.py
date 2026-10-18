@@ -127,8 +127,9 @@ def test_truncated_rejected():
         unpack_firmware(packed + bytes(4))
 
 
-def test_round_trip(tmp_path):
-    original = stock_image()
+@pytest.mark.parametrize("name", ["epl3", "em10ii"])
+def test_round_trip(tmp_path, name):
+    original = stock_image(name)
     firmware = unpack_firmware(original)
     assert pack_firmware(firmware) == original
 

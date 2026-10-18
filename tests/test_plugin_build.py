@@ -17,6 +17,12 @@ from fenykl.payload import (
 )
 
 EXAMPLES = sorted(p.parent.name for p in (sdk.SDK / "projects").glob("*/plugin.toml"))
+# (example, target) for every target an example's plugin.toml lists.
+EXAMPLE_TARGETS = [
+    (e, t.name)
+    for e in EXAMPLES
+    for t in plugin.plugin_targets(sdk.SDK / "projects" / e)
+]
 needs_ghidra = pytest.mark.skipif(
     not (os.environ.get("GHIDRA_INSTALL_DIR") and os.environ.get("JAVA_HOME")),
     reason="the ISA check needs GHIDRA_INSTALL_DIR and JAVA_HOME",
@@ -24,25 +30,53 @@ needs_ghidra = pytest.mark.skipif(
 
 
 @needs_toolchain
-@pytest.mark.parametrize("example", EXAMPLES)
-def test_example_builds(example, tmp_path):
+@pytest.mark.parametrize(("example", "target"), EXAMPLE_TARGETS)
+def test_example_builds(example, target, tmp_path):
     image = plugin.build(
-        sdk.SDK / "projects" / example, tmp_path, sdk.target("epl3")
+        sdk.SDK / "projects" / example, tmp_path, sdk.target(target)
     ).read_bytes()
     assert check_image(image) is None
-    assert parse_header(image).entry == HEADER_SIZE
+    header = parse_header(image)
+    assert header.entry == HEADER_SIZE
+    assert header.load == sdk.target(target).load
     assert b"C:\\FENYKL.LOG" in image
     assert not (tmp_path / "isacheck").exists()
 
 
 @needs_toolchain
 @needs_ghidra
-@pytest.mark.parametrize("example", EXAMPLES)
-def test_example_passes_the_isa_check(example, tmp_path):
+@pytest.mark.parametrize(("example", "target"), EXAMPLE_TARGETS)
+def test_example_passes_the_isa_check(example, target, tmp_path):
     plugin.build(
-        sdk.SDK / "projects" / example, tmp_path, sdk.target("epl3"), isa_check=True
+        sdk.SDK / "projects" / example, tmp_path, sdk.target(target), isa_check=True
     )
     assert (tmp_path / "isacheck").is_dir()
+
+
+def test_feature_libraries_follow_the_target_capabilities():
+    def names(target):
+        return {p.name for p in plugin.lib_sources(sdk.target(target))}
+
+    assert names("epl3") == {p.name for p in plugin.LIB.glob("*.c")}
+    assert names("em10ii") == {"cfg.c", "log.c", "log_rec.c", "start.c", "string.c"}
+
+
+@needs_toolchain
+def test_log_and_cfg_link_for_the_em10ii(tmp_path):
+    (tmp_path / "plugin.toml").write_text('targets = ["em10ii"]\n')
+    (tmp_path / "main.c").write_text(
+        '#include "cfg.h"\n#include "log.h"\n'
+        'static FENYKL_LOG_MODULE(m, "m", FENYKL_LOG_INFO);\n'
+        'FENYKL_CFG_BOOL(opt, "opt", "Opt", NULL, 0);\n'
+        "void plugin_main(uint32_t b, uint32_t s)\n"
+        "{ fenykl_log_init(NULL); fenykl_log_task_start(); fenykl_cfg_init();\n"
+        '  fenykl_cfg_task_start(); fenykl_log_info(&m, "%u", opt); fenykl_log_flush(); }\n'
+    )
+    image = plugin.build(tmp_path, tmp_path / "out", sdk.target("em10ii")).read_bytes()
+    assert check_image(image) is None
+    symbols = (tmp_path / "out" / "plugin.map").read_text()
+    for name in ("flog_flusher_task", "fcfg_saver_task", "fenykl_card_io_allowed"):
+        assert f" {name}\n" in symbols
 
 
 def test_plugin_targets_refuses_an_unlisted_target(tmp_path):

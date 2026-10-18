@@ -1,0 +1,45 @@
+# E-M10 Mark II v1.4 fenykl-loader patch: the pinned bytes of
+# loader.S linked with loader.ld (disassembly: loader.lst), so that flashing never depends on the local
+# toolchain. tests/test_fenykl_loader.py re-assembles the source and requires exactly these bytes.
+# Addresses are run addresses; the block's load address is target.toml [stock] load_addresses.
+# original_sha256 is the sha256 of the stock bytes each edit overwrites, checked before patching.
+description = "Load and run C:\\FENYKL.BIN from the SD card at boot"
+
+# Usr3 (USRSTART_THIRD): call task_self_end,[],8 -> call fenykl_spawn,[d2,d3,a2,a3],0x20
+[[edit]]
+block = "main-code-01"
+address = 0x6018D73A
+original_sha256 = "07b224fb7e431c4ba4f4e49cd427384d50923ba1263e6bf8adc0ec0f8dbe7565"
+replacement = "dd c6 08 ed ff f0 20"
+
+# The stub in the boot1 padding 0x6005B7C0..0x60060000 (0xFF, loaded by main_init, unreferenced).
+[[edit]]
+block = "main-code-01"
+address = 0x6005E000
+original_sha256 = "4aa99749fb2482d95c13a7d09cf43f6d489b681c09601060b2b718ed93ecb5ae"
+replacement = """
+fc ac 64 3f 84 61 a0 01 c9 49 2e 2c 01 fc a8 44
+80 c1 a1 f8 e0 18 a0 18 c8 11 80 64 dd 13 b9 00
+00 80 08 2a ff c9 e8 ca 2a 80 37 f8 93 04 2c 00
+40 42 08 fc cc 00 c0 e0 60 42 0c fc dc 63 e1 05
+60 fc dd 5b e0 05 60 80 02 04 dd 63 bc 00 00 f0
+34 dd fa b8 00 00 00 08 df f0 20 cf f0 f8 fe f0
+8a 64 fc dc 10 6d c4 a1 f0 60 a0 01 c8 12 80 64
+dd bf b8 00 00 80 08 2a ff c9 e9 cc d5 00 fc dc
+6a e1 05 60 fc dd 78 e1 05 60 dd 9f 67 50 00 00
+04 92 ba 00 c9 05 cc ba 00 fc dc 00 50 da 60 80
+01 fc cd 00 70 06 00 99 dd 13 69 50 00 f0 18 83
+98 dd 81 67 50 00 b0 10 fc dc 00 50 da 60 70 fc
+c8 46 4e 4c 32 c8 05 cc 89 00 f8 00 14 fc c8 45
+2d 4d 31 c9 7d f8 00 18 fc c8 30 49 49 00 c9 72
+f8 00 04 fc c8 00 50 da 60 c9 67 f8 04 08 ad c5
+61 a5 1c c4 5d f8 ed 03 c9 58 f8 00 0c a4 c6 52
+a0 1c c4 4e fc dd 1c 50 da 60 fc cc 00 50 da 60
+e4 f1 e3 00 bd c6 07 75 e4 51 ca fa f8 04 10 a4
+c9 30 00 dd 60 a3 02 00 80 08 82 dd 4c 14 02 00
+80 08 88 dd 99 a3 02 00 80 08 fc dc 00 50 da 60
+f8 04 08 f8 00 0c f1 60 fc cc 00 50 da 60 f0 f0
+dd fb b7 00 00 00 08 2c e8 03 dd d5 b7 00 00 80
+08 ca f6 46 45 4e 59 4b 4c 00 43 3a 5c 46 45 4e
+59 4b 4c 2e 42 49 4e 00 72 00
+"""

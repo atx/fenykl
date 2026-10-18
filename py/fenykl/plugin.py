@@ -10,9 +10,18 @@ from . import fwapi
 from .payload import pack_elf
 from .sdk import SDK, SdkTarget, target
 
-# The SDK library: runtime, logging, configuration, HUD. Every plugin links all of it; --gc-sections drops
-# what the plugin does not use.
+# The SDK library: runtime, logging, configuration, HUD. Every plugin links all of it that its target
+# supports; --gc-sections drops what the plugin does not use.
 LIB = SDK / "lib"
+# Library files of a camera feature, built only for targets with that capability (target.toml).
+LIB_CAPABILITIES = {
+    "afc.c": "afc",
+    "afc_sm.c": "afc",
+    "event.c": "event",
+    "key.c": "event",
+    "hud.c": "hud",
+    "ui.c": "ui",
+}
 # Keeps GCC from turning the runtime's copy/clear loops into calls to memcpy/memset themselves.
 RUNTIME_CFLAGS = ["-fno-tree-loop-distribute-patterns"]
 
@@ -40,6 +49,15 @@ def plugin_targets(plugin_dir: Path, only: str | None = None) -> list[SdkTarget]
             f"{plugin_dir} is not for {only} (plugin.toml: {', '.join(names)})"
         )
     return [target(only)]
+
+
+def lib_sources(target: SdkTarget) -> list[Path]:
+    """The sdk/lib files built for `target`: all but those of features it lacks (LIB_CAPABILITIES)."""
+    return [
+        p
+        for p in sorted(LIB.glob("*.c"))
+        if LIB_CAPABILITIES.get(p.name, "") in ("", *target.capabilities)
+    ]
 
 
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> str:
@@ -98,13 +116,13 @@ def link(
         *(f"-DFENYKL_HAS_{c.upper()}=1" for c in target.capabilities),
     ]
     lib_flags = [*RUNTIME_CFLAGS, f"-DFENYKL_PLUGIN_CPU1={1 if cpu1_sources else 0}"]
-    lib_sources = sorted(LIB.glob("*.c"))
+    lib = lib_sources(target)
     runtime = [target.dir / "crt0.S", *sorted(target.dir.glob("*.c"))]
     objects = []
-    for src in [*runtime, *lib_sources, gen / "fw_thunks.S", gen / "fw_hooks.S", *sources]:
+    for src in [*runtime, *lib, gen / "fw_thunks.S", gen / "fw_hooks.S", *sources]:
         obj = objdir / f"{src.parent.name}_{src.name}.o"
         extra = RUNTIME_CFLAGS if src in runtime else []
-        if src in lib_sources:
+        if src in lib:
             extra = lib_flags
         if src in cpu1_sources:
             extra = [*extra, "-DFENYKL_CPU1"]

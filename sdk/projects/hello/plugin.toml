@@ -1,1 +1,1 @@
-targets = ["epl3"]
+targets = ["epl3", "em10ii"]
