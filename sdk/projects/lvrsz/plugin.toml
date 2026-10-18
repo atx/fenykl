@@ -1,0 +1,4 @@
+targets = ["epl3"]
+
+# CPU0 probe of the IPU resizer (img_exec ucMode 0x15) as a source of small live-view frames.
+# No hooks: the firmware is only read, the jobs go through the firmware's own img_exec.
