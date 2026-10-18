@@ -14,5 +14,6 @@ minimal examples of SDK features that no other plugin uses, and the probes and p
 | `trklog/` | does the C-AF+TR window follow the tracker (tracker injection) |
 | `framepaths/` | where the live-view frames come from (focus peaking, magnified view, Pro Capture) |
 | `cpu1frame/` | live-view frames read on CPU1 (focus peaking on CPU1); minimal CPU1 worker example |
-| `macbench/` | multiply and int8 dot-product kernels and timings on both cores (detector speed) |
+| `nnbench/` | neural-network kernel costs on CPU1 (conv, ternary, depthwise/pointwise, packed and binary weights, pooling, input preparation, memory and cache), checked against C references, plus the multiply timings of the former `macbench` on both cores; `nnbench_report.py` turns the log into a cost table (detector design) |
+| `nnbench2/` | the second nnbench run, built from nnbench's sources with its own plan: input preparation on the live face-detection frame, int8 kernels generated with 4 pixels per call, softmax and the hand-written kernels on the shapes that matter most; `nnbench_report.py` merges both logs |
 | `birddetect/` | bird detector on CPU1 that steers the face frame; weights trained by the separate fenykl-nn project on the Open Images Dataset V7 bird class (annotations CC BY 4.0, Google LLC; images listed as CC BY 2.0) |

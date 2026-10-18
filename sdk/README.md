@@ -16,7 +16,7 @@ The SDK is split per camera (`targets/<camera>/`, see Layout). The only target s
 | RAM holes the loader and plugins use | clean in two short camera runs; no long run |
 | callbacks (`FENYKL_CALLBACK`) | **works on the camera** through `lib/afc.c` (`projects/mfstats`, `projects/main`) |
 | slots, cloned vtables | simulator only (`tests/test_sim.py`); camera test `projects/proxyget` pending |
-| CPU1 worker (`fenykl_cpu1_*`, `cpu1_sources`) | **works on the camera**: clean start/stop in `cpu1frame`, `macbench`, `birddetect` |
+| CPU1 worker (`fenykl_cpu1_*`, `cpu1_sources`) | **works on the camera**: clean start/stop in `cpu1frame`, `macbench` (since folded into `nnbench`), `birddetect` |
 | other thunks (`fw_OlyTaskCreate` from C, `fw_malloc`/`fw_free`, `fw_dcache_purge_all_irqsafe`, `fw_dbg_puts*`) | used on the camera by the libraries and plugins; `fw_dbg_puts*` output is invisible without the internal UART |
 | logging library (`lib/log*.c`) | **works on the camera**: init, `"a"` append, overflow counters, CPU1 ring, hook and console tee, flushes into standby. Not run: wake from standby, the 4 MiB cap. `fw_malloc` refuses more than 0x3FFC bytes |
 | configuration, HUD and settings page libraries (`lib/cfg.c`, `lib/hud.c`, `lib/ui.c`) | simulator (`tests/`); **on the camera** through `projects/main` |
@@ -202,7 +202,8 @@ if (fp) {
   and an older, longer file keeps its tail (seen 2026-10-13: one probe's log followed by the rest
   of an earlier, longer log). Delete `FENYKL.LOG` on the PC before a run, or end the log with a clear marker.
   `"a"` (append) exists in the firmware's mode table but has not been tried.
-- Use `\r\n` line ends if you read the log on Windows; `fw_sprintf` supports at most 8 variadic words.
+- Use `\r\n` line ends if you read the log on Windows; `fw_sprintf` forwards at most 8 variadic words
+  and the build refuses a call with more (split a long line into calls appending to the buffer).
 - Do not write every few milliseconds: file writes go through the firmware's file server task, and
   writes concurrent with the camera's own image writing are not proven safe. Log in batches, use a
   test card.
@@ -227,7 +228,7 @@ own menu list view. `projects/main` uses it.
 |---|---|---|---|
 | `void fw_dbg_puts(const char *s)` | 0x6E606525 | high | yes |
 | `void fw_dbg_puts_hex(const char *msg, unsigned value)` | 0x6E70AA34 | high | yes |
-| `void fw_sprintf(char *buf, const char *fmt, ...)` (max 8 variadic words) | 0x6E8F78B5 | high | yes |
+| `void fw_sprintf(char *buf, const char *fmt, ...)` (max 8 variadic words, more does not compile) | 0x6E8F78B5 | high | yes |
 | `int fw_OlyTaskSleep(int ticks)` | 0x6E6214FC | medium | yes |
 | `int fw_OlyTaskCreate(name, entry, mode, exinf, priority, stack_size, stack_base)` | 0x6E62158D | high | no |
 | `int fw_OlyTaskStart(int id)`, `int fw_OlyTaskStop(int id)` | 0x6E6213E0, 0x6E621458 | high | no |
@@ -268,7 +269,8 @@ note = "ret [],24 at 0x6E7B8270; returns items read"
 
 `args` entries are `<class> <C declaration>`: `d` = integer class (D0, D1, then stack), `a` = pointer
 class (A0, A1, then stack), only 32-bit types. A trailing `"..."` makes it variadic: the last named
-argument goes to the first stack slot and 8 variadic words are forwarded. The generator refuses
+argument goes to the first stack slot and 8 variadic words are forwarded; a macro of the same name
+makes a call with more variadic arguments a compile error. The generator refuses
 argument layouts the characterised ABI does not cover (a register argument after a stack argument). The
 simulator test (`tests/test_sim.py`, `api`) then calls the new thunk against the mock of its ABI
 shape: `tests/sim/mocks.S` has one `ARGS_<pattern>` macro per argument pattern (the classes of
@@ -537,6 +539,9 @@ Rules:
   (section `.shared`, whole 64-byte lines, zeroed by the loader through the uncached alias). Both
   sides access it only through `FENYKL_SHARED_PTR(var)`. Never touch it through its plain name. The
   worker's other data and its stack are CPU1-private: CPU0 must not touch them after the start.
+  Neither may they share a 64-byte line with CPU0 data (a write-back of one core's copy of the line
+  undoes the other core's writes): give the first object after each boundary between the two in
+  the link map `__attribute__((aligned(64)))`, as the worker stack has (check with `nm -n`).
 - **Not while recording a movie.** CPU1 runs the AVCHD encoder then. Hooks on CPU1 code are not
   supported yet.
 

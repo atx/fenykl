@@ -7,7 +7,7 @@
 2. Every instruction objdump finds in the code sections is re-decoded by the ghidra-mn103 SLEIGH
    module (written from manual 13250-040E, no AM33 opcodes) and must decode with the same length
    and not as a UDF instruction (several AM33 encodings land in the MN103 UDF20-35 space). The
-   firmware's multiply forms of udf00/udf01/udfu01 are allowed (inline asm, e.g. macbench).
+   firmware's multiply forms of udf00/udf01/udfu01 are allowed (inline asm, e.g. nnbench).
 3. Every instruction form is looked up in the stock firmware's form histogram (MN103Forms.java run
    over the E-PL3 Ghidra project). Forms the firmware never uses are listed for review; they are
    valid MN103 instructions but have no evidence of running on the E-PL3 silicon.

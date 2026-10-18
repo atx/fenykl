@@ -149,3 +149,27 @@ def test_log_call_with_more_than_four_arguments_does_not_build(tmp_path):
     )
     with pytest.raises(plugin.BuildError, match="at most 4 log arguments"):
         plugin.build(tmp_path, tmp_path / "out", sdk.target("epl3"))
+
+
+def sprintf_plugin(tmp_path, words):
+    """A plugin whose fw_sprintf calls pass `words` variadic words, and none, in expression context."""
+    args = "".join(f", {i}" for i in range(words))
+    (tmp_path / "plugin.toml").write_text('targets = ["epl3"]\n')
+    (tmp_path / "main.c").write_text(
+        "#include <fenykl.h>\n"
+        "static char buf[64];\n"
+        "void plugin_main(uint32_t b, uint32_t s)\n"
+        f'{{ b ? fw_sprintf(buf, "x") : fw_sprintf(buf, "%u"{args}); }}\n'
+    )
+    return plugin.build(tmp_path, tmp_path / "out", sdk.target("epl3"))
+
+
+@needs_toolchain
+def test_fw_sprintf_with_more_than_eight_variadic_words_does_not_build(tmp_path):
+    with pytest.raises(plugin.BuildError, match="fw_sprintf: at most 8 variadic words"):
+        sprintf_plugin(tmp_path, 9)
+
+
+@needs_toolchain
+def test_fw_sprintf_with_eight_variadic_words_builds(tmp_path):
+    assert check_image(sprintf_plugin(tmp_path, 8).read_bytes()) is None

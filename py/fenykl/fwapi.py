@@ -487,6 +487,34 @@ def prototype(func: Function) -> str:
     return _signature(func, f"fw_{func.name}") + f' FENYKL_CPU0_ONLY("fw_{func.name}");'
 
 
+# Arguments counted by the guard of a variadic call; more is not a plausible call.
+NARGS_MAX = 32
+NARGS = [
+    f"/* The number of arguments, 1 to {NARGS_MAX}: the variadic call guards. */",
+    "#define __FENYKL_FW_NARGS_PICK("
+    + ", ".join(f"_{i}" for i in range(1, NARGS_MAX + 1))
+    + ", n, ...) n",
+    "#define __FENYKL_FW_NARGS(...) \\",
+    "\t__FENYKL_FW_NARGS_PICK(__VA_ARGS__, "
+    + ", ".join(str(i) for i in range(NARGS_MAX, 0, -1))
+    + ")",
+    "",
+]
+
+
+def variadic_guard(func: Function) -> list[str]:
+    """A macro of the function's name that refuses a call with more than VARIADIC_WORDS variadic
+    words at compile time; inside it the name is not expanded again and calls the thunk."""
+    n = f"fw_{func.name}"
+    return [
+        f"#define {n}(...) ({{ \\",
+        f"\t_Static_assert(__FENYKL_FW_NARGS(__VA_ARGS__) - {len(func.args)} <= {VARIADIC_WORDS}, \\",
+        f'\t\t       "{n}: at most {VARIADIC_WORDS} variadic words (the thunk forwards no more)"); \\',
+        f"\t{n}(__VA_ARGS__); \\",
+        "})",
+    ]
+
+
 _INSN = re.compile(r"^\s*[0-9a-f]+:\t[0-9a-f ]+\t(\S+)\s*(.*)$")
 
 
@@ -631,14 +659,21 @@ def header(api: Api, sel: Selection) -> str:
         "#endif",
         "",
     ]
+    if any(f.variadic for f in api.functions):
+        out += NARGS
     for f in api.functions:
         out.append(f"/* {f.name} 0x{f.address:08X}, evidence {f.evidence}: {f.note}")
         if f.cores_evidence:
             out.append(f"   Cores {', '.join(f.cores)}: {f.cores_evidence}")
         if f.variadic:
-            out.append(f"   Forwards at most {VARIADIC_WORDS} 32-bit variadic words.")
+            out.append(
+                f"   Forwards at most {VARIADIC_WORDS} 32-bit variadic words; the build refuses more."
+            )
         out[-1] += " */"
-        out += [prototype(f), ""]
+        out.append(prototype(f))
+        if f.variadic:
+            out += variadic_guard(f)
+        out.append("")
     if sel.hooks:
         out += [
             "/* Hooks of this plugin (plugin.toml); see FENYKL_HOOK in fenykl.h. */"

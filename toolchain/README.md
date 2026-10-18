@@ -83,7 +83,7 @@ For each input it checks:
    (built from 13250-040E only) with the same length and not as UDF (several AM33 encodings decode
    as UDF20-35 on MN103, so this is checked explicitly). Exception: `udf00`, `udf01`, `udfu01` in the
    forms the firmware uses (its multiply unit, ~12,000 uses, also in CPU1 code; inline asm only,
-   e.g. `sdk/projects/macbench`);
+   e.g. `sdk/projects/nnbench`);
 3. every instruction form (mnemonic, operand kinds, length) is looked up in `fw-forms.tsv`, the
    histogram of what the stock firmware's code uses; forms the firmware never uses are listed.
 

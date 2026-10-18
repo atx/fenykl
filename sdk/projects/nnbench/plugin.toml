@@ -1,0 +1,4 @@
+targets = ["epl3"]
+
+# Built with FENYKL_CPU1: CPU1 code (CPU0 also runs isa.c), CPU0-only firmware calls do not compile.
+cpu1_sources = ["bench.c", "isa.c", "cases.c", "plan.c", "fam_icache.c", "nb_kern.S", "fam_conv.c", "fam_dot.c", "fam_misc.c", "fam_bdnet.c", "nb_gen.c", "nb_gen.S"]

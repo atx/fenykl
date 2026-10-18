@@ -10,11 +10,8 @@
  * one summary per second and the chosen cell on change. Runs until power-off. Log: C:\FENYKL.LOG.
  */
 #include "birddetect.h"
+#include "fd_frame.h"
 
-#define BD_FD_PUB 0x606067B0u		/* u32: FD slot published by mov_fd_publish */
-#define BD_FD_SLOT0 0xADC56300u		/* ROM table 0x6E9EA9EC: 5 slots of 0x4B000 bytes */
-#define BD_FD_SLOT_SIZE 0x4B000u
-#define BD_FD_SLOTS 5u
 #define BD_PROP_FACE 0x9121u		/* u8 Face Priority */
 
 #define BD_STACK 0x2000u
@@ -59,13 +56,6 @@ static uint32_t bd_rd32(uint32_t a)
 	return *(volatile uint32_t *)(uintptr_t)a;
 }
 
-static bool bd_is_slot(uint32_t addr)
-{
-	uint32_t off = (uint32_t)FENYKL_UNCACHED(addr) - BD_FD_SLOT0;
-
-	return off % BD_FD_SLOT_SIZE == 0 && off / BD_FD_SLOT_SIZE < BD_FD_SLOTS;
-}
-
 /* A changed BD_FD_PUB is one publish: true for a valid slot (the newest is in bd.pub_addr). */
 static bool bd_poll(void)
 {
@@ -75,7 +65,7 @@ static bool bd_poll(void)
 		return false;
 	bd.pub_addr = a;
 	bd.win.pubs++;
-	if (bd_is_slot(a))
+	if (bd_fd_is_slot(a))
 		return true;
 	bd.bad++;
 	bd.bad_last = a;
