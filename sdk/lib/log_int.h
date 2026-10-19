@@ -141,6 +141,7 @@ struct flog_state {
 
 	/* Card gate (fenykl_card_io_allowed), checked by every flush. */
 	bool gate_closed;
+	bool gate_held;			/* closed by a cable: until power-off */
 	uint32_t gate_last;		/* timer_now at the last check while closed */
 	uint32_t gate_us;		/* closed time not yet in gate_ms */
 	uint32_t gate_ms;		/* closed time of this period */

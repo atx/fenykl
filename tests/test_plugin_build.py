@@ -59,7 +59,14 @@ def test_feature_libraries_follow_the_target_capabilities():
         return {p.name for p in plugin.lib_sources(sdk.target(target))}
 
     assert names("epl3") == {p.name for p in plugin.LIB.glob("*.c")}
-    assert names("em10ii") == {"cfg.c", "log.c", "log_rec.c", "start.c", "string.c"}
+    assert names("em10ii") == {
+        "card.c",
+        "cfg.c",
+        "log.c",
+        "log_rec.c",
+        "start.c",
+        "string.c",
+    }
 
 
 @needs_toolchain

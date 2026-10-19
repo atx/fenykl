@@ -54,9 +54,14 @@ int fenykl_usb_attached(void);
 /* Target, CPU0 task context (README, Startup and USB boots; unproven on the camera): the USB cable
    is in now (a plugged-in cable switches a running camera to USB in place). */
 bool fenykl_usb_cable_present(void) FENYKL_CPU0_ONLY("fenykl_usb_cable_present");
-/* Target, CPU0 task context: no cable and the camera has the card mounted. Plugins that write files
-   check it before each open/write/close batch (README). */
+/* Target, CPU0 task context: the camera has the card mounted (the cable is not checked). */
+bool fenykl_card_mounted(void) FENYKL_CPU0_ONLY("fenykl_card_mounted");
+/* CPU0 task context: no cable seen this boot and the card mounted; once a cable was seen it stays
+   false until power-off. Plugins that write files check it before each open/write/close batch
+   (README). */
 bool fenykl_card_io_allowed(void) FENYKL_CPU0_ONLY("fenykl_card_io_allowed");
+/* A cable was seen by fenykl_card_io_allowed this boot: the gate stays closed until power-off. */
+bool fenykl_card_usb_seen(void);
 
 /* Hooks (README, Hooks): FENYKL_HOOK(name, fn) makes `fn` the replacement of firmware function
    `name`, which plugin.toml must list in `hooks` (top level or a [capabilities.<cap>] table). `fn`

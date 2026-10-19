@@ -592,27 +592,24 @@ static void sim_log_gate(unsigned int from, unsigned int to)
 		fenykl_log_info(&sim_mod, "gate %u", i);
 }
 
-/* 17: init with the card gate closed takes records but does not touch the card */
+/* 17: init with the card not mounted takes records but does not touch the card */
 static void sim_boot6(void)
 {
 	uint32_t opens = sim.opens, size = sim.size;
 	struct fenykl_log_stats s;
 
-	mock_usb_key = 0;
+	SIM_FAT_MOUNTED = 0;
 	SIM_CHECK(17, fenykl_log_init(NULL) == FENYKL_LOG_ENOCARD);
 	sim_log_gate(0, 1);
 	sim_tick(2000000);
 	SIM_CHECK(17, fenykl_log_flush() == FENYKL_LOG_ENOCARD);
-	/* cable out, the camera has not remounted the card yet */
-	mock_usb_key = 1;
-	SIM_FAT_MOUNTED = 0;
 	sim_log_gate(1, 2);
 	sim_tick(2000000);
 	SIM_CHECK(17, fenykl_log_flush() == FENYKL_LOG_ENOCARD);
 	s = sim_stats();
 	SIM_CHECK(17, sim.opens == opens && sim.size == size && s.queued[0] == 3);
 	SIM_CHECK(17, s.gate_skipped == 3 && s.gate_max_ms == 4000);
-	/* 18: the first flush with the gate open does the init and writes everything */
+	/* 18: the first flush after the mount does the init and writes everything */
 	SIM_FAT_MOUNTED = 1;
 	sim_tick(1000000);
 	SIM_CHECK(18, fenykl_log_flush() == 0);
@@ -621,32 +618,38 @@ static void sim_boot6(void)
 	SIM_CHECK(18, s.gate_skipped == 3 && s.gate_max_ms == 5000);
 }
 
-/* 19: the gate closes after init: no open while closed, ring 0 overflows as usual */
+/* 19: a cable closes the gate after init: no open while closed, ring 0 overflows as usual */
 static void sim_boot7(void)
 {
 	uint32_t opens, size;
 	struct fenykl_log_stats s;
 
 	SIM_CHECK(19, fenykl_log_init(NULL) == 0);
+	sim_log_gate(0, 100);
+	SIM_CHECK(19, fenykl_log_flush() == 0);
 	mock_usb_key = 0;
 	opens = sim.opens;
 	size = sim.size;
-	sim_log_gate(0, 100);
+	sim_log_gate(100, 200);
 	SIM_CHECK(19, fenykl_log_flush() == FENYKL_LOG_ENOCARD);
-	sim_log_gate(100, 600);
+	sim_log_gate(200, 700);
 	sim_tick(2000000);
 	SIM_CHECK(19, fenykl_log_flush() == FENYKL_LOG_ENOCARD);
 	s = sim_stats();
-	SIM_CHECK(19, sim.opens == opens && sim.size == size && s.flushes == 0);
+	SIM_CHECK(19, sim.opens == opens && sim.size == size && s.flushes == 1);
 	SIM_CHECK(19, s.queued[0] == FLOG_RING0_RECORDS && s.overwritten0 == 89);
 	SIM_CHECK(19, s.gate_skipped == 2 && s.gate_max_ms == 2000);
-	/* 20: reopened: everything left is written in order */
+	/* 20: cable out and the card mounted: the gate stays closed until power-off */
 	mock_usb_key = 1;
-	sim_tick(500000);
-	SIM_CHECK(20, fenykl_log_flush() == 0);
+	for (unsigned int i = 0; i < 2; i++) {
+		sim_tick(500000);
+		SIM_CHECK(20, fenykl_log_flush() == FENYKL_LOG_ENOCARD);
+	}
 	s = sim_stats();
-	SIM_CHECK(20, s.queued[0] == 0 && sim_balanced(&s) && s.overwritten0 == 90);
-	SIM_CHECK(20, s.gate_skipped == 2 && s.gate_max_ms == 2500);
+	SIM_CHECK(20, !fenykl_card_io_allowed() && fenykl_card_usb_seen());
+	SIM_CHECK(20, sim.opens == opens && sim.size == size && s.flushes == 1);
+	SIM_CHECK(20, s.queued[0] == FLOG_RING0_RECORDS && s.overwritten0 == 89);
+	SIM_CHECK(20, s.gate_skipped == 4 && s.gate_max_ms == 3000);
 }
 
 void plugin_main(uint32_t load_base, uint32_t image_size)

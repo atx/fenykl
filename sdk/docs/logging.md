@@ -299,22 +299,30 @@ Strategy:
 
 A cable plugged into a running camera hands the card to the PC in place, while the camera's FAT stays
 mounted [static analysis]; a log write then corrupts the card. Every flush first
-asks `fenykl_card_io_allowed()` (no cable and `fat_mounted[0] == 1`; README, Startup and USB boots):
+asks `fenykl_card_io_allowed()` (card mounted and no cable seen this boot; README, Startup and USB
+boots). Once a cable was seen the gate stays closed until power-off: on the E-PL3 (2026-10-19) a
+reopened gate after a USB session wrote `FENYKL.LOG` with the camera's FAT state from before the
+session, and the `FENYKL.BIN` the PC had written lost its cluster chain (`fsck.fat`: directory entry
+on a free cluster, dirty bit set).
 
 - **Closed:** no file RPC at all. `fenykl_log_flush` returns `FENYKL_LOG_ENOCARD`, counts
   `gate_skipped` (not `open_fail`) and leaves the records in the rings; overflow is counted as usual
   (`overwritten0`, `dropped1`, `[lost N]` lines later). The flusher polls the gate every `flush_ms`
-  only (a half-full ring does not trigger extra checks).
-- **Transitions:** closing queues the record `W log : card gate closed (USB cable in or card not
-  mounted): log on hold`; reopening queues `I log : card gate open again after <ms> ms, <n> flushes
-  skipped`. Both reach the file with the first flush after reopening, in stamp order with the other
-  records. `gate_max_ms` is the longest closed period (resolution: the flush period); status blocks
-  add a `card gate` line once a flush was skipped.
+  only (a half-full ring does not trigger extra checks). After a cable, `gate_skipped` keeps counting
+  until power-off and the queued records are lost with it.
+- **Transitions:** closing for an unmounted card queues the record `W log : card gate closed (card
+  not mounted): log on hold`; the mount reopening it queues `I log : card gate open again after <ms>
+  ms, <n> flushes skipped`. Both reach the file with the first flush after reopening, in stamp order
+  with the other records. The first closed check that sees a cable queues `W log : card gate closed
+  (USB cable seen): log on hold until power-off`, which never reaches the file. `gate_max_ms` is the
+  longest closed period (resolution: the flush period); status blocks add a `card gate` line once a
+  flush was skipped.
 - **Init with the gate closed:** `fenykl_log_init` takes the configuration, starts the streams and
   accepts records, but does not touch the card and returns `FENYKL_LOG_ENOCARD` (not an error to
   give up on). The size cap and the boot header run in the first flush with the gate open, before
   the queued records; the header's line carries that flush's stamp, the records keep theirs.
-- Unproven on the camera: the gate signals are static analysis (README status table).
+- On the camera: the cable closes the gate (E-PL3, 2026-10-19). The stay-closed rule is
+  simulator-tested only (README status table).
 
 ## 6. Timestamps
 

@@ -540,9 +540,17 @@ static void flog_gate_close(uint32_t now)
 	flog.gate_us = 0;
 	flog.gate_ms = 0;
 	flog.gate_skips = 0;
-	fenykl_log_warn(&flog_mod, "card gate closed (USB cable in or card not mounted): log on hold");
+	if (!fenykl_card_usb_seen())
+		fenykl_log_warn(&flog_mod, "card gate closed (card not mounted): log on hold");
 }
 
+static void flog_gate_hold(void)
+{
+	flog.gate_held = true;
+	fenykl_log_warn(&flog_mod, "card gate closed (USB cable seen): log on hold until power-off");
+}
+
+/* Reached only when the card was not mounted: after a cable the gate never opens again. */
 static void flog_gate_reopen(uint32_t now)
 {
 	flog_gate_time(now);
@@ -551,7 +559,7 @@ static void flog_gate_reopen(uint32_t now)
 			flog.gate_ms, flog.gate_skips);
 }
 
-/* Checks the gate; a closed gate counts the flush as skipped. Logs both transitions. */
+/* Checks the gate; a closed gate counts the flush as skipped. Logs the transitions. */
 static bool flog_gate_open(void)
 {
 	uint32_t now = FENYKL_LOG_TIMER_NOW();
@@ -565,6 +573,8 @@ static bool flog_gate_open(void)
 		flog_gate_time(now);
 	else
 		flog_gate_close(now);
+	if (!flog.gate_held && fenykl_card_usb_seen())
+		flog_gate_hold();
 	flog.gate_skips++;
 	flog.st.gate_skipped++;
 	return false;

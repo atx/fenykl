@@ -393,6 +393,24 @@ static void sim_check_gate(void)
 	sim_dump("gate");
 }
 
+/* A cable closes the gate until power-off: pulling it does not let the held save through. */
+static void sim_check_cable(void)
+{
+	struct sim_file cf0, cf1;
+
+	SIM_CHECK(20, sim_boot() == 0);
+	cf0 = sim.f[SIM_CF0];
+	cf1 = sim.f[SIM_CF1];
+	mock_usb_key = 0;
+	SIM_CHECK(20, fenykl_cfg_set(&fenykl_cfg_sim_big, 9) == 0);
+	SIM_CHECK(20, fenykl_cfg_save() == FENYKL_CFG_ENOCARD);
+	mock_usb_key = 1;
+	SIM_CHECK(20, fenykl_cfg_save() == FENYKL_CFG_ENOCARD && fenykl_card_usb_seen());
+	SIM_CHECK(20, fenykl_cfg_save() == FENYKL_CFG_ENOCARD && fenykl_cfg_dirty());
+	SIM_CHECK(20, sim_stats().gate_holds == 1 && sim_stats().saves == 0);
+	SIM_CHECK(20, sim_same(&sim.f[SIM_CF0], &cf0) && sim_same(&sim.f[SIM_CF1], &cf1));
+}
+
 static void sim_check_cpu1(void)
 {
 	SIM_CORE = 1;
@@ -422,6 +440,7 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	sim_check_import();
 	sim_check_overflow();
 	sim_check_gate();
+	sim_check_cable();
 	sim_check_cpu1();
 	sim_check_wrap();
 	sim_write("\n", 1);

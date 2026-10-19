@@ -193,33 +193,22 @@ def this_boot(dump: str) -> list[str]:
     return [line for line in out[start + 1 :] if line]
 
 
-def test_init_with_the_gate_closed_writes_header_and_records_once_it_opens(run):
+def test_init_before_the_card_mount_writes_header_and_records_once_it_opens(run):
     sixth = this_boot(run[0][5])
     assert sixth[0].split("] ", 1)[1].startswith("I log    : fenykl log boot: ")
     assert [line.split("] ", 1)[1] for line in sixth[1:]] == [
-        "W log    : card gate closed (USB cable in or card not mounted): log on hold",
+        "W log    : card gate closed (card not mounted): log on hold",
         "I test   : gate 0",
         "I test   : gate 1",
         "I log    : card gate open again after 5000 ms, 3 flushes skipped",
     ]
 
 
-def test_records_queued_while_the_gate_is_closed_are_written_in_order(run):
+def test_a_cable_keeps_the_gate_closed_after_it_is_pulled(run):
+    """A reopened gate after a USB session wrote the camera's stale FAT back over the PC's changes:
+    nothing after the cable reaches the file, the hold record included."""
     boot = this_boot(run[0][6])
     seventh = "\r\n".join(boot)
-    assert sequence(seventh, "gate") == list(range(90, 600))
-    (lost,) = find(seventh, r"\[lost \d+ records, ring 0\]")
-    assert lost.endswith("[lost 90 records, ring 0]")
-    body = [line.split("] ", 1)[1] for line in boot]
-    closed = body.index(
-        "W log    : card gate closed (USB cable in or card not mounted): log on hold"
-    )
-    assert body[closed - 1 : closed + 2] == [
-        "I test   : gate 99",
-        body[closed],
-        "I test   : gate 100",
-    ]
-    assert (
-        body[-1] == "I log    : card gate open again after 2500 ms, 2 flushes skipped"
-    )
-    assert stamp(boot[-1]) - stamp(find(seventh, ": gate 599$")[0]) == 2_500_000
+    assert boot[0].split("] ", 1)[1].startswith("I log    : fenykl log boot: ")
+    assert sequence(seventh, "gate") == list(range(100))
+    assert not find(seventh, "card gate|lost")

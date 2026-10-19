@@ -1,4 +1,4 @@
-/* USB detection for the E-PL3 (README, Startup and USB boots). */
+/* USB and card state for the E-PL3 (README, Startup and USB boots). */
 #include <fenykl.h>
 
 /* Power-on factor of this boot (a key code): ui_key_gio_init 0x6E7121D5 maps the PMU wake register
@@ -22,7 +22,7 @@ bool fenykl_usb_cable_present(void)
 	return fw_ui_key_get_state(FENYKL_EPL3_KEY_USB) == 0;
 }
 
-bool fenykl_card_io_allowed(void)
+bool fenykl_card_mounted(void)
 {
-	return !fenykl_usb_cable_present() && FENYKL_EPL3_FAT_MOUNTED == 1;
+	return FENYKL_EPL3_FAT_MOUNTED == 1;
 }

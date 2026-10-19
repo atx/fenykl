@@ -24,6 +24,7 @@ struct fcfg_state {
 	bool load_pending;		/* init ran with the card gate closed */
 	bool busy;			/* a save or a late load runs */
 	bool gate_closed;
+	bool gate_held;			/* closed by a cable: until power-off */
 	bool failed;			/* the last save failed: retry after FCFG_RETRY_MS */
 	bool nospace;			/* a save hit FENYKL_CFG_ENOSPC: the saver task stops */
 	uint32_t changes;		/* stores by fenykl_cfg_set */
@@ -591,6 +592,7 @@ static int fcfg_load(void)
 
 /* --- card gate --- */
 
+/* Logs the transitions; once a cable was seen the gate stays closed until power-off. */
 static bool fcfg_gate_open(void)
 {
 	if (fenykl_card_io_allowed()) {
@@ -601,10 +603,16 @@ static bool fcfg_gate_open(void)
 	}
 	if (!fcfg.gate_closed) {
 		fcfg.st.gate_holds++;
-		fenykl_log_warn(&fcfg_mod, "card gate closed (USB cable in or card not mounted): "
-				"config load/save on hold");
+		if (!fenykl_card_usb_seen())
+			fenykl_log_warn(&fcfg_mod, "card gate closed (card not mounted): "
+					"config load/save on hold");
 	}
 	fcfg.gate_closed = true;
+	if (!fcfg.gate_held && fenykl_card_usb_seen()) {
+		fcfg.gate_held = true;
+		fenykl_log_warn(&fcfg_mod, "card gate closed (USB cable seen): "
+				"config load/save on hold until power-off");
+	}
 	return false;
 }
 

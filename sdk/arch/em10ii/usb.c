@@ -21,10 +21,8 @@ bool fenykl_usb_cable_present(void)
 }
 
 /* Ready rule: FAT mounted and no DCF mount running; card removal reads as status 1. */
-bool fenykl_card_io_allowed(void)
+bool fenykl_card_mounted(void)
 {
-	if (fenykl_usb_cable_present())
-		return false;
 	return (fw_fileif_get_media_status(0) &
 		(FENYKL_EM10II_MEDIA_MOUNTED | FENYKL_EM10II_MEDIA_DCF_MOUNT)) ==
 	       FENYKL_EM10II_MEDIA_MOUNTED;

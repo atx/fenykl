@@ -27,7 +27,7 @@ probes of its hook path, in that order (not yet run on the camera).
 | configuration, HUD and settings page libraries (`lib/cfg.c`, `lib/hud.c`, `lib/ui.c`) | simulator (`tests/`); **on the camera** through `projects/main` |
 | event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`); **on the camera** through `projects/main`, counters clean (`docs/key.md` 4) |
 | USB boot skip (`fenykl_usb_attached`, power-on factor 0x60551630 == 0x400) | **works on the camera**: a cable-started boot skips the plugin, a power-button boot runs it |
-| card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | static analysis and simulator (`tests/test_log_sim.py`); not run on the camera |
+| card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | **on the camera**: the gate closed on a cable plugged into a running E-PL3; reopening after the USB session corrupted the FAT (2026-10-19), so the gate now stays closed until power-off once a cable was seen; that rule: simulator (`tests/test_log_sim.py`, `tests/test_cfg_sim.py`) |
 | E-M10 II hooks (`arch/em10ii/hooks.c`, CPU0 I-cache invalidate) | simulator (`tests/test_sim.py`, `hooks_em10ii`); camera probes `icprobe` then `hookprobe` not run |
 
 ## Development loop
@@ -160,21 +160,32 @@ functions (`arch/epl3/usb.c`, CPU0 task context, not CPU1; linked only when used
   uses (`pcsub_is_usb_connected` 0x6EE194E8). The key state is set by the GIO interrupt, before USB
   enumeration and long before the PC can mount the card. A function call, not a RAM read: the byte and
   bit of 0x400 in the key state bytes (0x605519BC/BD) are not established.
-- `fenykl_card_io_allowed()`: `!fenykl_usb_cable_present() && fat_mounted[0] == 1` (u16 0x6059C978):
-  after the cable is pulled the camera unmounts and remounts the card; writing is safe again once it
-  has mounted it.
+- `fenykl_card_mounted()`: `fat_mounted[0] == 1` (u16 0x6059C978).
+
+The gate itself is shared (`lib/card.c`, CPU0 task context): `fenykl_card_io_allowed()` is false
+while the card is not mounted, and **from the first check that sees a cable (or a boot started by the
+cable, `fenykl_usb_attached`) until power-off**; `fenykl_card_usb_seen()` tells that case apart.
+
+Why not reopen after the cable is pulled: on the E-PL3 (2026-10-19) the gate closed for a USB session
+in which the PC deleted `FENYKL.LOG`, wrote a new `FENYKL.BIN` and unmounted the card cleanly. After
+the cable was pulled `fat_mounted[0]` read 1 again, the gate reopened and the logging library wrote
+`FENYKL.LOG`. The camera wrote back its FAT state from before the session: `fsck.fat` found the
+directory entry of `FENYKL.BIN` pointing at a cluster the FAT marks free (chain length 0) and the
+dirty bit set. `fat_mounted[0] == 1` does not mean the camera re-read the card after the PC changed
+it. Records and dirty config values stay in RAM until power-off; the next boot writes nothing of them.
 
 This also covers a camera switched on with the power button while the cable is in (the boot check
 above lets the plugin run).
 
 **Rule: a plugin that does its own file writes checks `fenykl_card_io_allowed()` before each
 open/write/close batch, skips the batch (keeps or drops the data in RAM) while it is false, and never
-keeps a file open.** The remaining window is one batch (milliseconds) against the second or more the
+keeps a file open.** Once it was false because of a cable it stays false until power-off. The remaining window is one batch (milliseconds) against the second or more the
 PC needs to enumerate and mount the card. The logging library does this for its flushes
 (`docs/logging.md` section 5.1). The example projects that write files themselves do not check it
 yet (no migration): do not plug the cable into a camera that runs them.
 
-Status: unproven. The signals come from static analysis; no camera test yet.
+Status: the closing on a cable works on the E-PL3 (2026-10-19); the reopening corrupted the FAT and
+is gone. The stay-closed rule is simulator-tested only.
 
 ### `plugin.toml`
 
@@ -241,7 +252,8 @@ if (fp) {
 
 - Open, write, close per batch; never keep a file open (the card may be unmounted for USB, or pulled).
 - Check `fenykl_card_io_allowed()` before each batch and skip it while false: a USB cable plugged in
-  at run time hands the card to the PC (Startup and USB boots, card gate).
+  at run time hands the card to the PC, and the gate stays closed until power-off after it (Startup
+  and USB boots, card gate).
 - Mode `"w"` is the one proven on the camera, but it does **not truncate**: it overwrites from the start
   and an older, longer file keeps its tail (seen 2026-10-13: one probe's log followed by the rest
   of an earlier, longer log). Delete `FENYKL.LOG` on the PC before a run, or end the log with a clear marker.
@@ -739,6 +751,7 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | `lib/` | SDK library, linked into every plugin (`--gc-sections` drops what is unused) |
 | `lib/start.c` | clears `.bss`, skips a USB boot (`fenykl_usb_attached`, `run_on_usb`), calls `plugin_main` |
 | `lib/string.c` | `memcpy`, `memmove`, `memset`, `memcmp` |
+| `lib/card.c` | card gate `fenykl_card_io_allowed`: closed while the card is not mounted and until power-off once a cable was seen |
 | `lib/log.c`, `lib/log_rec.c`, `lib/log_int.h` | logging library: `log_rec.c` record writers (CPU1 code, both cores), `log.c` flusher, init, tee; design `docs/logging.md` |
 | `docs/logging.md` | logging library reference |
 | `lib/cfg.c` | configuration library: load, parser, save, saver task; doc `docs/config.md` |
@@ -756,7 +769,7 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | `arch/epl3/hooks.c` | `fenykl_hook_install` / `..._remove` (compiled into every plugin) |
 | `arch/epl3/cpu1.c` | `fenykl_cpu1_start` / `..._state` / `..._stop`, the worker stack and the shared stop flag (compiled into every plugin) |
 | `arch/epl3/slots.c` | `fenykl_slot_replace` / `..._restore`, `fenykl_vtable_attach` / `..._detach` (compiled into every plugin) |
-| `arch/epl3/usb.c` | `fenykl_usb_attached`: power-on factor 0x60551630 == 0x400 (compiled into every plugin) |
+| `arch/epl3/usb.c` | `fenykl_usb_attached`: power-on factor 0x60551630 == 0x400; `fenykl_usb_cable_present`, `fenykl_card_mounted` for the card gate (compiled into every plugin) |
 | `projects/*/plugin.toml` | cameras the example is written for (`epl3`; `hello`: both; `bootprobe`, `menuprobe1`, `menuprobe2`, `guiprobe`, `icprobe`, `hookprobe`: `em10ii`) |
 | `arch/em10ii/` | E-M10 II: `target.toml`, `firmware.toml`, `loader/`, `crt0.S`, `link.ld` (0x60DA501C, 0x67000 incl. header), `fenykl_target.h` (`FENYKL_LIB_TASK_PRIO` 55, `fenykl_dcache_flush`, `struct fenykl_slot`, the I-cache API), `usb.c` (card gate), `slots.c` (slot replace/restore), `hooks.c` (hook install/remove, CPU0 I-cache invalidate) |
 | `projects/` | the example and experiment plugins, indexed in `projects/README.md` |
@@ -769,7 +782,8 @@ payload. Loaders older than this format reject `FNL2` files as well.
    `FENYKL_TASK`, `hooks.c` and a thunk/hook generator: `py/fenykl/fwapi.py` only knows MN10300 GCC->Panasonic thunks.
    Omit `isa_check` if there is none.
 3. Implement `int fenykl_usb_attached(void)` (`include/fenykl.h`) in `arch/<camera>/`; it returns
-   0 if the camera cannot tell a boot started by the USB cable.
+   0 if the camera cannot tell a boot started by the USB cable. Implement `fenykl_usb_cable_present`
+   and `fenykl_card_mounted` there too: the shared card gate (`lib/card.c`) is built on them.
 4. List the SDK features it supports in `capabilities` (`target.toml`). Each becomes
    `FENYKL_HAS_<NAME>=1` in every compile, next to `FENYKL_TARGET_<CAMERA>=1`. epl3 has `cpu1` (the
    CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.

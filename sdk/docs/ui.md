@@ -42,7 +42,8 @@ How:
   title (tab D) carries the header "Fenykl: not saved". All 21 ids are checked against the
   firmware's item table at install.
 - **Header:** lang id 0x122 ("Fenykl", the overridden Eye-Fi title), or "Fenykl: not saved"
-  while a change is dirty and the card gate is closed or a save failed since the page opened. The
+  while a change is dirty and the card gate is closed (after a USB cable: until power-off) or a
+  save failed since the page opened. The
   header follows at the next key (the slot is published only from GUI actions).
 - **Tab column and footer** stay as the stock J list wrote them (tabs H, I, J; "Back MENU",
   "Set OK").

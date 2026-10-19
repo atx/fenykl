@@ -95,7 +95,9 @@ crc=8A7B3C1D
   changes since the last completed save.
 - **Card gate**: saves and loads check `fenykl_card_io_allowed()`; closed means dirty values
   stay in RAM (closures are logged and counted). Init with a closed gate applies defaults; the
-  saver loads at the first open gate, and options set meanwhile keep their RAM value.
+  saver loads at the first open gate, and options set meanwhile keep their RAM value. Once a USB
+  cable was seen the gate stays closed until power-off (README, card gate): changes made after
+  that, or still unsaved then, are lost at power-off.
 - **Import:** `C:\FENYKL.CFG` (plain `name=value` lines, no header or CRC, `\r\n` allowed) is read
   after the slots and applied with the same parser (unknown names are carried as in a slot), marks
   the config dirty and is deleted after the next completed save. Hand-editing CF0/CF1 is not
