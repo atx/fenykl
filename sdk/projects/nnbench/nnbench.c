@@ -9,6 +9,7 @@
  *   R st=<stage> k=<family> v=<variant> <param>=<value>... m=<mode> it=<calls per rep> reps=<n>
  *     us=<min>/<median> (per rep) cyc=<min>/<median> (per call) ops=<n> <unit> ops2=<n> <unit2>
  *     code=<bytes> chk=OK|BAD|- bad=<mismatching outputs> [live modes: frame=<slot> hash=<x> tries=<n>]
+ *     [split generated code: blocks=<n> sizes=<bytes>,<bytes>...]
  *   R st=<stage> k=<family> v=<variant> ci=<case> chk=BAD|SKIP err=<reason>
  *   I c=<core> st=<stage> kind=<kind> us=<min>/<median> ops=<n> got=<x> want=<x> mdr=<x> hi=<x>
  *     chk=OK|BAD|- name=<the rest of the line>
@@ -114,6 +115,14 @@ static void nb_log_case(const struct nb_row *r)
 	if (k->mode >= NB_LIVE) {
 		p += nb_len(p);
 		fw_sprintf(p, " frame=%08x hash=%08x tries=%u", r->got, r->want, r->got2);
+	}
+	if (r->nblk) {
+		p += nb_len(p);
+		fw_sprintf(p, " blocks=%u sizes=", r->nblk);
+		for (unsigned int i = 0; i < r->nblk; i++) {
+			p += nb_len(p);
+			fw_sprintf(p, i ? ",%u" : "%u", r->blk[i]);
+		}
 	}
 	nb.bad += r->status == NB_BAD;
 	nb_emit();

@@ -46,19 +46,19 @@ static void nb_pool_setup(struct nb_run *r)
 
 static void NB_HOT nb_run_pool(struct nb_run *r)
 {
-	unsigned int c = r->p[NB_POOL_C], h = r->p[NB_POOL_H], w = r->p[NB_POOL_W];
+	unsigned int c = r->p[NB_POOL_C], h = r->p[NB_POOL_H], w = r->p[NB_POOL_W], n = h * w;
 	const uint8_t *in = r->rin;
 	uint8_t *d = r->out;
 
-	if (!h || !w)
+	if (!n)
 		return;
 	if (r->p[NB_POOL_OP] == NB_POOL_GAP) {
-		for (unsigned int i = 0; i < c; i++, in += h * w) {
+		for (unsigned int i = 0; i < c; i++, in += n) {
 			uint32_t s = 0;
 
-			for (unsigned int j = 0; j < h * w; j++)
+			for (unsigned int j = 0; j < n; j++)
 				s += in[j];
-			d[i] = (uint8_t)((s + h * w / 2) / (h * w));
+			d[i] = (uint8_t)((s + n / 2) / n);
 		}
 		return;
 	}
@@ -83,18 +83,8 @@ static int nb_ok_pool_w(const struct nb_run *r)
 	return r->p[NB_POOL_OP] != NB_POOL_GAP && r->p[NB_POOL_W] % 8 == 0;
 }
 
-/* Per byte lane max(a, b): the borrow of a - b per lane (Hacker's Delight 2-18) as a mask. */
-static inline uint32_t nb_max_u8x4(uint32_t a, uint32_t b)
-{
-	const uint32_t h = 0x80808080u;
-	uint32_t d = ((a | h) - (b & ~h)) ^ ((a ^ ~b) & h);
-	uint32_t lt = ((~a & b) | (~(a ^ b) & d)) & h;
-
-	return a ^ ((a ^ b) & ((lt << 1) - (lt >> 7)));
-}
-
-/* Word loads, 8 input columns per step: max2 as SWAR byte maxes (the two rows, then the even
-   and odd columns), avg2 as 16-bit lane sums (as prep box2 cw). */
+/* Word loads, 8 input columns per step: max2 by nb_maxpool2_row (nb_kern.h), avg2 as 16-bit lane
+   sums (as prep box2 cw). */
 static void NB_HOT nb_run_pool_w(struct nb_run *r)
 {
 	unsigned int c = r->p[NB_POOL_C], h = r->p[NB_POOL_H], w = r->p[NB_POOL_W];
@@ -104,16 +94,12 @@ static void NB_HOT nb_run_pool_w(struct nb_run *r)
 	for (unsigned int i = 0; i < c * h / 2; i++, in += w / 2) {
 		const uint32_t *a = in, *b = in + w / 4;
 
+		if (r->p[NB_POOL_OP] == NB_POOL_MAX2) {
+			nb_maxpool2_row(a, b, (uint32_t *)d, w);
+			d += w / 2;
+			continue;
+		}
 		for (unsigned int x = 0; x < w / 8; x++, a += 2, b += 2, d += 4) {
-			if (r->p[NB_POOL_OP] == NB_POOL_MAX2) {
-				uint32_t v1 = nb_max_u8x4(a[0], b[0]), v2 = nb_max_u8x4(a[1], b[1]);
-				uint32_t e = (v1 & 0x00FF00FFu) | (v2 & 0x00FF00FFu) << 8;
-				uint32_t o = (v1 >> 8 & 0x00FF00FFu) | (v2 & 0xFF00FF00u);
-				uint32_t m = nb_max_u8x4(e, o);	/* bytes: out 0, 2, 1, 3 */
-
-				*(uint32_t *)d = (m & 0xFF0000FFu) | (m >> 8 & 0xFF00u) | (m << 8 & 0xFF0000u);
-				continue;
-			}
 			for (unsigned int k = 0; k < 2; k++) {
 				uint32_t l = (a[k] & 0x00FF00FFu) + (a[k] >> 8 & 0x00FF00FFu) +
 					     (b[k] & 0x00FF00FFu) + (b[k] >> 8 & 0x00FF00FFu) + 0x00020002u;

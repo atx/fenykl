@@ -120,6 +120,9 @@ static void nb_measure(struct nb_run *r, struct nb_clock *c, struct nb_row *row)
 	row->ops = r->ops;
 	row->ops2 = r->ops2;
 	row->code = r->code;
+	row->nblk = r->nblk;
+	for (uint32_t i = 0; i < r->nblk; i++)
+		row->blk[i] = r->blk[i];
 }
 
 static void nb_push(volatile struct nb_shared *sh, const struct nb_row *row)

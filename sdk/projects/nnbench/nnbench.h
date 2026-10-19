@@ -12,8 +12,8 @@
 #define NNBENCH_H
 
 #include <fenykl.h>
+#include "nb_kern.h"
 
-#define NB_HOT __attribute__((optimize("O2", "no-tree-loop-distribute-patterns")))
 #define NB_NP 10		/* parameters per case */
 
 /* 32-bit low-word multiply in one cycle (udf00 on this core; GCC's `*` emits the slow mul). */
@@ -21,15 +21,6 @@ static inline int32_t nb_mul(int32_t a, int32_t b)
 {
 	__asm__("udf00 %1,%0" : "+d"(a) : "d"(b));
 	return a;
-}
-
-static inline uint8_t nb_u8(int32_t v)
-{
-	if (v < 0)
-		return 0;
-	if (v > 255)
-		return 255;
-	return (uint8_t)v;
 }
 
 enum nb_mode {
@@ -78,14 +69,14 @@ struct nb_fam {
 struct nb_case {
 	uint8_t fam;		/* enum nb_fam_id */
 	uint8_t mode;
-	uint16_t p[NB_NP];
+	uint32_t p[NB_NP];
 };
 
 /* A generated kernel (gen_kernels.py, nb_gen.S / nb_gen.c). */
 struct nb_gen {
 	uint8_t fam;
 	uint8_t px;		/* output pixels per call (ternary: 4) */
-	uint16_t p[NB_NP];	/* the case parameters it implements */
+	uint32_t p[NB_NP];	/* the case parameters it implements */
 	void (*fn)(const void *in, void *out);
 	const char *beg, *end;	/* its code */
 };
@@ -94,11 +85,13 @@ extern const unsigned int nb_ngen;
 
 typedef void nb_tick_fn(struct nb_run *r);
 
+#define NB_BLK_MAX 8u	/* code blocks of a split generated variant */
+
 struct nb_run {
 	const struct nb_case *k;
 	const struct nb_fam *f;
 	const struct nb_var *v;
-	const uint16_t *p;
+	const uint32_t *p;
 	const struct nb_gen *gen;	/* the generated kernel of a gen variant */
 	/* setup: logical data */
 	uint8_t *src, *src2;
@@ -113,6 +106,8 @@ struct nb_run {
 	void *aux;
 	void *out, *ref;
 	uint32_t code;			/* code bytes of a generated variant */
+	uint32_t nblk;			/* its blocks run one after the other (0: not split) */
+	uint16_t blk[NB_BLK_MAX];	/* code bytes per block */
 	/* Called by long kernels once per output row; may sleep (bench.c). */
 	nb_tick_fn *tick;
 	void *tick_ctx;
@@ -136,6 +131,7 @@ enum nb_fam_id {
 	NB_F_MEM,	/* memcpy, memset, strided reads */
 	NB_F_ICACHE,	/* straight-line code of a given size (nnbench only) */
 	NB_F_BDNET,	/* the bird detector network as shipped (birddetect/net.c, nnbench only) */
+	NB_F_TSPLIT,	/* a trained ternary layer, generated code split into blocks (nnbench3 only) */
 	NB_FAMS,
 };
 /* The plan (plan.c of each plugin): its name, its families (NULL: not linked), the stages. */
@@ -157,10 +153,18 @@ struct nb_geo {
 	unsigned int ho, wo;
 	unsigned int taps;	/* weights per output channel */
 };
-void nb_geo(const uint16_t *p, struct nb_geo *g);
+void nb_geo(const uint32_t *p, struct nb_geo *g);
 /* Deterministic weights [o][i][ky][kx] (i over 1 channel if depthwise), bias with the rounding
    term, shift; gen_kernels.py computes the same. */
-void nb_conv_weights(const uint16_t *p, int8_t *w, int32_t *b, uint8_t *s);
+void nb_conv_weights(const uint32_t *p, int8_t *w, int32_t *b, uint8_t *s);
+/* conv variants other families reuse on r->w, r->b, r->s: the plain C reference over padded CHW
+   planes, the pair words, pair_tab_asm (any non-zero count per output channel). */
+void nb_prep_chw(struct nb_run *r);
+void nb_conv_c(struct nb_run *r);
+uint32_t nb_get_chw(const struct nb_run *r, const void *buf, uint32_t i);
+void nb_pair_input(struct nb_run *r);
+void nb_prep_pair_tab(struct nb_run *r);
+void nb_conv_pair_tab_asm(struct nb_run *r);
 
 /* --- the case runner (cases.c), shared by bench.c and the simulator test --- */
 
@@ -185,7 +189,7 @@ void nb_arena_release(uint32_t mark);
 void *nb_alloc(uint32_t bytes);
 uint32_t nb_rand(uint32_t *x);
 void nb_fill_u8(uint8_t *p, uint32_t n, uint32_t seed);
-uint32_t nb_seed(const uint16_t *p, unsigned int fam);
+uint32_t nb_seed(const uint32_t *p, unsigned int fam);
 uint32_t nb_min(const uint32_t *v, unsigned int n);
 /* Sorts v. */
 uint32_t nb_median(uint32_t *v, unsigned int n);
@@ -227,6 +231,8 @@ struct nb_row {
 	uint32_t ops, ops2;	/* per call */
 	uint32_t bad;		/* mismatching outputs */
 	uint32_t code;
+	uint32_t nblk;
+	uint16_t blk[NB_BLK_MAX];
 	const char *name;	/* isa rows (rodata) */
 	uint32_t got, want, got2, want2;	/* live rows: frame, hash, tries */
 };

@@ -11,7 +11,7 @@
  */
 #include "nnbench.h"
 
-void nb_geo(const uint16_t *p, struct nb_geo *g)
+void nb_geo(const uint32_t *p, struct nb_geo *g)
 {
 	g->cin = p[NB_CIN];
 	g->cout = p[NB_COUT];
@@ -41,7 +41,7 @@ static unsigned int nb_shift(unsigned int n, unsigned int base)
 	return s;
 }
 
-void nb_conv_weights(const uint16_t *p, int8_t *w, int32_t *b, uint8_t *s)
+void nb_conv_weights(const uint32_t *p, int8_t *w, int32_t *b, uint8_t *s)
 {
 	struct nb_geo g;
 	uint32_t x = nb_seed(p, NB_F_CONV);
@@ -115,7 +115,7 @@ static void nb_store(struct nb_run *r, uint32_t i, int32_t acc, unsigned int s)
 
 /* --- chw: the reference (plain C) and the same loop with the udf00 multiply --- */
 
-static void nb_prep_chw(struct nb_run *r)
+void nb_prep_chw(struct nb_run *r)
 {
 	struct nb_geo g;
 	uint8_t *d;
@@ -134,7 +134,7 @@ static void nb_prep_chw(struct nb_run *r)
 }
 
 #define NB_CONV_CHW(fn, MUL)							\
-	static void NB_HOT fn(struct nb_run *r)					\
+	void NB_HOT fn(struct nb_run *r)					\
 	{									\
 		struct nb_geo g;						\
 		const uint8_t *in = r->rin;					\
@@ -167,9 +167,9 @@ static void nb_prep_chw(struct nb_run *r)
 
 #define NB_MUL_C(a, b) ((a) * (b))
 NB_CONV_CHW(nb_conv_c, NB_MUL_C)
-NB_CONV_CHW(nb_conv_cu, nb_mul)
+static NB_CONV_CHW(nb_conv_cu, nb_mul)
 
-static uint32_t nb_get_chw(const struct nb_run *r, const void *buf, uint32_t i)
+uint32_t nb_get_chw(const struct nb_run *r, const void *buf, uint32_t i)
 {
 	if (r->p[NB_FL] & NB_FL_RAW)
 		return ((const uint32_t *)buf)[i];
@@ -381,7 +381,7 @@ static int nb_ok_pair_i4(const struct nb_run *r)
 	       nb_ok_pair(r, 2);
 }
 
-static void nb_pair_input(struct nb_run *r)
+void nb_pair_input(struct nb_run *r)
 {
 	struct nb_geo g;
 	const uint8_t *p;
@@ -408,24 +408,28 @@ static uint16_t nb_pair_off(const struct nb_geo *g, unsigned int o, unsigned int
 	return (uint16_t)(4 * ((c * g->hp + ky * g->d) * g->wp + kx * g->d));
 }
 
-/* Bytes of the pair_tab tables (word aligned), then pair_tab_asm's row of group sums. */
-static uint32_t nb_pair_tab_bytes(const struct nb_run *r, const struct nb_geo *g)
+/* aux: pair_tab_asm's row of group sums (2 words per group of 4 pixels), then npos[cout],
+   nneg[cout] and per channel the + offsets and the - offsets (birddetect's struct bd_tern built at
+   run time). */
+static uint16_t *nb_pair_tab(const struct nb_run *r, const struct nb_geo *g)
 {
-	return (2 * (2 * g->cout + g->cout * r->p[NB_NZ]) + 3) & ~3u;
+	return (uint16_t *)((uint8_t *)r->aux + 2 * g->wo);
 }
 
-/* aux: npos[cout], nneg[cout], then per channel the + offsets and the - offsets (birddetect's
-   struct bd_tern built at run time), then 2 words per group of 4 pixels of a row. */
-static void nb_prep_pair_tab(struct nb_run *r)
+void nb_prep_pair_tab(struct nb_run *r)
 {
 	struct nb_geo g;
+	uint32_t nz = 0;
 	uint16_t *t;
 
 	nb_geo(r->p, &g);
 	nb_pair_input(r);
-	t = r->aux = nb_alloc(nb_pair_tab_bytes(r, &g) + 2 * g.wo);
-	if (!t || !r->in)
+	for (uint32_t i = 0; i < g.cout * g.taps; i++)
+		nz += r->w[i] != 0;
+	r->aux = nb_alloc(2 * g.wo + 2 * (2 * g.cout + nz));
+	if (!r->aux || !r->in)
 		return;
+	t = nb_pair_tab(r, &g);
 	uint16_t *off = t + 2 * g.cout;
 	for (unsigned int o = 0; o < g.cout; o++) {
 		const int8_t *w = r->w + o * g.taps;
@@ -440,20 +444,16 @@ static void nb_prep_pair_tab(struct nb_run *r)
 	}
 }
 
-static inline uint8_t nb_lane(uint32_t lane, unsigned int s)
-{
-	return nb_u8(((int32_t)lane - 0x8000) >> s);
-}
-
 /* birddetect's bd_tern (net.c) on run-time offset lists, 4 outputs per pass. */
 static void NB_HOT nb_conv_pair_tab(struct nb_run *r)
 {
 	struct nb_geo g;
-	const uint16_t *t = r->aux, *off;
+	const uint16_t *t, *off;
 	const uint32_t *in = r->rin;
 	uint8_t *out = r->out;
 
 	nb_geo(r->p, &g);
+	t = nb_pair_tab(r, &g);
 	off = t + 2 * g.cout;
 	for (unsigned int o = 0; o < g.cout; o++) {
 		const uint16_t *pos = off, *pend = off + t[o], *nend = pend + t[g.cout + o];
@@ -491,27 +491,18 @@ static void NB_HOT nb_conv_pair_tab(struct nb_run *r)
 	}
 }
 
-/* nb_kern.S: one output row of one channel. */
-struct nb_tern_job {
-	const void *row;
-	const uint16_t *off;
-	uint32_t npos, nneg, init, groups;
-	uint32_t *out;
-};
-void nb_tern_rows(struct nb_tern_job *j);
-
 /* nb_conv_pair_tab with the offset loops in asm, one call per output row. */
-static void NB_HOT nb_conv_pair_tab_asm(struct nb_run *r)
+void NB_HOT nb_conv_pair_tab_asm(struct nb_run *r)
 {
 	struct nb_geo g;
-	const uint16_t *t = r->aux, *off;
+	const uint16_t *t, *off;
 	const uint32_t *in = r->rin;
 	uint8_t *out = r->out;
-	uint32_t *acc;
+	uint32_t *acc = r->aux;
 
 	nb_geo(r->p, &g);
+	t = nb_pair_tab(r, &g);
 	off = t + 2 * g.cout;
-	acc = (uint32_t *)((uint8_t *)r->aux + nb_pair_tab_bytes(r, &g));
 	for (unsigned int o = 0; o < g.cout; o++) {
 		struct nb_tern_job j = { .off = off, .npos = t[o], .nneg = t[g.cout + o],
 					 .init = (uint32_t)(0x8000 + r->b[o]) * 0x10001u };

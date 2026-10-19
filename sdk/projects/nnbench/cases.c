@@ -52,7 +52,7 @@ void nb_fill_u8(uint8_t *p, uint32_t n, uint32_t seed)
 		p[i] = nb_fill_kind == 1 ? 255 : nb_fill_kind == 2 ? 0 : (uint8_t)nb_rand(&seed);
 }
 
-uint32_t nb_seed(const uint16_t *p, unsigned int fam)
+uint32_t nb_seed(const uint32_t *p, unsigned int fam)
 {
 	uint32_t x = 0x9E3779B9u ^ fam;
 
@@ -121,6 +121,7 @@ int nb_var_begin(struct nb_run *r, unsigned int vi)
 	r->gen = NULL;
 	r->aux = NULL;
 	r->code = 0;
+	r->nblk = 0;
 	if (r->v->ok && !r->v->ok(r))
 		return 0;
 	r->v->prep(r);

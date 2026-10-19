@@ -1,0 +1,6 @@
+targets = ["epl3"]
+
+# nnbench's harness and kernels (the one-line .c / .S files include them from ../nnbench) with this
+# plugin's plan.c, the tsplit family and the kernels gen_kernels.py generates from a fenykl-nn
+# handoff (nb_gen.*). Built with FENYKL_CPU1 like nnbench's.
+cpu1_sources = ["bench.c", "isa.c", "cases.c", "plan.c", "nb_kern.S", "fam_conv.c", "fam_misc.c", "fam_tsplit.c", "nb_gen.c", "nb_gen.S"]

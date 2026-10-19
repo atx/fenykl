@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turns the FENYKL.LOGs of nnbench and nnbench2 into one markdown cost table and a CSV (stdlib
+"""Turns the FENYKL.LOGs of nnbench, nnbench2 and nnbench3 into one markdown cost table and a CSV (stdlib
 only).
 
 Usage: python3 nnbench_report.py LOG [LOG ...] [--out PREFIX]   (writes PREFIX.md and PREFIX.csv;
@@ -9,7 +9,8 @@ Reads the last run of each plugin in the logs (the R, I and clock lines, nnbench
 call are the camera's (the CPU1 clock measured by that run's calib stage); per-op costs divide them
 by the row's op counts. The tables are per kernel family, the rows of a case from both runs next to
 each other (column run). Per family, variant and mode with several sizes, a least-squares fit
-cycles = a + b * ops gives the fixed cost a and the cost per op b.
+cycles = a + b * ops gives the fixed cost a and the cost per op b. The split ternary layers
+(family tsplit, nnbench3) get a summary: Mcycles per layer per variant against pair_tab_asm.
 """
 
 import argparse
@@ -40,6 +41,8 @@ FIXED = (
     "frame",
     "hash",
     "tries",
+    "blocks",
+    "sizes",
 )
 ISA_PAIR = 2  # enum nb_isa_kind
 ISA_EMPTY = 0
@@ -69,6 +72,8 @@ class Row:
     err: str = ""
     run: str = ""
     live: str = ""  # live modes: frame slot, hash, checks tried
+    blocks: int = 0  # split generated code: blocks run one after the other
+    sizes: str = ""  # their code bytes, comma-separated
 
     def per_op(self, n: int) -> float | None:
         return self.cyc_min / n if n and not self.err else None
@@ -134,6 +139,8 @@ def parse_r(text: str) -> Row:
         bad=int(kv.get("bad", 0)),
         err=err,
         live=" ".join(f"{k}={kv[k]}" for k in ("frame", "hash", "tries") if k in kv),
+        blocks=int(kv.get("blocks", 0)),
+        sizes=kv.get("sizes", ""),
     )
 
 
@@ -213,6 +220,33 @@ def case_key(r: Row) -> tuple:
     return (tuple(r.params.items()), r.mode)
 
 
+def split_summary(rows: list[Row]) -> list[str]:
+    """Per tsplit case: every variant's Mcycles per layer (one call is one layer) and its speedup
+    over pair_tab_asm on the same case."""
+    split = [r for r in rows if r.kernel == "tsplit" and not r.err]
+    if not split:
+        return []
+    out = [
+        "",
+        "## split ternary layers (tsplit)",
+        "",
+        "One call is one layer. x tab: pair_tab_asm's min cycles over the variant's.",
+        "",
+        "| run | stage | params | mode | variant | blocks | code B | Mcyc min | Mcyc med | x tab | check |",
+        "|---|---|---|---|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for key in dict.fromkeys((r.run, r.stage, case_key(r)) for r in split):
+        case = [r for r in split if (r.run, r.stage, case_key(r)) == key]
+        tab = next((r.cyc_min for r in case if r.variant == "pair_tab_asm"), 0)
+        for r in case:
+            speedup = fmt(tab / r.cyc_min, 2) if tab and r.cyc_min else ""
+            out.append(
+                f"| {r.run} | {r.stage} | {param_text(r)} | {r.mode} | {r.variant} | {r.blocks or ''} | "
+                f"{r.code or ''} | {r.cyc_min / 1e6:.3f} | {r.cyc_med / 1e6:.3f} | {speedup} | {r.check} |"
+            )
+    return out
+
+
 def markdown(runs: list[Run]) -> str:
     out = ["# nnbench cost table", ""]
     for run in runs:
@@ -254,8 +288,8 @@ def markdown(runs: list[Run]) -> str:
             "",
             f"## {kernel}",
             "",
-            "| run | stage | variant | params | mode | ops | unit | cyc min | cyc med | cyc/op | ops2 | unit2 | cyc/op2 | code B | check |",
-            "|---|---|---|---|---|---:|---|---:|---:|---:|---:|---|---:|---:|---|",
+            "| run | stage | variant | params | mode | ops | unit | cyc min | cyc med | cyc/op | ops2 | unit2 | cyc/op2 | code B | blocks B | check |",
+            "|---|---|---|---|---|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|",
         ]
         for r in rows:
             check = r.check if not r.err else f"{r.check} ({r.err})"
@@ -266,7 +300,7 @@ def markdown(runs: list[Run]) -> str:
             out.append(
                 f"| {r.run} | {r.stage} | {r.variant} | {param_text(r)} | {r.mode} | {r.ops} | {r.ops_unit} | "
                 f"{r.cyc_min} | {r.cyc_med} | {fmt(r.per_op(r.ops))} | {r.ops2} | {r.ops2_unit} | "
-                f"{fmt(r.per_op(r.ops2))} | {r.code or ''} | {check} |"
+                f"{fmt(r.per_op(r.ops2))} | {r.code or ''} | {r.sizes} | {check} |"
             )
         fits = []
         groups: dict[tuple[str, str], list[Row]] = {}
@@ -288,6 +322,7 @@ def markdown(runs: list[Run]) -> str:
                 "|---|---|---|---:|---:|---:|",
                 *fits,
             ]
+    out += split_summary(rows_all)
     for run in runs:
         if not run.isa:
             continue
@@ -311,7 +346,7 @@ def write_csv(rows: list[Row], path: Path) -> None:
     pnames = list(dict.fromkeys(k for r in rows for k in r.params))
     cols = ["run", "stage", "kernel", "variant", *pnames, "mode", "iters", "reps"]
     cols += ["us_min", "us_med", "cyc_min", "cyc_med", "ops", "ops_unit", "ops2", "ops2_unit"]
-    cols += ["cyc_per_op", "cyc_per_op2", "code", "check", "bad", "err", "live"]
+    cols += ["cyc_per_op", "cyc_per_op2", "code", "blocks", "sizes", "check", "bad", "err", "live"]
     with path.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(cols)
@@ -321,7 +356,7 @@ def write_csv(rows: list[Row], path: Path) -> None:
                 + [r.params.get(p, "") for p in pnames]
                 + [r.mode, r.iters, r.reps, r.us_min, r.us_med, r.cyc_min, r.cyc_med]
                 + [r.ops, r.ops_unit, r.ops2, r.ops2_unit]
-                + [fmt(r.per_op(r.ops)), fmt(r.per_op(r.ops2)), r.code]
+                + [fmt(r.per_op(r.ops)), fmt(r.per_op(r.ops2)), r.code, r.blocks or "", r.sizes]
                 + [r.check, r.bad, r.err, r.live]
             )
 

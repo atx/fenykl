@@ -1,7 +1,8 @@
-"""nnbench and nnbench2 (sdk/projects/nnbench, nnbench2): their kernels in the GDB simulator
-against the C references with each plugin's plan (tests/sim/nnbench/test_nnbench.c, bit-exact), a
-broken kernel caught, the generated kernels current with gen_kernels.py, and the log report on
-synthetic logs of both plugins."""
+"""nnbench, nnbench2 and nnbench3 (sdk/projects/nnbench, nnbench2, nnbench3): their kernels in the
+GDB simulator against the C references with each plugin's plan (tests/sim/nnbench/test_nnbench.c,
+bit-exact; nnbench3: trained ternary layers whole and split into blocks), a broken kernel caught,
+the generated kernels current with gen_kernels.py (nnbench3's need the fenykl-nn handoff and are not
+regenerated here), and the log report on synthetic logs."""
 
 import csv
 import shutil
@@ -24,7 +25,9 @@ from fenykl import sdk
 
 PROJECTS = sdk.SDK / "projects"
 PROJECT = PROJECTS / "nnbench"
-PLUGINS = ["nnbench", "nnbench2"]
+PLUGINS = ["nnbench", "nnbench2", "nnbench3"]
+# gen_kernels.py from its own parameters alone
+GENERATED = ["nnbench", "nnbench2"]
 # The pure kernel and case code; bench.c, isa.c and nnbench.c call the firmware, fam_bdnet.c is
 # birddetect's network (tests/test_birddetect_sim.py). nnbench2's files include nnbench's.
 KERNELS = {
@@ -45,6 +48,16 @@ KERNELS = {
         "fam_conv.c",
         "fam_dot.c",
         "fam_misc.c",
+        "nb_gen.c",
+        "nb_gen.S",
+        "nb_kern.S",
+    ],
+    "nnbench3": [
+        "cases.c",
+        "plan.c",
+        "fam_conv.c",
+        "fam_misc.c",
+        "fam_tsplit.c",
         "nb_gen.c",
         "nb_gen.S",
         "nb_kern.S",
@@ -99,8 +112,16 @@ BREAKS = [
     ("nnbench", "nnbench/nb_kern.S", "\tasr\t28,d1\n", "\tasr\t27,d1\n", "i4_asm"),
     ("nnbench", "nnbench/nb_kern.S", "\tasr\t16,d2\n", "\tasr\t15,d2\n", "i4_lut"),
     ("nnbench", "nnbench/nb_kern.S", "\tand\t0x3C,d0\n", "\tand\t0x38,d0\n", "i2_lut"),
-    ("nnbench", "nnbench/fam_misc.c", "((lt << 1) - (lt >> 7))", "(lt << 1)", "cw"),
+    ("nnbench", "nnbench/nb_kern.h", "((lt << 1) - (lt >> 7))", "(lt << 1)", "cw"),
     ("nnbench2", "nnbench2/nb_gen.S", "\tM4S\td1,a3,\\w\n", "\tM4S\td1,a2,\\w\n", "gen4"),
+    # one block of one split reads its input a pixel off
+    (
+        "nnbench3",
+        "nnbench3/nb_gen.S",
+        "_nb3_l5_split7_3:\n\tmovm [d2,d3],(sp)\n\tmov d0,a0\n",
+        "_nb3_l5_split7_3:\n\tmovm [d2,d3],(sp)\n\tmov d0,a0\n\tadd 4,a0\n",
+        "split7",
+    ),
 ]
 
 
@@ -124,7 +145,7 @@ def test_a_broken_kernel_fails(tmp_path, plugin, name, original, broken, variant
     assert f" v={variant} " in out, out[-2000:]
 
 
-@pytest.mark.parametrize("plugin", PLUGINS)
+@pytest.mark.parametrize("plugin", GENERATED)
 def test_generated_kernels_are_current(tmp_path, plugin):
     subprocess.run(
         [sys.executable, str(PROJECT / "gen_kernels.py"), plugin, str(tmp_path)],
@@ -214,3 +235,28 @@ def test_report_on_a_synthetic_log(tmp_path):
     # cycles = a + b * ops over the two gen rows: a = 0, b = 79450 / 147456
     assert "| conv | gen | warm | 2 | 0 | 0.539 |" in md
     assert "(12 wrong)" in md
+
+
+SYNTHETIC_LOG3 = """\
+[     0.050000] I nnb    : nnbench3, load 6ea70000 size 41980, log init 0
+[     3.187774] I nnb    : clock c=1 khz=159000 (add = 1 cycle)
+[     4.000000] I nnb    : R st=l5 k=tsplit v=pair_tab_asm cin=28 cout=28 h=9 w=12 kh=3 kw=3 s=1 d=1 fl=2 layer=5 m=warm it=1 reps=5 us=23000/23100 cyc=3657000/3672900 ops=762048 mac ops2=284148 nzw code=0 chk=OK bad=0
+[     4.100000] I nnb    : R st=l5 k=tsplit v=split5 cin=28 cout=28 h=9 w=12 kh=3 kw=3 s=1 d=1 fl=2 layer=5 m=warm it=1 reps=5 us=5000/5100 cyc=795000/810900 ops=762048 mac ops2=284148 nzw code=32831 chk=OK bad=0 blocks=5 sizes=6972,6893,7026,5936,6004
+[     9.000000] I nnb    : nnbench done 0: 2 rows, 0 BAD, 5000 ms
+"""
+
+
+def test_report_on_split_layers(tmp_path):
+    log = tmp_path / "nnbench3.log"
+    log.write_text(SYNTHETIC_LOG3)
+    subprocess.run(
+        [sys.executable, str(PROJECT / "nnbench_report.py"), str(log), "--out", str(tmp_path / "r")],
+        check=True,
+    )
+    md = (tmp_path / "r.md").read_text()
+    rows = list(csv.DictReader((tmp_path / "r.csv").open()))
+    split = next(r for r in rows if r["variant"] == "split5")
+    assert split["blocks"] == "5" and split["sizes"] == "6972,6893,7026,5936,6004"
+    assert split["layer"] == "5"
+    # 3657000 / 795000 cycles per layer
+    assert "| warm | split5 | 5 | 32831 | 0.795 | 0.811 | 4.60 | OK |" in md
