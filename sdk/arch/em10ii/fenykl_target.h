@@ -40,11 +40,8 @@ static inline void fenykl_dcache_flush(void)
 	fw_irq_unlock(cookie);
 }
 
-/* No vtable clones on this target yet: fenykl.h's prototypes only. */
-struct fenykl_vtable;
-
 /* Descriptor of a slot (fenykl_slot_<name>, generated from firmware.toml by fwapi.slot_asm).
-   Replaced with FENYKL_SLOT_REPLACE, restored with fenykl_slot_restore (slots.c). */
+   Replaced with FENYKL_SLOT_REPLACE, restored with fenykl_slot_restore (lib/slots.c). */
 struct fenykl_slot {
 	uint32_t address;  /* the pointer word the firmware calls through */
 	uint32_t expected; /* its stock value, also the original to call (0 = empty slot) */
@@ -55,6 +52,12 @@ struct fenykl_slot {
    hook whose target CPU1/CPU2 may run is safe only under the rules in sdk/README.md (Hooks). */
 /* On FENYKL_HOOK_EVERIFY and FENYKL_HOOK_EICACHE the old bytes are written back. */
 #define FENYKL_HOOK_EICACHE (-3) /* the I-cache invalidate timed out */
+
+/* Replaces the n bytes of firmware code at addr with `to` if they hold `from`, the way a hook
+   install does (CPU0 I-cache only). 0 or FENYKL_HOOK_E*; EBYTES writes nothing, and on EVERIFY and
+   EICACHE `from` is written back. Task context, CPU0. */
+int fenykl_code_patch(uint32_t addr, const uint8_t *from, const uint8_t *to, unsigned int n)
+	FENYKL_CPU0_ONLY("fenykl_code_patch");
 
 /* I-cache invalidate of the executing core (hooks.c), with interrupts masked: CHCTR ICEN off, wait
    for !ICBUSY, ICINV, wait for !ICBUSY, entry value back; explicit values with the INV bits clear

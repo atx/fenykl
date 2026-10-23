@@ -1,6 +1,7 @@
-/* Hook install/remove for the E-M10 II. The patch is written from CPU0 through the uncached alias
-   with CPU0's interrupts and dispatch masked, the D-cache is written back and CPU0's I-cache is
-   invalidated. CPU1/CPU2 are neither stopped nor invalidated (sdk/README.md, Hooks). */
+/* Hook install/remove and code byte patches for the E-M10 II. The patch is written from CPU0
+   through the uncached alias with CPU0's interrupts and dispatch masked, the D-cache is written
+   back and CPU0's I-cache is invalidated. CPU1/CPU2 are neither stopped nor invalidated
+   (sdk/README.md, Hooks). */
 #include <fenykl.h>
 
 #define JMP_SIZE 5
@@ -90,49 +91,67 @@ static void jmp_to_stub(const struct fenykl_hook *hook, uint8_t *out)
 		out[i] = rel >> (8 * (i - 1));
 }
 
-/* The entry holds `head`, followed by the rest of the stock span. */
-static int holds(const volatile uint8_t *entry, const struct fenykl_hook *hook, const uint8_t *head)
+static bool holds(const volatile uint8_t *at, const uint8_t *bytes, unsigned int n)
 {
-	for (int i = 0; i < hook->length; i++)
-		if (entry[i] != (i < JMP_SIZE ? head[i] : hook->original[i]))
-			return 0;
-	return 1;
+	for (unsigned int i = 0; i < n; i++)
+		if (at[i] != bytes[i])
+			return false;
+	return true;
 }
 
-static void put(volatile uint8_t *entry, const uint8_t *bytes)
+/* Stores only the bytes that differ: a hook writes its JMP_SIZE head, never the checked tail. */
+static void put(volatile uint8_t *at, const uint8_t *bytes, unsigned int n)
 {
-	for (int i = 0; i < JMP_SIZE; i++)
-		entry[i] = bytes[i];
+	for (unsigned int i = 0; i < n; i++)
+		if (at[i] != bytes[i])
+			at[i] = bytes[i];
 }
 
-static int replace_locked(const struct fenykl_hook *hook, const uint8_t *from, const uint8_t *to)
+/* Interrupts masked by the caller. */
+static int patch_locked(uint32_t addr, const uint8_t *from, const uint8_t *to, unsigned int n)
 {
-	volatile uint8_t *entry = FENYKL_UNCACHED(hook->entry);
+	volatile uint8_t *at = FENYKL_UNCACHED(addr);
 
-	/* No dirty line may be written back over the entry later. */
+	/* No dirty line may be written back over the patch later. */
 	fw_dcache_flush_all();
-	if (!holds(entry, hook, from))
+	if (!holds(at, from, n))
 		return FENYKL_HOOK_EBYTES;
-	put(entry, to);
-	int result = holds(entry, hook, to) ? 0 : FENYKL_HOOK_EVERIFY;
+	put(at, to, n);
+	int result = holds(at, to, n) ? 0 : FENYKL_HOOK_EVERIFY;
 	fw_dcache_flush_all();
 	if (result == 0 && icache_invalidate_locked() != 0)
 		result = FENYKL_HOOK_EICACHE;
 	if (result == 0)
 		return 0;
-	/* CPU0 fetched nothing from the entry since the write: its I-cache holds old lines or none. */
-	put(entry, from);
+	/* CPU0 fetched nothing from the patch since the write: its I-cache holds old lines or none. */
+	put(at, from, n);
 	fw_dcache_flush_all();
 	return result;
 }
 
-static int replace(const struct fenykl_hook *hook, const uint8_t *from, const uint8_t *to)
+int fenykl_code_patch(uint32_t addr, const uint8_t *from, const uint8_t *to, unsigned int n)
 {
 	unsigned int cookie = fw_irq_lock(0);
-	int result = replace_locked(hook, from, to);
+	int result = patch_locked(addr, from, to, n);
 
 	fw_irq_unlock(cookie);
 	return result;
+}
+
+/* The whole stock span with its first JMP_SIZE bytes replaced by `head`. */
+static void span(const struct fenykl_hook *hook, const uint8_t *head, uint8_t *out)
+{
+	for (int i = 0; i < hook->length; i++)
+		out[i] = i < JMP_SIZE ? head[i] : hook->original[i];
+}
+
+static int replace(const struct fenykl_hook *hook, const uint8_t *from, const uint8_t *to)
+{
+	uint8_t old[sizeof(hook->original)], new[sizeof(hook->original)];
+
+	span(hook, from, old);
+	span(hook, to, new);
+	return fenykl_code_patch(hook->entry, old, new, hook->length);
 }
 
 int fenykl_hook_install(struct fenykl_hook *hook)

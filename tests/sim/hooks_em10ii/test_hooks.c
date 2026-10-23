@@ -11,7 +11,9 @@
          invalidate writing explicit CHCTR values: ICEN off (2), ICINV with ICEN off (0x12), entry
          value back (3); INV bits read as set at entry (0x33) are never written back
      32  remove: stock bytes back, calls reach the originals directly, remove idempotent
-     64  an entry that is not the stock span is refused (EBYTES) and left untouched
+     64  an entry that is not the stock span is refused (EBYTES) and left untouched;
+         fenykl_code_patch on one byte: a wrong `from` is refused (EBYTES, one lock and flush, no
+         invalidate, byte untouched), 01 -> 03 and back as one install each, neighbours untouched
      128 ICBUSY stuck: install fails with EICACHE, the stock bytes are back, ICEN restored, one
          timeout counted after the poll bound; install works once ICBUSY clears */
 #include <fenykl.h>
@@ -99,6 +101,37 @@ static int sim_sticky_inv(void)
 	return st.chctr[1] != 0x0002 || st.chctr[2] != 0x0012 || CHCTR != 0x0003;
 }
 
+static uint8_t code[4] = { 0x80, 0x01, 0xdf, 0x00 };
+
+static int code_is(uint8_t imm)
+{
+	const volatile uint8_t *c = FENYKL_UNCACHED(code);
+
+	return c[0] == 0x80 && c[1] == imm && c[2] == 0xdf && c[3] == 0x00;
+}
+
+static int sim_code_patch(void)
+{
+	static const uint8_t one = 1, three = 3;
+	uint32_t at = (uint32_t)&code[1], locks = mock[3], flushes = mock[7];
+	struct fenykl_icache_stats st;
+
+	fenykl_icache_get_stats(&st);
+	CHCTR = 0x0003;
+	if (fenykl_code_patch(at, &three, &one, 1) != FENYKL_HOOK_EBYTES || !code_is(1) ||
+	    mock[3] != locks + 1 || mock[5] != locks + 1 || mock[7] != flushes + 1)
+		return 1;
+	locks = mock[3];
+	flushes = mock[7];
+	if (fenykl_code_patch(at, &one, &three, 1) != 0 || !code_is(3) ||
+	    !one_patch(locks, flushes, st.runs))
+		return 1;
+	locks = mock[3];
+	flushes = mock[7];
+	return fenykl_code_patch(at, &three, &one, 1) != 0 || !code_is(1) ||
+	       !one_patch(locks, flushes, st.runs + 1);
+}
+
 static int sim_icache(void)
 {
 	struct fenykl_hook *h = &fenykl_hook_cw_updateDisplay;
@@ -165,6 +198,8 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 		fail |= 16;
 	if (sim_icache())
 		fail |= 128;
+	if (sim_code_patch())
+		fail |= 64;
 
 	sim_exit_code = fail;
 }

@@ -1,6 +1,7 @@
 # Olympus OM-D E-M10 Mark II with the fenykl-loader firmware. Plugin runtime: start, string, log and
-# cfg libraries, data slots (slots.c) and code hooks (hooks.c, CPU0 I-cache only); no CPU1 runtime,
-# event/key layers, HUD, settings page or AF control yet.
+# cfg libraries, the settings page (lib/ui.c + ui_em10ii.c), the HUD library (lib/hud.c +
+# hud_em10ii.c), the body API's batt group (fenykl_body.h), data slots (lib/slots.c) and code hooks
+# (hooks.c, CPU0 I-cache only); no CPU1 runtime, event/key layers or AF control yet.
 model = "E-M10II"                      # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
 toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
 cflags = "toolchain/cflags"            # relative to the fenykl checkout
@@ -11,8 +12,14 @@ max_size = 0x67000                     # bytes the loader reads; the loader stac
 # Hooks the SDK binds itself: none (the event layer is not built for this camera; plugins may hook
 # appevent_post themselves).
 sdk_hooks = []
-# SDK features of this camera (see epl3/target.toml): none yet.
-capabilities = []
+# Slots the SDK binds itself, generated for every plugin; plugin.toml may not list them. The settings
+# page (lib/ui_em10ii.c) takes over the Eye-Fi row of Custom menu tab K with them.
+sdk_slots = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
+# The SDK's hooks and slots whose CPU1 scope is unproven, acknowledged (as a plugin's cpu1_unproven):
+# CPU0 only by static analysis; the settings page counts calls on other cores and touches nothing.
+sdk_cpu1_unproven = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
+# SDK features of this camera (see epl3/target.toml).
+capabilities = ["ui", "hud", "batt"]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]
@@ -22,3 +29,29 @@ sha256 = "ff9d302318ecf6e06c0b31c181fc6a185e93623e819749db31cec7977fa92052"
 size = 69599232
 # Real load address per block kind; header addresses are not trusted.
 load_addresses = { main-code-01 = 0x60021020 }
+
+# Where the [stock] image keeps its GUI assets (`fenykl assets dump`, py/fenykl/assets.py AssetLayout).
+# Addresses are runtime (DRAM) addresses unless noted.
+[assets]
+lang_block = "main-lang"
+lang_flash_base = 0x41760020     # lang header read from flash 0x41760000 (0x602978ED), directory at +0x20
+common_dir = 0x00
+common_addr = 0xA24E2C00         # imm in the common loader 0x60297AEE (slot 0)
+icon_table = 0x00                # header +0 -> icon table 0xA2BDA714
+icon_count = 0x109               # glyph lookup 0x60931706 accepts 0xA000..0xA108
+icon_code_base = 0xA000
+image_table = 0x10               # header +0x10 -> image table 0xA2BD6630 ([0] unused); gui_res_image 0x6094650C via data.gui_image_table
+image_count = 4152               # the table u32[4153] ends at the icon table
+image_slot_dir = 0x45            # slot 1: 1942 image records and bitmaps, same loader with index 1
+image_slot_addr = 0xA2CE2C00
+string_dirs = [0x01, 0x23]       # 34 languages
+string_addr = 0xA31A2C00         # imm in the string loader 0x60297C2A
+font_dir_offset = 0x22           # font dirs 0x23..0x44
+font_addr = 0xA3122C00           # imm in the font loader 0x60297A46
+font_desc_size = 0x4A            # gui_res_fontdesc 0x609464F3
+font_list_end = 0x93             # glyph lookup 0x60931748
+code_block = "main-code-01"
+palette_table = 0x601E76E4       # .data1 image (0x601D0000 -> 0x615DC540) of the GUI palette table 0x615F3C24 (gui_res_palette 0x6094653C)
+palette_count = 60
+palette_4bpp = 18                # PNG dumps only: the E-PL3's 16-colour palette, entry for entry
+palette_8bpp = 2                 # PNG dumps only: a 256-colour UI palette with the stock icon colours

@@ -63,7 +63,7 @@ frame = 0x8
 evidence = "high"
 returns = "int"
 args = ["d int ticks"]
-note = "boot1b; ret [d2],8 at 0x60069948; all 228 CALLs use [d2],8; D0 = ticks passed unchanged to dly_tsk 0x6003172B (wakes at the (n+1)-th tick); returns 0, or -1 when the kernel result is negative (E_CTX in an ISR or with dispatch disabled, E_PAR for n >= 0x7FFFFFFF). Tick = 1000 counts of the 0x98900000 timer, 1 ms inferred from the prescaler setup, not measured"
+note = "boot1b; ret [d2],8 at 0x60069948; all 228 CALLs use [d2],8; D0 = ticks passed unchanged to dly_tsk 0x6003172B (wakes at the (n+1)-th tick); returns 0, or -1 when the kernel result is negative (E_CTX in an ISR or with dispatch disabled, E_PAR for n >= 0x7FFFFFFF). Measured on the camera: OlyTaskSleep(1000) and OlyTaskSleep(30000) took 1015.9 counts of the 0x98900000 timer per tick, so either the timer runs at 1 MHz and a tick is 64/63 ms, or a tick is 1 ms and the timer runs at 64/63 MHz"
 cores = ["cpu0", "cpu1"]
 cores_evidence = "verified: dly_tsk acts on the calling core's own KCB; CPU1 has its own tick (timer ch2, IRQ 0x3B)"
 
@@ -304,7 +304,7 @@ note = "CHCTR, the executing core's cache control (abs16 per-core register, 16-b
 address = 0x98900074
 type = "u32 MMIO"
 evidence = "medium"
-note = "free-running 30-bit down counter: freerun_count 0x60022F11 returns 0x3FFFFFFF - (0x98900074). 1 MHz (1000 counts per tick) is inferred from the timer setup, not measured; one MMIO block for all cores"
+note = "free-running 30-bit down counter: freerun_count 0x60022F11 returns 0x3FFFFFFF - (0x98900074). 1 MHz is inferred from the timer setup; measured on the camera: 1015.9 counts per OlyTaskSleep tick, so counts / 1000 is within 1.6 % of milliseconds; one MMIO block for all cores"
 
 [data.uart_tee_buf]
 address = 0xA1BB309C
@@ -336,6 +336,27 @@ type = "u8"
 evidence = "high"
 note = "loaded mask of the on-demand code sections: bit n-1 = section n. Only writer: section_wait 0x6004206F, `movbu d0,(0xA1C18044)` at 0x6004211D with d0 |= 1 << (pending - 1) (0x60042082..0x6004208D), after the section's guard and constructors; byte scan finds the absolute operand only there (0x60042117, 0x6004211F) and in the reader 0x60041F97 (section_loaded(n)). In the bss zeroed at reset. Test a section's bit before calling into it; never section_request a loaded section: 0x60041FAF then sets u8 0xA1C18045 = 1 and every later section_wait returns at 0x6004207F without waiting"
 
+# --- battery check record 0x61BF83F8..0x61BF8417 (BCHK_MAIN, CPU0); every access found uses the
+# uncached alias, so a cached read would not see its writes ---
+
+[data.batt_vbat]
+address = 0xA1BF8414
+type = "u16"
+evidence = "high"
+note = "vbat16 of the last 1 Hz source check: the source check 0x6007798E stores bchk_ad_read(4) (mean of samples 1..4 of A/D channel 4) at 0x6007799B..0x6007799E. Thresholds compare vbat16 >> 2. Frozen while power_src_check is 0"
+
+[data.power_src]
+address = 0xA1BF8408
+type = "u16"
+evidence = "high"
+note = "power source: 0 unknown, 0x200 battery, 0x100 AC or DC coupler; written by the source check on a change. The detector 0x60077A36 never produces 0x400 or the holder's 0x204"
+
+[data.power_src_check]
+address = 0xA1BF840A
+type = "u8"
+evidence = "high"
+note = "1 s source check on: the exec task 0x600786A1 runs it on each 1000-tick queue timeout while set; cleared at power-off (0x6007827F) and standby start (0x6023CFE7)"
+
 # --- card file I/O (fileif.c client wrappers, sec3) ---
 # The wrappers run the file operation directly when called by the file task FILECLBK (task id 0x11 at
 # 0x60040C52) and otherwise post it to FILECLBK's queue 0x22 (half word 0x60041030) through the
@@ -356,6 +377,17 @@ args = ["a const char *path", "a const char *mode"]
 note = "sec3; ret [],4 at 0x6056482F, 49 CALLs [],4; body: clr d0 and call fopen_opt 0x6056570C,[d2,d3,a2,a3],44 (option 0); RPC cmd 0x10001 -> server 0x60570DC0. Returns A0 = FILE* or 0 (stock callers test A0, e.g. 0x60172615). Mode chars r (1), w (2), a (0xA), + (3), b, c, d (sector-direct reads into the caller's buffer), e, h; 'r' reads through a 0x4000 bounce buffer with memcpy, so any buffer works. Open on an unmounted drive fails at once with errno 0x9415 (media status bit 0x100 clear, no I/O); a write mode on a protected card fails with 0x9414"
 cores = ["cpu0"]
 cores_evidence = "verified: on CPU0 a non-FILECLBK task takes the RPC path (0x6056FBDF returns 1); other cores take a copy-to-heap RPC path (returns 2) that is not exercised by the SDK"
+
+[fileif_fopen_opt]
+address = 0x6056570C
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x2C
+evidence = "high"
+returns = "void *"
+args = ["a const char *path", "a const char *mode", "d unsigned option"]
+note = "sec3; ret [d2,d3,a2,a3],44 at 0x60565736, 0x60565763 and 0x605657DD; all 12 CALLs use [d2,d3,a2,a3],0x2C (rpc_fopen 0x6056482A passes option 0). A0 path, A1 mode, D0 option (stored as u16 at 0x6056570F); RPC cmd 0x10001 -> 0x60570DC0. Option bit 0x2: after the lookup 0x605711EA calls 0x60570D37, which frees the cluster chain and clears size and position, so 'w' truncates (if the free fails, 0x60570D37 returns 0xFFFF and the open returns 0 through 0x605711FD -> 0x60571306 without setting errno); without it a 'w' open keeps the old size and an fwrite only raises it. Stock 'w' opens pass option 2 (0x6056652F, 0x60566585, 0x6056E0F8), 4 (0x6056D88A) or, at 0x6056D9EE, 8 with 'wd' (0x6056D9EC) and 6 with '+d' (0x6056D9E0, string 0x6062DE73). Option bit 0x10: the server copies the 8-bit path byte by byte into a UTF-16 buffer (0x60570DE4..0x60570E03) and opens through 0x6057378E (long-name lookup), whose mode table 0x6062E7A4 sends w, a and + to errno 0x9414 and return 0 (0x60573803, 0x60573815, 0x6057382D) before any media access: read-only (r, b, d, c, e, h). Without bit 0x10 the open goes through the 8.3 name lookup 0x6057094A only. Stock 0x60E992CE opens with option 0x10 and mode \"rde\", then calls rpc_fread and rpc_fclose on the result. Returns A0 = FILE* or 0"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
 
 [rpc_fclose]
 address = 0x60564832
@@ -445,6 +477,30 @@ address = 0x61843F64
 type = "u16"
 evidence = "high"
 note = "set to 1 by usr3_mount_request 0x6018E207 (sec1, Usr3 stage) only when it posted api_media_Mount_Media(0, 1): power-on factor == 12, wake input bit 0 clear and the battery-like check 0x60078867() == 0x100 or 0x6007883C() >= 50; cleared at its start. 0 on battery or card insertion wake boots (factor 0x1000001 / 0x1506), playback-button, USB and other wake boots"
+
+[data.file_slots_free]
+address = 0x618A17CC
+type = "u32"
+evidence = "high"
+note = "free FILE slots: word 0 of the slot list {u32 count, head, tail} at 0x618A17CC. Init 0x60570431 clears it (0x6057023F) and inserts 6 slots of 0xA00 bytes through 0x60570400 -> 0x6057024A (count + 1); an open takes one at 0x60570F4F (0x605702FD, count - 1; an empty list returns 0 and the open fails with errno 0x9417); 0x6057024A gives it back (failed open 0x60571306). Read-only for plugins"
+
+[data.file_open_count]
+address = 0x618A17CA
+type = "u16"
+evidence = "high"
+note = "u16 compared with file_open_limit at the start of the 8-bit open 0x60570E1C (the open returns 0 without errno unless file_open_limit > this), also read at 0x60573797 (UTF-16 open) and 0x60573F30. The only writer is init 0x60570473 (0); no increment found, so the check cannot fail in practice and the live count is file_slots_free. Read-only for plugins"
+
+[data.file_open_limit]
+address = 0x618A17C8
+type = "u16"
+evidence = "high"
+note = "6, written only by init 0x6057046C; the limit in the open check 0x60570E1C (see file_open_count), equal to the number of FILE slots. Read-only for plugins"
+
+[data.file_errno]
+address = 0x618A19E0
+type = "u32"
+evidence = "high"
+note = "file errno word, global: the only writer is fileif_set_errno 0x60572686 (mov d0,(0x618A19E0); retf), the only other reference the reader 0x6057267C. Set on errors only, so a successful call leaves the previous value, and any other task's file call can change it between two reads. The value is the code passed to 0x60569E38 with the filewrap.c line: 0x9414 (not found for a read open 0x6057111F, same file already open for write 0x60570F19, write open of a read-only entry 0x605711CD, w/a/+ in a UTF-16 open 0x60573803/0x60573815/0x6057382D), 0x9415 (media not mounted), 0x9416 (cluster allocation in fwrite 0x60571977), 0x9417 (internal)"
 
 # --- application events, USB storage ---
 
@@ -614,4 +670,344 @@ note = "with gpi_ext_out: 0 = display 0 gets no layers; setter 0x609313E8 (calle
 address = 0x618CDCD4
 type = "u8 [0xC6E]"
 evidence = "high"
-note = "storage of GUI data slot 0x38 (Custom list model): record 0x615E78B4 = {get 0, set 0, data 0x618CDCD4, size 0xC6E} in the slot table 0x615E7534 (0xCA records); gui_data_set copies into it with memcpy, no lock, so a reader in another task can see a half-written copy. No code references the address but through the table"
+note = "storage of GUI data slot 0x38 (Custom list model): record 0x615E78B4 = {get 0, set 0, data 0x618CDCD4, size 0xC6E} in the slot table 0x615E7534 (0xCA records); gui_data_set copies into it with memcpy between optional lock hooks (see gui_data_set), unused here, so a reader in another task can see a half-written copy. No code references the address but through the table"
+
+# --- HUD: layer-1 OSD path from the GUI request to the display controller, output device, palette ---
+
+[data.osd_req]
+address = 0x6187D860
+type = "u32 [4]"
+evidence = "high"
+note = "disp_sync OSD request: [0..2] display 0 = pdata of GPI layer 1, 0, 2 (osd idx 0..2), [3] display 1. Stored only by 0x60468FAA (0x60469065/0x60469077/0x604690A0) and read by 0x604692BC (0x6046937E), on the path cw_updateDisplay -> display API 0x6069C579 (builds {L1, L0, L2, 0} from each handle's pdata, 0x6069D9F0) -> Disp_Sync_Update_Osd_Multi_Ext 0x602C7062 -> 0x60468169 -> 0x60468CC7 -> 0x60468FAA, then to the DISPLAY task by imdf_call (0x6046A7AB). Holds the buffer the last cw_updateDisplay asked to show"
+
+[data.disp_device]
+address = 0xA1C19FB8
+type = "u32 [2]"
+evidence = "high"
+note = "output device per display (display 0 = panel, 1 = external), written by the DISPLAY task (0x602E3D77 `and 15`), the indexed stores at 0x602E4F80 (0x602E4F77) and 0x602E54E8 (0x602E54D6), the close path 0x602E559F (0 on close at 0x602E561E; closing device 6 falls back to 1 at 0x602E5684 in 0x602E5627) and 0x602E570C (both 0). Device ids from the debug-shell open table at 0x602EC313..0x602EC3B7: 1 tft (rear LCD), 2 ntsc, 3 pal, 5 evf, 6 bievf (built-in EVF), 4 and 7..0x12 hdmi variants (0x602E480B maps 1/2/3/6 to themselves, 5/0xD/0x13 to 5, the rest to 4). Device meaning of the shell names is inferred"
+
+[data.osd_palette]
+address = 0x619AE019
+type = "u8 [0x400]"
+evidence = "high"
+note = "osddraw copy of the plane-2 (GPI layer 1, 8 bpp) palette: pointer table 0x60F2F95C = {0x619AE499 plane 0, 0x619AE419 plane 1, 0x619AE019 plane 2}, entry counts 0x60F2F954 = {0x20, 0x20, 0x100}. 4 bytes per index: bytes 0..2 colour, written by 0x60E179EA from gpi_apply_palettes 0x60930C49 (ARGB word split R, G, B [inferred order]), byte 3 = alpha >> 3 (0..32, 0x60E17B60). Dirty flags 0x619AE013 + 2 * plane (colour) and +1 (alpha); committed by 0x60E17846. Not 4-byte aligned"
+
+# --- HUD library (lib/hud.c): the camera font, the stock images, layer 1's depth and the live-view
+# INFO screen. Read by hand in the v1.4 main code: every CALL operand (byte scan of call d16/d32), every
+# RET, the argument registers, and the absolute operands of each data address.
+
+[gpi_get_glyph]
+address = 0x609315E2
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x14
+evidence = "high"
+returns = "void"
+args = ["a const unsigned short *key", "a void *out"]
+note = "sec4; ret [d2,d3,a2,a3],0x14 at 0x60931647 (only RET; 0x6093164A starts the next function); both CALLs (0x60930826, 0x6093224C) use [d2,d3,a2,a3],0x14. key in A0 = {u16 font_id, u16 size_key, u16 char} (movhu (a0) / (2,a0) / (4,a0) at 0x609315E2..0x609315E8), out in A1 = {u16 w, u16 h, const void *bitmap}, written through a3 = a1. font_id < 10: legacy icon path 0x609316D3; else the glyph lookup 0x609316E9: codes 0xA000..0xA108 from the common icon table (*0x618C84A4), other codes from the glyph list at *gpi_font_res + 4 (0x60931724..0x60931737); w = h = 0 and bitmap 0 when not found (0x6093163C). Table reads only; the same body as the E-PL3's 0x6EFDC0B2 apart from the icon bound"
+
+[data.gpi_font_res]
+address = 0x618C84A8
+type = "u32 -> font resource"
+evidence = "high"
+note = "per-language font resource; +4 -> glyph list of 16-byte records {font_id, key, sets, index} ending at font_id 0x93, word 0 of the first record = the font id (15 English). Only store: gui_load_language_res 0x60A76FB4 at 0x60A77031 (`mov d2,(0x618c84a8)`), on a language load; the other ten absolute operands (0x609314AC..0x6093183B) are reads in the glyph code (lookup 0x60931724: mov (0x618c84a8),a3; inc4 a3)"
+
+[data.gui_image_table]
+address = 0x615F3D14
+type = "u32 -> u32 [id] -> struct gui_image"
+evidence = "high"
+note = "the GUI's pointer to the image table of the common resource: 0 in .data1, set once by gui_load_language_res at 0x60A77108 from common_res + 0x10 (common_res 0x618C84A4 stored at 0x60A770FF; resource slot 0 loaded at 0xA24E2C00, table 0xA2BD6630, ids 1..4152, [0] = 0); read by gui_res_image 0x6094650C (0x60946516: + 4 * id). Its only two absolute operands. Records {u16 type, w, h, bpp, u32 0, u32 size, u32 bitmap @+0x10, u32 key}; 1942 records point into resource slot 1 at 0xA2CE2C00. Live-view value images (image font 14, table 0x60D11CDC = .data1 0x615F3D30[14]): '-' 1120, '1'..'9' 1121..1129, '0' 1130, ':' 1131, '+' 1132; '.' 1871 from image font 25 (0x60D148DC)"
+
+[data.gpi_layer_bpp]
+address = 0x60BC51CC
+type = "u8 [3]"
+evidence = "high"
+note = "sec4 rodata, bits per pixel of each GPI layer: bytes 04 08 04 (layer 1: 8 bpp). Its only absolute operand: gpi_init 0x6092F32E (`mov 0x60bc51cc,a3`), read per layer with movbu (a3),d0 at 0x6092F34E, inc a3 at 0x6092F35C"
+
+[data.prop_override_valid]
+address = 0xA1BE81F0
+type = "u16"
+evidence = "high"
+note = "non-zero while the property override table is in use: the lookup 0x60076078 reads it first (movhu at 0x60076078) and takes data.prop_override's entry when that entry's object is non-zero; written only by 0x60076038, 0x6007605E and 0x6007606F"
+
+[data.prop_override]
+address = 0xA1BF01F4
+type = "{u16 id, u16 size, u32 object} [4096]"
+evidence = "high"
+note = "property override table, the layout of data.prop_table: entry (id >> 4) at 0x60076089..0x60076094 of the lookup 0x60076078; set up by 0x6007603E (its only other absolute operand)"
+
+[data.prop_table]
+address = 0xA1BE81F4
+type = "{u16 id, u16 size, u32 object} [4096]"
+evidence = "high"
+note = "property registry (settings and camera-state values): the lookup 0x60076078 (10 CALLs, all [d2],0x10, from the typed getters 0x60076AA2..0x60076F84) returns A0 = &entry[(u16 id) >> 4] (0x6007609B..0x600760A1), the override entry first while data.prop_override_valid != 0, or 0 when the entry's object +4 is 0. The getter 0x60076FD9 maps the object to the calling core's view (0x600750FD) and reads element D1 of it with the width of id & 7 (4 u32, 2 u16, else u8; bit 8 = signed). Filled by the registry init 0x60075F2A..0x60075FCD. Property 0x8321 (s8) = the live-view INFO screen: 11 basic info, 12 image only, 1 histogram, 0 level gauge [camera: it alone changed on every INFO press, the same on the LCD and in the EVF]"
+
+# --- Display controller planes: display 0 (LCD/EVF) registers at 0x9C000000, display 1 (external) at
+# 0x9C002000. The driver keeps a RAM shadow per display and its commit rewrites the layer addresses,
+# image alphas and the enable mask (0x9C000030) from it on every update, OSD flips included.
+
+[data.disp_state]
+address = 0xA1C19FC2
+type = "u8 [2]"
+evidence = "high"
+note = "display state per display (0 display 0, 1 display 1); 2 while the display is up. Read only through the getters 0x60042492 (movbu (0xA1C19FC2)) and 0x6004249B (movbu (0xA1C19FC3)); written by the DISPLAY task 0x602E3B97 (0x602E3CB0, 0x602E3CB6), its init 0x602E397C, the indexed store 0x602E47BD in 0x602E47A4, and 0x602E52C7 (0x602E52E5) and the close path 0x602E559F, both of which clear the byte before they act on the device. The driver gates its own register work on it: Disp_Direct_Custom does nothing unless display 0's byte is 2 (0x602E4F06); the scan-line and latched-address readers 0x602E7E12 and 0x602E4AE9 read display 1's registers only while its byte is non-zero"
+
+[data.disp0_shadow]
+address = 0xA1C1A050
+type = "u32 [15], palette copies follow up to +0x740"
+evidence = "high"
+note = "display 0 driver shadow, the argument of the commit 0x602F82C7 (mov 0xa1c1a050,a0 before each CALL): [0..2] img1/img2/img3 address (0 = layer off), [4..6] img1..3 alpha 0..0x80 (0x80 opaque; the commit writes 2 * alpha into the low 9 bits of 0x9C000194/198/19C), [8..10] OSD addresses for 0x9C00004C/048/044, bytes +0x38..+0x3A osd idx 0 bank toggle and 0x680/0x600 palette-dirty flags. The commit sets an enable bit only for a non-zero address with window width >= 16 (0x602F751F writes 0x9C000030). Init 0x602F1D81: addresses 0, alphas 0x80/0/0; display reset 0x602F281B: addresses 0, alphas 0x80"
+
+[data.disp1_shadow]
+address = 0xA1C1B160
+type = "u32 [16], palette copies follow up to +0x840"
+evidence = "high"
+note = "display 1 driver shadow, the argument of its commit 0x602F9810 (mov 0xa1c1b160,a0 at 0x602F4FB1, 0x602F5042, 0x602F5205): +0xC image address (0x9C002038 adds 0xA1C1C2BC), +0x1C image alpha (low 9 bits of 0x9C002194 = 2 * alpha), +0x2C/+0x30 OSD addresses for 0x9C002044/048, bytes +0x3B/+0x3C palette-dirty flags for 0x9C002600/680"
+
+[disp_direct_custom]
+address = 0x602C52FA
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x10
+evidence = "high"
+returns = "void"
+args = ["a const void *param"]
+note = "sec2; Disp_Direct_Custom (API trace string 0x603A4780 at 0x602C5302); ret [d2,d3,a2,a3],0x10 at 0x602C6243 (only RET); all 6 CALLs use [d2,d3,a2,a3],0x10 (playback slide/zoom 0x60829616, 0x6082B323, 0x6082D1F6, 0x60837F9E, 0x6083A0DD, 0x6083B4AC). A0 = {u8 *bg, layer *img[3], layer *osd[3], s32 blink, u8 mix order, u8 colour range, u16, u32 device}; layer = {u16 *from_area (w, h), u16 *from_target, u16 *from_coordinate (x, y), u16 *to_target, u16 *to_coordinate, u32 address, u32 transparency (0 opaque .. 0x7F), u8 layer_type}, deep-copied (0x602C52FA..0x602C6240), NULL layers skipped. Runs the driver in the caller's task: 0x602E4F06 returns unless display 0's state byte is 2, else takes the driver semaphore (id at 0x60040DDC, the one the DISPLAY task holds for its commands) and calls 0x602F2EA4: per image layer the alpha shadow (0x80 - transparency), the address, window, scaler and line registers from the record, then the commit 0x602F82C7 between hold/release (0x602F5FB6). Mix order and blink are not applied. No bounds check of the window against the device (the layer-custom path 0x602F28D3 has one). The state byte is tested before the semaphore wait, not under it. The CPU2 live-view flip (0x602E48E0 -> 0x602F2E4F or 0x602F28D3) commits without the semaphore, as against every DISPLAY task commit. The stock caller 0x60828117 passes an img1 layer; the other 5 were not read. Task context (0x602F751F dispatch-disables)"
+cores = ["cpu0"]
+cores_evidence = "CPU0 only: the driver semaphore, k_dis_dsp in 0x602F751F and the display controller belong to CPU0's DISPLAY task"
+
+# --- Main-menu screen stack (SsMenu menu app): what a plugin settings page needs to push its own
+# screen over the Custom list and give the screen back. All entries read by hand in the v1.4 listing.
+
+[data.menu_app]
+address = 0x615F5E94
+type = "u32 -> menu app (0x90 bytes)"
+evidence = "high"
+note = "the main menu's screen stack. Written only in SsMenu code: created by 0x60A4FF7B / 0x60A4FF83 and stored at 0x60A35E07 (state 1 entry 0x60A35D7C) and 0x60A35EA8, cleared at 0x60A35DE6 and at 0x60A35F89 after its destructor ran; no other absolute operand. Non-NULL does not mean the menu is open: when action 3 0x60A35EDE ends the menu on 0x9000 or 0x9052 it keeps the app (0x60A35F55 -> 0x60A6EE78 sets the resume flag 0x615F648C). Layout: +0 vtable (data.menu_app_vtable), u16 +4 = wanted depth, u16 +6 = depth, +8 = default event handler object (vtable 0x60D683C0), u32 +0xC = re-show reason, +0x10 + 0x10 * i = entry i {u32 kind, u32 screen, u32 group, u16 id} for i = 1..depth (0x80 bytes cleared by 0x60A51A22, so depth <= 7). A screen is an object whose vtable[0] is the event handler (callbacks.menu_screen) and vtable[1] the delete (callbacks.menu_screen_delete). Leading entries of group 0xF survive a menu end (menu_app_vtable [1]): a plugin screen must use another group. GUI task only"
+
+[data.menu_app_vtable]
+address = 0x60D68518
+type = "u32 [4] -> code"
+evidence = "high"
+note = "menu app class vtable (4 words; 0x60D68528.. is the vtable of another class: 0x40 bytes, constructor 0x60A51E61 via 0x60A51BDE, destructor 0x60A51C0C), stored by the constructors 0x60A517C6 / 0x60A518B3 and the destructor 0x60A5137B only. [0] 0x60A51375 = destructor (deletes every screen). [1] 0x60A513DC = event: calls top->vtable[0] (0x60A51424); +4 == 0 makes the result 0x9625. On 0x9625, since 0x615F5F2C is set to 1 by both constructors (0x60A51A3A, 0x60A518BC) and never cleared, +4 = the number of leading entries of group 0xF (0x60A51458..0x60A51471) and 0x60A51B27 sends 0xAF00 to every screen. On event 0xF806 the param is looked up in 0x60D684F8 ({u32 param, u32 group, u16 id} x 2), +4 is rewound to the matching entry and the new top gets 0x971D (0x60A51479..0x60A5150D). Then, while +6 != +4, it deletes the top screen (vtable[1], 0x60A51537) and clears its entry; unless the result is 0x9625, the new top gets 0x971D with D1 = +0xC (0x60A5159B) and +0xC is cleared. [2] 0x60A515AC = push(D0 kind, D1 group, A1 id): reuses a matching entry or creates the screen with the factory table 0x60D6881C. [3] 0x60A51799 = pop: +4 -= 1 and +0xC = D0 (callbacks.menu_app_pop)"
+
+[data.menu_app_event_fn]
+address = 0x60A513DC
+type = "code"
+evidence = "high"
+note = "sec4; stock menu_app_vtable[1] (word 0x60D6851C), the app's event method: movm [d2,d3,a2,a3] prologue; enters the top screen's handler with calls (a2) at 0x60A51424 and deletes the screens above the wanted depth +4 afterwards (menu_app_vtable). The settings page checks the word before it pushes a screen"
+
+[data.menu_app_pop_fn]
+address = 0x60A51799
+type = "code"
+evidence = "high"
+note = "sec4; stock menu_app_vtable[3] (word 0x60D68524), the app's pop method (callbacks.menu_app_pop): add -4,sp; u16 +4 -= 1 if > 0 (0x60A5179C..0x60A517A6), then, if entry +4 has a screen ((0x14 + 0x10 * depth, app)), 0x60A50010 sets the re-show reason +0xC = D0; ret [],4 at 0x60A517BC (only RET)"
+
+[data.menu_screen_vt_list0]
+address = 0x60D68B64
+type = "u32 [2] -> code"
+evidence = "high"
+note = "sec4 rodata, class of the kind-0 menu-app screens (menu_app_vtable push, factory table 0x60D6881C): {event 0x60A53CB8 (movm [d2,d3,a2,a3] prologue), delete 0x60A53F42 (movm [a2,a3] prologue)}, stored into the new 8-byte screen by its constructor at 0x60A53FA6. The settings page pushes its screen only over a screen of this class or menu_screen_vt_list5"
+
+[data.menu_screen_vt_list5]
+address = 0x60D688D0
+type = "u32 [2] -> code"
+evidence = "high"
+note = "sec4 rodata, class of the kind-5 menu-app screens: {event 0x60A52E8B (movm [d2,d3,a2,a3] prologue), delete 0x60A52F28 (movm [a2,a3] prologue)}, stored by its constructor at 0x60A52F65 (factory kind 5 0x60A52E69 allocates 8 bytes)"
+
+[gui_data_set]
+address = 0x609367B5
+saves = ["d2", "a2"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["a const void *buf", "d unsigned id", "d unsigned size", "a unsigned notify"]
+note = "sec4; ret [d2,a2],16 at 0x609367D0; all 1015 CALLs use [d2,a2],0x10, e.g. the Custom list view 0x609F8E9F (buf = model + 0x1380, D0 = 0x38, D1 = 0xC6E). Manager 0x615E81F0 (returns 0 if NULL). The worker 0x60936927 returns 0 for an id beyond the table or buf NULL, then calls the optional lock hook (0x615E6DA8)(-1) and returns 0 if that returns 0; a slot with a set function gets that call instead of the copy, else min(size, slot size) bytes are memcpy'd into the slot storage (0x609369A2) and it returns 1; then the slot's listeners (0x60936F44), the optional hook (0x615E6DAC)() (0x6093694A..0x609369E0) and, with notify (u16 of A1) != 0, the GUI notification (0x609369EB). GUI task only"
+
+[menu_app_default]
+address = 0x60A4FFC1
+saves = []
+frame = 4
+evidence = "high"
+returns = "unsigned"
+args = ["a void *app", "d unsigned code", "d unsigned param"]
+note = "sec4; `mov (8,a0),a0; mov (a0),a1; mov (a1),a1; calls (a1); ret [],4`, both CALLs use [],4 (e.g. 0x60A52CDA, where every stock screen hands an event its controller did not take). D0/D1 reach the default handler 0x60A5120E unchanged: 0x9000, 0x9002, 0x9030, 0x9052, 0x9625 -> returns 0x9625 (the app then ends the menu); 0x9601 re-lays out the display; 0x9B01 and 0x9404 post 0x971D; else 0. GUI task only"
+
+[callbacks.menu_screen]
+entry = "calls"
+evidence = "high"
+returns = "unsigned"
+args = ["a void *screen", "d unsigned code", "d unsigned param", "a void *app"]
+note = "screen event handler, vtable[0] of a menu-app screen: menu app vtable[1] 0x60A513DC enters the top screen's handler with calls (a2) at 0x60A51424, A0 = screen, A1 = app, D0 = GUI event code, D1 = param (SsMenu action 3 passes the event's param2); the re-show at 0x60A5159B sends 0x971D with D1 = the pop reason. Returns 0, or 0x9625 to end the menu. Every SsMenu state-2 event but 0x971D/0x9404 and a MENU taken by 0x60A35F10 reaches it. Stock handlers: 0x60A52E8B, 0x60A53CB8. GUI task (CPU0) [inferred core]"
+
+[callbacks.menu_screen_delete]
+entry = "calls"
+evidence = "high"
+returns = "void *"
+args = ["a void *screen"]
+note = "screen vtable[1], called when the app drops the screen (pop 0x60A51537, destructors 0x60A51375 / 0x60A51C0C, constructor 0x60A51825): A0 = screen; the A0 it returns is called next with calls and A0 = screen (callbacks.menu_screen_free), or 0x6090A6D2 frees the screen when it returns 0 (0x60A51539..0x60A51544). The stock 0x60A52F28 tears the screen down and returns 0"
+
+[callbacks.menu_screen_free]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a void *screen"]
+note = "the function a menu_screen_delete returns: entered with calls (a1) at 0x60A5153F (also 0x60A5182D and the destructors), A0 = screen; result unused"
+
+[callbacks.menu_app_pop]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a void *app", "d unsigned reason"]
+note = "menu app vtable[3] 0x60A51799 (add -4,sp .. ret [],4): if u16 +4 > 0, +4 -= 1 and, when the entry below has a screen, +0xC = D0 (0x60A50010); the app deletes the screens above +4 after the handler returns. Stock screens enter it with calls (a1) at 0x60A52F02 / 0x60A53D75 with D0 = 1 (closed) or 2 (cancelled), the controller's mapping of actuator results 2 and 3; the reason reaches the screen below as the param of 0x971D"
+
+[data.custom_row_eyefi]
+address = 0x60D3C4C4
+type = "36-byte Custom-list row record"
+evidence = "high"
+note = "sec4 rodata, row 7 of the tab K row table 0x60D3C3EC (rows* of custom_tabs record 13): u16 +0 row id 0x193, +8 title {u16 kind 4, u16 lang 0x5FA 'Eye-Fi', u32 0x60D38D30}, +0x10 help {4, 0x1DF, 0x60D38D30}, +0x18 value table 0x60D39E68 ({u32 value, title} x 2: 0 -> lang 0x5AE, 1 -> lang 0xC6), +0x1C value function 0. The model copies a title with 0x609F6AA1: kind 4 -> lang id at cell +4; kinds 1/2/5/6 -> the ASCII string at the u32 widened into cell +8 (0x609F6B00, unbounded: at most 32 characters). The view (0x60A59995, jump table 0x60D69F54) draws kind 5 as that string verbatim (0x60A59A23); stock value tables use kind 5 (e.g. ISO 0x60D39370)"
+
+# ======================================================================================================
+# --- autofocus hooks: follow contrast-AF evaluation and the focus ring ---
+# Contrast-AF evaluation start/stop of the fcs code and the lens focus-ring callback slot. Every entry was
+# read by hand in the v1.4 main code (CALL operands at every call site, every RET, argument registers,
+# span bytes, a byte scan for branch/call targets and stored words inside each span). Not for plugins
+# to call: they belong to the FCS_MOVIE task's state machine.
+
+[fcs_af_eval_run]
+address = 0x603F3D63
+saves = ["a2"]
+frame = 0x1C
+evidence = "high"
+returns = "void"
+args = ["a void *ctx"]
+note = "sec3; ret [a2],0x1c at 0x603F3DE3 (its only RET); all 5 CALLs use [a2],0x1c: 0x604046A2, 0x6040E289, 0x604337C0, 0x604348B2, 0x60435C7D. A0 = the fcs contrast context (the word at 0x6187D7D4): state u8 0x61879A48 0 -> 2 and cam_request(ctx + 0xC2C) (0x603F3D75), 4 -> 2 with u16 0x61879914 = 1, any other state logs error 0xF802006 with ctx +4. No stack argument; D0 on return is not read by any caller"
+
+[fcs_af_eval_run.hook]
+entry = "call"
+relocate = "fc a9 48 9a 87 61"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static: the 5 callers lie in fcs code whose only entries are case labels of two jump tables, 0x605C52B0 (read only by the FCS_MOVIE task 0x6043212A, CPU0, at 0x60432143) and 0x605C3B0C (read only by 0x60409AC6, which is called only from FCS_MOVIE handlers 0x60432677/0x604327D9); no stored word equals an address in the span; no CPU1/CPU2 task entry reaches it in the direct-call graph. Not run on the camera"
+note = "movbu (0x61879A48),d1: one 6-byte absolute instruction, no instruction boundary inside the 5 patched bytes. Byte scan of main-code-01 for bcc/bra d8, bvc..bns d8, jmp/call d16/d32 and calls d16/d32: no target in 0x603F3D64..0x603F3D68; no 32-bit word equals 0x603F3D63..0x603F3D68 or its 0xA alias"
+
+[fcs_af_eval_stop]
+address = 0x603F3E3D
+saves = ["d2", "a2", "a3"]
+frame = 0x20
+evidence = "high"
+returns = "void"
+args = ["a void *ctx", "d unsigned wait"]
+note = "sec3; ret [d2,a2,a3],0x20 at 0x603F3EB0, 0x603F3EDC and 0x603F404F (all its RETs); all 5 CALLs use [d2,a2,a3],0x20: 0x603F3DE8 (D0 0) and 0x603F3DF1 (D0 1) in 0x603F3DE6, 0x6040C574, 0x60434004, 0x60434408 (D0 0). A0 = fcs context (stores u16 0 to ctx +0xD24 = the setting's number at 0x603F3F70), D0 (exthu at 0x603F3E4B): 0 = request the stop (state 2 or 4 -> 3 and clear flag 0x1E under irq_lock, return at once); else wait for the done flag 0x1E for 2000 ticks, on timeout set number 0 and state 1 and wait again (0x60432EFF), i.e. it may block about 4 s. State 0: return at once. No stack argument; D0 on return is not read"
+
+[fcs_af_eval_stop.hook]
+entry = "call"
+relocate = "fc a9 48 9a 87 61"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static, all CPU0 tasks: (a) FCS_MOVIE: callers in 0x6040C442, 0x604330CA and the stop-and-wait helper 0x603F3DE6, reached from the case labels of the FCS_MOVIE jump tables 0x605C52B0 and 0x605C3B0C (see fcs_af_eval_run.hook); (b) TAKE_FOCUS (0x7C, priority 25, stack 0x800): its command handlers (labels of table 0x605C9858) -> 0x6045974E -> 0x6045988A call fcs's synchronous request API 0x603F0DC3 -> label 0x603F0E2F (table 0x605BADAC) -> 0x603F0F84 call 0x603F263C -> label 0x603F2681 (table 0x605BAE2C) -> call 0x603F8955 -> 0x603F89B8 call 0x603F3DE6; (c) the factory adjust task ADJ (0x06, priority 55, stack 0x1000): its command table (0x60F4C2B0 -> 0x60E48942) -> 0x60E49A01, command 0x3001 -> 0x60E49C92 call 0x603F0DC3, then as (b). No stored word equals an address in the span; no CPU1/CPU2 task entry reaches it. Not run on the camera"
+note = "movbu (0x61879A48),d1: one 6-byte absolute instruction, no instruction boundary inside the 5 patched bytes. Byte scan: no branch/call target in 0x603F3E3E..0x603F3E42, no stored word equal to 0x603F3E3D..0x603F3E42 or its 0xA alias. The 5 bytes cross an 8-byte (and a 16-byte) boundary, so this entry relies on CPU0's I-cache invalidate (no other core runs it)"
+
+[callbacks.lens_ring_cb]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["d unsigned code"]
+note = "lens focus-ring callback: the lens event handlers enter the word at slots.lens_ring with `calls (a0)` (A0 = the function itself) and D0 = 0 (0x6014AF1B, after posting app event 0x04060053, focus ring), 1 (0x6014B01A, after 0x04060054) or 2 (0x6014AF6D); they ignore D0 on return. The stock 0x603F031A (movm [d2], add -0x14 .. ret [d2],0x18) checks the code (0..2, else error 0xF800000) and passes it on to the fcs-level callback word 0x6187982C when that is non-zero"
+
+[slots.lens_ring]
+address = 0x6182D82C
+callback = "lens_ring_cb"
+expected = 0x603F031A
+cpu1 = "cpu0-only"
+cpu1_evidence = "static: read only by the handlers 0x6014AEFF, 0x6014AF5E and 0x6014AFFD (plus debug prints of the value); their addresses are only passed as function pointers to the lens event ring 0x601673AF (entries at 0x6182E234), whose only consumer 0x60167341 runs in task LENS_ASKDATA (0x6A, CPU0, priority 25, entry 0x601480AC); no direct call to the handlers"
+note = "writers: 0x601495F8 (lens init, 0) and 0x6014BE28 (A0), called only by 0x601671F2 from fcs 0x603F0382, which always stores 0x603F031A; 0x603F0382 runs on every TakeFcs mode_start/mode_end (via 0x60458921), so the firmware rewrites the stock value then and a replacement is dropped (a plugin must check the word and replace again). 0 until the first mode_start"
+
+# ======================================================================================================
+# --- CPU1 start: run a task on CPU1 ---
+# Run code on CPU1: CPU0 posts a function with cpucall_post; CPU1's CPUCALL_CPU1 task (0x101C, priority
+# 51, entry 0x60071DA7, 0x400 stack) runs it, and it creates a CPU1 task with the kernel's acre_tsk; the
+# task ends with exd_tsk. The firmware's own Wi-Fi shell start 0x60E44557 does the same: on CPU1 it
+# calls 0x60E445AE directly, else cpucall_post(0x60E445A9, 0, 1); 0x60E445AE calls acre_tsk with
+# {TA_ACT, exinf 0, entry 0x60E44363, priority 0x37, stack 0x400, kernel heap}. Every CALL form below was
+# counted by a byte scan of main-code-01 for call d16/d32 to the entry; each RET was read in the listing.
+
+[cpucall_post]
+address = 0x60071B71
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x28
+evidence = "high"
+returns = "int"
+args = ["a void *func", "a void *arg", "d unsigned core"]
+note = "boot1b; ret [d2,d3,a2,a3],0x28 at 0x60071C97 (its only RET); all 16 CALLs use [d2,d3,a2,a3],0x28. A0 func (0x60071B77), A1 arg (0x60071B79), D0 core as a byte (0x60071B71); core >= 3 prints an error. Own core: `calls (a1)` at once with A0 = arg (0x60071B9D..0x60071BA1). Else under dis_dsp the first free slot (func word 0) of the 32 of (target, source) gets {func, arg} (target 1 from CPU0: 0xA1BE74F0; 0x60071BD1..0x60071C2D), then cpucall_ring_post 0x6007179B queues {trampoline, source << 16 | slot} on the (source, target) ring (descriptor 0x6009D1F8 + target * 0x30 + source * 0x10 = {wp byte, rp byte, ring, IRQ 0x78 bit}; CPU0 -> CPU1: wp 0xA1BE6FD8, rp 0xA1BE6FD9, ring 0xA1BE6CD8, 32 entries, full when wp + 1 == rp mod 32) and raises the IRQ. Returns -1 only when all 32 slots are in use; a full ring prints '[CREQ]Buffer Full' and the post is lost with its slot held, yet 0 is returned (0x60071C8D..0x60071C93). The target's CPUCALL task runs `calls (a1)` with A0 = arg in task context, then frees the slot (CPU1: 0x60071E0E..0x60071E16). No result, no completion signal"
+
+[acre_tsk]
+address = 0x600306D3
+saves = ["d2", "a2", "a3"]
+frame = 0x14
+evidence = "high"
+returns = "int"
+args = ["a const void *ctsk"]
+note = "boot1 (kernel); ret [d2,a2,a3],0x14 at 0x600307DA (its only RET); all 21 CALLs use [d2,a2,a3],0x14. A0 -> T_CTSK of 6 words: atr (byte 0..3 checked, else E_RSATR -11; 2 = TA_ACT), exinf, entry, priority (u16, 1..128 else E_PAR -17), stack size (>= 0x14 else E_PAR), stack base (0 = the calling core's kernel heap, `(size + 0x17) & ~3` from 0x60036C44, E_NOMEM -33 on failure, then atr bit 0x80 marks the stack for exd_tsk to free: 0x60030CDE..0x60030D07). E_CTX -25 in an ISR or with the CPU locked. Copies T_CTSK to TCB+0x44 and with TA_ACT readies the task (0x60032654: frame at top - 0x14, entered through 0x600329DD with D0 = exinf by `calls`). Returns the new id (core in bits 12-14) or the error"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: the id, the TCB and the stack come from the executing core's KCB ((0x8FF00004)[(0x8050)]); CPU1 callers: cpuconn_scan 0x6006C3F9 in CPUCONN_CPU1 and the Wi-Fi shell start 0x60E445AE in CPUCALL_CPU1"
+
+[exd_tsk]
+address = 0x600319AA
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void"
+args = []
+note = "boot1 (kernel); `call 0x600318E2,[d2,d3,a2,a3],0x14; ret [],4` (RET at 0x600319AF, never reached); all 8 CALLs use [],4 (the cpu_conn workers 0x6006BF71/92/B3, five in sec5). 0x600318E2 (its only caller is this wrapper) takes the kernel lock, removes the running task, frees its stack through 0x60036D62 when atr bit 0x80 says the kernel allocated it, clears the TCB id (the id is free again), dispatches and calls kernel_fatal(-0x76) if that ever returns. Does not return; task context only"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: acts on the executing core's KCB ((0x8FF00004)[(0x8050)]); CPU1 callers: the cpu_conn worker for CPU0's packets 0x6006BF5B runs on CPU1 and CPU2"
+
+# ======================================================================================================
+# --- USB EP0: answer control requests from a hook on the dispatcher ---
+# The EP0 control request dispatcher of the USB device stack (sec5) and its two reply helpers. All
+# three run only in the USB core ISR (IRQ 0x51, level 5, CPU0) on the shared 4 KiB CPU0 interrupt
+# stack. Read by hand in the v1.4 main code: every CALL operand, every RET, the argument registers,
+# the span bytes, and a byte scan for branch/call targets and stored words inside the span.
+
+[usb_ep0_request]
+address = 0x60E6C98C
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x2C
+evidence = "high"
+returns = "void"
+args = ["a void *setup"]
+note = "sec5; both CALLs use [d2,d3,a2,a3],0x2c with A0 = 0x61A66C76, the 8-byte setup packet copy: 0x60E6C83F in usb_ep0_setup 0x60E6C7C3 (no data stage, or device-to-host) and 0x60E6C898 in usb_ep0_recv_next 0x60E6C847 (after the last OUT packet of a host-to-device data stage into 0x61A66B74, with the EP0 state u16 0x61A66B6C set to 0 first). Looks bRequest + 1 up in the 16-slot table 0x60F55550 {u32 key, u32 code} by linear probing (bmRequestType is not part of the key) and enters the handler with `jmp (a1)` inside its own frame; the handlers end `ret [d2,d3,a2,a3],0x2c` (0x60E6CA61, 0x60E6CA6A, 0x60E6CBDC, 0x60E6CDFA, 0x60E6CEA3), reply through usb_ep0_send or ack/stall through usb_ep0_finish, and use only (4..0x10,sp) of the frame. Neither caller reads D0 on return"
+
+[usb_ep0_request.hook]
+entry = "call"
+relocate = "93 f8 47 01 a5 00"
+cpu1 = "cpu0-only"
+cpu1_evidence = "static: the only references are the two CALLs above, in usb_ep0_setup and usb_ep0_recv_next, which are called only from usb_ep0_event 0x60E6C76E in the USB core ISR chain (IRQ 0x51 on CPU0: usb_isr_core 0x60E6D096 -> usb_isr_dispatch 0x60E6D0B0); no stored word equals an address in the span. Not run on the camera"
+note = "mov a0,a3; movbu (1,a3),d1; cmp 0,d1: instruction boundaries at +1 and +4 inside the 5 patched bytes, harmless here because the code runs only in the ISR and every nested ISR finishes before a task (the installer) runs again. The bge at +6 reads the flags of the relocated cmp; the trampoline's jmp back does not change PSW. Byte scan of main-code-01 for bcc/bra d8, bvc..bns d8, jmp/call d16/d32 and calls d16/d32: no target in 0x60E6C98D..0x60E6C991; no 32-bit word equals 0x60E6C98C..0x60E6C991 or its 0xA alias. The 5 bytes cross a 16-byte boundary (0x60E6C990): CPU0's I-cache invalidate covers it, no other core runs it"
+
+[usb_ep0_send]
+address = 0x60E6C8BD
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void"
+args = ["a const void *buf", "d unsigned len"]
+note = "sec5, EP0 ISR only; ret [],4 at 0x60E6C8E3 (only RET); its one CALL uses [],4: 0x60E6CBD7, the shared reply tail of the request handlers. Stores len (u16 0x61A66B6E) and buf (0x61A66B70), selects pipe 0, sets the EP0 state 0x61A66B6C to 1 and sends the first packet at once through 0x60E6C8E6 (64-byte packets; a short last packet returns the state and the remaining count to 0). The FIFO is written in 16-bit units, so buf must be 2-byte aligned. Not for plugins to call outside the EP0 hook"
+
+[usb_ep0_finish]
+address = 0x60E6D075
+saves = ["d2"]
+frame = 0x8
+evidence = "high"
+returns = "void"
+args = ["d unsigned ack"]
+note = "sec5, EP0 ISR only; ret [d2],8 at 0x60E6D083 (only RET); all 3 CALLs use [d2],8: 0x60E6CE9E (the dispatcher's stall tail, D0 0), 0x60E6CF17 (stall in the CLEAR_FEATURE helper 0x60E6CEA6, D0 0), 0x60E6D038 (D0 1 from 0x60E6CFB9, or 0). Selects pipe 0 and writes the EP0_CSR code of D0 through 0x60E6D3E5: 1 = ack (EP0_CSR 0x98F01018 = 0x82), 0 = stall (0x22). Not for plugins to call outside the EP0 hook"
+
+# ======================================================================================================
+# --- Live-view JPEG source: choose what live view feeds ---
+# The default return of the CPU0 through-kind function; patched to 3 it requests the Wi-Fi JPEG stream
+# next to the display. Read by hand in the v1.4 main code: the function body, every CALL operand (byte
+# scan of call d16/d32), every RET, and a word scan for stored pointers.
+
+[data.lv_kind_imm]
+address = 0x60223604
+type = "u8, code: the immediate of `mov 1,d0` (80 01) at 0x60223603"
+evidence = "high"
+note = "sec2; default return of the CPU0 through-kind function 0x60223538 (`ret [],16`, its only CALL 0x60223245 in the take-info builder, which stores D0 to message +0x133 at 0x6022324C; CPU2 copies it to through param +0x135 at 0x60520133). Reached by the jmps at 0x6022355D, 0x6022356A and the bne at 0x602235D0; no branch target inside the instruction. Kind bits: 1 LCD/EVF, 2 Wi-Fi JPEG, 8 HDMI; the other returns are 2, 4, 5, 8 and 9. 03 here requests display plus JPEG. The kind is evaluated per live-view frame: the take-info builder is entered through the callback word 0x61844C2C from the frame loop (0x60225D88, between the frame counter updates of 0x61844BF8/0x61844BFE), so a patch while live view runs changes the kind mid-stream"
