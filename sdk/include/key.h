@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <fenykl.h>
+#include "body.h"
 #include "event.h"
 #include "log.h"
 
@@ -30,7 +31,7 @@ enum fenykl_key {
 	FENYKL_KEY_HALF,	/* shutter half press (Trg1) */
 	FENYKL_KEY_FULL,	/* shutter full press (Trg2) */
 	FENYKL_KEY_POWER,	/* not exercised on the camera */
-	FENYKL_KEY_MODE_DIAL,	/* VALUE only; read it with fenykl_key_mode_dial() */
+	FENYKL_KEY_MODE_DIAL,	/* VALUE only */
 	FENYKL_KEY_COUNT,
 };
 #define FENYKL_KEY_BIT(k) (1u << (k))
@@ -47,7 +48,7 @@ struct fenykl_key_event {
 	enum fenykl_key key;
 	enum fenykl_key_kind kind;
 	uint32_t held_us;	/* RELEASE/SHORT/LONG: time since the press */
-	uint32_t now_us;	/* FENYKL_LOG_TIMER_NOW() */
+	uint32_t now_us;	/* FENYKL_TIMER_NOW() */
 	uint16_t gui;		/* fenykl_gui_state(), at the press for SHORT/LONG/RELEASE */
 	bool from_tick;		/* delivered by fenykl_key_tick (plugin task), not the hook */
 };
@@ -109,14 +110,5 @@ void fenykl_key_get_stats(struct fenykl_key_stats *st);
 /* Press+release of k through the stock entry: the firmware acts, ui_key_get_state does not see it.
    CPU0 task or handler. 0 or FENYKL_KEY_EARG (NONE, the mode dial). */
 int fenykl_key_inject(enum fenykl_key k) FENYKL_CPU0_ONLY("fenykl_key_inject");
-
-/* Polled state, any CPU0 context. */
-bool fenykl_key_pressed(enum fenykl_key k);	/* false for NONE and the mode dial */
-unsigned int fenykl_key_mode_dial(void);	/* 1 P, 2 A, 3 S, 4 M, 0x0A movie, 0x31 iAUTO, ... */
-uint16_t fenykl_gui_state(void);		/* GUI super state << 8 | state */
-#define FENYKL_GUI_SUPER(gui) ((gui) >> 8)
-#define FENYKL_GUI_SS_REC 0x02u		/* every live-view screen */
-#define FENYKL_GUI_SS_MENU 0x03u	/* main menu */
-#define FENYKL_GUI_SS_PLAY 0x06u	/* single playback */
 
 #endif

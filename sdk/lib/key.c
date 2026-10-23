@@ -9,7 +9,6 @@
  */
 #include <key.h>
 
-#define MODE_DIAL_VALUE (FENYKL_EVENT_KEY_VALUE | 0x1901u)
 #define KEY_ALL ((FENYKL_KEY_BIT(FENYKL_KEY_COUNT) - 1) & ~FENYKL_KEY_BIT(FENYKL_KEY_NONE))
 
 enum {
@@ -151,7 +150,7 @@ static bool key_complete(struct fenykl_key_handler *h, struct fenykl_key_event *
 	}
 	h->private.state = KS_IDLE;
 	fw_irq_mask_restore(psw);
-	e->held_us = FENYKL_LOG_ELAPSED(h->private.press_us, e->now_us);
+	e->held_us = FENYKL_TIMER_ELAPSED(h->private.press_us, e->now_us);
 	e->gui = h->private.gui;
 	if (state == KS_LONG) {
 		e->kind = FENYKL_KEY_RELEASE;
@@ -195,7 +194,7 @@ static enum fenykl_event_action key_release(struct fenykl_key_event *e,
 			break;
 	if (h && key_complete(h, e, ev))
 		return FENYKL_EVENT_CONSUME;
-	e->held_us = FENYKL_LOG_ELAPSED(keyl.press_us[e->key], e->now_us);
+	e->held_us = FENYKL_TIMER_ELAPSED(keyl.press_us[e->key], e->now_us);
 	e->kind = FENYKL_KEY_RELEASE;
 	key_observe(e);
 	return FENYKL_EVENT_PASS;
@@ -216,7 +215,7 @@ static enum fenykl_event_action key_on_event(struct fenykl_event *ev, void *arg)
 		keyl.st.last_unknown = ev->event;
 		return FENYKL_EVENT_PASS;
 	}
-	e.now_us = FENYKL_LOG_TIMER_NOW();
+	e.now_us = FENYKL_TIMER_NOW();
 	e.gui = fenykl_gui_state();
 	if (class == FENYKL_EVENT_KEY_PRESS)
 		return key_press(&e, ev);
@@ -242,7 +241,7 @@ static void key_tick_one(struct fenykl_key_handler *h, uint32_t now)
 
 	e.key = h->private.held;
 	e.gui = h->private.gui;
-	e.held_us = FENYKL_LOG_ELAPSED(h->private.press_us, now);
+	e.held_us = FENYKL_TIMER_ELAPSED(h->private.press_us, now);
 	if (state != KS_HELD || e.held_us < key_long_us(h)) {
 		fw_irq_mask_restore(psw);
 		return;
@@ -271,7 +270,7 @@ static void key_tick_one(struct fenykl_key_handler *h, uint32_t now)
 	fw_irq_mask_restore(psw);
 	if (state != KS_TICK_REL)
 		return;
-	e.held_us = FENYKL_LOG_ELAPSED(h->private.press_us, h->private.rel_us);
+	e.held_us = FENYKL_TIMER_ELAPSED(h->private.press_us, h->private.rel_us);
 	e.kind = FENYKL_KEY_RELEASE;
 	if (!h->long_stock) {
 		h->on(&e, h->arg);
@@ -284,7 +283,7 @@ static void key_tick_one(struct fenykl_key_handler *h, uint32_t now)
 
 void fenykl_key_tick(void)
 {
-	uint32_t now = FENYKL_LOG_TIMER_NOW();
+	uint32_t now = FENYKL_TIMER_NOW();
 
 	for (struct fenykl_key_handler *h = keyl.head; h; h = h->private.next)
 		key_tick_one(h, now);
@@ -348,21 +347,4 @@ int fenykl_key_inject(enum fenykl_key k)
 	fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | key_codes[k], 0, 0);
 	fenykl_event_inject(FENYKL_EVENT_KEY_RELEASE | key_codes[k], 0, 0);
 	return 0;
-}
-
-bool fenykl_key_pressed(enum fenykl_key k)
-{
-	return key_is_button(k) && fw_ui_key_get_state(key_codes[k]) == 1;
-}
-
-unsigned int fenykl_key_mode_dial(void)
-{
-	return fw_ui_key_get_state(MODE_DIAL_VALUE);
-}
-
-uint16_t fenykl_gui_state(void)
-{
-	const volatile uint8_t *sm = (const volatile uint8_t *)FW_GUI_SUPER;
-
-	return sm[0] << 8 | sm[1];
 }

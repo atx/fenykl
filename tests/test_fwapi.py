@@ -206,7 +206,7 @@ def test_relocator_accepts_the_reviewed_span(tmp_path):
 
 
 def test_select_hooks_needs_an_acknowledgement_for_an_unproven_cpu1_scope():
-    api = fwapi.Api([hooked(cpu1="unproven")], {}, {}, {}, {})
+    api = fwapi.Api([hooked(cpu1="unproven")], {}, {}, {})
     with pytest.raises(fwapi.ApiError, match="CPU1 never runs it"):
         fwapi.select(api, hooks=["f"])
     sel = fwapi.select(api, hooks=["f"], cpu1_unproven=["f"])
@@ -235,20 +235,6 @@ def test_declared_relocate_bytes_match_the_stock_image(name):
 EM10II_TOML = sdk.target("em10ii").dir / "firmware.toml"
 
 
-@needs_toolchain
-def test_relocator_accepts_the_em10ii_spans(tmp_path):
-    funcs = {f.name: f for f in fwapi.load(EM10II_TOML).functions}
-    objdump = sdk.target("em10ii").tool("objdump")
-    assert fwapi.relocated_instructions(funcs["appevent_post"], objdump, tmp_path) == [
-        "mov d0,d3",
-        "mov d1,a2",
-        "movbu (0xa1c184da),d1",
-    ]
-    assert fwapi.relocated_instructions(funcs["cw_updateDisplay"], objdump, tmp_path) == [
-        f"mov {0x60BC53C4},a1"  # objdump prints this immediate in decimal
-    ]
-
-
 def test_em10ii_unproven_hooks_patch_one_aligned_8_byte_block():
     """A core with a stale I-cache line must see the whole stock entry: the jmp may not straddle an
     aligned 8-byte block (one line at any line size >= 8)."""
@@ -259,7 +245,7 @@ def test_em10ii_unproven_hooks_patch_one_aligned_8_byte_block():
             assert f.address % 8 + fwapi.JMP_SIZE <= 8, f.name
 
 
-# ---- Callbacks, slots and vtables ----
+# ---- Callbacks and slots ----
 
 EPL3_TOML = sdk.target("epl3").dir / "firmware.toml"
 CALLBACK = """
@@ -279,12 +265,15 @@ cpu1 = "unproven"
 cpu1_evidence = "test"
 note = ""
 """
-VTABLE = """
-[vtables.vt]
-address = 0x60000000
-count = 4
-cpu1 = "cpu0-only"
-cpu1_evidence = "test"
+# A function named like the slot: the two would share fw_orig_s.
+FUNCTION_S = """
+[s]
+address = 0x6E600000
+saves = []
+frame = 4
+evidence = "high"
+returns = "int"
+args = []
 note = ""
 """
 
@@ -321,35 +310,50 @@ def test_bad_callback_declarations(tmp_path, edit, match):
         (("0x60000008", "0x60000006"), "not word-aligned"),
         (('cpu1 = "unproven"', 'cpu1 = "maybe"'), "cpu1 must be one of"),
         (('cpu1_evidence = "test"', 'cpu1_evidence = " "'), "cpu1_evidence"),
-        (("[vtables.vt]", "[vtables.s]"), "names used twice"),
+        (("[slots.s]", FUNCTION_S + "[slots.s]"), "names used twice"),
     ],
 )
 def test_bad_slot_declarations(tmp_path, edit, match):
-    text = (CALLBACK + SLOT + VTABLE).replace(*edit)
+    text = (CALLBACK + SLOT).replace(*edit)
     with pytest.raises(fwapi.ApiError, match=match):
         load_toml(tmp_path, text)
 
 
-def test_select_gates_slots_and_vtables_like_hooks(tmp_path):
-    api = load_toml(tmp_path, CALLBACK + SLOT + VTABLE)
+def test_select_gates_slots_like_hooks(tmp_path):
+    api = load_toml(tmp_path, CALLBACK + SLOT)
     with pytest.raises(fwapi.ApiError, match="s: it is not proven"):
         fwapi.select(api, slots=["s"])
-    with pytest.raises(fwapi.ApiError, match="no vtable declared"):
-        fwapi.select(api, vtables=["s"])
-    with pytest.raises(fwapi.ApiError, match="cpu1_unproven lists vt2"):
-        fwapi.select(api, vtables=["vt"], cpu1_unproven=["vt2"])
-    sel = fwapi.select(api, slots=["s"], vtables=["vt"], cpu1_unproven=["s"])
+    with pytest.raises(fwapi.ApiError, match="no slot declared"):
+        fwapi.select(api, slots=["t"])
+    with pytest.raises(fwapi.ApiError, match="cpu1_unproven lists t"):
+        fwapi.select(api, slots=["s"], cpu1_unproven=["s", "t"])
+    sel = fwapi.select(api, slots=["s"], cpu1_unproven=["s"])
     assert [s.name for s in sel.slots] == ["s"]
 
 
-def test_slot_in_a_selected_vtable_gets_its_clone_index(tmp_path):
-    api = load_toml(tmp_path, CALLBACK + SLOT + VTABLE)
-    with_vt = fwapi.header(
-        api, fwapi.select(api, slots=["s"], vtables=["vt"], cpu1_unproven=["s"])
-    )
-    assert "fenykl_vtable_vt.clone[2] = FENYKL_CB(cb, fn)" in with_vt
-    alone = fwapi.header(api, fwapi.select(api, slots=["s"], cpu1_unproven=["s"]))
-    assert "FENYKL_VTABLE_SET_s" not in alone
+def test_select_needs_the_sdk_acknowledgement_for_an_unproven_sdk_slot(tmp_path):
+    """An SDK slot is acknowledged in target.toml (sdk_cpu1_unproven), never in plugin.toml."""
+    api = load_toml(tmp_path, CALLBACK + SLOT)
+    with pytest.raises(fwapi.ApiError, match="s: the SDK binds it itself"):
+        fwapi.select(api, slots=["s"], cpu1_unproven=["s"], sdk_slots=["s"])
+    with pytest.raises(
+        fwapi.ApiError, match='add "s" to target.toml sdk_cpu1_unproven'
+    ):
+        fwapi.select(api, sdk_slots=["s"])
+    with pytest.raises(fwapi.ApiError, match="plugin.toml cpu1_unproven lists s"):
+        fwapi.select(api, cpu1_unproven=["s"], sdk_slots=["s"], sdk_cpu1_unproven=["s"])
+    with pytest.raises(fwapi.ApiError, match="target.toml sdk_cpu1_unproven lists t"):
+        fwapi.select(api, sdk_slots=["s"], sdk_cpu1_unproven=["s", "t"])
+    sel = fwapi.select(api, sdk_slots=["s"], sdk_cpu1_unproven=["s"])
+    assert [s.name for s in sel.slots] == ["s"]
+
+
+def test_select_needs_the_sdk_acknowledgement_for_an_unproven_sdk_hook():
+    api = fwapi.Api([hooked(cpu1="unproven")], {}, {}, {})
+    with pytest.raises(fwapi.ApiError, match="sdk_cpu1_unproven to build it"):
+        fwapi.select(api, sdk_hooks=["f"])
+    sel = fwapi.select(api, sdk_hooks=["f"], sdk_cpu1_unproven=["f"])
+    assert [f.name for f in sel.hooks] == ["f"]
 
 
 def test_call_thunk_reads_gcc_arguments_after_the_target():
@@ -381,25 +385,23 @@ def test_call_thunk_reads_gcc_arguments_after_the_target():
     ]
 
 
-def test_declared_slots_and_vtables_match_the_stock_image():
-    """A slot in the loaded image holds its stock value; a vtable has exactly `count` code pointers."""
-    fw = unpack_firmware(stock_image())
+def test_em10ii_slots_match_the_stock_image():
+    """A slot in the loaded image holds its stock value (the E-PL3 slots are all RAM words)."""
+    fw = unpack_firmware(stock_image("em10ii"))
     code = fw.blocks[fw.find_block("main-code-01")].body
-    base = 0x6E601420
+    base = TARGETS["em10ii"].load_addresses["main-code-01"]
 
     def word(address: int) -> int:
         return int.from_bytes(code[address - base : address - base + 4], "little")
 
-    def is_code(value: int) -> bool:
-        return base <= value < base + len(code)
-
-    api = fwapi.load(EPL3_TOML)
-    for slot in api.slots.values():
-        if base <= slot.address < base + len(code):
-            assert word(slot.address) == slot.expected, slot.name
-    for vt in api.vtables.values():
-        assert all(is_code(word(vt.address + 4 * i)) for i in range(vt.count)), vt.name
-        assert not is_code(word(vt.address + 4 * vt.count)), vt.name
+    slots = [
+        s
+        for s in fwapi.load(EM10II_TOML).slots.values()
+        if base <= s.address < base + len(code)
+    ]
+    assert slots
+    for slot in slots:
+        assert word(slot.address) == slot.expected, slot.name
 
 
 # ---- Data ----

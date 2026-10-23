@@ -1,7 +1,7 @@
 """Logging library (sdk/lib/log.c) in the GDB simulator (tests/sim/log/): ring wrap and
 overflow, the CPU1 ring refilled while the flusher drains it, record formatting and continuation
-records, [lost N] from sequence gaps, the 30-bit timer wrap, the size cap and the failed-append
-error, against mocks of the file RPC, sprintf and the PSW calls.
+records, [lost N] from sequence gaps, the 30-bit timer wrap and gaps longer than it, the size cap
+and the failed-append error, against mocks of the file RPC, sprintf and the PSW calls.
 test_log.c checks the counters (exit status); this file checks the text it dumps after each boot."""
 
 import re
@@ -184,6 +184,8 @@ def test_failed_append_is_reported_not_worked_around(run):
     assert dumps[4].startswith(dumps[3])
     assert find(dumps[4], "after a failed init")
     assert 'rpc_fopen("C:\\FENYKL.LOG", "a") failed 3 times' in err
+    text = err.removeprefix("err\n")
+    assert text[126:128] == "\r\n", "the padded line must end within FLOG_ERR_SIZE"
 
 
 def this_boot(dump: str) -> list[str]:
@@ -206,9 +208,29 @@ def test_init_before_the_card_mount_writes_header_and_records_once_it_opens(run)
 
 def test_a_cable_keeps_the_gate_closed_after_it_is_pulled(run):
     """A reopened gate after a USB session wrote the camera's stale FAT back over the PC's changes:
-    nothing after the cable reaches the file, the hold record included."""
+    nothing after the cable reaches the file."""
     boot = this_boot(run[0][6])
     seventh = "\r\n".join(boot)
     assert boot[0].split("] ", 1)[1].startswith("I log    : fenykl log boot: ")
     assert sequence(seventh, "gate") == list(range(100))
     assert not find(seventh, "card gate|lost")
+
+
+def test_stamps_keep_gaps_longer_than_one_timer_wrap(run):
+    """timer_now wraps every 2^30 us (1073.74 s): a ring without records for longer than that, with
+    the card gate open and closed, and a record queued for longer than that keep their stamps."""
+    boot = this_boot(run[0][7])
+
+    def at(pattern: str) -> int:
+        (line,) = [line for line in boot if re.search(pattern, line)]
+        return stamp(line)
+
+    idle = [at(rf": idle {i}$") for i in range(3)]
+    closed = at(r"W log    : card gate closed \(card not mounted\)")
+    reopened = at(
+        r"I log    : card gate open again after 1600000 ms, 16 flushes skipped$"
+    )
+    assert idle[1] - idle[0] == 1_200_000_000
+    assert closed - idle[1] == 1_300_000_000
+    assert idle[2] - closed == 500_000_000
+    assert reopened - idle[2] == 1_100_000_000

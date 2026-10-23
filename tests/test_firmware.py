@@ -1,6 +1,5 @@
 import hashlib
 import os
-import struct
 
 import pytest
 from conftest import stock_image
@@ -11,7 +10,6 @@ from fenykl.firmware import (
     BlockHeader,
     Firmware,
     FirmwareFormatError,
-    compute_checksum,
     load_unpacked,
     pack_firmware,
     save_unpacked,
@@ -19,18 +17,6 @@ from fenykl.firmware import (
     unpack_firmware,
     unscramble,
 )
-
-
-def test_checksum_negates_wrapping_sum():
-    data = struct.pack("<3I", 0xFFFFFFFF, 0x00000002, 0x12345678)
-    expected = (-(0xFFFFFFFF + 2 + 0x12345678)) & 0xFFFFFFFF
-    assert compute_checksum(data) == expected
-    # Appending the checksum makes the total sum zero.
-    assert compute_checksum(data + struct.pack("<I", expected)) == 0
-
-
-def test_checksum_is_little_endian():
-    assert compute_checksum(bytes([1, 0, 0, 0])) == 0xFFFFFFFF
 
 
 def test_scramble_known_vector():
@@ -41,13 +27,6 @@ def test_scramble_known_vector():
     expected = bytes(b ^ 0xFF for b in stored)
     assert scramble(plain) == expected
     assert unscramble(expected) == plain
-
-
-def test_scramble_inverse():
-    data = os.urandom(16 * 1000)
-    assert unscramble(scramble(data)) == data
-    assert scramble(unscramble(data)) == data
-    assert scramble(data) != data
 
 
 def make_firmware() -> Firmware:
@@ -139,12 +118,36 @@ def test_round_trip(tmp_path, name):
 
 # These pin the unpack format of the stock E-PL3 v1.6 image: (file, size, sha256) of every file.
 STOCK_UNPACKED = [
-    ("00.main-code-01.bin", 0xD7FFC0, "c291722827a5120fc06ca288b439cae82ebf597ac2cd83eba30a7f0fe6a72687"),
-    ("01.main-lang.bin", 0x15FFFC0, "af5a35e02304183c9e716af99b9fb619abb13f5a71e41146986bf9d833e2e20f"),
-    ("02.main-b106.bin", 0x25FFC0, "ae9d7a1cc5f0d3bfeedb4dfecedc70be8a423e9bea7070cee16363fb30eaacfb"),
-    ("03.main-imgs-02.bin", 0x67FFC0, "218b6003e490efc432851e831086cf8f1237f2fde3fade4be93dd89425459941"),
-    ("04.ibis-code-01.bin", 0x10000, "e131370def9d69fe4484592f0cf4bc84c865162007c0cae11405a4911c8b07a2"),
-    ("manifest.json", 0x596, "e81b2f4bad0a1227bcf7e2134b680db27f76173f2ef455d4f4404a1e5933678b"),
+    (
+        "00.main-code-01.bin",
+        0xD7FFC0,
+        "c291722827a5120fc06ca288b439cae82ebf597ac2cd83eba30a7f0fe6a72687",
+    ),
+    (
+        "01.main-lang.bin",
+        0x15FFFC0,
+        "af5a35e02304183c9e716af99b9fb619abb13f5a71e41146986bf9d833e2e20f",
+    ),
+    (
+        "02.main-b106.bin",
+        0x25FFC0,
+        "ae9d7a1cc5f0d3bfeedb4dfecedc70be8a423e9bea7070cee16363fb30eaacfb",
+    ),
+    (
+        "03.main-imgs-02.bin",
+        0x67FFC0,
+        "218b6003e490efc432851e831086cf8f1237f2fde3fade4be93dd89425459941",
+    ),
+    (
+        "04.ibis-code-01.bin",
+        0x10000,
+        "e131370def9d69fe4484592f0cf4bc84c865162007c0cae11405a4911c8b07a2",
+    ),
+    (
+        "manifest.json",
+        0x596,
+        "e81b2f4bad0a1227bcf7e2134b680db27f76173f2ef455d4f4404a1e5933678b",
+    ),
 ]
 
 

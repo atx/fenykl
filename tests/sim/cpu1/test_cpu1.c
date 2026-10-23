@@ -1,5 +1,5 @@
 /* The API contract of the CPU1 worker runtime (sdk/arch/epl3/cpu1.c) in the GDB simulator: start,
-   state, stop with its timeout, restart and the refusals, against a fake TCB of task 0x1002 and the
+   stop with its timeout, restart and the refusals, against a fake TCB of task 0x1002 and the
    mocks in fw.S. plugin_main sets sim_exit_code to 0 (pass) or 1 + the number of the
    lowest failed check. */
 #include <fenykl.h>
@@ -68,7 +68,6 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	stock_tcb();
 	TABLE_1002 = 0x6E690000u; /* not an uncached TCB pointer */
 	refused(1, FENYKL_CPU1_ETCB);
-	CHECK(1, fenykl_cpu1_state() == FENYKL_CPU1_ETCB);
 	CHECK(1, fenykl_cpu1_stop(10) == FENYKL_CPU1_ETCB && mock_args[2] == 0);
 
 	/* 2: the stock task is not dormant */
@@ -87,41 +86,38 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	sim_enter_task(T32(0x4C), T32(0x48));
 	CHECK(4, worker_runs == 1 && worker_arg == 0xC0FFEE00u && worker_stop_seen == 0);
 
-	/* 5: state */
+	/* 5: stop of the waiting task: the worker returns after 3 sleeps and sees the stop request */
 	T16(0xC) = 4;
-	CHECK(5, fenykl_cpu1_state() == 4);
-
-	/* 6: stop: the worker returns after 3 sleeps and sees the stop request */
 	mock_args[6] = 3;
-	CHECK(6, fenykl_cpu1_stop(100) == 0 && mock_args[5] == 3 && mock_args[2] == 0);
-	CHECK(6, stop_flag() == 1 && fenykl_cpu1_state() == 0x10);
+	CHECK(5, fenykl_cpu1_stop(100) == 0 && mock_args[5] == 3 && mock_args[2] == 0);
+	CHECK(5, stop_flag() == 1);
 	sim_enter_task(T32(0x4C), T32(0x48));
-	CHECK(6, worker_stop_seen == 1);
+	CHECK(5, worker_stop_seen == 1);
 
-	/* 7: restart: the borrowed TCB is accepted again */
-	CHECK(7, fenykl_cpu1_start(simworker_cpu1, (void *)0x77) == 0);
-	CHECK(7, mock_args[0] == 2 && T32(0x48) == 0x77 && stop_flag() == 0);
+	/* 6: restart: the borrowed TCB is accepted again */
+	CHECK(6, fenykl_cpu1_start(simworker_cpu1, (void *)0x77) == 0);
+	CHECK(6, mock_args[0] == 2 && T32(0x48) == 0x77 && stop_flag() == 0);
 
-	/* 8: not dormant */
+	/* 7: not dormant */
 	T16(0xC) = 1;
-	CHECK(8, fenykl_cpu1_start(simworker_cpu1, (void *)0x88) == FENYKL_CPU1_EBUSY);
-	CHECK(8, mock_args[0] == 2 && T32(0x48) == 0x77);
+	CHECK(7, fenykl_cpu1_start(simworker_cpu1, (void *)0x88) == FENYKL_CPU1_EBUSY);
+	CHECK(7, mock_args[0] == 2 && T32(0x48) == 0x77);
 
-	/* 9: the worker does not return: OlyTaskStop after the timeout */
+	/* 8: the worker does not return: OlyTaskStop after the timeout */
 	mock_args[4] = 1;
 	mock_args[5] = 0;
-	CHECK(9, fenykl_cpu1_stop(5) == FENYKL_CPU1_ETIMEOUT);
-	CHECK(9, mock_args[5] == 5 && mock_args[2] == 1 && mock_args[3] == 0x1002);
+	CHECK(8, fenykl_cpu1_stop(5) == FENYKL_CPU1_ETIMEOUT);
+	CHECK(8, mock_args[5] == 5 && mock_args[2] == 1 && mock_args[3] == 0x1002);
 
-	/* 10: not even OlyTaskStop ends it */
+	/* 9: not even OlyTaskStop ends it */
 	T16(0xC) = 4;
 	mock_args[4] = 0;
-	CHECK(10, fenykl_cpu1_stop(2) == FENYKL_CPU1_EBUSY && mock_args[2] == 2);
+	CHECK(9, fenykl_cpu1_stop(2) == FENYKL_CPU1_EBUSY && mock_args[2] == 2);
 
-	/* 11: the borrowed TCB with another stack is no longer ours */
+	/* 10: the borrowed TCB with another stack is no longer ours */
 	T16(0xC) = 0x10;
 	T32(0x58) += 64;
-	refused(11, FENYKL_CPU1_ETCB);
+	refused(10, FENYKL_CPU1_ETCB);
 
 	sim_exit_code = fail ? 1 + __builtin_ctz(fail) : 0;
 }

@@ -110,21 +110,31 @@ struct flog_stamp {
 	uint32_t s, us;
 };
 
-/* Formatting state of one record stream: the extended stamp and the next expected seq. */
+/* A raw timer_now and its extended stamp. */
+struct flog_time {
+	uint32_t raw;
+	struct flog_stamp ext;
+};
+
+/*
+ * Formatting state of one record stream. A record's stamp is the first one at or after `at` with
+ * its raw stamp (sdk/docs/logging.md section 6.1).
+ */
 struct flog_stream {
-	uint32_t last;		/* raw stamp of the last record */
-	struct flog_stamp ext;	/* of the last record */
+	struct flog_time at;	/* the last record, or a later lower bound for the next one */
+	uint32_t pos;		/* ring counter of the next record */
+	uint32_t fresh;		/* ring head at the end of the last flush */
 	uint32_t expect;	/* next seq, 16 bits */
 	uint32_t ring;		/* 0 or 1 */
 };
 
-/* All mutable state of the library but ring 1; the flusher's part is CPU0 task context only. */
 /* Ring slots a text message of len bytes takes (at least one). */
 static inline unsigned int flog_text_slots(unsigned int len)
 {
 	return len ? (len + FLOG_TEXT_PER_SLOT - 1) / FLOG_TEXT_PER_SLOT : 1;
 }
 
+/* All mutable state of the library but ring 1; the flusher's part is CPU0 task context only. */
 struct flog_state {
 	/* Set by fenykl_log_init once the streams start; CPU0 records before only count early. */
 	volatile bool ready;
@@ -141,12 +151,13 @@ struct flog_state {
 
 	/* Card gate (fenykl_card_io_allowed), checked by every flush. */
 	bool gate_closed;
-	bool gate_held;			/* closed by a cable: until power-off */
 	uint32_t gate_last;		/* timer_now at the last check while closed */
 	uint32_t gate_us;		/* closed time not yet in gate_ms */
 	uint32_t gate_ms;		/* closed time of this period */
 	uint32_t gate_skips;		/* flushes skipped in this period */
 
+	struct flog_time clock;		/* timer_now, extended by every flush */
+	struct flog_time fresh_at;	/* records from stream[].fresh on are later (a second early) */
 	struct flog_stream stream[2];	/* per ring */
 	struct flog_slot stage[2][FLOG_STAGE_RECORDS];
 

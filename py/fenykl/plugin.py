@@ -13,14 +13,21 @@ from .sdk import SDK, SdkTarget, all_targets, target
 # The SDK library: runtime, logging, configuration, HUD. Every plugin links all of it that its target
 # supports; --gc-sections drops what the plugin does not use.
 LIB = SDK / "lib"
-# Library files of a camera feature, built only for targets with that capability (target.toml).
+# Library files of a camera feature, built only for targets with that capability (target.toml). A
+# file named <name>_<camera>.c, <camera> exactly a target name (sdk/arch/<camera>/), is that
+# camera's part of a library and is built only for it (lib_camera).
 LIB_CAPABILITIES = {
     "afc.c": "afc",
     "afc_sm.c": "afc",
     "event.c": "event",
     "key.c": "event",
+    "shot.c": "shot",
+    "shot_pix.c": "shot",
     "hud.c": "hud",
+    "hud_em10ii.c": "hud",
     "ui.c": "ui",
+    "ui_epl3.c": "ui",
+    "ui_em10ii.c": "ui",
 }
 # Keys of a plugin.toml [capabilities.<name>] table.
 CAPABILITY_KEYS = ("sources", "hooks", "cpu1_unproven")
@@ -53,12 +60,22 @@ def plugin_targets(plugin_dir: Path, only: str | None = None) -> list[SdkTarget]
     return [target(only)]
 
 
+def lib_camera(path: Path) -> str | None:
+    """The camera whose part of a library `path` is (<name>_<camera>.c), None for a shared file."""
+    name, sep, camera = path.stem.rpartition("_")
+    return (
+        camera if sep and name and camera in {t.name for t in all_targets()} else None
+    )
+
+
 def lib_sources(target: SdkTarget) -> list[Path]:
-    """The sdk/lib files built for `target`: all but those of features it lacks (LIB_CAPABILITIES)."""
+    """The sdk/lib files built for `target`: all but those of features it lacks (LIB_CAPABILITIES)
+    and those of other cameras (lib_camera)."""
     return [
         p
         for p in sorted(LIB.glob("*.c"))
         if LIB_CAPABILITIES.get(p.name, "") in ("", *target.capabilities)
+        and lib_camera(p) in (None, target.name)
     ]
 
 
@@ -139,14 +156,13 @@ def link(
     cpu1_unproven: Sequence[str] = (),
     firmware: Path | None = None,
     slots: Sequence[str] = (),
-    vtables: Sequence[str] = (),
     cpu1_sources: Sequence[Path] = (),
     run_on_usb: bool = False,
 ) -> Path:
     """Compile the plugin sources with the runtime, the firmware thunks, the stubs of `hooks` and of
-    the target's `sdk_hooks` and the descriptors of `slots` and `vtables` and link them. Sources in
-    `cpu1_sources` are built with FENYKL_CPU1 (CPU1 code: CPU0-only firmware calls do not
-    compile). The sdk/lib files get FENYKL_PLUGIN_CPU1 = 1 if the plugin has `cpu1_sources`, else
+    the target's `sdk_hooks`, the descriptors of `slots` and of the target's `sdk_slots` and link
+    them. Sources in `cpu1_sources` are built with FENYKL_CPU1 (CPU1 code: CPU0-only firmware calls
+    do not compile). The sdk/lib files get FENYKL_PLUGIN_CPU1 = 1 if the plugin has `cpu1_sources`, else
     0. Every file gets FENYKL_TARGET_<NAME> and FENYKL_HAS_<CAPABILITY> (target.toml).
     `firmware` replaces the target's firmware.toml (simulator tests).
     `run_on_usb` lets the runtime call plugin_main on a boot started by the USB cable."""
@@ -159,8 +175,9 @@ def link(
             hooks,
             cpu1_unproven,
             slots,
-            vtables,
             target.sdk_hooks,
+            target.sdk_slots,
+            target.sdk_cpu1_unproven,
         )
     except fwapi.ApiError as e:
         raise BuildError(str(e)) from e
@@ -217,7 +234,9 @@ def check_isa(elf: Path, workdir: Path, target: SdkTarget) -> str:
     """Run the target's ISA check (toolchain/isacheck/check_isa.py, needs Ghidra) and return its
     report; fails on any ISA error."""
     if target.isa_check is None:
-        raise BuildError(f"target {target.name} has no ISA check (target.toml isa_check)")
+        raise BuildError(
+            f"target {target.name} has no ISA check (target.toml isa_check)"
+        )
     env = dict(os.environ, MN103_BINUTILS=target.tool(""))
     return _run(
         [
@@ -268,7 +287,6 @@ def build(
         hooks=hooks,
         cpu1_unproven=cpu1_unproven,
         slots=config.get("slots", []),
-        vtables=config.get("vtables", []),
         cpu1_sources=cpu1_sources,
         run_on_usb=run_on_usb,
     )

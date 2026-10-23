@@ -1,6 +1,11 @@
 # Settings page library (`sdk/lib/ui.c`)
 
-Status: camera-tested: the stock list view draws slot 0xF in super 0x0D,
+The option core (`ui.c`: list, keys, value text, cfg calls, and the page lifecycle: open and close
+bookkeeping, the start of the install, the stock word check, the "not saved" state) is shared; each
+camera patches and draws its page in `lib/ui_<camera>.c`. Sections 1 to 6 describe the E-PL3 page
+(`ui_epl3.c`), section 7 the E-M10 II page (`ui_em10ii.c`).
+
+Status (E-PL3): camera-tested: the stock list view draws slot 0xF in super 0x0D,
 borrowed titles show and are given back (`stray 0`), and `fenykl_cfg_set` from GUI actions saves
 (58 sets, 214 publishes, 0 failures). Simulator tests in `tests/test_sim.py` (program `ui`). Used by
 `projects/main`. Linked into every plugin, like all of `sdk/lib/`; a plugin that does not call it
@@ -57,8 +62,8 @@ Header `sdk/include/ui.h` (the reference). Errors are `FENYKL_UI_E*` (negative).
 
 | Call | Context | Does |
 | --- | --- | --- |
-| `fenykl_ui_install()` | CPU0 task, after `fenykl_cfg_init` | `EAGAIN` until the GUI is in live view or playback with its language; then collects the list (`EOPTS`), checks 31 stock words and the 21 borrowed ids (`ESTOCK`, each mismatch logged) and installs; all or nothing |
-| `fenykl_ui_tick()` | CPU0 task, ~100 ms | re-applies the row's strings after a language change; computes the "not saved" state; gives back lang ids left lent outside the page |
+| `fenykl_ui_install()` | CPU0 task, after `fenykl_cfg_init` | `EBUSY` once installed; collects the list (`EOPTS`, logged); `EAGAIN` until the GUI is in live view or playback with its language; checks 31 stock words and the 21 borrowed ids (`ESTOCK`, each mismatch logged) and installs; all or nothing |
+| `fenykl_ui_tick()` | CPU0 task, ~100 ms | re-applies the row's strings after a language change; computes the "not saved" state (logged when it starts); gives back lang ids left lent outside the page |
 | `fenykl_ui_get_stats(st)` | any | counters (`struct fenykl_ui_stats`) |
 | `fenykl_ui_log` | any | the log module `ui`: INFO logs install, open, entry, exit, sets, system events; DEBUG adds every key and ignored event |
 
@@ -120,3 +125,47 @@ in the menu / on the row but the view check failed), `entries`, `exits`, `keys`,
 - If the camera resets while the page is open nothing persists: the language array is a RAM copy
   loaded at boot. If the GUI left the page without any exit path the library sees, tabs A..C show
   option labels until the tick gives the ids back (~300 ms, logged).
+
+## 7. E-M10 II (`ui_em10ii.c`)
+
+Status: simulator (`tests/test_sim.py`, `test_em10ii_ui_runs_in_the_simulator`). The mechanism ran
+on the camera in a probe plugin (2026-10-21): the kind-5 row title in the stock font, OK
+pushing a screen at depth 3, UP/DOWN/OK presses and releases reaching it, `gui_data_set` of slot
+0x38 returning 1, half press ending the menu (0x9000 -> default 0x9625, 0xAF00, screen deleted),
+all on CPU0. This library works on the camera in `projects/main` (2026-10-21 and 2026-10-23): the
+"Fenykl" row, page open, RIGHT stepping the value, MENU popping the page, half press closing the
+menu, reopen after a half press, `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle; all
+on CPU0. Not run on the camera: dials, LEFT, several rows.
+
+- Entry: the Eye-Fi row of Custom menu tab K (Utility). The slots of `target.toml` `sdk_slots`:
+  condition 113 of setting 0x193's rule answers "allowed" (the row is enabled), the OK record's
+  row callback opens the page, the RIGHT record's swallows the key. Both return 1 ("handled"), so
+  the stock On/Off pop-up, whose OK writes setting 0x193, never opens. The OK and RIGHT slots are
+  replaced before the condition; any failure restores all three (`ESTOCK`, logged). The row's
+  title descriptor (`data.custom_row_eyefi` +8) becomes {kind 5, "Fenykl"}. Everything stays
+  installed for the boot. Install needs no GUI state: no `EAGAIN`.
+- Checked before anything is written: the menu app vtable's event and pop methods, the row's
+  setting id 0x193 and its stock title words; the slots' stock values (`fenykl_slot_replace`).
+- Open: the OK callback pushes a static screen {event, delete} as entry depth + 1 of the main menu
+  app (`data.menu_app`), kind and group 0xF0, if the app's vtable, wanted == current depth (< 7)
+  and the top screen's class (`menu_screen_vt_list0` / `_list5`) are as expected; else logged and
+  refused. The list republishes its own slot 0x38 right after the callback returns, so the page
+  copies that slot and publishes its own on the screen's first event (normally the OK release).
+- Drawing: a copy of the list's slot 0x38 with 7 rows per page: title cells (+0x3E) and value
+  cells (+0x244, the stock value column; the probe showed a title text there in the value column)
+  as kind 5 text, cursor u16 +6 + 2k = 2 on the cursor row, row marks +0x22 + 2k = 0xB on filled
+  rows, the 0x94-byte cell sets at +0x44A and +0x856 cleared, scroll bar +0/+2/+4 = pages > 1,
+  pages, page. Header, tab column and help line stay the stock list's.
+- Keys: the screen gets 0x9004..0x900E and the dials 0x9031/0x9032 (param as on the E-PL3, logged
+  at DEBUG); releases are ignored; 0x971D republishes; MENU (outside an edit) calls the app's pop
+  method with reason 2, and the app deletes the screen and re-shows the list. Every other event goes
+  to `menu_app_default` (half press, mode dial: menu end) and is logged with its result.
+- Close: every way the app drops the screen calls its delete: a pending edit is dropped, the page
+  is closed (`close (n)` in the log).
+- Not shown: the "not saved" state (only logged by `fenykl_ui_tick`); the arrow icons around an
+  INT in edit mode (U+A050 / U+A03F) are not proven in kind-5 text.
+- Counters: `entries` (opened), `wrap_pass` (RIGHT swallowed), `refused`, `exits`,
+  `keys`, `backs` (MENU pops), `sys` (events to the default handler), `ignored` (releases),
+  `sets`, `set_fail`, `publishes`, `publish_fail`, `cpu1_actions` (callbacks on another core:
+  counted, nothing touched; the delete still closes the page and keeps the static screen from
+  being freed).

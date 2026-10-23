@@ -25,12 +25,12 @@ firmware functions placed at their real firmware addresses. Every C test program
 - main_fmeter: the main plugin's focus meter (sdk/projects/main/main_fmeter.c): area choice
   (single target, centre fallback, all-target maximum), the fixed-point log2, the absolute scale's
   cell boundaries and the half-height pattern offset, the peak cell, the hold, MF.
-- main_shot: the main plugin's screenshot pixel work (sdk/projects/main/main_shot.c): YCbCr to RGB
-  against a BT.601 reference, palettes, live view placement, alpha blending, 4-bpp nibble order,
-  layer order, the 16:9 stretch and the PPM header.
 - main_rbswap: the main plugin's R/B swap hook (sdk/projects/main/main_rbswap_hook.c) on img_exec's
   real entry bytes: option off, P x M on live view and stills, the class and identity filters, the
   restore and a matrix kept when it changed during the pass, no IMG_PARAM, the counters.
+- shot: the screenshot library's pixel work (sdk/lib/shot_pix.c): YCbCr to RGB against a BT.601
+  reference, palettes, live view placement, alpha blending, 4-bpp nibble order, layer order, the
+  face/AF frame layer (scaling, transparent indices, stacking), the 16:9 stretch and the PPM header.
 - afc_sm: the contrast client's attach/detach state machine (sdk/lib/afc_sm.c): boot delay, settle
   and cooldown, the stop on a gate, the callback's stop, a stop pending while live view is off, and
   every error path ending passive.
@@ -39,16 +39,19 @@ firmware functions placed at their real firmware addresses. Every C test program
   BOOL/ENUM/INT editing with the value text, the "not saved" header with the real cfg library
   saving to a mock card, and the borrowed lang ids on a fake language table, given back on every
   way out of the page.
-- birddetect_hook: birddetect's fd_hw_shutdown hook (sdk/projects/birddetect/hook.c) on the
-  function's real entry bytes: install, a live cycle and a still call through the original, remove.
-- cpu1: the API contract of the CPU1 worker runtime (sdk/arch/epl3/cpu1.c): start, state,
-  stop and its timeout, restart, refusals; against a fake TCB and mocks of OlyTaskStart/Stop/Sleep.
+- birddetect6_hook: birddetect6's fd_hw_shutdown hook (sdk/projects/birddetect6/hook.c) on the
+  function's real entry bytes: install, live cycles and a still call through the original, remove.
+- cpu1: the API contract of the CPU1 worker runtime (sdk/arch/epl3/cpu1.c): start, stop and
+  its timeout, restart, refusals; against a fake TCB and mocks of OlyTaskStart/Stop/Sleep.
 - usb: a boot started by the USB cable skips plugin_main unless plugin.toml sets run_on_usb.
 - hooks: the hook generator and runtime, plus a synthetic stack-argument hook target.
 - hooks_em10ii: the E-M10 II hook runtime (sdk/arch/em10ii/hooks.c) on the real appevent_post and
   cw_updateDisplay spans: install, calls through stub and trampoline, remove, EBYTES and the
-  bounded I-cache wait (stuck ICBUSY -> EICACHE, stock bytes back).
-- slots: callbacks, slots and cloned vtables, plus synthetic callback shapes.
+  bounded I-cache wait (stuck ICBUSY -> EICACHE, stock bytes back), and a one-byte code patch.
+- slots: callbacks and slots, plus synthetic callback shapes.
+- ui_em10ii: the E-M10 II settings page (sdk/lib/ui_em10ii.c) entered through its slot words and
+  screen methods: install all or nothing, the push onto a fake menu app, the slot 0x38 image,
+  keys, an edit, MENU through the app's pop method, the delete, the default handler.
 """
 
 import re
@@ -72,8 +75,8 @@ pytestmark = needs_toolchain
 
 PROJECTS = sdk.SDK / "projects"
 FUNCTIONS = [f.name for f in fwapi.load(EPL3.dir / "firmware.toml").functions]
-# DRAM with the mocks and the payload.
-DRAM = region("0x6e600000,0xb00000")
+# DRAM with the mocks (up to the USB driver text at 0x6F34xxxx) and the payload.
+DRAM = region("0x6e600000,0xe00000")
 # The timer block (timer_now 0x98900074); the core id 0x8050 is in the simulator's default memory.
 TIMER = region("0x98900000,0x100")
 # The GUI state machine's super/state bytes (0x60702278); a 0x100 region left them unmapped.
@@ -227,14 +230,6 @@ PROGRAMS = {
         ],
         "memory": [DRAM, POWERON],
     },
-    "main_shot": {
-        "sources": [
-            SIM / "main" / "test_main_shot.c",
-            PROJECTS / "main" / "main_shot.c",
-            SIM / "hooks" / "sim_start.S",
-        ],
-        "memory": [DRAM, POWERON],
-    },
     "main_rbswap": {
         "sources": [
             SIM / "main" / "test_main_rbswap.c",
@@ -247,6 +242,13 @@ PROGRAMS = {
         "mocked": ["img_exec", *SUPPORT],
         "hooks": ["img_exec"],
         "cpu1_unproven": ["img_exec"],
+    },
+    "shot": {
+        "sources": [
+            SIM / "shot" / "test_shot.c",
+            SIM / "hooks" / "sim_start.S",
+        ],
+        "memory": [DRAM, POWERON],
     },
     "afc_sm": {
         "sources": [
@@ -264,7 +266,8 @@ PROGRAMS = {
             SIM / "hooks" / "sim_start.S",
         ],
         # DRAM, the timer, fat_mounted, the language table pointer, the GUI app pointer, the
-        # current panel and menu flags, the GUI state, SS_MENU_MAIN's event map (empty).
+        # current panel and menu flags, the GUI state, the super state descriptors, SS_MENU_MAIN's
+        # tables (empty) and the Custom menu records, all zero.
         "memory": [
             DRAM_ALIAS,
             TIMER,
@@ -274,17 +277,19 @@ PROGRAMS = {
             region("0x6034e000,0x1000"),
             region("0x60352000,0x2000"),
             region("0x60702000,0x1000"),
+            region("0x6f1b9000,0x1000"),
             region("0x6f1c9000,0x1000"),
+            region("0x6f1e8000,0x3000"),
         ],
         "mocked": UI_MOCKED,
     },
-    "birddetect_hook": {
+    "birddetect6_hook": {
         "sources": [
-            SIM / "birddetect" / "test_hook.c",
-            PROJECTS / "birddetect" / "hook.c",
-            PROJECTS / "birddetect" / "inject.c",
+            SIM / "birddetect6" / "test_hook.c",
+            PROJECTS / "birddetect6" / "hook.c",
+            PROJECTS / "birddetect6" / "inject.c",
             SIM / "hooks" / "sim_start.S",
-            SIM / "birddetect" / "fw_hook.S",
+            SIM / "birddetect6" / "fw_hook.S",
             SIM / "hooks" / "support.S",
         ],
         # The raw candidate list and the live cycle counter.
@@ -435,12 +440,49 @@ def test_em10ii_hooks_run_in_the_simulator(tmp_path):
             region("0xa1c18000,0x1000"),
             region("0x6eb00000,0x10000"),
         ],
-        mocked=["appevent_post", "cw_updateDisplay", "irq_lock", "irq_unlock", "dcache_flush_all"],
+        mocked=[
+            "appevent_post",
+            "cw_updateDisplay",
+            "irq_lock",
+            "irq_unlock",
+            "dcache_flush_all",
+        ],
         target=EM10II,
         hooks=["appevent_post", "cw_updateDisplay"],
         cpu1_unproven=["appevent_post", "cw_updateDisplay"],
     )
     assert_exit(result, 0, "tests/sim/hooks_em10ii/test_hooks.c")
+
+
+def test_em10ii_ui_runs_in_the_simulator(tmp_path):
+    """E-M10 II settings page against mocks of the GUI data store, the menu app's default handler
+    and its pop method (at its real address), with the real cfg and log libraries."""
+    pop = fwapi.load(EM10II.dir / "firmware.toml").data["menu_app_pop_fn"].address
+    ui = SIM / "ui_em10ii"
+    result = run_in_simulator(
+        tmp_path,
+        "uisim_em10ii",
+        [ui / "test_ui.c", SIM / "hooks_em10ii" / "sim_start.S", ui / "fw.S"],
+        # DRAM up to the GUI and menu data with its uncached alias, the timer, the mock bodies.
+        [
+            ("--memory-alias", "0x60000000,0x2000000,0xa0000000"),
+            TIMER,
+            region("0x6eb00000,0x10000"),
+        ],
+        mocked=[
+            "psw_get",
+            "irq_disable_all",
+            "irq_mask_restore",
+            "irq_lock",
+            "irq_unlock",
+            "dcache_flush_all",
+            "gui_data_set",
+            "menu_app_default",
+        ],
+        ldflags=[f"-Wl,--section-start=.fw.app_pop=0x{pop:x}"],
+        target=EM10II,
+    )
+    assert_exit(result, 0, "tests/sim/ui_em10ii/test_ui.c")
 
 
 SLOTS_TOML = """
@@ -469,18 +511,13 @@ note = "synthetic: CALL-entered with [d2,a2],12, c@(4,SP)"
 """
 
 
-def test_callbacks_slots_and_vtables_run_in_the_simulator(tmp_path):
-    """The real slot and vtable declarations are used; their stock values are mocks placed at their
-    real addresses. Synthetic callbacks add stack arguments, a pointer result and a CALL entry."""
+def test_callbacks_and_slots_run_in_the_simulator(tmp_path):
+    """The real slot declarations are used; the stock value of the change-callback slot is a mock
+    placed at its real address. Synthetic callbacks add stack arguments, a pointer result and a CALL
+    entry."""
     firmware = _firmware_toml(tmp_path, SLOTS_TOML)
-    api = fwapi.load(firmware)
-    stock = {
-        "change_cb": api.slots["usrset_change_cb"].expected,
-        "hfw_get": api.slots["hfw_setting_proxy_get"].expected,
-        "hfw_set": api.slots["hfw_setting_proxy_set"].expected,
-        "vtable": api.vtables["hfw_setting_proxy"].address,
-    }
-    slots = ["appevent_hook1", "usrset_change_cb", "hfw_setting_proxy_get"]
+    change_cb = fwapi.load(firmware).slots["usrset_change_cb"].expected
+    slots = ["appevent_hook1", "usrset_change_cb"]
     result = run_in_simulator(
         tmp_path,
         "slotsim",
@@ -499,10 +536,9 @@ def test_callbacks_slots_and_vtables_run_in_the_simulator(tmp_path):
             POWERON,
         ],
         mocked=SUPPORT[:4],
-        ldflags=[f"-Wl,--section-start=.fw.{n}=0x{a:x}" for n, a in stock.items()],
+        ldflags=[f"-Wl,--section-start=.fw.change_cb=0x{change_cb:x}"],
         firmware=firmware,
         slots=slots,
-        vtables=["hfw_setting_proxy"],
-        cpu1_unproven=[*slots, "hfw_setting_proxy"],
+        cpu1_unproven=slots,
     )
     assert_exit(result, 0, "tests/sim/slots/test_slots.c")

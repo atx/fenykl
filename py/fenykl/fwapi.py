@@ -15,9 +15,8 @@ Callbacks and slots: `[callbacks.<sig>]` declares a signature the firmware
 calls plugin code with (`calls`, or `call` with a register list and frame). For each, the header gets
 FENYKL_CALLBACK_<sig>, which emits a reverse entry stub (firmware -> GCC wrapper) for one C function,
 and the thunks get `fw_call_<sig>`, which calls a firmware function pointer with that convention.
-`[slots.<name>]` is a pointer word the firmware calls through, with its stock value; `[vtables.<name>]`
-a stock vtable that a plugin may clone for one object. A plugin lists the slots and vtables it uses
-in plugin.toml; their descriptors (`fenykl_slot_<name>`, `fenykl_vtable_<name>`) go to fw_hooks.S.
+`[slots.<name>]` is a pointer word the firmware calls through, with its stock value. A plugin lists
+the slots it uses in plugin.toml; their descriptors (`fenykl_slot_<name>`) go to fw_hooks.S.
 
 Cores: a function's `cores` says which cores may call
 it (default ["cpu0"]). Plugin files built for CPU1 (plugin.toml `cpu1_sources`) get -DFENYKL_CPU1,
@@ -58,7 +57,6 @@ CORE_SETS = {CPU0_ONLY, ("cpu0", "cpu1")}
 _HOOK_FIELDS = {"entry", "relocate", "cpu1", "cpu1_evidence", "note"}
 _CALLBACK_FIELDS = {"entry", "evidence", "returns", "args", "note"}
 _SLOT_FIELDS = {"address", "callback", "expected", "cpu1", "cpu1_evidence", "note"}
-_VTABLE_FIELDS = {"address", "count", "cpu1", "cpu1_evidence", "note"}
 _DATA_FIELDS = {"address", "type", "evidence", "note"}
 _DATA_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 CPU1_SCOPES = {"cpu0-only", "unproven"}
@@ -143,21 +141,6 @@ class Slot:
 
 
 @dataclass(frozen=True)
-class Vtable:
-    name: str
-    address: int
-    count: int
-    cpu1: str
-    cpu1_evidence: str
-    note: str
-
-    def index(self, slot: Slot) -> int | None:
-        """Index of `slot` in this table, or None if it lies outside."""
-        i, rest = divmod(slot.address - self.address, 4)
-        return i if rest == 0 and 0 <= i < self.count else None
-
-
-@dataclass(frozen=True)
 class Data:
     """Firmware address used as a value; `type` says what lives there."""
 
@@ -177,7 +160,6 @@ class Api:
     functions: list[Function]
     callbacks: dict[str, Callback]
     slots: dict[str, Slot]
-    vtables: dict[str, Vtable]
     data: dict[str, Data]
 
 
@@ -351,19 +333,6 @@ def _parse_slot(name: str, d: dict, callbacks: dict[str, Callback]) -> Slot:
     )
 
 
-def _parse_vtable(name: str, d: dict) -> Vtable:
-    where = f"vtables.{name}"
-    _check_fields(where, d, _VTABLE_FIELDS)
-    if d["address"] % 4:
-        raise ApiError(f"{where}: address 0x{d['address']:08X} is not word-aligned")
-    if d["count"] < 1:
-        raise ApiError(f"{where}: count must be at least 1")
-    _check_cpu1(where, d)
-    return Vtable(
-        name, d["address"], d["count"], d["cpu1"], d["cpu1_evidence"], d["note"]
-    )
-
-
 def _parse_data(name: str, d: dict) -> Data:
     where = f"data.{name}"
     _check_fields(where, d, _DATA_FIELDS)
@@ -385,15 +354,14 @@ def load(path: Path) -> Api:
         doc = tomllib.load(f)
     callbacks = {n: _parse_callback(n, d) for n, d in doc.pop("callbacks", {}).items()}
     slots = {n: _parse_slot(n, d, callbacks) for n, d in doc.pop("slots", {}).items()}
-    vtables = {n: _parse_vtable(n, d) for n, d in doc.pop("vtables", {}).items()}
     data = {n: _parse_data(n, d) for n, d in doc.pop("data", {}).items()}
     functions = [_parse_function(name, d) for name, d in doc.items()]
-    # Slots share fw_orig_<name> with hooks; cpu1_unproven names functions, slots and vtables.
-    names = [f.name for f in functions] + list(slots) + list(vtables)
+    # Slots share fw_orig_<name> with hooks; cpu1_unproven names functions and slots.
+    names = [f.name for f in functions] + list(slots)
     clash = sorted({n for n in names if names.count(n) > 1})
     if clash:
-        raise ApiError(f"names used twice in functions, slots and vtables: {clash}")
-    return Api(functions, callbacks, slots, vtables, data)
+        raise ApiError(f"names used twice in functions and slots: {clash}")
+    return Api(functions, callbacks, slots, data)
 
 
 @dataclass(frozen=True)
@@ -593,57 +561,76 @@ def relocated_instructions(func: Function, objdump: str, workdir: Path) -> list[
 class Selection:
     hooks: list[Function]
     slots: list[Slot]
-    vtables: list[Vtable]
+
+
+def _check_cpu1_scope(
+    declared: dict[str, dict],
+    used: dict[str, Sequence[str]],
+    acked: Sequence[str],
+    where: str,
+) -> None:
+    """Every name in `used` whose CPU1 scope is unproven must be in `acked` (`where`'s
+    acknowledgement list), and `acked` may name nothing else."""
+    stray = [n for n in acked if not any(n in u for u in used.values())]
+    if stray:
+        raise ApiError(
+            f"{where} lists {', '.join(stray)}, which hooks and slots do not"
+        )
+    for kind, names in used.items():
+        for name in names:
+            item = declared[kind][name]
+            if item.cpu1 == "unproven" and name not in acked:
+                raise ApiError(
+                    f"{name}: it is not proven that CPU1 never runs it ({item.cpu1_evidence}); "
+                    f'add "{name}" to {where} to build it anyway'
+                )
 
 
 def select(
     api: Api,
     hooks: Sequence[str] = (),
     slots: Sequence[str] = (),
-    vtables: Sequence[str] = (),
     cpu1_unproven: Sequence[str] = (),
     sdk_hooks: Sequence[str] = (),
+    sdk_slots: Sequence[str] = (),
+    sdk_cpu1_unproven: Sequence[str] = (),
 ) -> Selection:
-    """What a plugin uses (plugin.toml `hooks`, `slots`, `vtables`) plus the hooks the SDK binds
-    itself (target.toml `sdk_hooks`), which the plugin may not list; one whose CPU1 scope is
-    unproven needs the plugin's explicit acknowledgement (`cpu1_unproven`)."""
-    bound = [n for n in hooks if n in sdk_hooks]
-    if bound:
-        raise ApiError(
-            f"{', '.join(bound)}: the SDK binds it itself (target.toml sdk_hooks, sdk/README.md "
-            "Hooks; appevent_post: the event layer, sdk/docs/event.md); remove it from hooks"
-        )
-    hooks = [*sdk_hooks, *hooks]
+    """What a plugin uses (plugin.toml `hooks`, `slots`) plus the hooks and slots the
+    SDK binds itself (target.toml `sdk_hooks`, `sdk_slots`), which the plugin may not list. One
+    whose CPU1 scope is unproven needs an explicit acknowledgement: plugin.toml `cpu1_unproven` for
+    the plugin's own, target.toml `sdk_cpu1_unproven` for the SDK's."""
+    hints = {
+        "hook": "; appevent_post: the event layer, sdk/docs/event.md",
+        "slot": "; the E-M10 II settings page, sdk/docs/ui.md",
+    }
+    for kind, names, sdk_names in (
+        ("hook", hooks, sdk_hooks),
+        ("slot", slots, sdk_slots),
+    ):
+        bound = [n for n in names if n in sdk_names]
+        if bound:
+            raise ApiError(
+                f"{', '.join(bound)}: the SDK binds it itself (target.toml sdk_{kind}s"
+                f"{hints[kind]}); remove it from {kind}s"
+            )
     declared = {
         "hook": {f.name: f.hook for f in api.functions if f.hook is not None},
         "slot": api.slots,
-        "vtable": api.vtables,
     }
-    used = {"hook": hooks, "slot": slots, "vtable": vtables}
-    for kind, names in used.items():
-        unknown = [n for n in names if n not in declared[kind]]
+    own = {"hook": hooks, "slot": slots}
+    sdk = {"hook": sdk_hooks, "slot": sdk_slots}
+    for kind, names in own.items():
+        unknown = [n for n in [*sdk[kind], *names] if n not in declared[kind]]
         if unknown:
             raise ApiError(
                 f"no {kind} declared in firmware.toml for {', '.join(unknown)}"
             )
-    stray = [n for n in cpu1_unproven if not any(n in u for u in used.values())]
-    if stray:
-        raise ApiError(
-            f"cpu1_unproven lists {', '.join(stray)}, which hooks, slots and vtables do not"
-        )
-    for kind, names in used.items():
-        for name in names:
-            item = declared[kind][name]
-            if item.cpu1 == "unproven" and name not in cpu1_unproven:
-                raise ApiError(
-                    f"{name}: it is not proven that CPU1 never runs it ({item.cpu1_evidence}); "
-                    f'add cpu1_unproven = ["{name}"] to plugin.toml to build it anyway'
-                )
+    _check_cpu1_scope(declared, own, cpu1_unproven, "plugin.toml cpu1_unproven")
+    _check_cpu1_scope(declared, sdk, sdk_cpu1_unproven, "target.toml sdk_cpu1_unproven")
     funcs = {f.name: f for f in api.functions}
     return Selection(
-        [funcs[n] for n in hooks],
-        [api.slots[n] for n in slots],
-        [api.vtables[n] for n in vtables],
+        [funcs[n] for n in [*sdk_hooks, *hooks]],
+        [api.slots[n] for n in [*sdk_slots, *slots]],
     )
 
 
@@ -738,28 +725,14 @@ def header(api: Api, sel: Selection) -> str:
         ]
     for cb in api.callbacks.values():
         out += _callback_header(cb)
-    if sel.slots or sel.vtables:
+    if sel.slots:
         out += [
-            (
-                "/* Slots and vtables of this plugin (plugin.toml); see FENYKL_SLOT_REPLACE in "
-                "fenykl.h. */"
-            ),
+            "/* Slots of this plugin (plugin.toml); see FENYKL_SLOT_REPLACE in fenykl.h. */",
             "struct fenykl_slot;",
-            "struct fenykl_vtable;",
-            "",
-        ]
-    for vt in sel.vtables:
-        out += [
-            (
-                f"/* Vtable {vt.name} 0x{vt.address:08X}, {vt.count} slots, CPU1 scope "
-                f"{vt.cpu1}: {vt.cpu1_evidence}"
-            ),
-            f"   {vt.note} */",
-            f"extern struct fenykl_vtable fenykl_vtable_{vt.name};",
             "",
         ]
     for slot in sel.slots:
-        out += _slot_header(slot, sel.vtables)
+        out += _slot_header(slot)
     out.append("#endif")
     return "\n".join(out) + "\n"
 
@@ -831,7 +804,7 @@ def _callback_header(cb: Callback) -> list[str]:
     ]
 
 
-def _slot_header(slot: Slot, vtables: Sequence[Vtable]) -> list[str]:
+def _slot_header(slot: Slot) -> list[str]:
     n, cb = slot.name, slot.callback
     out = [
         (
@@ -854,14 +827,6 @@ def _slot_header(slot: Slot, vtables: Sequence[Vtable]) -> list[str]:
         out.append(
             f"static inline {_signature(cb, f'fw_orig_{n}')} {{ {result}{call}; }}"
         )
-    for vt in vtables:
-        i = vt.index(slot)
-        if i is not None:
-            out.append(
-                f"#define FENYKL_VTABLE_SET_{n}(fn) "
-                f"(fenykl_vtable_{vt.name}.clone[{i}] = FENYKL_CB({cb.name}, fn))"
-            )
-            break
     return [*out, ""]
 
 
@@ -877,28 +842,6 @@ def slot_asm(slot: Slot) -> str:
         f"\t.long 0x{slot.address:08X}",
         f"\t.long 0x{slot.expected:08X}",
         "\t.long 0",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def vtable_asm(vt: Vtable) -> str:
-    """The fenykl_vtable_<name> descriptor (struct fenykl_vtable in fenykl_target.h) and its
-    zeroed clone."""
-    n = vt.name
-    lines = [
-        f"/* vtable {n} 0x{vt.address:08X}, {vt.count} slots */",
-        f'\t.section .data.fenykl_vtable_{n},"aw"',
-        "\t.balign 4",
-        f"\t.global _fenykl_vtable_{n}",
-        f"_fenykl_vtable_{n}:",
-        f"\t.long 0x{vt.address:08X}",
-        f"\t.long {vt.count}",
-        "\t.long 0",
-        f"\t.long _fenykl_vclone_{n}",
-        f'\t.section .bss.fenykl_vclone_{n},"aw",@nobits',
-        "\t.balign 4",
-        f"_fenykl_vclone_{n}:",
-        f"\t.space {4 * vt.count}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -950,11 +893,14 @@ def generate(
     hooks: Sequence[str] = (),
     cpu1_unproven: Sequence[str] = (),
     slots: Sequence[str] = (),
-    vtables: Sequence[str] = (),
     sdk_hooks: Sequence[str] = (),
+    sdk_slots: Sequence[str] = (),
+    sdk_cpu1_unproven: Sequence[str] = (),
 ) -> None:
     api = load(toml)
-    sel = select(api, hooks, slots, vtables, cpu1_unproven, sdk_hooks)
+    sel = select(
+        api, hooks, slots, cpu1_unproven, sdk_hooks, sdk_slots, sdk_cpu1_unproven
+    )
     outdir.mkdir(parents=True, exist_ok=True)
     for f in sel.hooks:
         relocated_instructions(f, objdump, outdir)
@@ -966,7 +912,6 @@ def generate(
             [
                 *map(hook_asm, sel.hooks),
                 *map(slot_asm, sel.slots),
-                *map(vtable_asm, sel.vtables),
             ]
         )
     )

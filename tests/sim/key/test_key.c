@@ -48,7 +48,7 @@ static uint32_t nposts;		/* sim_nposts at the last post() */
 
 static void set_now(uint32_t us)
 {
-	TIMER_WORD = FENYKL_LOG_TIMER_MASK - us;
+	TIMER_WORD = FENYKL_TIMER_MASK - us;
 }
 
 static void set_gui(uint16_t gui)
@@ -225,7 +225,7 @@ static int run(void)
 	    !traced("aS") || last[0].held_us != 0x200)
 		return 6;
 	if (post(0x3FFF0000, PRESS(FN), 0, 0) != 0 ||
-	    post((0x3FFF0000 + 800000) & FENYKL_LOG_TIMER_MASK, RELEASE(FN), 0, 0) != 1 ||
+	    post((0x3FFF0000 + 800000) & FENYKL_TIMER_MASK, RELEASE(FN), 0, 0) != 1 ||
 	    !posted((struct post[]){ { PRESS(FN), 0, 0 }, { RELEASE(FN), 0, 0 } }, 2) ||
 	    last[0].held_us != 800000)
 		return 6;

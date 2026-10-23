@@ -36,7 +36,6 @@ struct fenykl_cfg_opt {
 	const char *const *names;	/* ENUM: one name per value, stored by name */
 	fenykl_cfg_change_fn on_change;	/* optional */
 	uint8_t type;			/* enum fenykl_cfg_type */
-	uint8_t flags;			/* reserved (UI levels), 0 */
 };
 
 #define FENYKL_CFG_NAME_MAX 23u
@@ -103,9 +102,6 @@ int fenykl_cfg_task_start(void);
  * and logged) nor from a hook (not detectable: hooks run in other tasks or interrupts).
  */
 int fenykl_cfg_set(const struct fenykl_cfg_opt *o, int32_t v);
-int fenykl_cfg_reset(const struct fenykl_cfg_opt *o);
-/* The value as the file shows it: "on"/"off", the enum name, decimal. n >= 12. */
-const char *fenykl_cfg_str(const struct fenykl_cfg_opt *o, char *buf, unsigned int n);
 /* Writes now if dirty: 0 or <0 (FENYKL_CFG_ENOCARD, _EIO, _ENOSPC, _EBUSY, _EDECL). */
 int fenykl_cfg_save(void);
 bool fenykl_cfg_dirty(void);
@@ -120,6 +116,7 @@ enum fenykl_cfg_slot_state {
 	FENYKL_CFG_SLOT_TOO_LONG,	/* FENYKL_CFG_BUF bytes or more */
 	FENYKL_CFG_SLOT_BAD_HEADER,
 	FENYKL_CFG_SLOT_BAD_CRC,	/* no CRC line at the end, or a wrong CRC: torn or edited */
+	FENYKL_CFG_SLOT_UNREADABLE,	/* opened, but rpc_fread failed */
 };
 
 struct fenykl_cfg_stats {

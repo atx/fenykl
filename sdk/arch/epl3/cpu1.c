@@ -20,6 +20,8 @@
 #define TCB_PRIORITY 0x50 /* u16 */
 #define TCB_STACK_SIZE 0x54
 #define TCB_STACK_BASE 0x58
+/* TCB_STATE of a dormant task (uITRON TTS_DOR); 1 running, 2 ready, 4 waiting. */
+#define TASK_DORMANT 0x10
 
 #define U16(tcb, off) (*(volatile uint16_t *)((tcb) + (off)))
 #define U32(tcb, off) (*(volatile uint32_t *)((tcb) + (off)))
@@ -56,7 +58,7 @@ int fenykl_cpu1_start(void (*entry)(void), void *arg)
 
 	if (!t)
 		return FENYKL_CPU1_ETCB;
-	if (U16(t, TCB_STATE) != FENYKL_CPU1_DORMANT)
+	if (U16(t, TCB_STATE) != TASK_DORMANT)
 		return FENYKL_CPU1_EBUSY;
 	FENYKL_SHARED_PTR(fenykl_cpu1_ctl)->stop = 0;
 	/* No dirty CPU0 line of the stack (from the .bss clear) may be written back over CPU1's frames. */
@@ -71,13 +73,6 @@ int fenykl_cpu1_start(void (*entry)(void), void *arg)
 	return 0;
 }
 
-int fenykl_cpu1_state(void)
-{
-	uint8_t *t = worker_tcb();
-
-	return t ? U16(t, TCB_STATE) : FENYKL_CPU1_ETCB;
-}
-
 int fenykl_cpu1_stop(int timeout_ticks)
 {
 	uint8_t *t = worker_tcb();
@@ -85,11 +80,11 @@ int fenykl_cpu1_stop(int timeout_ticks)
 	if (!t)
 		return FENYKL_CPU1_ETCB;
 	FENYKL_SHARED_PTR(fenykl_cpu1_ctl)->stop = 1;
-	for (int i = 0; U16(t, TCB_STATE) != FENYKL_CPU1_DORMANT; i++) {
+	for (int i = 0; U16(t, TCB_STATE) != TASK_DORMANT; i++) {
 		if (i >= timeout_ticks) {
 			fw_OlyTaskStop(TASK_ID);
-			return U16(t, TCB_STATE) == FENYKL_CPU1_DORMANT ? FENYKL_CPU1_ETIMEOUT
-									: FENYKL_CPU1_EBUSY;
+			return U16(t, TCB_STATE) == TASK_DORMANT ? FENYKL_CPU1_ETIMEOUT
+								 : FENYKL_CPU1_EBUSY;
 		}
 		fw_OlyTaskSleep(1);
 	}

@@ -62,6 +62,9 @@ class AssetLayout:
     palette_count: int
     palette_4bpp: int
     palette_8bpp: int
+    image_slot_dir: int | None = None
+    """Lang dir of a second common-resource slot that image records also point into."""
+    image_slot_addr: int | None = None
 
 
 def _load_layouts() -> dict[str, AssetLayout]:
@@ -77,15 +80,6 @@ def _load_layouts() -> dict[str, AssetLayout]:
 
 
 ASSET_LAYOUTS = _load_layouts()
-
-
-def default_target() -> Target:
-    """The camera `assets dump` reads when given no file: the only one with an asset layout."""
-    if len(ASSET_LAYOUTS) != 1:
-        raise AssetError(
-            f"cameras with an asset layout: {', '.join(ASSET_LAYOUTS)}; give the stock FILE.BIN"
-        )
-    return TARGETS[next(iter(ASSET_LAYOUTS))]
 
 
 @dataclass(frozen=True)
@@ -308,13 +302,28 @@ def layout_for(target: Target | None) -> AssetLayout:
     return ASSET_LAYOUTS[target.name]
 
 
+def _common(lang: bytes, layout: AssetLayout) -> Mem:
+    """The common resource at its runtime address; a second image slot is mapped at its own address,
+    the gap between them zero."""
+    common = _lang_dir(lang, layout, layout.common_dir)
+    if layout.image_slot_dir is None or layout.image_slot_addr is None:
+        return Mem(common, layout.common_addr)
+    gap = layout.image_slot_addr - layout.common_addr - len(common)
+    if gap < 0:
+        raise AssetError(
+            f"image slot {layout.image_slot_addr:#x} overlaps the common resource"
+        )
+    slot = _lang_dir(lang, layout, layout.image_slot_dir)
+    return Mem(common + bytes(gap) + slot, layout.common_addr)
+
+
 def common_resource(data: bytes) -> Mem:
     """The common GUI resource (icons, images) of a supported stock `.BIN`, mapped at its runtime
     address as the firmware loads it."""
     layout = layout_for(identify(data))
     firmware = unpack_firmware(data)
     lang = firmware.blocks[firmware.find_block(layout.lang_block)].body
-    return Mem(_lang_dir(lang, layout, layout.common_dir), layout.common_addr)
+    return _common(lang, layout)
 
 
 def read_assets(data: bytes) -> list[Asset]:
@@ -325,7 +334,7 @@ def read_assets(data: bytes) -> list[Asset]:
     code_block = firmware.blocks[firmware.find_block(layout.code_block)]
     lang = firmware.blocks[firmware.find_block(layout.lang_block)].body
     code = Mem(code_block.body, target.load_addresses[layout.code_block])
-    common = Mem(_lang_dir(lang, layout, layout.common_dir), layout.common_addr)
+    common = _common(lang, layout)
     palettes = {
         4: _palette(code, layout, layout.palette_4bpp),
         8: _palette(code, layout, layout.palette_8bpp),

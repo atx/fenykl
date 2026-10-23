@@ -17,6 +17,8 @@
 #define FCFG_POLL_MS 100u
 #define FCFG_RETRY_MS 10000u		/* after a failed save */
 #define FCFG_MS(ms) ((ms) * 1000u)
+#define FCFG_READ_NOFILE (-1)		/* fcfg_read: the file cannot be opened */
+#define FCFG_READ_EIO (-2)		/* fcfg_read: rpc_fread failed */
 
 struct fcfg_state {
 	bool ready;			/* init done, declarations good */
@@ -24,7 +26,6 @@ struct fcfg_state {
 	bool load_pending;		/* init ran with the card gate closed */
 	bool busy;			/* a save or a late load runs */
 	bool gate_closed;
-	bool gate_held;			/* closed by a cable: until power-off */
 	bool failed;			/* the last save failed: retry after FCFG_RETRY_MS */
 	bool nospace;			/* a save hit FENYKL_CFG_ENOSPC: the saver task stops */
 	uint32_t changes;		/* stores by fenykl_cfg_set */
@@ -51,6 +52,7 @@ static const char *const fcfg_slot_names[] = {
 	[FENYKL_CFG_SLOT_TOO_LONG] = "too long",
 	[FENYKL_CFG_SLOT_BAD_HEADER] = "bad header",
 	[FENYKL_CFG_SLOT_BAD_CRC] = "bad or missing CRC",
+	[FENYKL_CFG_SLOT_UNREADABLE] = "unreadable",
 };
 
 /* --- small helpers --- */
@@ -184,7 +186,7 @@ static uint32_t fcfg_crc32(const char *p, unsigned int n)
 
 static uint32_t fcfg_now(void)
 {
-	return FENYKL_LOG_TIMER_NOW();
+	return FENYKL_TIMER_NOW();
 }
 
 /* Logs `what` followed by a line of file text (not NUL-terminated, may change later). */
@@ -254,7 +256,8 @@ static bool fcfg_parse_value(const struct fenykl_cfg_opt *o, const char *s, unsi
 	}
 }
 
-const char *fenykl_cfg_str(const struct fenykl_cfg_opt *o, char *buf, unsigned int n)
+/* The value as the file shows it: "on"/"off", the enum name, decimal. */
+static const char *fcfg_str(const struct fenykl_cfg_opt *o, char buf[FCFG_DEC_MAX])
 {
 	int32_t v = *o->value;
 
@@ -262,8 +265,6 @@ const char *fenykl_cfg_str(const struct fenykl_cfg_opt *o, char *buf, unsigned i
 		return v ? "on" : "off";
 	if (o->type == FENYKL_CFG_ENUM && fcfg_in_range(o, v))
 		return o->names[v];
-	if (n < FCFG_DEC_MAX)
-		return "?";
 	buf[fcfg_put_dec(buf, v)] = 0;
 	return buf;
 }
@@ -461,19 +462,23 @@ static void fcfg_apply_text(unsigned int start, unsigned int end)
 
 /* --- load --- */
 
-/* Reads a file into buf: its length, or -1 if it cannot be opened. */
+/* Reads a file into buf: its length, FCFG_READ_NOFILE or FCFG_READ_EIO (logged). */
 static int fcfg_read(const char *path)
 {
 	void *fp = fw_rpc_fopen(path, "r");
 	int n;
 
 	if (!fp)
-		return -1;
+		return FCFG_READ_NOFILE;
 	/* No dirty line of buf may be written back over what the file server stores. */
 	fenykl_dcache_flush();
 	n = fw_rpc_fread(FENYKL_UNCACHED(fcfg.buf), 1, FENYKL_CFG_BUF, fp);
 	fw_rpc_fclose(fp);
-	return n < 0 ? 0 : n;
+	if (n < 0) {
+		fenykl_log_err(&fcfg_mod, "%s: rpc_fread returned %d", path, n);
+		return FCFG_READ_EIO;
+	}
+	return n;
 }
 
 /* Checks a slot text of n bytes in buf: header, CRC; *body.. *end is the option text. */
@@ -484,8 +489,10 @@ static enum fenykl_cfg_slot_state fcfg_check(int n, uint32_t *seq, unsigned int 
 	unsigned int tag = sizeof(FCFG_VERSION_TAG) - 1, crc_at, h;
 	uint32_t crc;
 
-	if (n < 0)
+	if (n == FCFG_READ_NOFILE)
 		return FENYKL_CFG_SLOT_MISSING;
+	if (n == FCFG_READ_EIO)
+		return FENYKL_CFG_SLOT_UNREADABLE;
 	if (n >= (int)FENYKL_CFG_BUF)
 		return FENYKL_CFG_SLOT_TOO_LONG;
 	crc_at = n - FCFG_CRC_LINE;
@@ -540,8 +547,13 @@ static void fcfg_import(void)
 {
 	int n = fcfg_read(FENYKL_CFG_IMPORT);
 
-	if (n < 0)
+	if (n == FCFG_READ_NOFILE)
 		return;
+	if (n == FCFG_READ_EIO) {
+		fenykl_log_err(&fcfg_mod, "%s: read failed: not imported, not deleted",
+			       FENYKL_CFG_IMPORT);
+		return;
+	}
 	if (n >= (int)FENYKL_CFG_BUF) {
 		fenykl_log_err(&fcfg_mod, "%s is %u bytes or more: not imported, not deleted",
 			       FENYKL_CFG_IMPORT, FENYKL_CFG_BUF);
@@ -608,11 +620,6 @@ static bool fcfg_gate_open(void)
 					"config load/save on hold");
 	}
 	fcfg.gate_closed = true;
-	if (!fcfg.gate_held && fenykl_card_usb_seen()) {
-		fcfg.gate_held = true;
-		fenykl_log_warn(&fcfg_mod, "card gate closed (USB cable seen): "
-				"config load/save on hold until power-off");
-	}
 	return false;
 }
 
@@ -676,7 +683,7 @@ static unsigned int fcfg_format(uint32_t seq)
 			continue;
 		fcfg_out_str(o->name);
 		fcfg_out("=", 1);
-		fcfg_out_str(fenykl_cfg_str(o, s, sizeof(s)));
+		fcfg_out_str(fcfg_str(o, s));
 		fcfg_out("\n", 1);
 	}
 	fcfg_out_raw();
@@ -856,13 +863,6 @@ int fenykl_cfg_set(const struct fenykl_cfg_opt *o, int32_t v)
 	return 0;
 }
 
-int fenykl_cfg_reset(const struct fenykl_cfg_opt *o)
-{
-	if (!fcfg_is_opt(o))
-		return FENYKL_CFG_EINVAL;
-	return fenykl_cfg_set(o, o->def);
-}
-
 /* --- init and the saver task --- */
 
 int fenykl_cfg_init(void)
@@ -892,9 +892,9 @@ static bool fcfg_save_due(void)
 		return true;
 	if (fcfg.nospace || !fenykl_cfg_dirty())
 		return false;
-	if (FENYKL_LOG_ELAPSED(fcfg.changed_at, now) < FCFG_MS(FENYKL_CFG_SAVE_MS))
+	if (FENYKL_TIMER_ELAPSED(fcfg.changed_at, now) < FCFG_MS(FENYKL_CFG_SAVE_MS))
 		return false;
-	return !fcfg.failed || FENYKL_LOG_ELAPSED(fcfg.tried_at, now) >= FCFG_MS(FCFG_RETRY_MS);
+	return !fcfg.failed || FENYKL_TIMER_ELAPSED(fcfg.tried_at, now) >= FCFG_MS(FCFG_RETRY_MS);
 }
 
 FENYKL_TASK(fcfg_saver);
@@ -918,7 +918,11 @@ int fenykl_cfg_task_start(void)
 		return FENYKL_CFG_ETASK;
 	id = fw_OlyTaskCreate("FYKCFG", fcfg_saver_task, 2, 0, FCFG_TASK_PRIO, FCFG_TASK_STACK,
 			      stack);
-	return id < 0 ? FENYKL_CFG_ETASK : 0;
+	if (id < 0) {
+		fw_free(stack);
+		return FENYKL_CFG_ETASK;
+	}
+	return 0;
 }
 
 void fenykl_cfg_get_stats(struct fenykl_cfg_stats *out)

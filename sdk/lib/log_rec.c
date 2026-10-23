@@ -11,7 +11,7 @@ static void flog_fill_fmt(volatile struct flog_slot *s, uint32_t meta,
 			  const struct fenykl_log_module *mod, const char *fmt,
 			  uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
 {
-	s->w[0] = FENYKL_LOG_TIMER_NOW();
+	s->w[0] = FENYKL_TIMER_NOW();
 	s->w[1] = meta;
 	s->w[2] = (uint32_t)mod;
 	s->w[3] = (uint32_t)fmt;
@@ -69,7 +69,7 @@ static void flog_ring0_text(const struct fenykl_log_module *mod, unsigned int le
 	volatile struct flog_ring0 *r = &flog.ring0;
 	unsigned int k = flog_text_slots(len);
 	uint32_t psw = flog_irq_save();
-	uint32_t t = FENYKL_LOG_TIMER_NOW();
+	uint32_t t = FENYKL_TIMER_NOW();
 
 	for (unsigned int i = 0; i < k; i++) {
 		uint32_t h = flog_ring0_claim(r);
@@ -100,7 +100,7 @@ static void flog_ring1_text(const struct fenykl_log_module *mod, unsigned int le
 		r->dropped += k;
 		goto out;
 	}
-	t = FENYKL_LOG_TIMER_NOW();
+	t = FENYKL_TIMER_NOW();
 	for (unsigned int i = 0; i < k; i++) {
 		unsigned int n = flog_text_chunk(len, i);
 

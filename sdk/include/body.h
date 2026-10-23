@@ -16,6 +16,9 @@
 
 /* --- GUI, every target; CPU0 --- */
 
+/* GUI super state << 8 | state, in the target's own encoding (for logs and target code). */
+static inline uint16_t fenykl_gui_state(void);
+#define FENYKL_GUI_SUPER(gui) ((gui) >> 8)
 /* The GUI shows a live-view screen (E-PL3: super state SS_REC). */
 static inline bool fenykl_gui_live_view(void);
 /* The GUI shows single playback. */
@@ -41,7 +44,7 @@ static inline uint32_t fenykl_lens_iris_av(void);
 #define FENYKL_BATT_ESTANDBY (-2)	/* the stock check is off (standby): no read */
 
 /* Battery voltage in the target's A/D counts into *v, read as the firmware's own checks do: 0 or
-   FENYKL_BATT_E*. Blocks for a few ms. */
+   FENYKL_BATT_E*. May block for a few ms (E-PL3: waits for an A/D request). */
 static inline int fenykl_batt_read(uint32_t *v);
 /* Power source word, for logs: it changes when the source does. */
 static inline uint32_t fenykl_power_src(void);
@@ -77,10 +80,13 @@ static inline bool fenykl_af_grid(struct fenykl_af_grid *g);
 /* --- shot: display, OSD layers and the lent RECFILE buffer; CPU0 task --- */
 #if FENYKL_HAS_SHOT
 /*
- * Also from fenykl_body.h: FENYKL_DISP_LV_PITCH, FENYKL_DISP_LV_BYTES (the live-view buffers),
- * FENYKL_OSD_LAYERS, FENYKL_OSD_PLANE_W, FENYKL_OSD_PLANE_H (an OSD buffer) and, per layer,
+ * Also from fenykl_body.h: FENYKL_DISP_W, FENYKL_DISP_H (the panel: the OSD canvas it shows),
+ * FENYKL_DISP_SQUARE_W (its width at square pixels), FENYKL_DISP_LV_PITCH, FENYKL_DISP_LV_BYTES
+ * (the live-view buffers), FENYKL_OSD_LAYERS, FENYKL_OSD_PLANE_W, FENYKL_OSD_PLANE_H (an OSD
+ * buffer) and, per layer,
  * initializers FENYKL_OSD_BPP, FENYKL_OSD_PAL_ENTRIES and FENYKL_OSD_PAL_FIRST (its entries in
- * fenykl_osd_palettes(), FENYKL_OSD_PAL_TOTAL in all), FENYKL_OSD_STACK (layers bottom to top).
+ * fenykl_osd_palettes(), FENYKL_OSD_PAL_TOTAL in all), FENYKL_OSD_STACK (layers bottom to top),
+ * FENYKL_FRAMES_PITCH, FENYKL_FRAMES_H and FENYKL_FRAMES_PAL (the face/AF frame layer).
  */
 
 /* a is a word-aligned DRAM address whose next bytes lie below the firmware image. */
@@ -108,6 +114,12 @@ static inline uint32_t fenykl_osd_buf(unsigned int l, unsigned int b);
 static inline uint32_t fenykl_osd_shown(unsigned int l);
 /* All layer palettes: {Y, Cb, Cr, alpha} per entry. */
 static inline const uint8_t *fenykl_osd_palettes(void);
+/* The firmware's face/AF frame layer (FENYKL_FRAMES_PITCH x FENYKL_FRAMES_H palette indices): the
+   buffer the display shows (any alias, 0 = none), its source size w x h scaled to to_w x to_h from
+   the canvas origin, and its FENYKL_FRAMES_PAL colours {R, G, B, pad}. */
+static inline uint32_t fenykl_frames_shown(void);
+static inline void fenykl_frames_geom(uint16_t *w, uint16_t *h, uint16_t *to_w, uint16_t *to_h);
+static inline const uint8_t *fenykl_frames_palette(void);
 /* RECFILE has a free run for bytes: fenykl_recfile_alloc would not block. */
 static inline bool fenykl_recfile_fits(uint32_t bytes);
 /* Lends bytes of RECFILE, uncached; blocks until free. fenykl_recfile_free gives it back. */

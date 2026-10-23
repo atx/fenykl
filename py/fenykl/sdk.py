@@ -38,6 +38,11 @@ class SdkTarget:
     max_size: int
     sdk_hooks: tuple[str, ...]
     """Hooks the SDK library binds itself, generated for every plugin (sdk/README.md, Hooks)."""
+    sdk_slots: tuple[str, ...]
+    """Slots the SDK library binds itself, generated for every plugin (sdk/README.md, Callbacks
+    and slots)."""
+    sdk_cpu1_unproven: tuple[str, ...]
+    """The SDK's acknowledgement of its hooks and slots whose CPU1 scope is unproven."""
     capabilities: tuple[str, ...]
     """SDK features this camera supports; each becomes FENYKL_HAS_<NAME> (sdk/README.md, Layout)."""
 
@@ -80,6 +85,8 @@ def target(name: str) -> SdkTarget:
         load=t["load"],
         max_size=t["max_size"],
         sdk_hooks=tuple(t.get("sdk_hooks", [])),
+        sdk_slots=tuple(t.get("sdk_slots", [])),
+        sdk_cpu1_unproven=tuple(t.get("sdk_cpu1_unproven", [])),
         capabilities=tuple(t["capabilities"]),
     )
 

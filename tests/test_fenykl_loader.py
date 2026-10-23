@@ -183,7 +183,11 @@ def test_calls_match_the_firmware_call_sites(loader):
         stub_calls += in_stub.total()
         in_firmware = call_encodings(code, loader.base, address)
         assert in_firmware.keys() == in_stub.keys(), (name, in_firmware, in_stub)
-    stub_listing = (loader.dir / "loader.lst").read_text().split("Disassembly of section .text:")[1]
+    stub_listing = (
+        (loader.dir / "loader.lst")
+        .read_text()
+        .split("Disassembly of section .text:")[1]
+    )
     assert stub_calls == len(re.findall(r"\tcall\t", stub_listing))
 
 
@@ -202,7 +206,9 @@ def test_loader_firmware_matches_the_pinned_build(loader, tmp_path):
     stock_image(loader.name)
     output = tmp_path / "loader.BIN"
 
-    cli.main(["patch", "apply", f"{loader.name}/fenykl-loader", "--output", str(output)])
+    cli.main(
+        ["patch", "apply", f"{loader.name}/fenykl-loader", "--output", str(output)]
+    )
 
     assert hashlib.sha256(output.read_bytes()).hexdigest() == loader.sha256
 
@@ -239,7 +245,9 @@ def _flip(field: bytes, index: int) -> bytes:
     return field[:index] + bytes([field[index] ^ 1]) + field[index + 1 :]
 
 
-def file_cases(test_payload: bytes, target: sdk.SdkTarget) -> dict[str, tuple[bytes, bool]]:
+def file_cases(
+    test_payload: bytes, target: sdk.SdkTarget
+) -> dict[str, tuple[bytes, bool]]:
     """FENYKL.BIN contents a mounted card can hold: name -> (file, accepted by the loader)."""
     good = _image(test_payload, target)
     size = len(good)
@@ -254,7 +262,10 @@ def file_cases(test_payload: bytes, target: sdk.SdkTarget) -> dict[str, tuple[by
         "bad magic": (_with_header(good, magic=0x334C4E46), False),
         "old FNL1 image": (_fnl1_image(good, target), False),
         "other model": (_with_header(good, model=_flip(model, 4)), False),
-        "model differs in the first word": (_with_header(good, model=_flip(model, 3)), False),
+        "model differs in the first word": (
+            _with_header(good, model=_flip(model, 3)),
+            False,
+        ),
         "model not zero-padded": (_with_header(good, model=model[:7] + b" "), False),
         "bad load address": (_with_header(good, load=target.load + 4), False),
         "size below header": (_with_header(good, size=0x10), False),
@@ -283,7 +294,10 @@ class Scenario:
 def scenarios(test_payload: bytes) -> dict[str, Scenario]:
     good = _image(test_payload, EPL3)
     return {
-        **{name: Scenario(file, ok) for name, (file, ok) in file_cases(test_payload, EPL3).items()},
+        **{
+            name: Scenario(file, ok)
+            for name, (file, ok) in file_cases(test_payload, EPL3).items()
+        },
         "valid after 5 failed opens": Scenario(good, True, fail_opens=5),
         "valid on the last try": Scenario(good, True, fail_opens=99),
         "no card": Scenario(good, True, fail_opens=1000),
@@ -476,7 +490,9 @@ def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
             good, True, loaded0=0x17, sec_after=10000
         ),
         "valid after 5 sleeps for the mount": Em10iiScenario(good, True, mount_after=5),
-        "valid, mounted on the last try": Em10iiScenario(good, True, mount_after=TRIES - 1),
+        "valid, mounted on the last try": Em10iiScenario(
+            good, True, mount_after=TRIES - 1
+        ),
         "no card": Em10iiScenario(good, True, mount_after=10000),
         "no file": Em10iiScenario(good, True, file_present=False),
         "no file, mounted after 5 sleeps": Em10iiScenario(
@@ -569,7 +585,9 @@ def _em10ii_scenario_source(scenario: Em10iiScenario, file: Path) -> str:
         "expect_fopens": expected.fopens,
         "expect_opened": expected.opened,
         "expect_called": expected.called,
-        "expect_size": payload.parse_header(scenario.file).size if expected.called else 0,
+        "expect_size": payload.parse_header(scenario.file).size
+        if expected.called
+        else 0,
         "file_len": len(scenario.file),
     }
     hook, stub = LOADERS["em10ii"].patch.edits
@@ -594,10 +612,9 @@ def _em10ii_scenario_source(scenario: Em10iiScenario, file: Path) -> str:
 def test_em10ii_loader_in_simulator(name, em10ii_sim_objects, tmp_path):
     payload_bin, objects = em10ii_sim_objects
     scenario = em10ii_scenarios(payload_bin.read_bytes())[name]
-    accepted = (
-        payload.check_image(scenario.file) is None
-        and payload.parse_header(scenario.file).model == payload.model_field(EM10II.model)
-    )
+    accepted = payload.check_image(scenario.file) is None and payload.parse_header(
+        scenario.file
+    ).model == payload.model_field(EM10II.model)
     assert accepted == scenario.accepted
 
     file = tmp_path / "FENYKL.BIN"
@@ -628,7 +645,11 @@ def test_em10ii_loader_in_simulator(name, em10ii_sim_objects, tmp_path):
     result = subprocess.run(
         [
             EM10II.tool("run"),
-            *(arg for region in SIM_MEMORY_EM10II for arg in ("--memory-region", region)),
+            *(
+                arg
+                for region in SIM_MEMORY_EM10II
+                for arg in ("--memory-region", region)
+            ),
             str(elf),
         ],
         check=False,

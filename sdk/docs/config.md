@@ -30,16 +30,15 @@ FENYKL_CFG_ENUM(sym, name, label, group, def, names, ...);        /* names: cons
 
 `sym` becomes `int32_t sym` (the live value) and `const struct fenykl_cfg_opt fenykl_cfg_<sym>`
 (the descriptor). Trailing arguments are designated initializers, e.g. `.on_change = fn`;
-`on_change(o, old)` gets the previous value. The descriptor has a reserved `flags` byte (UI
-levels later, 0 now).
+`on_change(o, old)` gets the previous value.
 
 | Call | Context | Result |
 | --- | --- | --- |
 | `fenykl_cfg_init()` | CPU0 task, once, before hooks that read options | 0, `ENOFILE` (defaults), `ENOCARD` (gate closed: loaded later), `EDECL` |
-| `fenykl_cfg_task_start()` | CPU0 task | saver task `FYKCFG` (priority 12, 4 KiB `fw_malloc` stack) |
-| `fenykl_cfg_set(o, v)` / `fenykl_cfg_reset(o)` | CPU0 task only | 0, `EINVAL` (range), `ECONTEXT` (CPU1) |
+| `fenykl_cfg_task_start()` | CPU0 task | saver task `FYKCFG` (`FENYKL_LIB_TASK_PRIO`: E-PL3 12, E-M10 II 55; 4 KiB `fw_malloc` stack) |
+| `fenykl_cfg_set(o, v)` | CPU0 task only | 0, `EINVAL` (range), `ECONTEXT` (CPU1) |
 | `fenykl_cfg_save()` | CPU0 task | write now if dirty: 0, `ENOCARD`, `EIO`, `ENOSPC`, `EBUSY` |
-| `fenykl_cfg_str(o, buf, n)`, `fenykl_cfg_dirty()`, `fenykl_cfg_for_each(o)`, `fenykl_cfg_get_stats()` | any CPU0 context | |
+| `fenykl_cfg_dirty()`, `fenykl_cfg_for_each(o)`, `fenykl_cfg_get_stats()` | any CPU0 context | |
 
 Reading: code reads the `int32_t` directly, any context, either core. CPU1 sees a change late
 (own cache); a module that needs it there promptly copies it into `FENYKL_SHARED` state in
@@ -72,13 +71,14 @@ crc=8A7B3C1D
 - Line 1: format version and sequence number. Then `name=value` lines: bool `on`/`off`, enum by
   name, int in decimal. Last line: CRC-32 (zlib) of every byte before it. `\n` line ends.
 - **Load:** both files are read (one `"r"` open each into the 4 KiB buffer; a file of 4 KiB or more
-  is invalid). Valid = CRC line at the very end matches and the header parses. The valid file with
-  the higher seq wins (wrap-safe compare). No valid file: defaults, `ENOFILE`.
+  is invalid, one whose `rpc_fread` fails is unreadable, logged E). Valid = CRC line at the very
+  end matches and the header parses. The valid file with the higher seq wins (wrap-safe compare).
+  No valid file: defaults, `ENOFILE`.
 - **Apply** (one parser for the slots and the import): a line with a known name and a good value
   sets it. A known name with a bad or out-of-range value uses the default (logged W) and the
   **line is carried** verbatim. An **unknown name is carried** verbatim (logged I): switching
   between builds with different module sets loses nothing. A carried line is written back on every
-  save until its option is set with `fenykl_cfg_set`/`reset`. A name repeated in one file: the last
+  save until its option is set with `fenykl_cfg_set`. A name repeated in one file: the last
   line wins (logged W). Lines without `=` or with an empty name are dropped (logged W). Carried
   lines that do not fit `FENYKL_CFG_RAW`: logged E, saving is refused for that boot (nothing is
   dropped silently).
@@ -94,14 +94,15 @@ crc=8A7B3C1D
   with a wrong CRC; the untouched slot still holds the previous generation. Worst case lost: the
   changes since the last completed save.
 - **Card gate**: saves and loads check `fenykl_card_io_allowed()`; closed means dirty values
-  stay in RAM (closures are logged and counted). Init with a closed gate applies defaults; the
+  stay in RAM (closures are counted, and logged when the card is not mounted). Init with a closed gate applies defaults; the
   saver loads at the first open gate, and options set meanwhile keep their RAM value. Once a USB
   cable was seen the gate stays closed until power-off (README, card gate): changes made after
   that, or still unsaved then, are lost at power-off.
 - **Import:** `C:\FENYKL.CFG` (plain `name=value` lines, no header or CRC, `\r\n` allowed) is read
   after the slots and applied with the same parser (unknown names are carried as in a slot), marks
-  the config dirty and is deleted after the next completed save. Hand-editing CF0/CF1 is not
-  supported (the CRC rejects it).
+  the config dirty and is deleted after the next completed save. One of 4 KiB or more, or one whose
+  read fails, is neither applied nor deleted (logged E). Hand-editing CF0/CF1 is not supported
+  (the CRC rejects it).
 
 Cost (a minimal demo build): `cfg.c` 5.6 KiB code, 5.3 KiB `.bss` (4 KiB text buffer, 1 KiB carried lines,
 128 B `touched`), 44 B `.fenykl_cfg` per option plus its strings, the saver's 4 KiB stack from
@@ -121,17 +122,16 @@ Cost (a minimal demo build): `cfg.c` 5.6 KiB code, 5.3 KiB `.bss` (4 KiB text bu
   must not lose configuration. Costs a 1 KiB buffer and one lookup per line on save.
 - **One-shot import** `FENYKL.CFG` for PC edits instead of a PC tool.
 - **Debounced save in an own task**: plugins without a main loop still save; a
-  user stepping through values does not cause a card write per step. The log flusher and the cfg
-  saver could later share one task to save a stack.
-- **No UI level** for now; the reserved `flags` byte leaves room.
+  user stepping through values does not cause a card write per step. It is not the log flusher:
+  a slow flush does not delay a save, and a late load's `on_change` runs in the saver.
 - **`set` is CPU0-task only**: no locks; the dirty state is a change counter
   compared with the counter at the last completed save, so a change during a save stays dirty.
 - **Live value is a plain global**, the descriptor points to it: one load in hooks, no lookup.
 
-## 5. Unproven on the camera
+## 5. Camera status
 
-- `rpc_fremove` has never run on the camera (the log's 4 MiB cap delete has not triggered); its
-  return value for a missing file is unknown (the save handles any value by probing with `"r"`).
+- Saves and loads run on the camera through `projects/main` (README status table), so the
+  `rpc_fremove` before every write and the read-back through the uncached alias run there too.
+- `rpc_fremove`'s return value for a missing file is unknown (the save handles any value by probing
+  with `"r"`).
 - `rpc_fclose`'s return value on success is assumed to be 0 (a non-zero one fails the save).
-- Reading a file back into a buffer through the uncached alias after a cache purge
-  for parsing.

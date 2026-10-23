@@ -167,14 +167,14 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	if (!sim_same(e) || st.erased != 1 || st.drawn != SIM_CASES || st.shows != 1)
 		fail |= SIM_FAIL_FRAME;
 
-	/* Multi View (0x06): nothing copied; the first copy afterwards is no erase. */
-	SIM_U8(SIM_STATE) = 0x06;
+	/* A screen without the HUD: nothing copied; the first copy afterwards is no erase. */
+	sim_set_hidden();
 	sim_fill(SIM_BUF1, e, SIM_GUI);
 	fenykl_hud_frame(0);
 	fenykl_hud_get_stats(&st);
 	if (!sim_all(SIM_BUF1, e, SIM_GUI) || st.hidden != SIM_CASES)
 		fail |= SIM_FAIL_HIDDEN;
-	SIM_U8(SIM_STATE) = 0x04;
+	sim_set_visible();
 	fenykl_hud_frame(0);
 	fenykl_hud_get_stats(&st);
 	if (!sim_same(e) || st.erased != 1)

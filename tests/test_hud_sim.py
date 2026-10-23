@@ -8,7 +8,10 @@ states, the one-layer override, hide clears) in its exit status and dumps each r
 this file builds the font and image tables it serves and compares the dumps. test_hud_draw.c
 decodes the exposure-row cells 1095-1098 with fenykl_hud_image and draws the focus meter's
 10-cell row with fenykl_hud_draw; both dumps are compared with the Python decoder. The image table
-holds the firmware's own encoded image bytes, read from the stock firmware at test time."""
+holds the firmware's own encoded image bytes, read from the stock firmware at test time.
+The text cases run for both cameras, each with its own stock font and live-view images (E-M10 II:
+image fonts 14 and 25); test_hud_em10ii.c checks the E-M10 II visibility predicate (GUI state,
+display request, output device, INFO screen property), the output device and the palette pick."""
 
 import math
 import struct
@@ -28,6 +31,7 @@ from conftest import (
     stock_image,
 )
 
+from fenykl import sdk
 from fenykl.assets import ASSET_LAYOUTS, Bitmap, common_resource, read_assets
 from fenykl.firmware import identify, unpack_firmware
 
@@ -43,7 +47,9 @@ LV_SPACE = 11
 LV_IMAGE_TOP = 1  # line row of the images' row 0
 LV_IMAGE_WHITE = (0x06, 0x05, 0x04)  # the images' white ramp, drawn in ink[0..2]
 LV_DROP = 3  # scaled baseline row 17 onto line row 20, the images' row 19
-LV_SCALE = Fraction(2, 3)  # letters: the font scaled down, row 25 (baseline) shifted to end row 17
+LV_SCALE = Fraction(
+    2, 3
+)  # letters: the font scaled down, row 25 (baseline) shifted to end row 17
 PITCH, LV_PITCH = 32, 21  # line to line after a newline (dumped as "|")
 BLACK, TRANSLUCENT, FAINT = 0x10, 0x11, 0x12
 CLEAR = 0xFF
@@ -53,38 +59,55 @@ CELLS = {"W": 1095, "Y": 1096, "O": 1097, "G": 1098, "f": 1095}
 CELL_PITCH, CELL_TOP = 8, 1
 # images test_hud_draw.c refuses: a live-view digit (too large), the AF dot (fmt 0x02)
 DIGIT, DOT = 1136, 969
-# GUI image fonts: u16 {char, image id} pairs (gui_imgfont_tab 0x60351B9C [12], [16])
-IMAGE_FONT_12 = 0x6F1B7908
-IMAGE_FONT_16 = 0x6F1B8908
-MEMORY = [
-    DRAM_ALIAS,
-    POWERON,
-    region("0x6034d000,0x1000"),  # draw index, one-layer override, hide mask
-    region(
-        "0x6066e000,0x1000"
-    ),  # layer vram table, font resource, the fake osd_vram records
-    region("0x60702000,0x1000"),  # GUI super state and state
-    region("0x6f123000,0x1000"),  # layer bpp
-    region("0xa0800000,0x200000"),  # the two layer-1 buffers
-    region("0xaf966000,0x1000"),  # common resource header: image table pointer
-]
+# GUI image fonts of the LV style: u16 {char, image id} pairs, the digits' font and the one of '.'
+# (E-PL3 gui_imgfont_tab 0x60351B9C [12], [16]; E-M10 II 0x615F3D30 [14], [25])
+IMAGE_FONTS = {"epl3": (0x6F1B7908, 0x6F1B8908), "em10ii": (0x60D11CDC, 0x60D148DC)}
+MEMORY = {
+    "epl3": [
+        DRAM_ALIAS,
+        POWERON,
+        region("0x6034d000,0x1000"),  # draw index, one-layer override, hide mask
+        region(
+            "0x6066e000,0x1000"
+        ),  # layer vram table, font resource, the fake osd_vram records
+        region("0x60702000,0x1000"),  # GUI super state and state
+        region("0x6f123000,0x1000"),  # layer bpp
+        region("0xa0800000,0x200000"),  # the two layer-1 buffers
+        region("0xaf966000,0x1000"),  # common resource header: image table pointer
+    ],
+    # DRAM up to the GUI, display and property words and the two layer-1 buffers (0xa1e00000,
+    # 0xa1f00000), with its uncached alias; the mock bodies
+    "em10ii": [
+        ("--memory-alias", "0x60000000,0x2000000,0xa0000000"),
+        region("0x6eb00000,0x10000"),
+    ],
+}
+SIM_START = {
+    "epl3": SIM / "hooks" / "sim_start.S",
+    "em10ii": SIM / "hooks_em10ii" / "sim_start.S",
+}
+
+
+@pytest.fixture(scope="module", params=["epl3", "em10ii"])
+def camera(request) -> str:
+    return request.param
 
 
 @pytest.fixture(scope="module")
-def font() -> dict[str, Bitmap]:
+def font(camera) -> dict[str, Bitmap]:
     """ASCII glyphs of the English font (the C table has 128 entries)."""
     glyphs = {
         chr(int(a.name.removeprefix("U+"), 16)): a.bitmap
-        for a in read_assets(stock_image())
+        for a in read_assets(stock_image(camera))
         if a.kind == "glyph" and a.font == FONT
     }
     return {c: bitmap for c, bitmap in glyphs.items() if c < "\x80"}
 
 
 @pytest.fixture(scope="module")
-def lv_images() -> dict[str, tuple[int, Bitmap]]:
-    """The LV style's image ids and images by character: image font 12, and '.' of image font 16."""
-    data = stock_image()
+def lv_images(camera) -> dict[str, tuple[int, Bitmap]]:
+    """The LV style's image ids and images by character: the digits' image font, and its '.'."""
+    data = stock_image(camera)
     code = unpack_firmware(data).blocks[0].body
     base = identify(data).load_addresses["main-code-01"]
 
@@ -97,7 +120,9 @@ def lv_images() -> dict[str, tuple[int, Bitmap]]:
             pairs[chr(ch)] = image
         return pairs
 
-    ids = image_font(IMAGE_FONT_12) | {".": image_font(IMAGE_FONT_16)["."]}
+    digits, dot = IMAGE_FONTS[camera]
+    ids = {c: i for c, i in image_font(digits).items() if c in "0123456789+-:"}
+    ids["."] = image_font(dot)["."]
     assert sorted(ids) == sorted("0123456789+-:."), ids
     images = {
         int(a.name): a.bitmap
@@ -126,11 +151,11 @@ def encode(bitmap: Bitmap) -> bytes:
     return bytes(out)
 
 
-def image_table(ids: set[int], path: Path) -> Path:
+def image_table(ids: set[int], path: Path, camera: str = "epl3") -> Path:
     """The firmware's struct gui_image records {u16 type, w, h, bpp, u32 0, size, bitmap, key} of
     `ids` with their encoded bitmaps, and the id table."""
-    common = common_resource(stock_image())
-    layout = ASSET_LAYOUTS["epl3"]
+    common = common_resource(stock_image(camera))
+    layout = ASSET_LAYOUTS[camera]
     table = common.u32(layout.common_addr + layout.image_table)
     lines = ["#include <stdint.h>"]
     entries = []
@@ -337,20 +362,23 @@ def expected(
 
 
 @pytest.fixture(scope="module")
-def cases(font, lv_images, tmp_path_factory) -> list[Case]:
-    workdir = tmp_path_factory.mktemp("hudsim")
+def cases(camera, font, lv_images, tmp_path_factory) -> list[Case]:
+    workdir = tmp_path_factory.mktemp(f"hudsim_{camera}")
     result = run_in_simulator(
         workdir,
         "hudsim",
         [
             HUD / "test_hud.c",
             HUD / "fw.S",
-            SIM / "hooks" / "sim_start.S",
+            SIM_START[camera],
             glyph_table(font, workdir / "glyphs.c"),
-            image_table({i for i, _ in lv_images.values()}, workdir / "images.c"),
+            image_table(
+                {i for i, _ in lv_images.values()}, workdir / "images.c", camera
+            ),
         ],
-        MEMORY,
+        MEMORY[camera],
         mocked=["gpi_get_glyph", "malloc", "free"],
+        target=sdk.target(camera),
     )
     assert_exit(result, 0, "tests/sim/hud/test_hud.c")
     out, found = result.stdout, []
@@ -400,7 +428,7 @@ def draw_dump(stock_images, tmp_path_factory) -> DrawDump:
             SIM / "hooks" / "sim_start.S",
             image_table(set(stock_images), workdir / "images.c"),
         ],
-        MEMORY,
+        MEMORY["epl3"],
         mocked=["malloc", "free"],
     )
     assert_exit(result, 0, "tests/sim/hud/test_hud_draw.c")
@@ -454,3 +482,15 @@ def test_cell_row_places_the_stock_cells(draw_dump, stock_images):
         assert CLEAR not in inside, k
     for y in (0, 1, 9, 10, 11):
         assert row.pixels[y * row.w : (y + 1) * row.w] == bytes([CLEAR]) * row.w
+
+
+def test_em10ii_visibility_output_and_palette(tmp_path):
+    result = run_in_simulator(
+        tmp_path,
+        "hudsim_em10ii",
+        [HUD / "test_hud_em10ii.c", HUD / "fw.S", SIM_START["em10ii"]],
+        MEMORY["em10ii"],
+        mocked=["malloc", "free"],
+        target=sdk.target("em10ii"),
+    )
+    assert_exit(result, 0, "tests/sim/hud/test_hud_em10ii.c")

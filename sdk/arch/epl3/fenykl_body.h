@@ -2,31 +2,23 @@
 #ifndef FENYKL_BODY_TARGET_H
 #define FENYKL_BODY_TARGET_H
 
-#include <key.h>
+#define FENYKL_GUI_SS_REC 0x02u		/* every live-view screen */
+#define FENYKL_GUI_SS_MENU 0x03u	/* main menu */
+#define FENYKL_GUI_SS_PLAY 0x06u	/* single playback */
 
-static inline uint32_t fbody_rd8(uint32_t a)
+static inline uint16_t fenykl_gui_state(void)
 {
-	return *(volatile uint8_t *)(uintptr_t)a;
-}
-
-static inline uint32_t fbody_rd16(uint32_t a)
-{
-	return *(volatile uint16_t *)(uintptr_t)a;
-}
-
-static inline uint32_t fbody_rd32(uint32_t a)
-{
-	return *(volatile uint32_t *)(uintptr_t)a;
+	return (uint16_t)(fenykl_rd8(FW_GUI_SUPER) << 8 | fenykl_rd8(FW_GUI_STATE));
 }
 
 static inline bool fenykl_gui_live_view(void)
 {
-	return fbody_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_REC;
+	return fenykl_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_REC;
 }
 
 static inline bool fenykl_gui_playback(void)
 {
-	return fbody_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_PLAY;
+	return fenykl_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_PLAY;
 }
 
 #if FENYKL_HAS_LENS
@@ -34,12 +26,12 @@ static inline bool fenykl_gui_playback(void)
 
 static inline bool fenykl_lens_attached(void)
 {
-	return fbody_rd16(FW_LENS_ATTACHED) != 0;
+	return fenykl_rd16(FW_LENS_ATTACHED) != 0;
 }
 
 static inline uint32_t fenykl_lens_focus_mm(void)
 {
-	return fbody_rd32(FW_LENS_OBJ_DST);
+	return fenykl_rd32(FW_LENS_OBJ_DST);
 }
 
 static inline uint32_t fenykl_lens_focal_mm(void)
@@ -56,7 +48,7 @@ static inline uint32_t fenykl_lens_av(void)
 
 static inline uint32_t fenykl_lens_iris_av(void)
 {
-	return fbody_rd16(FW_AV_EFFECT);
+	return fenykl_rd16(FW_AV_EFFECT);
 }
 #endif
 
@@ -72,7 +64,7 @@ static inline int fenykl_batt_read(uint32_t *v)
 	if (fw_OlySemaphoreWait(FBODY_BATT_SEM, FBODY_BATT_SEM_MS))
 		return FENYKL_BATT_EBUSY;
 	/* bchk_ad_read waits forever on its event, so read only while the stock check does */
-	if (!fbody_rd8(FW_POWER_SRC_CHECK)) {
+	if (!fenykl_rd8(FW_POWER_SRC_CHECK)) {
 		fw_OlySemaphoreSignal(FBODY_BATT_SEM);
 		return FENYKL_BATT_ESTANDBY;
 	}
@@ -83,7 +75,7 @@ static inline int fenykl_batt_read(uint32_t *v)
 
 static inline uint32_t fenykl_power_src(void)
 {
-	return fbody_rd16(FW_POWER_SRC);
+	return fenykl_rd16(FW_POWER_SRC);
 }
 
 static inline bool fenykl_power_src_batt(uint32_t src)
@@ -113,22 +105,22 @@ static inline uint32_t fbody_prop_u8(unsigned int prop)
 
 static inline bool fenykl_af_mf(void)
 {
-	uint32_t tf = fbody_rd32(FW_TAKE_FOCUS_PTR);
+	uint32_t tf = fenykl_rd32(FW_TAKE_FOCUS_PTR);
 
-	return tf && fbody_rd8(tf + FBODY_TF_MODE) == FBODY_TF_MF;
+	return tf && fenykl_rd8(tf + FBODY_TF_MODE) == FBODY_TF_MF;
 }
 
 static inline bool fenykl_af_half(void)
 {
-	return !(fbody_rd8(FW_TRG_SNAPSHOT) & 1u);
+	return !(fenykl_rd8(FW_TRG_SNAPSHOT) & 1u);
 }
 
 static inline int fenykl_af_target_area(void)
 {
 	uint32_t t = fbody_prop_u8(FBODY_PROP_TARGET);
 
-	if (t < FBODY_TARGETS && fbody_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t + 1))
-		return (int)fbody_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t);
+	if (t < FBODY_TARGETS && fenykl_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t + 1))
+		return (int)fenykl_rd8(FW_TAKE_FCS_AF_MODE2FCS + 2 * t);
 	return FENYKL_AF_AREA_NONE;
 }
 
@@ -139,16 +131,16 @@ static inline bool fenykl_af_all_targets(void)
 
 static inline bool fenykl_af_grid(struct fenykl_af_grid *g)
 {
-	uint32_t ctx = fbody_rd32(FW_FCS_CONTRAST_CTX);
+	uint32_t ctx = fenykl_rd32(FW_FCS_CONTRAST_CTX);
 
 	if (!ctx)
 		return false;
 	g->buf = (const volatile uint32_t *)FW_FCS_DMA_BUF;
-	g->chan_words = fbody_rd32(FW_FCS_AREA_SIZE);
-	g->cols = (uint8_t)fbody_rd8(ctx + FBODY_CTX_COLS);
-	g->rows = (uint8_t)fbody_rd8(ctx + FBODY_CTX_ROWS);
-	g->pattern = (uint8_t)fbody_rd8(ctx + FBODY_CTX_PATTERN);
-	g->cut3 = (uint16_t)fbody_rd16(ctx + FBODY_CTX_CUT3);
+	g->chan_words = fenykl_rd32(FW_FCS_AREA_SIZE);
+	g->cols = (uint8_t)fenykl_rd8(ctx + FBODY_CTX_COLS);
+	g->rows = (uint8_t)fenykl_rd8(ctx + FBODY_CTX_ROWS);
+	g->pattern = (uint8_t)fenykl_rd8(ctx + FBODY_CTX_PATTERN);
+	g->cut3 = (uint16_t)fenykl_rd16(ctx + FBODY_CTX_CUT3);
 	return true;
 }
 #endif
@@ -156,6 +148,10 @@ static inline bool fenykl_af_grid(struct fenykl_af_grid *g)
 #if FENYKL_HAS_SHOT
 #define FENYKL_DISP_LV_PITCH 1600u	/* 800x600 YUYV */
 #define FENYKL_DISP_LV_BYTES (FENYKL_DISP_LV_PITCH * 600u)
+/* The panel shows the top-left 720 x 480 of the OSD planes, 16:9: 853 x 480 at square pixels. */
+#define FENYKL_DISP_W 720u
+#define FENYKL_DISP_H 480u
+#define FENYKL_DISP_SQUARE_W 853u	/* 720 * 32 / 27 */
 #define FENYKL_OSD_LAYERS 3u
 #define FENYKL_OSD_PLANE_W 896u
 #define FENYKL_OSD_PLANE_H 600u
@@ -166,6 +162,10 @@ static inline bool fenykl_af_grid(struct fenykl_af_grid *g)
 #define FENYKL_OSD_PAL_TOTAL (256u + 16u + 8u)
 /* bottom to top [inferred from camera OSD dumps; L1 on top (osdcard)]; 0x1A4 is logged at debug */
 #define FENYKL_OSD_STACK { 2, 0, 1 }
+/* img3: the face/AF frames, 8 bpp palette indices, index 0 transparent; above img1, below the OSD */
+#define FENYKL_FRAMES_PITCH 448u
+#define FENYKL_FRAMES_H 240u
+#define FENYKL_FRAMES_PAL 8u
 
 #define FBODY_FLIP_ENTRIES 3u
 #define FBODY_RECFILE_BLOCKS 256u
@@ -188,15 +188,12 @@ static inline uint32_t fenykl_cached(uint32_t a)
 
 static inline bool fenykl_dram(uint32_t a, uint32_t bytes)
 {
-	uint32_t c = fenykl_cached(a);
-
-	return (a & 3) == 0 && ((a >> 28) == 0x6 || (a >> 28) == 0xA) &&
-	       c + bytes <= FW_IMAGE_START;
+	return fenykl_dram_ptr(a, 4) && fenykl_cached(a) + bytes <= FW_IMAGE_START;
 }
 
 static inline uint32_t fenykl_disp_lv(void)
 {
-	return fbody_rd32(FW_MOV_IMG1_SHADOW);
+	return fenykl_rd32(FW_MOV_IMG1_SHADOW);
 }
 
 static inline bool fenykl_disp_lv_pos(uint32_t lv, uint32_t *x, uint32_t *y)
@@ -204,10 +201,10 @@ static inline bool fenykl_disp_lv_pos(uint32_t lv, uint32_t *x, uint32_t *y)
 	for (unsigned int i = 0; i < FBODY_FLIP_ENTRIES; i++) {
 		uint32_t e = FW_MOV_DISP_FLIP_TBL + 16 * i;
 
-		if ((fbody_rd32(e) & 0x1FFFFFFFu) != (lv & 0x1FFFFFFFu))
+		if ((fenykl_rd32(e) & 0x1FFFFFFFu) != (lv & 0x1FFFFFFFu))
 			continue;
-		*x = fbody_rd32(e + 4);
-		*y = fbody_rd32(e + 8);
+		*x = fenykl_rd32(e + 4);
+		*y = fenykl_rd32(e + 8);
 		return true;
 	}
 	return false;
@@ -215,37 +212,37 @@ static inline bool fenykl_disp_lv_pos(uint32_t lv, uint32_t *x, uint32_t *y)
 
 static inline uint32_t fenykl_disp_img1_x(void)
 {
-	return fbody_rd32(FW_DISP_IMG1_X);
+	return fenykl_rd32(FW_DISP_IMG1_X);
 }
 
 static inline uint32_t fenykl_disp_img1_y(void)
 {
-	return fbody_rd32(FW_DISP_IMG1_Y);
+	return fenykl_rd32(FW_DISP_IMG1_Y);
 }
 
 static inline uint32_t fenykl_disp_mix(void)
 {
-	return fbody_rd32(FW_DISP_MIX);
+	return fenykl_rd32(FW_DISP_MIX);
 }
 
 static inline unsigned int fenykl_osd_bpp(unsigned int l)
 {
-	return fbody_rd8(FW_GPI_LAYER_BPP + l);
+	return fenykl_rd8(FW_GPI_LAYER_BPP + l);
 }
 
 static inline uint32_t fenykl_osd_draw_buf(void)
 {
-	return fbody_rd8(FW_GPI_DRAW_BUF);
+	return fenykl_rd8(FW_GPI_DRAW_BUF);
 }
 
 static inline uint32_t fenykl_osd_hide_mask(void)
 {
-	return fbody_rd16(FW_GPI_HIDE_MASK);
+	return fenykl_rd16(FW_GPI_HIDE_MASK);
 }
 
 static inline uint32_t fenykl_osd_buf(unsigned int l, unsigned int b)
 {
-	uint32_t h = fbody_rd32(FW_GPI_LAYER_VRAM + 4 * (l * 2 + b));
+	uint32_t h = fenykl_rd32(FW_GPI_LAYER_VRAM + 4 * (l * 2 + b));
 	const volatile struct fbody_osd_vram *v =
 		(const volatile struct fbody_osd_vram *)(uintptr_t)h;
 
@@ -257,12 +254,30 @@ static inline uint32_t fenykl_osd_buf(unsigned int l, unsigned int b)
 
 static inline uint32_t fenykl_osd_shown(unsigned int l)
 {
-	return fbody_rd32(FW_OSD_SHADOW + 4 * fbody_osd_shadow_slot[l]);
+	return fenykl_rd32(FW_OSD_SHADOW + 4 * fbody_osd_shadow_slot[l]);
 }
 
 static inline const uint8_t *fenykl_osd_palettes(void)
 {
 	return (const uint8_t *)FW_OSD_PALETTES;
+}
+
+static inline uint32_t fenykl_frames_shown(void)
+{
+	return fenykl_rd32(FW_DISP_IMG3_SHADOW);
+}
+
+static inline void fenykl_frames_geom(uint16_t *w, uint16_t *h, uint16_t *to_w, uint16_t *to_h)
+{
+	*w = (uint16_t)fenykl_rd16(FW_DISP_IMG3_GEOM + 4);
+	*h = (uint16_t)fenykl_rd16(FW_DISP_IMG3_GEOM + 6);
+	*to_w = (uint16_t)fenykl_rd16(FW_DISP_IMG3_GEOM + 12);
+	*to_h = (uint16_t)fenykl_rd16(FW_DISP_IMG3_GEOM + 14);
+}
+
+static inline const uint8_t *fenykl_frames_palette(void)
+{
+	return (const uint8_t *)FW_FRAME_PALETTE;
 }
 
 static inline bool fenykl_recfile_fits(uint32_t bytes)
@@ -271,7 +286,7 @@ static inline bool fenykl_recfile_fits(uint32_t bytes)
 	unsigned int run = 0;
 
 	for (unsigned int i = 0; i < FBODY_RECFILE_BLOCKS; i++) {
-		run = fbody_rd8(FW_RECFILE_USED + i) ? 0 : run + 1;
+		run = fenykl_rd8(FW_RECFILE_USED + i) ? 0 : run + 1;
 		if (run >= blocks)
 			return true;
 	}

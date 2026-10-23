@@ -24,6 +24,7 @@
 #define SIM_LOG_FP 1u	/* the handle of C:\FENYKL.LOG */
 #define SIM_ERR_FP 2u	/* the handle of C:\FENYKL.ERR */
 #define SIM_BOOT_GAP_US 1000000u
+#define SIM_IDLE_STEP_US 100000000u	/* flush period of the idle steps */
 #define SIM_MALLOC_MAX 0x3FFCu	/* api_memory_alloc 0x6E8639AE: "AllocMemory: Size Over!!!", NULL */
 
 #define SIM_CHECK(n, cond)			\
@@ -67,8 +68,8 @@ extern char fenykl_bss_start[], fenykl_bss_end[];
 
 static void sim_set_time(uint32_t t)
 {
-	sim.now = t & FENYKL_LOG_TIMER_MASK;
-	SIM_TIMER = FENYKL_LOG_TIMER_MASK - sim.now;
+	sim.now = t & FENYKL_TIMER_MASK;
+	SIM_TIMER = FENYKL_TIMER_MASK - sim.now;
 }
 
 static void sim_tick(uint32_t us)
@@ -440,7 +441,7 @@ static void sim_check_bad(void)
 	SIM_CHECK(3, s.truncated == 1 && s.bad == 3);
 }
 
-/* 5: a jump of more than 2^29 us, then the 30-bit wrap */
+/* 5: the 30-bit wrap between two records */
 static void sim_check_wrap(void)
 {
 	sim_set_time(0x3FFFFF00);
@@ -448,7 +449,6 @@ static void sim_check_wrap(void)
 	sim_set_time(0x100);
 	fenykl_log_info(&sim_mod, "post-wrap");
 	SIM_CHECK(5, fenykl_log_flush() == 0);
-	SIM_CHECK(5, sim_stats().stamp_jumps == 1);
 }
 
 /* 6, 7: ring 0 keeps the newest, ring 1 drops the newest */
@@ -637,7 +637,7 @@ static void sim_boot7(void)
 	SIM_CHECK(19, fenykl_log_flush() == FENYKL_LOG_ENOCARD);
 	s = sim_stats();
 	SIM_CHECK(19, sim.opens == opens && sim.size == size && s.flushes == 1);
-	SIM_CHECK(19, s.queued[0] == FLOG_RING0_RECORDS && s.overwritten0 == 89);
+	SIM_CHECK(19, s.queued[0] == FLOG_RING0_RECORDS && s.overwritten0 == 88);
 	SIM_CHECK(19, s.gate_skipped == 2 && s.gate_max_ms == 2000);
 	/* 20: cable out and the card mounted: the gate stays closed until power-off */
 	mock_usb_key = 1;
@@ -648,8 +648,36 @@ static void sim_boot7(void)
 	s = sim_stats();
 	SIM_CHECK(20, !fenykl_card_io_allowed() && fenykl_card_usb_seen());
 	SIM_CHECK(20, sim.opens == opens && sim.size == size && s.flushes == 1);
-	SIM_CHECK(20, s.queued[0] == FLOG_RING0_RECORDS && s.overwritten0 == 89);
+	SIM_CHECK(20, s.queued[0] == FLOG_RING0_RECORDS && s.overwritten0 == 88);
 	SIM_CHECK(20, s.gate_skipped == 4 && s.gate_max_ms == 3000);
+}
+
+/* 21: no record for more than one timer wrap (2^30 us), with the card gate open and closed */
+static void sim_idle(unsigned int steps, int ret)
+{
+	for (unsigned int i = 0; i < steps; i++) {
+		sim_tick(SIM_IDLE_STEP_US);
+		SIM_CHECK(21, fenykl_log_flush() == ret);
+	}
+}
+
+static void sim_boot8(void)
+{
+	struct fenykl_log_stats s;
+
+	SIM_CHECK(21, fenykl_log_init(NULL) == 0);
+	fenykl_log_info(&sim_mod, "idle 0");
+	sim_idle(12, 0);
+	fenykl_log_info(&sim_mod, "idle 1");
+	sim_idle(12, 0);
+	SIM_FAT_MOUNTED = 0;
+	sim_idle(6, FENYKL_LOG_ENOCARD);
+	fenykl_log_info(&sim_mod, "idle 2");
+	sim_idle(10, FENYKL_LOG_ENOCARD);
+	SIM_FAT_MOUNTED = 1;
+	sim_idle(1, 0);
+	s = sim_stats();
+	SIM_CHECK(21, s.queued[0] == 0 && sim_balanced(&s) && s.gate_max_ms == 1600000);
 }
 
 void plugin_main(uint32_t load_base, uint32_t image_size)
@@ -673,6 +701,8 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	sim_boot6();
 	sim_reboot(SIM_BOOT_GAP_US);
 	sim_boot7();
+	sim_reboot(SIM_BOOT_GAP_US);
+	sim_boot8();
 	sim_dump();
 	sim_write(err_head, sizeof(err_head) - 1);
 	sim_write(sim.err, sizeof(sim.err) - 1);

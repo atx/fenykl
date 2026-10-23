@@ -2,7 +2,7 @@
 by CRC and seq (torn and short files fall back to the older slot, seq wraps), the line parser
 (good, invalid, out-of-range, duplicate, unknown and malformed lines, enum names), lines carried
 verbatim through saves, the one-shot import through the same parser, the remove-before-write rule,
-the carried-lines overflow and the card gate. test_cfg.c checks return codes and counters (exit
+the carried-lines overflow, the card gate and a failed read. test_cfg.c checks return codes and counters (exit
 status); this file crafts the input files (CRC from zlib) and checks the files the library wrote."""
 
 import zlib
@@ -71,6 +71,7 @@ CRAFTED = {
     "wrap1": slot_file(0, ["t.int=25"]),
     "import": b"t.enum=a\r\nfuture.opt=9\r\nnew.thing=1\r\n\r\nt.int=abc\r\n",
     "overflow": b"".join(b"x.unknown%03d=%060d\n" % (i, i) for i in range(16)),
+    "readfail": b"t.int=50\r\nread.fail=1\r\n",
 }
 
 
@@ -103,7 +104,7 @@ def dumps(tmp_path_factory) -> dict[str, dict[str, str | None]]:
         timeout=120,
     )
     assert_exit(result, 0, "tests/sim/cfg/test_cfg.c")
-    out = result.stdout.decode("latin-1")
+    out = result.stdout.decode("latin-1").removesuffix("\n")
     scenarios = {}
     for block in out.split("\n#### ")[1:]:
         tag, *files = block.split("\n-- ")
@@ -194,3 +195,12 @@ def test_late_load_after_a_closed_gate_keeps_values_set_meanwhile(dumps):
         "new.thing=1",
         "t.int=abc",
     ]
+
+
+def test_a_failed_import_read_keeps_the_file_and_applies_nothing(dumps):
+    """A failed rpc_fread is no empty import: the next save would delete the file."""
+    files = dumps["read-fail"]
+    assert files[SLOTS[2]] == CRAFTED["readfail"].decode()
+    _, lines = body(files[SLOTS[1]])
+    assert "t.int=50" not in lines
+    assert "read.fail=1" not in lines

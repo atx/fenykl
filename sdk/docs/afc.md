@@ -1,6 +1,6 @@
 # Own contrast client (`sdk/lib/afc.c`)
 
-Status: camera-proven in the `mfstats` probe (8 clean attach/detach cycles, S-AF locking every time
+Status: camera-proven in a probe plugin (8 clean attach/detach cycles, S-AF locking every time
 afterwards); used by the `main` focus meter in MF. The pending stop while live view is off
 (section 3) is simulator-tested only (`tests/sim/afc/`). Linked into every plugin, like all of
 `sdk/lib/`; a plugin that does not call `fenykl_afc_*` gets no byte of it (`--gc-sections`, including
@@ -40,7 +40,6 @@ Header `sdk/include/afc.h` (the reference).
 | `fenykl_afc_get()` | any | the library state (read-only): state machine, callback counters, gates, grid, snapshot |
 | `fenykl_afc_dma()` | any | the statistics buffer: channel c, area i at `c * rows * 16 + i / cols * 16 + i % cols` |
 | `fenykl_afc_failed()` | any | an error stopped the client for the boot |
-| `fenykl_afc_slot_owner(slot)`, `fenykl_afc_take_gap()` | any | probe helpers (mfstats) |
 
 Data is valid while the state is `ATTACHED` and the area's words are not `FENYKL_AFC_DMA_FILL`.
 
@@ -85,5 +84,5 @@ the frame callback) -> idle (done callback) or off.
   time out once (2000 ticks) [inferred]. The gates (fcs idle, slots free, no half-press, the frame
   callback's own stop) keep fcs from wanting the block while attached; camera runs saw no 0x4585.
 - Wrong setting fields (a snapshot from another sensor mode): wrong windows or a DMA write past the
-  used 4 x 5 x 16 words; the buffer has 768 bytes of slack (mfstats checks it).
+  used 4 x 5 x 16 words; the buffer has 768 bytes of slack.
 - Nothing is written to firmware settings, flash or properties; fcs's own client is never touched.

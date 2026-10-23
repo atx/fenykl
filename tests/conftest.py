@@ -22,7 +22,9 @@ def stock_image(name: str = "epl3") -> bytes:
     data = read_bin(path)
     digest = hashlib.sha256(data).hexdigest()
     if digest != target.sha256:
-        pytest.fail(f"{path} is not the stock image: sha256 {digest}, expected {target.sha256}")
+        pytest.fail(
+            f"{path} is not the stock image: sha256 {digest}, expected {target.sha256}"
+        )
     return data
 
 

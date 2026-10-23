@@ -4,8 +4,9 @@ Status: simulator-tested (`tests/sim/key/`); two camera runs with a key probe (2
 key code but POWER seen through the hook, all on `ui_key_task`, layer counters clean (section 4).
 The rear dial posts no APPEVENT and is not part of the layer (section 5). A claim consumes a key's
 events but does **not** hide a hold from the firmware (section 3.1). Used by main's Fn override
-(short Fn runs the action, long Fn replays the stock function on release). Linked into every
-plugin, like all of `sdk/lib/`; a plugin that does not call `fenykl_key_*` gets no byte of it
+(short Fn runs the action, long Fn replays the stock function on release) and the Fn screenshot of
+birddetect6. Linked into every plugin, like all of `sdk/lib/`; a plugin that does not call
+`fenykl_key_*` gets no byte of it
 (`--gc-sections`).
 
 ## 1. What it does
@@ -27,7 +28,7 @@ code to a named key and offers it to the plugin's **key handlers**:
 
 The firmware's own long press and auto-repeat (HFW `KeyCtrl`) exist only for keys the active screen
 registered; the key task posts plain press/release, so the layer times holds itself
-with the 1 MHz timer (`FENYKL_LOG_TIMER_NOW`, 30 bit, wrap-safe).
+with the 1 MHz timer (`FENYKL_TIMER_NOW`, 30 bit, wrap-safe).
 
 ## 2. API
 
@@ -42,9 +43,7 @@ DEBUG lines: set `fenykl_key_log.level = FENYKL_LOG_DEBUG` to see them).
 | `fenykl_key_tick()` | plugin task, optional, every ~50 ms | LONG / the replay at `long_us` while held (section 3) |
 | `fenykl_key_get_stats(st)` | any | layer counters (section 4) |
 | `fenykl_key_inject(k)` | CPU0 task or handler | press + release of a button through the stock entry (`fenykl_event_inject`): the firmware acts, `ui_key_get_state` keeps reporting the key up; `EARG` for NONE and the mode dial |
-| `fenykl_key_pressed(k)` | any CPU0 context | `fw_ui_key_get_state(code) == 1`; false for NONE and the mode dial |
-| `fenykl_key_mode_dial()` | any CPU0 context | `fw_ui_key_get_state(0x02021901)`: the hardware mode dial value (1 P, 2 A, 3 S, 4 M, 0x0A movie, 0x31 iAUTO, 0x33 ART, 0x2A SCN) |
-| `fenykl_gui_state()` | any | GUI super state << 8 \| state (u8 bytes at 0x60702278); `FENYKL_GUI_SUPER()`, `FENYKL_GUI_SS_REC` (0x02, every live-view screen), `_MENU` (0x03), `_PLAY` (0x06). The E-PL3's encoding: a plugin for several cameras asks `body.h`'s `fenykl_gui_live_view()` / `fenykl_gui_playback()` instead |
+| `fenykl_gui_state()` | any | from `body.h` (key.h includes it): GUI super state << 8 \| state, the camera's own encoding; E-PL3: u8 bytes at 0x60702278, `FENYKL_GUI_SUPER()`, `FENYKL_GUI_SS_REC` (0x02, every live-view screen), `_MENU` (0x03), `_PLAY` (0x06) from `arch/epl3/fenykl_body.h`. A plugin for several cameras asks `fenykl_gui_live_view()` / `fenykl_gui_playback()` instead |
 
 A handler node is the plugin's static storage and stays added for the boot; `enabled = false`
 stops new claims and deliveries (a key it already holds still completes). The fields under
@@ -169,7 +168,7 @@ Adding a key is one line in `key_codes[]`.
 | REC | 0x1209 | camera-seen: two R presses started and stopped recording (GUI 0x020F -> 0x0212) |
 | HALF, FULL | 0x0100, 0x0101 | camera-seen; a shot posts HALF press, FULL press, FULL release, HALF release |
 | POWER | 0x000C | code verified; not exercised |
-| MODE_DIAL | 0x1901 (class 0x0202) | camera-seen: one VALUE per step, `fenykl_key_mode_dial()` agreed every time |
+| MODE_DIAL | 0x1901 (class 0x0202) | camera-seen: one VALUE per step, `fw_ui_key_get_state(0x02021901)` agreed every time |
 
 Not in the table, passed as `unknown`: 0x0202121C (VALUE, twice while the lens release button was
 held; LpSw [inferred]) and 0x02031902, the rear dial event of the static analysis.

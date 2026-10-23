@@ -138,7 +138,10 @@ _mock_\name:
 	cmp	1000,d0
 	bne	1f
 	mov	(_sim_exit_code),d1
-	mov	1,d0
+	cmp	255,d1		/* the exit status is 8 bits: 256 and up would wrap */
+	bls	3f
+	mov	255,d1
+3:	mov	1,d0
 	syscall
 1:	mov	d0,(ARGS)
 	add	1,d0

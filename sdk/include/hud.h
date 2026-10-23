@@ -19,9 +19,11 @@
 /* '\n' starts a line this much lower; n lines need h = (n - 1) * pitch + LINE_H */
 #define FENYKL_HUD_PITCH 32		/* the glyph cell */
 #define FENYKL_HUD_LV_PITCH 21		/* outlines of neighbouring lines abut, as in the stock ISO item */
+#define FENYKL_HUD_BITMAP_MAX 0x3FFC	/* w * h: fw_malloc refuses more */
+
+#if FENYKL_TARGET_EPL3
 #define FENYKL_HUD_CANVAS_W 720
 #define FENYKL_HUD_CANVAS_H 480
-#define FENYKL_HUD_BITMAP_MAX 0x3FFC	/* w * h: fw_malloc refuses more */
 
 /* Layer-1 palette indices in live view [camera]. */
 #define FENYKL_HUD_CLEAR 0xFF		/* transparent */
@@ -42,6 +44,51 @@
 /* Basic, Histogram, Highlight&Shadow */
 #define FENYKL_HUD_INFO_SCREENS \
 	(FENYKL_HUD_STATE(0x03) | FENYKL_HUD_STATE(0x04) | FENYKL_HUD_STATE(0x05))
+#elif FENYKL_TARGET_EM10II
+/* The LCD shows the canvas 1:1; the EVF shows its left FENYKL_HUD_EVF_W columns, scaled
+   (fenykl_hud_output). */
+#define FENYKL_HUD_CANVAS_W 720
+#define FENYKL_HUD_CANVAS_H 480
+#define FENYKL_HUD_EVF_W 640
+
+/* Layer-1 palette indices: the E-PL3's colours at the same indices in the live-view layer-1
+   palette [camera dump] and in 19 of the 59 stock GUI palettes (about every third). Only indices
+   < FENYKL_HUD_PAL_ENTRIES reach the display (128-entry hardware palette). */
+#define FENYKL_HUD_PAL_ENTRIES 0x80
+#define FENYKL_HUD_CLEAR 0x00		/* transparent (alpha 0) */
+#define FENYKL_HUD_BLACK 0x10
+#define FENYKL_HUD_TRANSLUCENT 0x11	/* black, alpha 0x11/0x1F */
+#define FENYKL_HUD_FAINT 0x12		/* black, alpha 8/0x1F */
+#define FENYKL_HUD_WHITE { 0x06, 0x05, 0x04 }
+#define FENYKL_HUD_GREEN { 0x09, 0x08, 0x07 }
+#define FENYKL_HUD_YELLOW { 0x03, 0x02, 0x01 }
+/* No fixed red: index 0x39 differs between the GUI palettes. Use fenykl_hud_color. */
+
+/* Visible INFO screens: bit n = value n of the live-view INFO screen (fenykl_hud_info_screen). */
+#define FENYKL_HUD_INFO(n) (1u << (n))
+#define FENYKL_HUD_INFO_IMAGE 0		/* image only */
+#define FENYKL_HUD_INFO_BASIC 1
+#define FENYKL_HUD_INFO_CUSTOM1 0x11	/* histogram by default */
+#define FENYKL_HUD_INFO_CUSTOM2 0x12	/* level gauge by default */
+#define FENYKL_HUD_INFO_SCREENS \
+	(FENYKL_HUD_INFO(FENYKL_HUD_INFO_BASIC) | FENYKL_HUD_INFO(FENYKL_HUD_INFO_CUSTOM1))
+
+enum fenykl_hud_output {
+	FENYKL_HUD_OUT_NONE,		/* display 0 closed or on another device */
+	FENYKL_HUD_OUT_LCD,		/* canvas 720 x 480 visible */
+	FENYKL_HUD_OUT_EVF,		/* canvas 640 x 480 visible */
+};
+
+/* Output device of display 0 (enum fenykl_hud_output). */
+int fenykl_hud_output(void);
+/* The live-view INFO screen (FENYKL_HUD_INFO_*), or -1 if its property is not registered. */
+int fenykl_hud_info_screen(void);
+/* Index < FENYKL_HUD_PAL_ENTRIES of the opaque live layer-1 palette entry nearest to rgb (0xRRGGBB,
+   sum of squared differences), or -1 if none is opaque. */
+int fenykl_hud_color(uint32_t rgb);
+#else
+#error "hud: no canvas for this target"
+#endif
 
 enum fenykl_hud_align {
 	FENYKL_HUD_LEFT,
@@ -112,7 +159,7 @@ struct fenykl_hud_stats {
 };
 
 /* Checks the layer-1 buffers (buf[2] receives what was read) and sets the states in which elements
-   are shown (FENYKL_HUD_STATE bits). 0 or FENYKL_HUD_E*. */
+   are shown (FENYKL_HUD_STATE bits; E-M10 II: FENYKL_HUD_INFO bits). 0 or FENYKL_HUD_E*. */
 int fenykl_hud_init(uint32_t states, struct fenykl_hud_buf buf[2]) FENYKL_CPU0_ONLY("fenykl_hud_init");
 /* After fenykl_hud_init: checks e's rectangle and allocates its bitmaps; e is not shown until
    fenykl_hud_text. 0 or FENYKL_HUD_E*. */
@@ -140,7 +187,8 @@ void fenykl_hud_tick(void) FENYKL_CPU0_ONLY("fenykl_hud_tick");
 int fenykl_hud_text_width(uint8_t style, const char *s) FENYKL_CPU0_ONLY("fenykl_hud_text_width");
 /* Font id of the loaded language (15 for English), 0 while the GUI has not loaded one. */
 uint32_t fenykl_hud_font(void);
-/* Layer 1 is not masked and the GUI is in one of the states given to fenykl_hud_init. */
+/* Layer 1 is not masked and the GUI is in one of the states given to fenykl_hud_init. E-M10 II:
+   live view with its info display on the LCD or the EVF, on one of the INFO screens given. */
 bool fenykl_hud_visible(void);
 /* From the plugin's cw_updateDisplay hook, before the original: copies the published elements
    into the buffer about to be shown (show_front == 0 only). Counts and skips CPU1 calls. */

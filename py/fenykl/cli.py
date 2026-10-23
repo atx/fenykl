@@ -7,9 +7,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from .assets import AssetError, default_target, dump_assets
+from .assets import ASSET_LAYOUTS, AssetError, dump_assets
 from .firmware import (
     FIRMWARE_DIR,
+    TARGETS,
     BlockHeader,
     FirmwareFormatError,
     StockMissingError,
@@ -92,7 +93,7 @@ def cmd_patch_apply(args: argparse.Namespace) -> None:
 
 
 def cmd_assets_dump(args: argparse.Namespace) -> None:
-    data = read_bin(args.file or default_target().stock_path())
+    data = read_bin(args.file or TARGETS[args.target].stock_path())
     assets = dump_assets(data, args.out)
     kinds = Counter(asset.kind for asset in assets)
     fonts = len({asset.font for asset in assets if asset.kind == "glyph"})
@@ -181,7 +182,15 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         type=Path,
         metavar="FILE.BIN",
-        help="stock firmware (default: the image in firmware/ of the camera with an asset layout)",
+        help="stock firmware (default: the --target camera's image in firmware/)",
+    )
+    assets_dump.add_argument(
+        "-t",
+        "--target",
+        choices=sorted(ASSET_LAYOUTS),
+        default="epl3",
+        help="camera whose stock image in firmware/ is read when FILE.BIN is not given "
+        "(default: epl3)",
     )
     assets_dump.add_argument(
         "-o",

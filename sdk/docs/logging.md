@@ -1,8 +1,9 @@
 # Shared plugin logging (`sdk/lib/log*.c`)
 
 Status: works on the camera (init, `"a"` append, overflow counters, CPU1 ring, logging from a hook,
-console tee, flushes into standby); not run on the camera: wake from standby, the 4 MiB cap, the card
-gate (section 5.1), logging from ISR context. Simulator tests: `tests/test_log_sim.py`. Evidence tags:
+console tee, flushes into standby, the card gate closing on a USB cable on the E-PL3); not run on the
+camera: wake from standby, the 4 MiB cap, the rest of the card gate (section 5.1), logging from ISR
+context. Simulator tests: `tests/test_log_sim.py`. Evidence tags:
 [verified] read in a listing/decompile or seen in a camera log; [camera] seen on the camera; [sim]
 measured in the GDB mn10300 simulator running the firmware's own code (section 9); [inferred].
 
@@ -30,8 +31,8 @@ Design rules:
   firmware's `bset` lock word 0x8FF00100 is the IPU's, not ours, and a hook must never spin.
 - The entry point picks the ring by core id (section 4.2), so a hook that may run on CPU1 needs no
   special code, but a `cpu1_unproven` hook stays `cpu1_unproven`.
-- The SDK bring-up probes (`hello`, `proxyget`) do not use the library, so they validate the SDK
-  without its failure modes.
+- The E-PL3 build of `hello` does not use the library, so it validates the SDK without its failure
+  modes.
 
 ## 2. API
 
@@ -78,20 +79,22 @@ int fenykl_log_init(const struct fenykl_log_config *cfg); /* size cap, boot head
                         ENOCARD (card gate closed: card work deferred, section 5.1) */
 int fenykl_log_flush(void);      /* drains both rings into the file and closes it before it
                                     returns: 0, EOPEN (records stay queued), EBUSY (another
-                                    flush is running) or ENOCARD (card gate closed, section 5.1) */
-int fenykl_log_task_start(void); /* "FYKLOG", priority 12, 4 KiB stack: flushes every flush_ms or
-                                    when a ring is half full; polls the tee every 20 ms */
+                                    flush is running, or before init) or ENOCARD
+                                    (card gate closed, section 5.1) */
+int fenykl_log_task_start(void); /* "FYKLOG", priority FENYKL_LIB_TASK_PRIO (E-PL3 12, E-M10 II
+                                    55), 4 KiB stack: flushes every flush_ms or when a ring is
+                                    half full; polls the tee every 20 ms */
 void fenykl_log_set_level(struct fenykl_log_module *mod, unsigned level);
 void fenykl_log_get_stats(struct fenykl_log_stats *out);
 ```
 
 `struct fenykl_log_stats` (`log.h`) has per ring `produced`, `written`, `lost`, `queued`, the
 producer counters `overwritten0` and `dropped1`, `early` (records before init), `bad`, `truncated`,
-`stamp_jumps`, the flush counters (`flushes`, `open_fail`, `short_write`, `flush_max_us`,
-`flush_slow`, `flush_busy`/`flush_since`, `bytes`), the card gate counters (`gate_skipped`,
+the flush counters (`flushes`, `open_fail`, `short_write`, `flush_max_us`,
+`flush_slow`, `bytes`), the card gate counters (`gate_skipped`,
 `gate_max_ms`, section 5.1), the init results (`file_size`, `removed_size`,
 `boot_cause`) and the tee counters. Every 20th flush
-writes two `status:` lines with them.
+writes two to four `status:` lines with them (tee and card gate lines only when used).
 
 Context rules (what each entry point may do):
 
@@ -156,7 +159,8 @@ At 162 MHz and ~1.3 cycles/instruction, a `fw_sprintf` line costs ~35-40 us, the
 [inferred from sim counts; the sim has no cache or DRAM stalls]. Per-frame logging at 60 fps from a hook
 would spend 2.4 ms/s on text, 25 us/s on records; what matters more is hook latency and stack, and
 that CPU1 and ISR producers need no formatter at all. The flusher pays the same `fw_sprintf` cost at
-priority 12 where it is harmless (1000 lines/s = 4 % of CPU0).
+`FENYKL_LIB_TASK_PRIO` (12 on the E-PL3, 55 on the E-M10 II) where it is harmless (1000 lines/s =
+4 % of CPU0).
 
 `%s` rule: the pointer must be valid at flush time: a string literal, or a static buffer whose content
 the reader accepts as "latest". The flusher prints `<%08x>` instead of dereferencing a pointer outside
@@ -272,8 +276,8 @@ Strategy:
 - **Size cap at init only:** a file larger than `FENYKL_LOG_SIZE_CAP` (4 MiB, compile time) is deleted
   with `rpc_fremove` and started fresh; the new file's first lines say how large the old one was. If
   the delete fails, the log says so and appends anyway. Nothing checks the size during a boot.
-- **Boot header:** a line of `=` and `fenykl log boot: build <FENYKL.BIN sum>, boot cause <byte
-  0x6044151A>, timer <timer_now>, file <n> bytes before this boot`.
+- **Boot header:** a line of `=` and `fenykl log boot: build <FENYKL.BIN sum>, boot cause <E-PL3: byte
+  0x6044151A; E-M10 II: the u32 power-on factor>, timer <timer_now>, file <n> bytes before this boot`.
 - **"w" only for a file that does not exist** (the `"r"` probe failed, or the cap deleted it): `"w"`
   does not truncate, but on a new file it is exact. Every other open is `"a"`.
 - Each flush: `fp = rpc_fopen(name, "a")`, `rpc_fwrite` per 4 KiB of text, `rpc_fclose(fp)`. Never keep
@@ -291,7 +295,8 @@ Strategy:
   for crash hunting use a short flush interval and the synchronous flush below.
 - **Synchronous flush**: `fenykl_log_flush()` returns after `rpc_fclose`; when it returns 0, the
   records queued at the call are in the file. A CPU0 task calls it on an error path before it gives up
-  or hangs; `FENYKL_LOG_EBUSY` means the flusher task is in a flush: sleep and call it again.
+  or hangs; `FENYKL_LOG_EBUSY` means the flusher task is in a flush (sleep and call it again) or init
+  has not run.
 - Firmware function added to `firmware.toml`: `rpc_fremove` (`[],12`, A0 = path; read from its `ret`
   and its one caller). `rpc_fseek` stays out (registers not characterised, not needed).
 
@@ -313,14 +318,14 @@ on a free cluster, dirty bit set).
 - **Transitions:** closing for an unmounted card queues the record `W log : card gate closed (card
   not mounted): log on hold`; the mount reopening it queues `I log : card gate open again after <ms>
   ms, <n> flushes skipped`. Both reach the file with the first flush after reopening, in stamp order
-  with the other records. The first closed check that sees a cable queues `W log : card gate closed
-  (USB cable seen): log on hold until power-off`, which never reaches the file. `gate_max_ms` is the
+  with the other records. A cable queues no record: none could reach the file. `gate_max_ms` is the
   longest closed period (resolution: the flush period); status blocks add a `card gate` line once a
   flush was skipped.
 - **Init with the gate closed:** `fenykl_log_init` takes the configuration, starts the streams and
   accepts records, but does not touch the card and returns `FENYKL_LOG_ENOCARD` (not an error to
   give up on). The size cap and the boot header run in the first flush with the gate open, before
   the queued records; the header's line carries that flush's stamp, the records keep theirs.
+- **Stamps** of records queued over a closed period of more than 1073 s: section 6.1.
 - On the camera: the cable closes the gate (E-PL3, 2026-10-19). The stay-closed rule is
   simulator-tested only (README status table).
 
@@ -329,10 +334,26 @@ on a free cluster, dirty bit set).
 ### 6.1 Source
 
 `timer_now` = `0x3FFFFFFF - *(u32 *)0x98900074`, a free-running 1 MHz 30-bit counter, wraps after
-1073 s [inferred, strong; the RTOS tick is 1 ms]. The producer stores the
-raw 30-bit value (one load, no arithmetic). The flusher keeps a 64-bit microsecond count: it extends
-each record's stamp against the last one it formatted (records are in order per ring, and a flush
-happens far more often than every 1073 s). Across rings, records are merged by stamp since both cores
+2^30 us = 1073.74 s [inferred, strong; the RTOS tick is 1 ms]. The producer stores the
+raw 30-bit value (one load, no arithmetic). The flusher extends it to seconds since init:
+
+- **Clock:** every `fenykl_log_flush` extends `timer_now`, card gate open or not. It must run at
+  least once per wrap; the flusher task runs it every `flush_ms`. The library's own lines (boot
+  header, status, slow flush) are stamped on it.
+- **Per ring, a lower bound:** a record gets the first stamp at or after the bound with its raw
+  bits and becomes the next bound (records are in order per ring). The end of every flush notes the
+  clock and the ring heads; a record queued after that is later than that time less 1 s (a CPU1
+  record's stamp precedes its head update), and the ring's bound rises to it once all older records
+  of the ring are formatted or evicted.
+- **Exact** is every record less than 1073 s after its bound: one drained by the first flush after
+  it (however long its ring was quiet), and one that waited in its ring (card gate closed,
+  `rpc_fopen` failing) less than 1073 s after the previous record of its ring.
+- **Ambiguous** is a record that waited in its ring across flushes and came more than 1073 s after
+  the previous record of its ring: its raw stamp cannot tell how many wraps passed. It is stamped as
+  if less than one, so short by whole wraps of 1073.74 s, still in order within its ring. The
+  `card gate open again after <ms> ms` line gives the length of a closed period.
+
+Across rings, records are merged by stamp since both cores
 read the same timer [inferred: one timer block, read by both cores].
 
 ### 6.2 Format
@@ -340,45 +361,23 @@ read the same timer [inferred: one timer block, read by both cores].
 `[ssssss.uuuuuu] L module : text`, seconds since `fenykl_log_init` with six decimals, `L` one of
 `E W I D T`, module name padded to 7. CPU1 records get `L` in lower case. The header line
 carries the absolute `timer_now` at init so that two logs of one boot can be aligned. The flusher keeps
-seconds and microseconds as two 32-bit words (no 64-bit division, section 10) and counts
-`stamp_jumps`, consecutive records of a ring more than 2^29 us apart.
+seconds and microseconds as two 32-bit words (no 64-bit division, section 10).
 
 ## 7. Optional firmware console tee
 
-Two ways to get the firmware's `dbg_puts` traffic into the log. **Implemented: mode 1 only**, opt-in
-with `cfg.tee = 1`; mode 2 is not implemented.
+The firmware's `dbg_puts` traffic goes into the log, opt-in with `cfg.tee = 1`, by polling the boot
+capture buffer (no code patch). `uart_putchar` appends every character to `uart_boot_capture`
+0xA07C5E80 (767 bytes, count u16 at 0x8FF00088) while `uart_state[1]` 0x8FF00082 is below 2, which
+on a UART0 camera is forever [verified code path; the camera's variant: runtime]. These are the
+E-PL3 addresses; both bodies list theirs as `uart_tee_*` in `firmware.toml`.
 
-**Mode 1, poll the boot capture buffer (no code patch, implemented):** `uart_putchar` appends every character to
-`uart_boot_capture` 0xA07C5E80 (767 bytes, count u16 at 0x8FF00088) while `uart_state[1]` 0x8FF00082
-is below 2, which on a UART0 camera is forever [verified code path; the
-camera's variant: runtime]). The flusher task copies `count` bytes into ring 0 as text records every 20
-ms and resets the count under the CPU0 interrupt mask. Cost: a 20 ms poll loop on the flusher task
-(one load when nothing arrived), a byte copy of what arrived; no hook, no firmware code touched; loses
-characters only when more than 767 arrive within 20 ms (a `[tee overflow]` marker says so). Downsides:
-the plugin's own `fw_dbg_puts` lands there too (harmless), characters from CPU1 come through the
-DBG_MESSAGE_CPU1 queue in firmware order, and it does not work on a UART1 camera.
-
-**Mode 2, hook `dbg_puts_raw` 0x6E606557:** entry `mov A0,A2` (1 byte), `movbu (A2),D0` (2), `cmp
-0,D0` (2) = exactly 5 position-independent bytes before the first branch [verified listing], so the
-hook generator accepts it; its CALL register list and frame must be read from its `ret` before it is
-added to `firmware.toml`. 158 functions call it directly [verified callers], among them `nmi_report`
-on **both cores**, so the hook is `cpu1_unproven`: the handler checks `FENYKL_CORE_ID()` and on CPU1
-only calls the original (ring 1 is reserved for the worker's uncached writes; a CPU1 tee is a later
-step). On CPU0 the handler copies the string into ring 0 as text records (one record per 20 bytes,
-~15 instructions per byte with the byte copy; a 100-byte line ~2 us) and calls the original, so the
-UART output is unchanged. Filtering: a runtime prefix table (`[fcs]`, `[SYS` ...) checked against
-the first bytes, and a per-flush cap (default 200 lines) after which lines are counted, not stored:
-the firmware can print hundreds of lines per second in some modes and would otherwise evict the
-plugin's own records (ring 0 keeps the newest). Risks: the hook runs inside every firmware print,
-including fatal paths (`nmi_report`, `rtos_service_error`), where the ring write must not fault: it
-cannot (no calls except the PSW primitives, bounded copy). The install itself has the usual CPU1
-publication hole of a hook install.
-
-As built: the flusher task copies and resets the capture under the CPU0 interrupt mask every 20 ms,
-splits it into lines (`\r` dropped), and logs each line as text records of module `fwcon` (a line
-longer than 255 bytes is split). A full buffer (767 bytes) logs `[tee overflow: console characters
-lost]`; `uart_state[1] >= 2` logs once that the capture is off (UART1 camera). Mode 2 is for a
-UART1 camera or for more than 767 bytes per 20 ms.
+Every 20 ms the flusher task copies and resets the capture under the CPU0 interrupt mask, splits it
+into lines (`\r` dropped), and logs each line as ring 0 text records of module `fwcon` (a line
+longer than 255 bytes is split). Cost: one load when nothing arrived, a byte copy of what arrived; no
+hook, no firmware code touched. More than 767 characters within 20 ms overflow the buffer and log
+`[tee overflow: console characters lost]`; `uart_state[1] >= 2` logs once that the capture is off.
+Downsides: the plugin's own `fw_dbg_puts` lands there too (harmless), characters from CPU1 come
+through the DBG_MESSAGE_CPU1 queue in firmware order, and it does not work on a UART1 camera.
 
 ## 8. Size and cost
 
@@ -392,8 +391,8 @@ of `.shared` (only with `cpu1_sources`). Per part (estimates):
 | init: file size probe, size cap, header line | ~500 |
 | flush: drain both rings, stamps, `fw_sprintf` per record, `%s` pointer check, text buffer, file open/append/close, status line | ~900 |
 | flusher task, stats, level setter | ~150 |
-| tee mode 1 (poll + copy) | ~150; mode 2 adds the hook stub (generated) + ~200 |
-| total | ~2.0 KiB, 2.5 KiB with both tees (the examples' hand-rolled logging is ~0.6-1 KiB each) |
+| console tee (poll + copy) | ~150 |
+| total | ~2.0 KiB (the examples' hand-rolled logging is ~0.6-1 KiB each) |
 
 RAM: ring 0 16 KiB, ring 1 4 KiB `.shared` (only with a CPU1 worker), staging 1 KiB, text buffer
 4 KiB, line 256 B, state ~200 B: **~21.5 KiB of payload `.bss`**. Flusher task stack 4 KiB from `fw_malloc` (`fw_sprintf` needs ~370 B, the file RPC a few
@@ -408,10 +407,10 @@ CPU per call [sim instruction counts; cycles inferred at ~1.3/instruction, 162 M
 | record from an ISR-context hook | same | same; interrupts are already masked, the PSW round trip is harmless |
 | record from CPU1 | 48 | ~0.4 us + 8 uncached stores (CPU1 at 162 MHz) |
 | `fenykl_log_text`, 100 bytes | ~1500 | ~12 us (5 records; the byte copy dominates) |
-| flusher per record | ~4600 `fw_sprintf` + ~700 copy/stamp | ~45 us; 1000 records/s = 4-5 % of CPU0 at priority 12 |
+| flusher per record | ~4600 `fw_sprintf` + ~700 copy/stamp | ~45 us; 1000 records/s = 4-5 % of CPU0 at `FENYKL_LIB_TASK_PRIO` |
 | flusher per flush, file part | one `rpc_fopen` + write + `rpc_fclose` | 0-100 ms observed for 4 KiB `"w"`; append not measured |
 
-## 9. Firmware facts
+## 9. Firmware facts (E-PL3)
 
 | fact | answer | evidence |
 |---|---|---|

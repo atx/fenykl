@@ -109,8 +109,9 @@ int fenykl_log_init(const struct fenykl_log_config *cfg);
 /*
  * Drains both rings into the file and closes it before it returns: 0, or <0 (records stay
  * queued). The flusher task calls it; a CPU0 task may call it on an error path to put what is
- * queued on the card at once. FENYKL_LOG_EBUSY: the flusher task is in a flush; sleep, call again.
- * FENYKL_LOG_ENOCARD: the card gate is closed (USB cable in or card not mounted); nothing touched.
+ * queued on the card at once. FENYKL_LOG_EBUSY: fenykl_log_init has not run yet, or the flusher
+ * task is in a flush (sleep, call again). FENYKL_LOG_ENOCARD: the card gate is closed (USB cable in or card not mounted); nothing touched.
+ * The stamps need a call at least every 1073 s (one timer wrap), gate open or not.
  */
 int fenykl_log_flush(void);
 /*
@@ -132,14 +133,11 @@ struct fenykl_log_stats {
 	uint32_t early;		/* CPU0 records before fenykl_log_init (not stored) */
 	uint32_t bad;		/* records printed as <bad record>: bad pointer, format or length */
 	uint32_t truncated;	/* fenykl_log_text calls cut at FENYKL_LOG_TEXT_MAX */
-	uint32_t stamp_jumps;	/* consecutive records of a ring more than 2^29 us apart */
 	uint32_t flushes;	/* flushes that opened the file */
 	uint32_t open_fail;
 	uint32_t short_write;
 	uint32_t flush_max_us;	/* slowest flush (open .. close) */
 	uint32_t flush_slow;	/* flushes > FENYKL_LOG_SLOW_US */
-	uint32_t flush_busy;	/* 1 while a flush is between open and close */
-	uint32_t flush_since;	/* timer_now when that flush opened the file */
 	uint32_t gate_skipped;	/* flushes skipped while fenykl_card_io_allowed() was false */
 	uint32_t gate_max_ms;	/* longest period the gate was closed, ms (flush period resolution) */
 	uint32_t bytes;		/* bytes appended in this boot, the boot header included */
@@ -154,13 +152,5 @@ struct fenykl_log_stats {
 };
 
 void fenykl_log_get_stats(struct fenykl_log_stats *out);
-
-/*
- * FW_TIMER_NOW: free-running 30-bit counter at 1 MHz (counts down; this counts up), both
- * cores. FENYKL_LOG_ELAPSED is the wrap-safe difference.
- */
-#define FENYKL_LOG_TIMER_MASK 0x3FFFFFFFu
-#define FENYKL_LOG_TIMER_NOW() (FENYKL_LOG_TIMER_MASK - *(volatile uint32_t *)FW_TIMER_NOW)
-#define FENYKL_LOG_ELAPSED(from, to) (((to) - (from)) & FENYKL_LOG_TIMER_MASK)
 
 #endif /* _FENYKL_LOG_H */

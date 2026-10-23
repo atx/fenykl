@@ -1,8 +1,10 @@
 # HUD library (`sdk/lib/hud.c`)
 
-Status: simulator-tested (`tests/test_hud_sim.py`); on the camera through `projects/main` (its
-smoke test). Images and colours are the ones the GUI draws [camera OSD dumps]. Linked into every
-plugin, like all of `sdk/lib/`; a plugin that does not call it gets no byte of it (`--gc-sections`).
+Status: simulator-tested (`tests/test_hud_sim.py`); on the camera (E-PL3) through `projects/main`
+(its smoke test). E-M10 II: simulator, a camera probe (2026-10) that drew on the LCD and in the EVF,
+and `projects/main`'s battery percentage on the camera (2026-10-23; section 6). Images and colours
+are the ones the GUI draws [camera OSD dumps]. Linked into every plugin, like all of `sdk/lib/`; a
+plugin that does not call it gets no byte of it (`--gc-sections`).
 
 ## 1. What it does
 
@@ -28,7 +30,7 @@ Header `sdk/include/hud.h` (the reference). Errors are `FENYKL_HUD_E*` (negative
 | `fenykl_hud_text(e, s)` | CPU0 task | renders `s`, publishes it, paints it into both buffers if visible; `ENOFONT` / `EGLYPH` leave `e` unchanged |
 | `fenykl_hud_draw(e, fn, arg)` | CPU0 task | clears `e`'s spare bitmap to `bg`, calls `fn(box, w, h, arg)` to draw into it, then publishes and paints it as `fenykl_hud_text`; a nonzero return of `fn` is returned and leaves `e` unchanged (section 3.1) |
 | `fenykl_hud_image(id, px, max, w, h)` | any | decodes stock image `id` (fmt 0x03) from the firmware into `px` (section 3.1) |
-| `fenykl_hud_hide(e)` | CPU0 task | unpublishes `e`; clears its rectangle to 0xFF now and at the next two ticks (if visible) |
+| `fenykl_hud_hide(e)` | CPU0 task | unpublishes `e`; clears its rectangle to `FENYKL_HUD_CLEAR` now and at the next two ticks (if visible) |
 | `fenykl_hud_tick()` | CPU0 task, ~100 ms | repaints an element the hook copied while it changed; repeats hide clears |
 | `fenykl_hud_text_width(style, s)` | CPU0 task | width in a style with the current font, for sizing elements |
 | `fenykl_hud_font()`, `fenykl_hud_visible()`, `fenykl_hud_get_stats(st)` | any CPU0 context | font id (0 = none yet), the visibility gate, counters |
@@ -137,10 +139,6 @@ static int fmeter_paint(uint8_t *box, int w, int h, void *arg)
 }
 ```
 
-The text path's image helpers are always inlined, so a plugin that does not call
-`fenykl_hud_image` keeps the code it had before (main's payload: same size, one pair of stores in
-another order).
-
 ## 4. Rules and counters
 
 - Draw at `cw_updateDisplay(0)` only; calls with `show_front != 0` re-show the front, which already
@@ -172,4 +170,44 @@ too large digit, the fmt 0x02 AF dot, a missing id and a missing table, draws a 
 cell kind and faint cells into the focus meter's element (620, 42, 80, 12) through `fenykl_hud_draw`
 (compared with the decoder's cells placed 8 px apart; transparent rows and 2 px gaps checked), and
 checks the callback's arguments, both buffers, and that a callback error leaves the element
-unchanged. The module skips without the stock firmware sample.
+unchanged. The text cases also run for the E-M10 II (its English font and its live-view images,
+read the same way from its stock firmware, at its firmware addresses); `tests/sim/hud/test_hud_em10ii.c`
+checks the E-M10 II visibility predicate (GUI state, display request, output device, layer mask, INFO
+screen from the property registry and its override table, unregistered property), the output device
+per `disp_device` value, the palette pick (opaque entries below 0x80 only) and `fenykl_hud_init` with
+the E-M10 II handle layout (window sizes up to the buffer, handle and buffer address rules). The
+module skips without the stock firmware sample.
+
+## 6. E-M10 II
+
+The library is the same; `lib/hud_int.h` holds what differs per camera, `lib/hud_em10ii.c` the E-M10
+II's own part. `main` draws its battery percentage with it on this camera (camera run 2026-10-23:
+shown on the basic and histogram INFO screens, hidden in MENU, the Super Control Panel and
+playback).
+
+- **Hook and buffers:** the same `cw_updateDisplay` hook and `show_front == 0` rule, drawing into
+  layer 1's `b[gpi_draw_buf]` (or the one-layer override's buffer) before the original; the same
+  CPU1 guard (core id != 0, which also covers CPU2). Layer-1 handles are `{pdata, plane, w, h, x, y}`
+  in the GUI's bss above the code image; `w`/`h` are the layer window, at most 896 x 600. Buffers
+  are 896-byte pitch, 600 lines, 8 bpp, in uncached DRAM (0xBFCEC800 / 0xBFD6FC00 on the camera).
+- **Visibility** (`fenykl_hud_visible`): layer 1 not masked, GUI live view (super state 1, state 8),
+  display request 0xF001 (the live-view info display), output device LCD or EVF, and the INFO screen
+  in the set given to `fenykl_hud_init` as `FENYKL_HUD_INFO(n)` bits. The INFO screen is property
+  0x8321 (`fenykl_hud_info_screen`: 1 basic info, 0 image only, 0x11 Custom1, 0x12 Custom2, the same on
+  the LCD and in the EVF; Custom1/2 show the histogram and the level gauge by default), read from
+  the property registry like the firmware's lookup 0x60076078 (override table first while it is
+  valid). `FENYKL_HUD_INFO_SCREENS` = basic info and Custom1.
+- **Output and region** (`fenykl_hud_output`): `disp_device` 1 = rear LCD, shows the 720 x 480 canvas
+  1:1; 6 = built-in EVF, shows its left 640 x 480 (`FENYKL_HUD_EVF_W`) scaled to 1024 x 768; anything
+  else (closed, external) hides the HUD. Elements are fixed rectangles, so a layout for both outputs
+  keeps to x < 640 or swaps elements on an output change.
+- **Colours:** only indices below 0x80 reach the display (128-entry hardware palette). The stock
+  colours sit at the E-PL3's indices in the live-view layer-1 palette (camera dump) and in 19 of
+  the 59 stock GUI palettes, about every third (black 0x10, shadows 0x11/0x12, white 4..6, green
+  7..9, yellow 1..3);
+  `FENYKL_HUD_CLEAR` is 0x00 (alpha 0). There is no fixed red: `fenykl_hud_color(rgb)` picks the
+  nearest opaque entry below 0x80 of the live layer-1 palette (`osd_palette`).
+- **Font and images:** `gpi_get_glyph` 0x609315E2 and the font resource pointer as on the E-PL3; the
+  image table through the GUI's pointer `gui_image_table`. The LV style's images are image font 14
+  ('-' 1120, '1'..'9' 1121..1129, '0' 1130, ':' 1131, '+' 1132) and '.' 1871 of image font 25: the
+  E-PL3's shapes (13 x 22, ':' and '.' 6 x 22, white 4/5/6, outline 0x10/0x11/0x12).

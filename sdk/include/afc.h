@@ -82,7 +82,7 @@ struct fenykl_afc_cb {
 	uint32_t calls, st, cp;		/* callbacks, AF_ST, AF_CP */
 	uint32_t irq, cpu1, bad_req;	/* in interrupt context, on CPU1, A0 not our request */
 	uint32_t events, unk, psw;	/* of the last call */
-	uint32_t last_us, gap_us;	/* last call, longest gap since a reader reset gap_us */
+	uint32_t last_us, gap_us;	/* last call, longest gap since the attach */
 	uint32_t first_us;		/* first call after the attach, 0 = none yet */
 	uint32_t first_irq, first_core;
 	uint32_t stop;			/* the task asks the callback to write number = 0 */
@@ -134,10 +134,6 @@ const struct fenykl_afc *fenykl_afc_get(void);
 /* The statistics buffer (uncached): channel c, area i at c * rows * ROW_WORDS + i / cols * ROW_WORDS
    + i % cols; FILL until the DMA wrote it (from the second frame of an attach). */
 const volatile uint32_t *fenykl_afc_dma(void);
-/* Owner of a driver slot word (0x605AEFA0 current, 0x605AEFA4 queued): 0 empty, 1 ours, 2 foreign. */
-uint32_t fenykl_afc_slot_owner(uint32_t slot);
-/* Longest gap between callbacks in us since the last call (resets it). */
-uint32_t fenykl_afc_take_gap(void);
 /* An error stopped the client for the boot (not END). */
 bool fenykl_afc_failed(void);
 

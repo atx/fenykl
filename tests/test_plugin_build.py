@@ -1,5 +1,6 @@
 """Builds the example plugins end to end (compile, link, pack). The build tests need the cross
-toolchain, the ISA check tests also GHIDRA_INSTALL_DIR and JAVA_HOME; they are skipped without them."""
+toolchain and are skipped without it; the example builds also run the ISA check when
+GHIDRA_INSTALL_DIR and JAVA_HOME are set."""
 
 import dataclasses
 import os
@@ -24,48 +25,46 @@ EXAMPLE_TARGETS = [
     for e in EXAMPLES
     for t in plugin.plugin_targets(sdk.SDK / "projects" / e)
 ]
-needs_ghidra = pytest.mark.skipif(
-    not (os.environ.get("GHIDRA_INSTALL_DIR") and os.environ.get("JAVA_HOME")),
-    reason="the ISA check needs GHIDRA_INSTALL_DIR and JAVA_HOME",
-)
+HAVE_GHIDRA = bool(os.environ.get("GHIDRA_INSTALL_DIR") and os.environ.get("JAVA_HOME"))
 
 
 @needs_toolchain
 @pytest.mark.parametrize(("example", "target"), EXAMPLE_TARGETS)
 def test_example_builds(example, target, tmp_path):
     image = plugin.build(
-        sdk.SDK / "projects" / example, tmp_path, sdk.target(target)
+        sdk.SDK / "projects" / example,
+        tmp_path,
+        sdk.target(target),
+        isa_check=HAVE_GHIDRA,
     ).read_bytes()
     assert check_image(image) is None
     header = parse_header(image)
     assert header.entry == HEADER_SIZE
     assert header.load == sdk.target(target).load
     assert b"C:\\FENYKL.LOG" in image
-    assert not (tmp_path / "isacheck").exists()
-
-
-@needs_toolchain
-@needs_ghidra
-@pytest.mark.parametrize(("example", "target"), EXAMPLE_TARGETS)
-def test_example_passes_the_isa_check(example, target, tmp_path):
-    plugin.build(
-        sdk.SDK / "projects" / example, tmp_path, sdk.target(target), isa_check=True
-    )
-    assert (tmp_path / "isacheck").is_dir()
+    assert (tmp_path / "isacheck").is_dir() == HAVE_GHIDRA
 
 
 def test_feature_libraries_follow_the_target_capabilities():
     def names(target):
         return {p.name for p in plugin.lib_sources(sdk.target(target))}
 
-    assert names("epl3") == {p.name for p in plugin.LIB.glob("*.c")}
+    assert names("epl3") == {p.name for p in plugin.LIB.glob("*.c")} - {
+        "ui_em10ii.c",
+        "hud_em10ii.c",
+    }
     assert names("em10ii") == {
         "card.c",
         "cfg.c",
+        "hud.c",
+        "hud_em10ii.c",
         "log.c",
         "log_rec.c",
+        "slots.c",
         "start.c",
         "string.c",
+        "ui.c",
+        "ui_em10ii.c",
     }
 
 
@@ -102,6 +101,16 @@ def test_plugin_may_not_list_a_hook_the_sdk_binds(tmp_path):
     (tmp_path / "main.c").write_text("void plugin_main(void) {}\n")
     with pytest.raises(plugin.BuildError, match="the SDK binds it itself"):
         plugin.build(tmp_path, tmp_path / "out", sdk.target("epl3"))
+
+
+@needs_toolchain
+def test_plugin_may_not_list_a_slot_the_sdk_binds(tmp_path):
+    (tmp_path / "plugin.toml").write_text(
+        'targets = ["em10ii"]\nslots = ["eyefi_ok_fn"]\ncpu1_unproven = ["eyefi_ok_fn"]\n'
+    )
+    (tmp_path / "main.c").write_text("void plugin_main(void) {}\n")
+    with pytest.raises(plugin.BuildError, match="eyefi_ok_fn: the SDK binds it itself"):
+        plugin.build(tmp_path, tmp_path / "out", sdk.target("em10ii"))
 
 
 # ---- CPU1 sources ----
@@ -186,7 +195,7 @@ def test_target_and_capability_macros_reach_the_plugin(tmp_path):
 def test_cpu1_shared_data_is_whole_lines_in_the_image(tmp_path):
     out = tmp_path / "out"
     image = plugin.build(
-        sdk.SDK / "projects" / "cpu1frame", out, sdk.target("epl3")
+        sdk.SDK / "projects" / "birddetect6", out, sdk.target("epl3")
     ).read_bytes()
     address, size = elf_section((out / "plugin.elf").read_bytes(), ".shared")
     assert address % 64 == 0 and size % 64 == 0 and size > 0

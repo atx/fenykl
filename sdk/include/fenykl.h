@@ -47,6 +47,55 @@ static inline int fenykl_fclose(void *fp)
 /* fw_sprintf: at most 8 variadic words. */
 #define fenykl_sprintf(...) fw_sprintf(__VA_ARGS__)
 
+/*
+ * FW_TIMER_NOW: free-running 30-bit counter at 1 MHz (counts down; this counts up), both
+ * cores. FENYKL_TIMER_ELAPSED is the wrap-safe difference.
+ */
+#define FENYKL_TIMER_MASK 0x3FFFFFFFu
+#define FENYKL_TIMER_NOW() (FENYKL_TIMER_MASK - *(volatile uint32_t *)FW_TIMER_NOW)
+#define FENYKL_TIMER_ELAPSED(from, to) (((to) - (from)) & FENYKL_TIMER_MASK)
+
+/* Volatile reads and writes of firmware memory at address a. */
+static inline uint32_t fenykl_rd8(uint32_t a)
+{
+	return *(const volatile uint8_t *)(uintptr_t)a;
+}
+
+static inline uint32_t fenykl_rd16(uint32_t a)
+{
+	return *(const volatile uint16_t *)(uintptr_t)a;
+}
+
+static inline uint32_t fenykl_rd32(uint32_t a)
+{
+	return *(const volatile uint32_t *)(uintptr_t)a;
+}
+
+static inline void fenykl_wr8(uint32_t a, uint32_t v)
+{
+	*(volatile uint8_t *)(uintptr_t)a = (uint8_t)v;
+}
+
+static inline void fenykl_wr16(uint32_t a, uint32_t v)
+{
+	*(volatile uint16_t *)(uintptr_t)a = (uint16_t)v;
+}
+
+static inline void fenykl_wr32(uint32_t a, uint32_t v)
+{
+	*(volatile uint32_t *)(uintptr_t)a = v;
+}
+
+/* a lies in the cached DRAM window [FW_DRAM_START, FW_DRAM_END) or its uncached alias
+   (FENYKL_UNCACHED) and is a multiple of align, a power of two. */
+static inline bool fenykl_dram_ptr(uint32_t a, uint32_t align)
+{
+	uint32_t size = FW_DRAM_END - FW_DRAM_START;
+
+	return !(a & (align - 1)) && (a - FW_DRAM_START < size ||
+				      a - (uint32_t)FENYKL_UNCACHED(FW_DRAM_START) < size);
+}
+
 /* Target: nonzero if this boot was started by plugging in the USB cable. The runtime then returns
    without calling plugin_main, unless plugin.toml sets run_on_usb = true (README, Startup). */
 int fenykl_usb_attached(void);
@@ -88,7 +137,7 @@ struct fenykl_hook {
 int fenykl_hook_install(struct fenykl_hook *hook);
 int fenykl_hook_remove(struct fenykl_hook *hook);
 
-/* Callbacks, slots and vtables (README, Callbacks and slots). FENYKL_CALLBACK(sig, fn), at file scope
+/* Callbacks and slots (README, Callbacks and slots). FENYKL_CALLBACK(sig, fn), at file scope
    after fn, makes `fn` (signature fw_cb_<sig>_fn) callable by the firmware with callback convention
    `sig`; FENYKL_CB(sig, fn) is then its firmware-callable address. fw_call_<sig>(addr, ...) calls a
    firmware function pointer with that convention. */
@@ -97,20 +146,15 @@ int fenykl_hook_remove(struct fenykl_hook *hook);
 
 /* For a slot plugin.toml lists in `slots`: FENYKL_SLOT_REPLACE(slot, fn) stores FENYKL_CB(<its sig>,
    fn) in the slot (fn must be bound with FENYKL_CALLBACK), fenykl_slot_restore(&fenykl_slot_<slot>)
-   puts the stock value back; fw_orig_<slot>(...) calls the stock value. FENYKL_VTABLE_SET(slot, fn)
-   sets that method in the clone of the listed vtable containing the slot; fenykl_vtable_attach
-   gives `object` the clone, fenykl_vtable_detach gives it back the stock table. All return 0 on
-   success or if already in that state, else FENYKL_SLOT_E*. Call them from a task. */
+   puts the stock value back; fw_orig_<slot>(...) calls the stock value. Both return 0 on success
+   or if already in that state, else FENYKL_SLOT_E*. Call them from a task. */
 #define FENYKL_SLOT_REPLACE(slot, fn) FENYKL_SLOT_REPLACE_##slot(fn)
-#define FENYKL_VTABLE_SET(slot, fn) FENYKL_VTABLE_SET_##slot(fn)
 
 #define FENYKL_SLOT_EVALUE (-1)  /* the word did not hold the expected value: nothing was written */
 #define FENYKL_SLOT_EVERIFY (-2) /* the word did not read back as written */
-#define FENYKL_SLOT_EBUSY (-3)   /* already replaced/attached with something else: restore first */
+#define FENYKL_SLOT_EBUSY (-3)   /* already replaced with something else: restore first */
 
 int fenykl_slot_replace(struct fenykl_slot *slot, uint32_t fn);
 int fenykl_slot_restore(struct fenykl_slot *slot);
-int fenykl_vtable_attach(struct fenykl_vtable *vt, void *object);
-int fenykl_vtable_detach(struct fenykl_vtable *vt);
 
 #endif

@@ -1,9 +1,9 @@
-/* Mock firmware for the callback/slot/vtable simulator test (test_slots.c). The callers enter plugin
+/* Mock firmware for the callback and slot simulator test (test_slots.c). The callers enter plugin
    code the way the firmware does (`calls (An)`, or a CALL with a register list and frame), keep
    sentinels in the callee-saved registers and canaries in their own frame, and return 0xbad if
    any of them, SP or their outgoing stack arguments changed. They are entered from C with
    `call x,[],0`, so they save D2/D3/A2/A3 themselves (movm), as firmware methods do. The mock
-   targets sit at the real addresses of the stock values the slots and the vtable declare. */
+   target sits at the real address of the stock value a slot declares. */
 	.equ	ARGS, _mock_args
 
 	.macro	SENTINELS
@@ -143,52 +143,6 @@ _sim_change:
 	mov	0xbad,d0
 	ret	[d2,d3,a2,a3],40
 
-/* int sim_vget(void *obj, unsigned *out, unsigned id): as gui_menu_get_setting 0x6F10994C: A0 = obj,
-   A2 = (8,vptr), A1 = out, D0 = id, calls (a2). D3 is the sentinel the callee must keep. */
-	.global	_sim_vget
-_sim_vget:
-	ENTER
-	mov	d0,a0
-	mov	d1,a1
-	mov	(52,sp),d0			/* id: GCC (12,SP) at entry, + 16 (movm) + 24 */
-	mov	0x5a5a0003,d3
-	mov	0x5a5a0002,d2
-	mov	(a0),a2
-	mov	(8,a2),a2
-	calls	(a2)
-	cmp	0x5a5a0003,d3
-	bne	.Lbad_vget
-	cmp	0x5a5a0002,d2
-	bne	.Lbad_vget
-	mov	(16,sp),a1
-	mov	sp,a0
-	cmp	a1,a0
-	bne	.Lbad_vget
-	ret	[d2,d3,a2,a3],40
-.Lbad_vget:
-	mov	0xbad,d0
-	ret	[d2,d3,a2,a3],40
-
-/* int sim_vset(void *obj, unsigned id, unsigned type, unsigned value): as gui_menu_set_setting
-   0x6F109962: A0 = obj, D0 = id, D1 = type, A1 = value, calls (a2) with A2 = (4,vptr). */
-	.global	_sim_vset
-_sim_vset:
-	ENTER
-	mov	d0,a0
-	mov	d1,d0
-	mov	(52,sp),d1
-	mov	(56,sp),a1
-	mov	0x5a5a0003,d3
-	mov	(a0),a2
-	mov	(4,a2),a2
-	calls	(a2)
-	cmp	0x5a5a0003,d3
-	bne	.Lbad_vset
-	ret	[d2,d3,a2,a3],40
-.Lbad_vset:
-	mov	0xbad,d0
-	ret	[d2,d3,a2,a3],40
-
 
 /* Targets for the fw_call_* forward thunks. */
 
@@ -235,7 +189,7 @@ _mock_callee:
 	ret	[d2,a2],12
 
 
-/* Stock targets at their real addresses (firmware.toml slots/vtables). */
+/* Stock target at its real address (firmware.toml slots). */
 
 /* usrsetmgr_change_cb 0x6EC0A5DB: void (id@D0); mock_args[6] = id, mock_args[7]++. */
 	.section .fw.change_cb,"ax"
@@ -247,41 +201,3 @@ _mock_change_cb:
 	mov	d0,(ARGS+28)
 	mov	0xdead0003,d0
 	ret	[],4
-
-/* hfw_getSetting 0x6EB8D163, shaped like the real one: *out = (u16)id + object word 1, returns 0. */
-	.section .fw.hfw_get,"ax"
-_mock_hfw_get:
-	movm	[a2],(sp)
-	add	-8,sp
-	mov	a1,a2
-	mov	(4,a0),d1
-	exthu	d0
-	add	d1,d0
-	mov	d0,(a2)
-	clr	d0
-	mov	0xdead0a01,a1
-	ret	[a2],12
-
-/* hfw_setSetting 0x6EB8D898: records this/id/type/value in mock_args[8..11], returns 1. */
-	.section .fw.hfw_set,"ax"
-_mock_hfw_set:
-	movm	[d2,d3,a2,a3],(sp)
-	add	-40,sp
-	mov	a0,(ARGS+32)
-	mov	d0,(ARGS+36)
-	mov	d1,(ARGS+40)
-	mov	a1,(ARGS+44)
-	mov	1,d0
-	ret	[d2,d3,a2,a3],56
-
-/* The stock vtable 0x6EE3F58C: 28 slots, methods +4 and +8 mocked, the rest fail loudly. */
-	.section .fw.vtable,"aw"
-	.long	_mock_vbad, _mock_hfw_set, _mock_hfw_get
-	.rept	25
-	.long	_mock_vbad
-	.endr
-
-	.section .mock,"ax"
-_mock_vbad:
-	mov	0xbad,d0
-	rets

@@ -5,7 +5,8 @@
  * the value text with edit arrows and clamping, the "not saved" header (the real cfg library
  * saving to the mock card of tests/sim/log/fw.S and cfg/fw.S), and the borrowed lang ids on a fake
  * language table: lent at entry, given back on every way out (MENU, system event, exit action,
- * the tick's stray check). gui_data_set is mocked (fw.S here) and records the published slot.
+ * the tick's stray check), and fenykl_ui_install's EAGAIN and all-or-nothing stock check.
+ * gui_data_set is mocked (fw.S here) and records the published slot.
  * plugin_main sets sim_exit_code to 0 or 1 + the number of the first failed check.
  */
 #include <fenykl.h>
@@ -20,6 +21,10 @@
 #define SIM_LANG_COUNT 1341
 #define SIM_STRINGS 64
 #define SIM_MENULIST_VTABLE 0x6F150894u
+/* GUI tables the install checks and patches (zero here: no firmware image), mapped by test_sim.py */
+#define SIM_SS_DESCS_PAGE 0x6F1B9000u
+#define SIM_MENU_PAGE 0x6F1C9000u
+#define SIM_CUSTOM_PAGES 0x6F1E8000u
 
 #define CHECK(n, cond)					\
 	do {						\
@@ -215,6 +220,24 @@ static bool lang_lent(void)
 		     "Fenykl: not saved");
 }
 
+static bool lang_untouched(void)
+{
+	for (unsigned int i = 0; i < SIM_LANG_COUNT; i++)
+		if (lang(i) != (uint32_t)&sim.lang.strings[i % SIM_STRINGS])
+			return false;
+	return true;
+}
+
+static bool sim_zero(uint32_t addr, uint32_t bytes)
+{
+	const volatile uint32_t *w = (const volatile uint32_t *)addr;
+
+	for (uint32_t i = 0; i < bytes / 4; i++)
+		if (w[i])
+			return false;
+	return true;
+}
+
 /* Every slot invariant for n rows with the cursor on `cursor`. */
 static bool slot_ok(unsigned int n, unsigned int cursor, unsigned int page, unsigned int visible)
 {
@@ -398,6 +421,18 @@ static void check_edit(void)
 	CHECK(56, key(FUI_KEY_MENU) == FUI_LEAVE);
 }
 
+/* Install waits for live view or playback; with the stock words all 0 it writes nothing. */
+static void check_install(void)
+{
+	sim_lang_init();
+	SIM_GUI_SUPER = 0x03;
+	CHECK(90, fenykl_ui_install() == FENYKL_UI_EAGAIN);
+	SIM_GUI_SUPER = 0x02;
+	CHECK(91, fenykl_ui_install() == FENYKL_UI_ESTOCK && !fui.installed);
+	CHECK(92, sim_zero(SIM_SS_DESCS_PAGE, 0x1000) && sim_zero(SIM_MENU_PAGE, 0x1000) &&
+		  sim_zero(SIM_CUSTOM_PAGES, 0x3000) && lang_untouched());
+}
+
 /* Entry lends, every way out gives back. */
 static void check_lang(void)
 {
@@ -500,6 +535,7 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	check_slot_sizes();
 	check_value_text();
 	check_edit();
+	check_install();
 	check_lang();
 	check_unsaved();
 	sim_exit_code = sim.first_fail ? 1 + sim.first_fail : 0;

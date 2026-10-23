@@ -15,7 +15,6 @@
 #define FLOG_SUBST_LEN 10u	/* "<%08x>" */
 #define FLOG_TEXT_MARGIN 16u	/* line room a text record keeps free for " [truncated]" CR LF */
 #define FLOG_USEC_PER_SEC 1000000u
-#define FLOG_JUMP_US (1u << 29)
 #define FLOG_PROBE_SIZE 0x2000u	/* fw_malloc returns NULL above 0x3FFC [camera] */
 #define FLOG_STATUS_EVERY 20u	/* flushes between two status blocks */
 #define FLOG_FLUSH_MS 2000u	/* default flusher period */
@@ -127,7 +126,17 @@ static struct flog_stamp flog_stamp_add(struct flog_stamp a, uint32_t us)
 
 static struct flog_stamp flog_stamp_of(const struct flog_stream *s, uint32_t t)
 {
-	return flog_stamp_add(s->ext, FENYKL_LOG_ELAPSED(s->last, t));
+	return flog_stamp_add(s->at.ext, FENYKL_TIMER_ELAPSED(s->at.raw, t));
+}
+
+/* Extends timer_now: needs a call at least once per timer wrap, which every flush makes. */
+static struct flog_stamp flog_clock(void)
+{
+	uint32_t t = FENYKL_TIMER_NOW();
+
+	flog.clock.ext = flog_stamp_add(flog.clock.ext, FENYKL_TIMER_ELAPSED(flog.clock.raw, t));
+	flog.clock.raw = t;
+	return flog.clock.ext;
 }
 
 static bool flog_stamp_not_after(struct flog_stamp a, struct flog_stamp b)
@@ -178,12 +187,11 @@ static void flog_line_end_str(unsigned int n)
 	flog_line_end(n);
 }
 
-/* A line of the library itself, stamped now on ring 0's clock: fw_sprintf, at most 6 words. */
+/* A line of the library itself, stamped now: fw_sprintf, at most 6 words. */
 static void flog_note(const char *fmt, uint32_t a, uint32_t b, uint32_t c, uint32_t d,
 		      uint32_t e, uint32_t f)
 {
-	struct flog_stamp now = flog_stamp_of(&flog.stream[0], FENYKL_LOG_TIMER_NOW());
-	unsigned int n = flog_line_prefix(now, FENYKL_LOG_INFO, 0, flog_mod.name);
+	unsigned int n = flog_line_prefix(flog_clock(), FENYKL_LOG_INFO, 0, flog_mod.name);
 
 	fw_sprintf(flog.line + n, fmt, a, b, c, d, e, f);
 	flog_line_end_str(n);
@@ -305,12 +313,15 @@ static void flog_emit_gap(struct flog_stream *s, const struct flog_slot *r, uint
 /* Advances the stream's extended stamp to raw stamp t. */
 static void flog_stream_advance(struct flog_stream *s, uint32_t t)
 {
-	uint32_t delta = FENYKL_LOG_ELAPSED(s->last, t);
+	s->at.ext = flog_stamp_of(s, t);
+	s->at.raw = t;
+}
 
-	if (delta >= FLOG_JUMP_US)
-		flog.st.stamp_jumps++;
-	s->ext = flog_stamp_add(s->ext, delta);
-	s->last = t;
+/* Raises the stream's lower bound to fresh_at once its next record is one queued after it. */
+static void flog_stream_fresh(struct flog_stream *s)
+{
+	if ((int32_t)(s->pos - s->fresh) >= 0 && flog_stamp_not_after(s->at.ext, flog.fresh_at.ext))
+		s->at = flog.fresh_at;
 }
 
 /* Records of the message at b[0]: a text record and its continuation records among the n. */
@@ -392,12 +403,13 @@ static void flog_emit(struct flog_stream *s, const struct flog_slot *b, unsigned
 	flog_stream_advance(s, r->w[0]);
 
 	count = flog_msg_records(r, n - *i);
+	s->pos += count;
 	s->expect = (FLOG_META_SEQ(r[count - 1].w[1]) + 1) & FLOG_SEQ_MASK;
 	flog.st.written[s->ring] += count;
 	*i += count;
 
 	name_ok = flog_slot_sane(r) && flog_str_len((uint32_t)mod->name, FLOG_NAME_MAX) >= 0;
-	k = flog_line_prefix(s->ext, FLOG_META_LEVEL(m), FLOG_META_CORE(m),
+	k = flog_line_prefix(s->at.ext, FLOG_META_LEVEL(m), FLOG_META_CORE(m),
 			     name_ok ? mod->name : "?");
 	if (!name_ok)
 		flog_emit_bad_record(r, k);
@@ -438,6 +450,7 @@ static unsigned int flog_ring0_take(void)
 	unsigned int n = flog_copy_range(r->slot, FLOG_RING0_RECORDS, t, r->head, flog.stage[0]);
 
 	r->tail = t + n;
+	flog.stream[0].pos = t;
 	fw_irq_mask_restore(psw);
 	return n;
 }
@@ -453,6 +466,7 @@ static unsigned int flog_ring1_take(void)
 		h = t + FLOG_RING1_RECORDS;
 	n = flog_copy_range(r->slot, FLOG_RING1_RECORDS, t, h, flog.stage[1]);
 	r->tail = t + n; /* frees the slots for CPU1: after the copy */
+	flog.stream[1].pos = t;
 	return n;
 #else
 	return 0;
@@ -472,10 +486,13 @@ static void flog_merge(unsigned int n0, unsigned int n1)
 	unsigned int i0 = 0, i1 = 0;
 
 	while (i0 < n0 || i1 < n1) {
-		bool first0 = i1 >= n1 ||
-			      (i0 < n0 && flog_stamp_not_after(flog_stamp_of(s0, b0[i0].w[0]),
-							       flog_stamp_of(s1, b1[i1].w[0])));
+		bool first0;
 
+		flog_stream_fresh(s0);
+		flog_stream_fresh(s1);
+		first0 = i1 >= n1 ||
+			 (i0 < n0 && flog_stamp_not_after(flog_stamp_of(s0, b0[i0].w[0]),
+							  flog_stamp_of(s1, b1[i1].w[0])));
 		if (first0)
 			flog_emit(s0, b0, n0, &i0);
 		else
@@ -525,7 +542,7 @@ static void flog_status(void)
 /* Adds the time since the last check to the closed period. */
 static void flog_gate_time(uint32_t now)
 {
-	flog.gate_us += FENYKL_LOG_ELAPSED(flog.gate_last, now);
+	flog.gate_us += FENYKL_TIMER_ELAPSED(flog.gate_last, now);
 	flog.gate_last = now;
 	flog.gate_ms += flog.gate_us / 1000u;
 	flog.gate_us %= 1000u;
@@ -544,12 +561,6 @@ static void flog_gate_close(uint32_t now)
 		fenykl_log_warn(&flog_mod, "card gate closed (card not mounted): log on hold");
 }
 
-static void flog_gate_hold(void)
-{
-	flog.gate_held = true;
-	fenykl_log_warn(&flog_mod, "card gate closed (USB cable seen): log on hold until power-off");
-}
-
 /* Reached only when the card was not mounted: after a cable the gate never opens again. */
 static void flog_gate_reopen(uint32_t now)
 {
@@ -562,7 +573,7 @@ static void flog_gate_reopen(uint32_t now)
 /* Checks the gate; a closed gate counts the flush as skipped. Logs the transitions. */
 static bool flog_gate_open(void)
 {
-	uint32_t now = FENYKL_LOG_TIMER_NOW();
+	uint32_t now = FENYKL_TIMER_NOW();
 
 	if (fenykl_card_io_allowed()) {
 		if (flog.gate_closed)
@@ -573,8 +584,6 @@ static bool flog_gate_open(void)
 		flog_gate_time(now);
 	else
 		flog_gate_close(now);
-	if (!flog.gate_held && fenykl_card_usb_seen())
-		flog_gate_hold();
 	flog.gate_skips++;
 	flog.st.gate_skipped++;
 	return false;
@@ -609,7 +618,7 @@ static void flog_flush_write(void)
 /* Counts the flush that opened the file at t0; a slow one is logged by the next flush. */
 static void flog_flush_time(uint32_t t0)
 {
-	uint32_t us = FENYKL_LOG_ELAPSED(t0, FENYKL_LOG_TIMER_NOW());
+	uint32_t us = FENYKL_TIMER_ELAPSED(t0, FENYKL_TIMER_NOW());
 
 	if (us > flog.st.flush_max_us)
 		flog.st.flush_max_us = us;
@@ -621,22 +630,16 @@ static void flog_flush_time(uint32_t t0)
 
 static int flog_flush_file(void)
 {
-	uint32_t t0 = FENYKL_LOG_TIMER_NOW();
-	int ret = 0;
+	uint32_t t0 = FENYKL_TIMER_NOW();
 
-	flog.st.flush_since = t0;
-	flog.st.flush_busy = 1;
 	flog.out_fp = fw_rpc_fopen(FENYKL_LOG_FILE, "a");
 	if (!flog.out_fp) {
 		flog.st.open_fail++;
-		ret = FENYKL_LOG_EOPEN;
-		goto out;
+		return FENYKL_LOG_EOPEN;
 	}
 	flog_flush_write();
 	flog_flush_time(t0);
-out:
-	flog.st.flush_busy = 0;
-	return ret;
+	return 0;
 }
 
 static int flog_init_card(void);
@@ -657,14 +660,37 @@ static int flog_flush_gated(void)
 	return 0;
 }
 
+/*
+ * Records queued from here on are later than fresh_at: the clock first, then the heads. fresh_at is
+ * a second early since a CPU1 record's stamp precedes its head update; within a second of init
+ * the bound stays at init.
+ */
+static void flog_mark_fresh(void)
+{
+	struct flog_stamp now = flog_clock();
+	uint32_t raw = flog.clock.raw;
+
+	if (!now.s)
+		return;
+	flog.stream[0].pos = flog.ring0.tail;
+	flog.stream[1].pos = flog_ring1()->tail;
+	flog_stream_fresh(&flog.stream[0]);
+	flog_stream_fresh(&flog.stream[1]);
+	flog.stream[0].fresh = flog.ring0.head;
+	flog.stream[1].fresh = flog_ring1()->head;
+	flog.fresh_at.raw = (raw - FLOG_USEC_PER_SEC) & FENYKL_TIMER_MASK;
+	flog.fresh_at.ext = (struct flog_stamp){ now.s - 1, now.us };
+}
+
 int fenykl_log_flush(void)
 {
 	int ret;
 
 	if (!flog_flush_claim())
 		return FENYKL_LOG_EBUSY;
-	flog.last_flush = FENYKL_LOG_TIMER_NOW();
+	flog.last_flush = FENYKL_TIMER_NOW();
 	ret = flog_flush_gated();
+	flog_mark_fresh();
 	flog.busy = false;
 	return ret;
 }
@@ -703,8 +729,8 @@ static void flog_append_error(void)
 	unsigned int n = 0;
 	void *fp;
 
-	fw_sprintf(err, "fenykl log: rpc_fopen(\"%s\", \"a\") failed 3 times on an existing file; "
-			"no log is written in this boot (build %08x)",
+	fw_sprintf(err, "fenykl log: rpc_fopen(\"%s\", \"a\") failed 3 times; "
+			"boot header not written, later flushes retry (build %08x)",
 		   FENYKL_LOG_FILE, FLOG_BUILD_ID);
 	while (err[n])
 		n++;
@@ -728,9 +754,11 @@ static uint32_t flog_init_state(const struct fenykl_log_config *cfg)
 		flog.cfg = *cfg;
 	if (!flog.cfg.flush_ms)
 		flog.cfg.flush_ms = FLOG_FLUSH_MS;
-	t_init = FENYKL_LOG_TIMER_NOW();
-	flog.stream[0] = (struct flog_stream){ .last = t_init, .ring = 0 };
-	flog.stream[1] = (struct flog_stream){ .last = t_init, .ring = 1 };
+	t_init = FENYKL_TIMER_NOW();
+	flog.clock = (struct flog_time){ .raw = t_init };
+	flog.fresh_at = flog.clock;
+	flog.stream[0] = (struct flog_stream){ .at = flog.clock, .ring = 0 };
+	flog.stream[1] = (struct flog_stream){ .at = flog.clock, .ring = 1 };
 	flog.st.boot_cause = FLOG_BOOT_CAUSE;
 	return t_init;
 }
@@ -903,7 +931,7 @@ static bool flog_flush_due(void)
 	volatile struct flog_ring0 *r0 = &flog.ring0;
 	volatile struct flog_ring1 *r1 = flog_ring1();
 	uint32_t n0 = r0->head - r0->tail, n1 = r1->head - r1->tail;
-	uint32_t elapsed = FENYKL_LOG_ELAPSED(flog.last_flush, FENYKL_LOG_TIMER_NOW());
+	uint32_t elapsed = FENYKL_TIMER_ELAPSED(flog.last_flush, FENYKL_TIMER_NOW());
 
 	if (elapsed >= flog.cfg.flush_ms * 1000u)
 		return true;
@@ -931,7 +959,11 @@ int fenykl_log_task_start(void)
 		return FENYKL_LOG_ETASK;
 	id = fw_OlyTaskCreate("FYKLOG", flog_flusher_task, 2, 0, FLOG_TASK_PRIO, FLOG_TASK_STACK,
 			      stack);
-	return id < 0 ? FENYKL_LOG_ETASK : 0;
+	if (id < 0) {
+		fw_free(stack);
+		return FENYKL_LOG_ETASK;
+	}
+	return 0;
 }
 
 void fenykl_log_set_level(struct fenykl_log_module *mod, unsigned int level)

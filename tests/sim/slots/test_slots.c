@@ -1,4 +1,4 @@
-/* Callbacks, slots and cloned vtables in the GDB simulator, with fw.S (firmware-style callers
+/* Callbacks and slots in the GDB simulator, with fw.S (firmware-style callers
    and targets) and the irq/cache mocks of tests/sim/hooks/support.S. plugin_main sets sim_exit_code
    to the failure bit mask (0 = pass):
      1   `calls` into a reverse stub: register args by class, two stack args, int result; the
@@ -9,27 +9,22 @@
          callee-saved registers survive although the thunk uses A2
      16  slot replace/restore: only from the expected value, EBUSY, EVALUE leaves the word alone
      32  replacement in a slot calls the original (fw_orig_<slot>)
-     64  cloned vtable: one method replaced and calling the original, the others stock, another
-         object and the stock table untouched, attach/detach errors and idempotence
    (the simulator's exit status keeps 8 bits) */
 #include <fenykl.h>
 
 #define HOOK1_SLOT (*(volatile uint32_t *)0x605FD840u)
 #define CHANGE_SLOT (*(volatile uint32_t *)0x6034CCB4u)
-#define STOCK_VTABLE 0x6EE3F58Cu
 
 int sim_calls_cbmix(uint32_t fn);
 uint32_t sim_calls_cbptr(uint32_t fn);
 int sim_call_cbcall(void);
 unsigned sim_hook1(unsigned event);
 int sim_change(unsigned id);
-int sim_vget(void *obj, unsigned *out, unsigned id);
-int sim_vset(void *obj, unsigned id, unsigned type, unsigned value);
 void mock_mix(void);
 void mock_ptr(void);
 void mock_callee(void);
 
-volatile uint32_t mock_args[12]; /* fw.S and support.S record here */
+volatile uint32_t mock_args[8]; /* fw.S and support.S record here */
 unsigned mock_cells[4];
 uint32_t sim_exit_code = 99;
 static uint32_t fail;
@@ -75,16 +70,6 @@ static void on_change(unsigned id)
 	fw_orig_usrset_change_cb(id);
 }
 FENYKL_CALLBACK(usrset_change_cb, on_change);
-
-static volatile uint32_t gets;
-static int counted_get(void *self, unsigned *out, unsigned id)
-{
-	gets++;
-	int r = fw_orig_hfw_setting_proxy_get(self, out, id);
-	*out += 0x100;
-	return r;
-}
-FENYKL_CALLBACK(hfw_getSetting, counted_get);
 
 static void check_callbacks(void)
 {
@@ -168,44 +153,6 @@ static void check_slots(void)
 		fail |= 32;
 }
 
-static void check_vtable(void)
-{
-	struct fenykl_vtable *vt = &fenykl_vtable_hfw_setting_proxy;
-	const uint32_t *stock = (const uint32_t *)STOCK_VTABLE;
-	static uint32_t object[2] = {STOCK_VTABLE, 0x1000};
-	static uint32_t other_object[2] = {STOCK_VTABLE, 0x2000};
-	static uint32_t wrong_class[2] = {0x6EE3F000, 0};
-	unsigned out = 0;
-
-	if (sim_vget(object, &out, 5) != 0 || out != 0x1005)
-		fail |= 64;
-	FENYKL_VTABLE_SET(hfw_setting_proxy_get, counted_get);
-	if (fenykl_vtable_attach(vt, object) != 0 || object[0] != (uint32_t)vt->clone ||
-	    fenykl_vtable_attach(vt, object) != 0 ||
-	    fenykl_vtable_attach(vt, other_object) != FENYKL_SLOT_EBUSY)
-		fail |= 64;
-	for (int i = 0; i < 28; i++)
-		if (vt->clone[i] != (i == 2 ? FENYKL_CB(hfw_getSetting, counted_get) : stock[i]))
-			fail |= 64;
-	if (stock[2] != fenykl_slot_hfw_setting_proxy_get.expected)
-		fail |= 64;
-	/* id is u16: the original masks it (exthu), the replacement passes it through. */
-	if (sim_vget(object, &out, 0x30005) != 0 || out != 0x1105 || gets != 1)
-		fail |= 64;
-	if (sim_vset(object, 7, 0, 99) != 1 || mock_args[8] != (uint32_t)object || mock_args[9] != 7 ||
-	    mock_args[10] != 0 || mock_args[11] != 99)
-		fail |= 64;
-	if (sim_vget(other_object, &out, 5) != 0 || out != 0x2005 || gets != 1)
-		fail |= 64;
-	if (fenykl_vtable_detach(vt) != 0 || object[0] != STOCK_VTABLE ||
-	    fenykl_vtable_detach(vt) != 0 || sim_vget(object, &out, 5) != 0 || out != 0x1005 ||
-	    gets != 1)
-		fail |= 64;
-	if (fenykl_vtable_attach(vt, wrong_class) != FENYKL_SLOT_EVALUE ||
-	    wrong_class[0] != 0x6EE3F000 || vt->object != 0)
-		fail |= 64;
-}
-
 void plugin_main(uint32_t load_base, uint32_t image_size)
 {
 	(void)load_base;
@@ -213,6 +160,5 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	check_callbacks();
 	check_forward_thunks();
 	check_slots();
-	check_vtable();
 	sim_exit_code = fail;
 }

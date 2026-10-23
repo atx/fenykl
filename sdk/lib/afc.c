@@ -5,6 +5,7 @@
  */
 #include <fenykl.h>
 #include <afc.h>
+#include <body.h>
 #include "afc_int.h"
 
 #define AFC_CL_SETTING 0x08u		/* driver client +8: its contrast_setting */
@@ -66,21 +67,6 @@ FENYKL_LOG_MODULE(fenykl_afc_log, "afc", FENYKL_LOG_INFO);
 const char *const fenykl_afc_state_name[] = { "idle", "attaching", "attached", "detaching", "off" };
 const char *const fenykl_afc_err_name[] = { "none", "req", "noframe", "nodone", "early", "end" };
 
-static uint32_t afc_rd8(uint32_t a)
-{
-	return *(volatile uint8_t *)a;
-}
-
-static uint32_t afc_rd16(uint32_t a)
-{
-	return *(volatile uint16_t *)a;
-}
-
-static uint32_t afc_rd32(uint32_t a)
-{
-	return *(volatile uint32_t *)a;
-}
-
 static volatile uint32_t *afc_dma(void)
 {
 	return *FENYKL_SHARED_PTR(afc_dma_buf);
@@ -91,17 +77,12 @@ static struct afc_req *afc_req(void)
 	return (struct afc_req *)afc.req;
 }
 
-static bool afc_half(void)
-{
-	return !(afc_rd8(FW_TRG_SNAPSHOT) & 1u);
-}
-
 /* As 0x6E6896DF, which the firmware's contrast callbacks use to pick iset_flg. */
 static uint32_t afc_in_irq(void)
 {
-	uint32_t k = afc_rd32(FW_KERNEL_CORE_CTX + 4u * FENYKL_CORE_ID());
+	uint32_t k = fenykl_rd32(FW_KERNEL_CORE_CTX + 4u * FENYKL_CORE_ID());
 
-	return afc_rd8(afc_rd32(k + 0x1Cu)) != 0;
+	return fenykl_rd8(fenykl_rd32(k + 0x1Cu)) != 0;
 }
 
 static void afc_set_u16(uint32_t off, uint32_t v)
@@ -114,11 +95,11 @@ static void afc_set_u16(uint32_t off, uint32_t v)
 static void afc_frame_cb(unsigned int unk, unsigned int events, void *req)
 {
 	volatile struct fenykl_afc_cb *c = &afc.cb;
-	uint32_t now = FENYKL_LOG_TIMER_NOW();
+	uint32_t now = FENYKL_TIMER_NOW();
 	uint32_t irq = afc_in_irq();
 
 	if (c->calls) {
-		uint32_t gap = FENYKL_LOG_ELAPSED(c->last_us, now);
+		uint32_t gap = FENYKL_TIMER_ELAPSED(c->last_us, now);
 
 		if (gap > c->gap_us)
 			c->gap_us = gap;
@@ -139,7 +120,7 @@ static void afc_frame_cb(unsigned int unk, unsigned int events, void *req)
 	c->unk = unk;
 	c->psw = fw_psw_get();
 	/* Fastest detach: the driver reads number right after the AF_ST callback (cam_cnt_frame). */
-	if (c->stop || afc_half()) {
+	if (c->stop || fenykl_af_half()) {
 		afc_set_u16(AFC_SET_NUMBER, 0);
 		if (!c->cb_stop_us)
 			c->cb_stop_us = now | 1u;
@@ -153,7 +134,7 @@ static void afc_done_cb(unsigned int status, void *req)
 	volatile struct fenykl_afc_cb *c = &afc.cb;
 
 	c->done_status = status;
-	c->done_us = FENYKL_LOG_TIMER_NOW();
+	c->done_us = FENYKL_TIMER_NOW();
 	c->done_irq = afc_in_irq();
 	c->done_core = FENYKL_CORE_ID();
 	c->bad_req += req != afc.req;
@@ -168,17 +149,17 @@ static bool afc_snap_ready(uint32_t tf, uint32_t ctx)
 	uint32_t set = ctx + AFC_CTX_SETTING;
 	uint32_t pat;
 
-	if (!tf || !ctx || afc_rd8(FW_FCS_AF_EVAL_STATE) != 2 || afc_half())
+	if (!tf || !ctx || fenykl_rd8(FW_FCS_AF_EVAL_STATE) != 2 || fenykl_af_half())
 		return false;
-	if (afc_rd8(tf + AFC_TF_MODE) == AFC_TF_MF || afc_rd8(tf + AFC_TF_MOVIE))
+	if (fenykl_rd8(tf + AFC_TF_MODE) == AFC_TF_MF || fenykl_rd8(tf + AFC_TF_MOVIE))
 		return false;
-	pat = afc_rd8(ctx + AFC_CTX_PATTERN);
-	if ((pat != 0 && pat != 0xD) || afc_rd8(ctx + AFC_CTX_COLS) != AFC_COLS ||
-	    afc_rd8(ctx + AFC_CTX_ROWS) != AFC_ROWS)
+	pat = fenykl_rd8(ctx + AFC_CTX_PATTERN);
+	if ((pat != 0 && pat != 0xD) || fenykl_rd8(ctx + AFC_CTX_COLS) != AFC_COLS ||
+	    fenykl_rd8(ctx + AFC_CTX_ROWS) != AFC_ROWS)
 		return false;
-	return afc_rd16(set + AFC_SET_NUMBER) == AFC_SET_ENDLESS &&
-	       afc_rd32(set + AFC_SET_DMA) == FW_FCS_DMA_BUF &&
-	       afc_rd32(ctx + AFC_CTX_REQ + 0x14u) == set;
+	return fenykl_rd16(set + AFC_SET_NUMBER) == AFC_SET_ENDLESS &&
+	       fenykl_rd32(set + AFC_SET_DMA) == FW_FCS_DMA_BUF &&
+	       fenykl_rd32(ctx + AFC_CTX_REQ + 0x14u) == set;
 }
 
 /* Two copies must agree on the parameter part (fcs may be updating it). */
@@ -199,7 +180,7 @@ static void afc_snap_poll(uint32_t tf, uint32_t ctx)
 	if (afc.snapped && !memcmp(afc.tmp[0], afc.snap, FENYKL_AFC_SET_INFO))
 		return;
 	memcpy(afc.snap, afc.tmp[0], FENYKL_AFC_SET_SIZE);
-	afc.snap_pat = (uint8_t)afc_rd8(ctx + AFC_CTX_PATTERN);
+	afc.snap_pat = (uint8_t)fenykl_rd8(ctx + AFC_CTX_PATTERN);
 	afc.snap_cols = AFC_COLS;
 	afc.snap_rows = AFC_ROWS;
 	afc.snaps++;
@@ -215,20 +196,21 @@ static void afc_snap_poll(uint32_t tf, uint32_t ctx)
 /* GUI super 0x02 (SS_REC), stills screens: Basic, Histogram, H&S, STILL_OFF, STILL_OVER, level gauge. */
 static bool afc_lv_screen(void)
 {
-	uint32_t st = afc_rd8(FW_GUI_STATE);
+	uint32_t st = fenykl_rd8(FW_GUI_STATE);
 
-	if (afc_rd8(FW_GUI_SUPER) != AFC_SS_REC)
+	if (fenykl_rd8(FW_GUI_SUPER) != AFC_SS_REC)
 		return false;
 	return (st >= 0x03 && st <= 0x05) || (st >= 0x09 && st <= 0x0B);
 }
 
-uint32_t fenykl_afc_slot_owner(uint32_t slot)
+/* Owner of a driver slot word: 0 empty, 1 ours, 2 foreign. */
+static uint32_t afc_slot_owner(uint32_t slot)
 {
-	uint32_t cl = afc_rd32(slot);
+	uint32_t cl = fenykl_rd32(slot);
 
 	if (!cl)
 		return 0;
-	return afc_rd32(cl + AFC_CL_SETTING) == (uint32_t)afc.setting ? 1 : 2;
+	return fenykl_rd32(cl + AFC_CL_SETTING) == (uint32_t)afc.setting ? 1 : 2;
 }
 
 static uint32_t afc_gates(uint32_t tf, bool enable)
@@ -237,19 +219,19 @@ static uint32_t afc_gates(uint32_t tf, bool enable)
 
 	if (!afc.snapped)
 		g |= FENYKL_AFC_G_SNAP;
-	if (!tf || afc_rd8(tf + AFC_TF_MODE) != AFC_TF_MF)
+	if (!tf || fenykl_rd8(tf + AFC_TF_MODE) != AFC_TF_MF)
 		g |= FENYKL_AFC_G_MF;
 	if (!afc_lv_screen())
 		g |= FENYKL_AFC_G_LV;
-	if (!tf || afc_rd8(tf + AFC_TF_MOVIE) || afc_rd8(tf + AFC_TF_LV_MODE))
+	if (!tf || fenykl_rd8(tf + AFC_TF_MOVIE) || fenykl_rd8(tf + AFC_TF_LV_MODE))
 		g |= FENYKL_AFC_G_MOVIE;
-	if (afc_half())
+	if (fenykl_af_half())
 		g |= FENYKL_AFC_G_HALF;
-	if (afc_rd8(FW_FCS_AF_EVAL_STATE))
+	if (fenykl_rd8(FW_FCS_AF_EVAL_STATE))
 		g |= FENYKL_AFC_G_FCS;
-	if (fenykl_afc_slot_owner(FW_CNT_CLIENT) == 2 || fenykl_afc_slot_owner(FW_CNT_QUEUED) == 2)
+	if (afc_slot_owner(FW_CNT_CLIENT) == 2 || afc_slot_owner(FW_CNT_QUEUED) == 2)
 		g |= FENYKL_AFC_G_SLOT;
-	if (afc_rd16(FW_CNT_DRV_DBG))
+	if (fenykl_rd16(FW_CNT_DRV_DBG))
 		g |= FENYKL_AFC_G_DRV;
 	if (!enable)
 		g |= FENYKL_AFC_G_OFF;
@@ -288,7 +270,7 @@ static int afc_attach(void)
 	afc.attach_calls = afc.cb.calls;
 	afc.attach_st = afc.cb.st;
 	afc.attaches++;
-	afc.req_us = FENYKL_LOG_TIMER_NOW();
+	afc.req_us = FENYKL_TIMER_NOW();
 	afc.attach_ms = afc.ms;
 	r = fw_cam_request(rq);
 	fenykl_log_info(&fenykl_afc_log, "attach #%u: cam_request %x, pat %02x", afc.attaches, r,
@@ -298,7 +280,7 @@ static int afc_attach(void)
 
 static void afc_stop(void)
 {
-	afc.stop_us = FENYKL_LOG_TIMER_NOW();
+	afc.stop_us = FENYKL_TIMER_NOW();
 	afc.cb.stop = 1;
 	afc_set_u16(AFC_SET_NUMBER, 0);
 }
@@ -338,7 +320,7 @@ static void afc_log(enum fenykl_afc_state from, bool done)
 	}
 	if (to == FENYKL_AFC_ATTACHED)
 		fenykl_log_info(&fenykl_afc_log, "attached #%u: first cb %u us after the request",
-				afc.attaches, FENYKL_LOG_ELAPSED(afc.req_us, c->first_us));
+				afc.attaches, FENYKL_TIMER_ELAPSED(afc.req_us, c->first_us));
 	else if (live && to == FENYKL_AFC_OFF)
 		fenykl_log_err(&fenykl_afc_log, "done while attached, no stop requested, status %x: off",
 			       c->done_status);
@@ -349,7 +331,7 @@ static void afc_log(enum fenykl_afc_state from, bool done)
 		afc.pend_logged = false;
 	if ((to == FENYKL_AFC_IDLE || to == FENYKL_AFC_OFF) && done && !(live && to == FENYKL_AFC_OFF))
 		fenykl_log_info(&fenykl_afc_log, "done #%u: %u us after the stop, status %x",
-				afc.attaches, FENYKL_LOG_ELAPSED(stop_us, c->done_us), c->done_status);
+				afc.attaches, FENYKL_TIMER_ELAPSED(stop_us, c->done_us), c->done_status);
 }
 
 /* The first error, once: the client stays off for the boot. */
@@ -379,9 +361,9 @@ static void afc_log_nosnap(void)
 
 static void afc_clock(void)
 {
-	uint32_t now = FENYKL_LOG_TIMER_NOW();
+	uint32_t now = FENYKL_TIMER_NOW();
 
-	afc.rem_us += FENYKL_LOG_ELAPSED(afc.last_us, now);
+	afc.rem_us += FENYKL_TIMER_ELAPSED(afc.last_us, now);
 	afc.last_us = now;
 	afc.ms += afc.rem_us / 1000u;
 	afc.rem_us %= 1000u;
@@ -397,7 +379,7 @@ void fenykl_afc_init(void)
 {
 	struct fenykl_afc_in in = { 0 };
 
-	afc.last_us = FENYKL_LOG_TIMER_NOW();
+	afc.last_us = FENYKL_TIMER_NOW();
 	afc.snap_cols = AFC_COLS;
 	afc.snap_rows = AFC_ROWS;
 	afc.snap_ms = -AFC_SNAP_MS;
@@ -406,13 +388,13 @@ void fenykl_afc_init(void)
 
 void fenykl_afc_poll(bool enable)
 {
-	uint32_t tf = afc_rd32(FW_TAKE_FOCUS_PTR);
+	uint32_t tf = fenykl_rd32(FW_TAKE_FOCUS_PTR);
 	enum fenykl_afc_state from = afc.sm.state;
 	uint32_t done = afc.sm.done;
 	struct fenykl_afc_in in;
 
 	afc_clock();
-	afc_snap_poll(tf, afc_rd32(FW_FCS_CONTRAST_CTX));
+	afc_snap_poll(tf, fenykl_rd32(FW_FCS_CONTRAST_CTX));
 	afc.gates = afc_gates(tf, enable);
 	in = afc_input();
 	afc_do(fenykl_afc_sm_step(&afc.sm, &in), &in);
@@ -440,14 +422,6 @@ const struct fenykl_afc *fenykl_afc_get(void)
 const volatile uint32_t *fenykl_afc_dma(void)
 {
 	return afc_dma();
-}
-
-uint32_t fenykl_afc_take_gap(void)
-{
-	uint32_t gap = afc.cb.gap_us;
-
-	afc.cb.gap_us = 0;
-	return gap;
 }
 
 bool fenykl_afc_failed(void)
