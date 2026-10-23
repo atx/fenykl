@@ -11,6 +11,10 @@
  * Pack voltage per A/D count. One multimeter point: 7.999 V open circuit read 819-821 at boot,
  * before live view; the offset is unknown and taken as 0. A second point replaces this by a
  * line through both.
+ * E-M10 II: uncalibrated, the E-PL3's scale and sag. Its firmware's raw battery constants match
+ * the E-PL3's: AC detection at vbat16 > 0x30F on both (source detect 0x60077A36), and the periodic
+ * rec thresholds {th50, th1} in vbat8 (table 0x60112080, row 0, middle temperature class) are
+ * 0xB1/0x97 against the E-PL3's 0xAB/0x9E, a least-squares scale factor of 0.9999.
  */
 #define MAIN_BATT_UV_PER_COUNT 9770u
 #define MAIN_BATT_CELLS 2u

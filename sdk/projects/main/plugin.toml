@@ -1,9 +1,15 @@
-targets = ["epl3"]
+targets = ["epl3", "em10ii"]
 
 # HUD elements are drawn from a cw_updateDisplay hook (sdk/docs/hud.md). Its CPU1 scope rests on
 # static analysis only; the library counts CPU1 calls and main stops drawing at the first one.
+[capabilities.hud]
+sources = ["main_hooks.c"]
 hooks = ["cw_updateDisplay"]
 cpu1_unproven = ["cw_updateDisplay"]
+
+# The Fn override needs the key layer.
+[capabilities.event]
+sources = ["main_fn.c"]
 
 # Features built only for targets with the body capability they read (include/body.h).
 [capabilities.lens]

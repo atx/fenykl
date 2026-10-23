@@ -51,10 +51,25 @@ struct main_fn_act {
 
 extern const struct main_fn_act act_shot;
 
-/* main_fn.c, plugin task */
+/* main_fn.c, plugin task; no Fn override without the event capability */
+#if FENYKL_HAS_EVENT
 void main_fn_tick(void);
 void main_fn_set_level(unsigned int level);
 void main_fn_status(void);
+#else
+static inline void main_fn_tick(void)
+{
+}
+
+static inline void main_fn_set_level(unsigned int level)
+{
+	(void)level;
+}
+
+static inline void main_fn_status(void)
+{
+}
+#endif
 
 /* main_hooks.c */
 int main_hooks_install(void);

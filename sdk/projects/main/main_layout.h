@@ -1,12 +1,14 @@
 /*
- * main: everything that depends on the target's screen and GUI resources, one section per target:
- * element positions, the stock images and palette indices they are drawn with, the screenshot
- * canvas.
+ * main: everything that depends on the target's screen and GUI resources, one section per target
+ * with the HUD: element positions and the stock images and palette indices they are drawn with.
  */
 #ifndef _MAIN_LAYOUT_H
 #define _MAIN_LAYOUT_H
 
 #include <hud.h>
+
+/* main draws the HUD on every target with it; each has a layout section below. */
+#define MAIN_HUD FENYKL_HAS_HUD
 
 #if FENYKL_TARGET_EPL3
 
@@ -62,12 +64,22 @@
 #define MAIN_LAYOUT_BATT_Y 13
 #define MAIN_LAYOUT_BATT_W 64
 
-/* Screenshot: the OSD canvas, the shown part of the LV buffer, shown stretched to 16:9. */
-#define MAIN_SHOT_W 720u
-#define MAIN_SHOT_H 480u
-#define MAIN_SHOT_OUT_W 853u		/* 720 * 32 / 27 */
+#elif FENYKL_TARGET_EM10II
 
-#else
+/*
+ * HUD layout: the battery percentage only, one line in the stock info items' style on a
+ * transparent background, at the E-PL3's top-left spot, inside the EVF's left 640 columns.
+ * Not yet checked against this body's stock items: no OSD dump of its info screens.
+ */
+#define MAIN_LAYOUT_STATES FENYKL_HUD_INFO_SCREENS
+#define MAIN_LAYOUT_BG FENYKL_HUD_CLEAR
+#define MAIN_LAYOUT_ALIGN FENYKL_HUD_LEFT
+#define MAIN_LAYOUT_STYLE FENYKL_HUD_LV
+#define MAIN_LAYOUT_BATT_X 20
+#define MAIN_LAYOUT_BATT_Y 13
+#define MAIN_LAYOUT_BATT_W 64
+
+#elif MAIN_HUD
 #error "main: no layout for this target"
 #endif
 

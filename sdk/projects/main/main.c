@@ -2,13 +2,13 @@
  * main: the polished daily-use plugin. Starts logging, configuration and the HUD library,
  * binds the hook (main_hooks.c), installs the settings page (sdk/lib/ui.c) and runs every
  * feature's tick, the Fn override (main_fn.c) and the R/B swap's log (main_rbswap.c)
- * from one task loop. Log: C:\FENYKL.LOG; options: C:\FENYKL.CF0/CF1.
+ * from one task loop. Log: C:\FENYKL.LOG; options: C:\FENYKL.CF0/CF1. A target without the hud
+ * or event capability gets neither the HUD nor the Fn override (MAIN_HUD).
  */
 #include "main.h"
 #include "main_rbswap.h"
 #include <afc.h>
 #include <body.h>
-#include <key.h>
 #include <ui.h>
 
 #define MAIN_GUI_WAIT_TICKS (60000u / MAIN_TICK_MS)	/* for the GUI and its language font */
@@ -92,6 +92,7 @@ static void main_start_cfg(void)
 			fenykl_cfg_task_start());
 }
 
+#if MAIN_HUD
 /* Waits for live view or playback with a loaded language font. */
 static bool main_wait_gui(void)
 {
@@ -132,8 +133,9 @@ static bool main_start_hud(void)
 	}
 	return true;
 }
+#endif
 
-/* Settings page from the Custom J row (sdk/docs/ui.md); does not need the HUD. */
+/* Settings page from a Custom menu row (sdk/docs/ui.md); does not need the HUD. */
 static void main_start_ui(void)
 {
 	unsigned int i;
@@ -151,6 +153,7 @@ static void main_start_ui(void)
 		fenykl_log_info(&main_log, "ui install 0 after %u tries", i);
 }
 
+#if MAIN_HUD
 static void main_start_feats(void)
 {
 	for (unsigned int i = 0; main_feats[i]; i++) {
@@ -175,6 +178,7 @@ static void main_check_cpu1(const struct fenykl_hud_stats *hs)
 		       hs->cpu1);
 	fenykl_log_flush();
 }
+#endif
 
 static void main_log_gui(void)
 {
@@ -183,21 +187,31 @@ static void main_log_gui(void)
 	if (gui == main_st.gui)
 		return;
 	main_st.gui = gui;
+#if MAIN_HUD
 	fenykl_log_info(&main_log, "gui %02x:%02x %s", gui >> 8, gui & 0xFF,
 			fenykl_hud_visible() ? "visible" : "hidden");
+#else
+	fenykl_log_info(&main_log, "gui %02x:%02x", gui >> 8, gui & 0xFF);
+#endif
 }
 
+/* hs: the HUD's counters, NULL without the HUD */
 static void main_status(const struct fenykl_hud_stats *hs)
 {
 	struct fenykl_ui_stats us;
 
 	fenykl_ui_get_stats(&us);
+#if MAIN_HUD
 	fenykl_log_info(&main_log, "status t %u drawing %d updates %u shows %u", main_st.ticks,
 			main_st.drawing, hs->updates, hs->shows);
 	fenykl_log_info(&main_log, "  drawn %u hidden %u erased %u cpu1 %u", hs->drawn, hs->hidden,
 			hs->erased, hs->cpu1);
 	fenykl_log_info(&main_log, "  stale %u override %u nofont %u miss %u", hs->stale,
 			hs->overrides, hs->nofont, hs->glyph_miss);
+#else
+	(void)hs;
+	fenykl_log_info(&main_log, "status t %u", main_st.ticks);
+#endif
 	fenykl_log_info(&main_log, "  ui entry %u exit %u set %u fail %u", us.entries, us.exits,
 			us.sets, us.set_fail);
 	fenykl_log_info(&main_log, "  ui refused %u stray %u cpu1 %u", us.refused, us.lang_stray,
@@ -219,20 +233,26 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 			image_size, r);
 	main_start_cfg();
 	main_rbswap_start();
+#if MAIN_HUD
 	main_st.drawing = main_start_hud();
 	if (main_st.drawing)
 		main_start_feats();
+#endif
 	main_start_ui();
 
 	for (;;) {
+#if MAIN_HUD
 		struct fenykl_hud_stats hs;
+#endif
 
 		bool slow;
 
 		main_sleep();
 		slow = main_st.ticks % MAIN_SLOW == 0;
+#if MAIN_HUD
 		fenykl_hud_get_stats(&hs);
 		main_check_cpu1(&hs);
+#endif
 		main_log_gui();
 		main_fn_tick();
 		main_rbswap_tick();
@@ -241,9 +261,14 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 		for (unsigned int i = 0; main_st.drawing && main_feats[i]; i++)
 			if (main_st.started[i] && main_st.ticks % main_feats[i]->period == 0)
 				main_feats[i]->tick();
+#if MAIN_HUD
 		if (slow)
 			fenykl_hud_tick();
 		if (main_st.ticks % MAIN_STATUS_TICKS == MAIN_STATUS_FIRST)
 			main_status(&hs);
+#else
+		if (main_st.ticks % MAIN_STATUS_TICKS == MAIN_STATUS_FIRST)
+			main_status(NULL);
+#endif
 	}
 }
