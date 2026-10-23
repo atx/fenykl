@@ -1,0 +1,7 @@
+targets = ["epl3"]
+
+# The face detector override: fd_hw_shutdown runs in TSK_FACE_FD only (CPU0-only).
+hooks = ["fd_hw_shutdown"]
+# Built with FENYKL_CPU1: CPU0-only firmware calls do not compile in the worker and the network.
+# inject.c is pure code: the worker post-processes the self-test, CPU0 the live results.
+cpu1_sources = ["worker.c", "net.c", "bd6_model.c", "bd6_gen.S", "inject.c"]
