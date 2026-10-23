@@ -1,5 +1,0 @@
-targets = ["em10ii"]
-hooks = ["cw_updateDisplay", "appevent_post"]
-# cw_updateDisplay: no static path from CPU1/CPU2. appevent_post: CPU1 runs it for the Wi-Fi remote;
-# the hook counts those calls and passes them through.
-cpu1_unproven = ["cw_updateDisplay", "appevent_post"]

@@ -1,5 +1,0 @@
-targets = ["epl3"]
-
-# Built with FENYKL_CPU1: CPU1 code, CPU0-only firmware calls do not compile (sdk/README.md, CPU1).
-# No hooks: the CPU0 task polls the published FD frame address.
-cpu1_sources = ["worker.c"]

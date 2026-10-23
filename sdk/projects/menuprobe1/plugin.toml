@@ -1,6 +1,0 @@
-targets = ["em10ii"]
-
-# Condition 113 of the mode-check rule of setting 0x193 (Eye-Fi), replaced by a pass-through that logs.
-slots = ["mode_cond_eyefi"]
-# CPU0 only by static analysis; the callback counts calls on other cores.
-cpu1_unproven = ["mode_cond_eyefi"]

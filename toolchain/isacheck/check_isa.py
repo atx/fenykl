@@ -7,7 +7,8 @@
 2. Every instruction objdump finds in the code sections is re-decoded by the ghidra-mn103 SLEIGH
    module (written from manual 13250-040E, no AM33 opcodes) and must decode with the same length
    and not as a UDF instruction (several AM33 encodings land in the MN103 UDF20-35 space). The
-   firmware's multiply forms of udf00/udf01/udfu01 are allowed (inline asm, e.g. nnbench).
+   firmware's multiply forms of udf00/udf01/udfu01 are allowed (hand-written or generated asm,
+   e.g. birddetect6).
 3. Every instruction form is looked up in the stock firmware's form histogram (MN103Forms.java run
    over the E-PL3 Ghidra project). Forms the firmware never uses are listed for review; they are
    valid MN103 instructions but have no evidence of running on the E-PL3 silicon.
@@ -56,8 +57,12 @@ def tool(name: str) -> str:
 
 
 def check_machine(files: list[Path]) -> list[str]:
-    out = subprocess.run([tool("readelf"), "-h", *map(str, files)], check=True, capture_output=True,
-                         text=True).stdout
+    out = subprocess.run(
+        [tool("readelf"), "-h", *map(str, files)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
     errors = []
     current = str(files[0])
     for line in out.splitlines():
@@ -66,13 +71,19 @@ def check_machine(files: list[Path]) -> list[str]:
         elif m := READELF_FLAGS.match(line):
             flags = int(m.group(1), 16)
             if flags & EF_MN10300_MACH != E_MN10300_MACH_MN10300:
-                errors.append(f"{current}: e_flags {flags:#x} is not the base MN10300 machine")
+                errors.append(
+                    f"{current}: e_flags {flags:#x} is not the base MN10300 machine"
+                )
     return errors
 
 
 def disassemble(files: list[Path]) -> list[Insn]:
-    out = subprocess.run([tool("objdump"), "-d", "-z", "--insn-width=8", *map(str, files)], check=True,
-                         capture_output=True, text=True).stdout
+    out = subprocess.run(
+        [tool("objdump"), "-d", "-z", "--insn-width=8", *map(str, files)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
     insns = []
     obj, section = "", ""
     for line in out.splitlines():
@@ -87,7 +98,9 @@ def disassemble(files: list[Path]) -> list[Insn]:
     return insns
 
 
-def ghidra_decode(insns: list[Insn], workdir: Path, headless: Path) -> dict[int, tuple[int, str, str]]:
+def ghidra_decode(
+    insns: list[Insn], workdir: Path, headless: Path
+) -> dict[int, tuple[int, str, str]]:
     """Returns offset -> (length, ghidra text, form) for the blob of all instructions."""
     blob = workdir / "insns.bin"
     offsets = workdir / "offsets.txt"
@@ -103,13 +116,34 @@ def ghidra_decode(insns: list[Insn], workdir: Path, headless: Path) -> dict[int,
     proj.mkdir(exist_ok=True)
     log = workdir / "headless.log"
     with log.open("w") as fh:
-        subprocess.run([
-            str(headless), str(proj), "isacheck",
-            "-import", str(blob), "-overwrite", "-loader", "BinaryLoader", "-loader-baseAddr", "0",
-            "-processor", LANGUAGE, "-noanalysis", "-scriptPath", str(HERE),
-            "-postScript", "MN103Forms.java", str(workdir / "ghidra-forms.tsv"), str(offsets), str(decoded),
-            "-deleteProject",
-        ], check=True, stdout=fh, stderr=subprocess.STDOUT)
+        subprocess.run(
+            [
+                str(headless),
+                str(proj),
+                "isacheck",
+                "-import",
+                str(blob),
+                "-overwrite",
+                "-loader",
+                "BinaryLoader",
+                "-loader-baseAddr",
+                "0",
+                "-processor",
+                LANGUAGE,
+                "-noanalysis",
+                "-scriptPath",
+                str(HERE),
+                "-postScript",
+                "MN103Forms.java",
+                str(workdir / "ghidra-forms.tsv"),
+                str(offsets),
+                str(decoded),
+                "-deleteProject",
+            ],
+            check=True,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+        )
     if "SCRIPT ERROR" in log.read_text():
         sys.exit(f"error: MN103Forms.java failed, see {log}")
     result = {}
@@ -134,7 +168,9 @@ def firmware_udf(got: tuple, fw: Counter) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--workdir", type=Path, required=True)
     ap.add_argument("--fw-forms", type=Path, default=HERE / "fw-forms.tsv")
     ap.add_argument("files", type=Path, nargs="+")
@@ -144,7 +180,9 @@ def main() -> int:
         sys.exit(f"error: the ISA check runs Ghidra and needs {', '.join(missing)}")
     headless = Path(os.environ["GHIDRA_INSTALL_DIR"]) / "support" / "analyzeHeadless"
     if not headless.is_file():
-        sys.exit(f"error: {headless} missing, GHIDRA_INSTALL_DIR is not a Ghidra installation")
+        sys.exit(
+            f"error: {headless} missing, GHIDRA_INSTALL_DIR is not a Ghidra installation"
+        )
     args.workdir.mkdir(parents=True, exist_ok=True)
 
     errors = check_machine(args.files)
@@ -159,12 +197,18 @@ def main() -> int:
     for i in insns:
         got = decoded.get(offset)
         if got is None:
-            errors.append(f"{i.where}: {i.raw.hex()} ({i.text}) is not an MN103 instruction")
+            errors.append(
+                f"{i.where}: {i.raw.hex()} ({i.text}) is not an MN103 instruction"
+            )
         elif got[0] != len(i.raw):
-            errors.append(f"{i.where}: {i.raw.hex()} ({i.text}) decodes as {got[1]} with length {got[0]}")
+            errors.append(
+                f"{i.where}: {i.raw.hex()} ({i.text}) decodes as {got[1]} with length {got[0]}"
+            )
         elif got[2].startswith("udf") and not firmware_udf(got, fw):
             # GCC never emits UDF; AM33 encodings in the F9/FB/FD space decode as UDF20-35 on MN103.
-            errors.append(f"{i.where}: {i.raw.hex()} ({i.text}) decodes as user-defined {got[1]}")
+            errors.append(
+                f"{i.where}: {i.raw.hex()} ({i.text}) decodes as user-defined {got[1]}"
+            )
         else:
             key = f"{got[2]}\t{got[0]}"
             f = forms.setdefault(key, Form(example=f"{i.where} {i.raw.hex()} {got[1]}"))
@@ -178,10 +222,14 @@ def main() -> int:
             fh.write(f"{key}\t{f.count}\t{fw[key]}\t{f.example}\n")
 
     unseen = {k: f for k, f in forms.items() if fw[k] == 0}
-    print(f"{len(insns)} instructions, {len(forms)} forms, {len(errors)} errors, "
-          f"{len(unseen)} forms not used by the stock firmware (full table: {report})")
+    print(
+        f"{len(insns)} instructions, {len(forms)} forms, {len(errors)} errors, "
+        f"{len(unseen)} forms not used by the stock firmware (full table: {report})"
+    )
     for key, f in sorted(unseen.items()):
-        print(f"  not in firmware: {key.replace(chr(9), ' /')} x{f.count}  e.g. {f.example}")
+        print(
+            f"  not in firmware: {key.replace(chr(9), ' /')} x{f.count}  e.g. {f.example}"
+        )
     for e in errors:
         print(f"ERROR {e}")
     return 1 if errors else 0

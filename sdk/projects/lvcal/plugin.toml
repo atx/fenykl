@@ -1,8 +1,0 @@
-targets = ["epl3"]
-
-# CPU0 probe for live-view colour calibration: on each shutter press it dumps the shown display buffer,
-# the FD frame, one 320x240 IPU resize of the display, and copies of the IPU job parameters and
-# register shadows of the live-view pass and of the still's first engine-1 passes (img_exec hook).
-# The event layer (SDK hook appevent_post) supplies the shutter presses.
-hooks = ["img_exec"]
-cpu1_unproven = ["img_exec"]

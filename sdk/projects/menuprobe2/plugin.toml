@@ -1,7 +1,0 @@
-targets = ["em10ii"]
-
-# Condition 113 of the Eye-Fi rule answers "allowed"; the Eye-Fi row's OK and RIGHT dispatch records
-# get a row callback that logs and continues with the stock pop-up.
-slots = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
-# CPU0 only by static analysis; the callbacks count calls on other cores.
-cpu1_unproven = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]

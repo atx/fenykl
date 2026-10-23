@@ -1,7 +1,0 @@
-targets = ["epl3"]
-
-# CPU0 probe of IPU engine-1 contention between a live-view resize task and still capture.
-# Hook img_exec: times every IPU job (engine-1 jobs and non-live-view engine-2 jobs logged, live-view
-# passes counted). The event layer (SDK hook appevent_post) supplies the shutter presses.
-hooks = ["img_exec"]
-cpu1_unproven = ["img_exec"]

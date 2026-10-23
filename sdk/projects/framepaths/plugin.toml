@@ -1,6 +1,0 @@
-targets = ["epl3"]
-
-# Per-frame probe of the live-view frame sources. Both hook targets are MOV-task code;
-# their CPU1 scope rests on static analysis only, the hooks count CPU1 calls (log: cpu1).
-hooks = ["mov_lv_disp_flip", "mov_yc_resize_pass"]
-cpu1_unproven = ["mov_lv_disp_flip", "mov_yc_resize_pass"]

@@ -1,4 +1,0 @@
-targets = ["epl3"]
-
-# Logging only: no hooks. Log C:\FENYKL.LOG (sdk/docs/logging.md); option caflog.tracker through the
-# configuration library (sdk/docs/config.md, import file C:\FENYKL.CFG).
