@@ -7,11 +7,16 @@
 > [!WARNING]
 > Most of the code and research in this repository was produced by a liberal application of frontier LLMs.
 >
-> But don't worry: I know a thing or two about cybersecurity, so the repository also features a dose of "hacker dude in pyjamas eating a hotdog over his keyboard" type of engineering. Pick your poison.
+> But don't worry: I know a thing or two about cybersecurity, so the repository also features a dose of "hacker dude in pyjamas eating a hotdog over his keyboard" type of engineering.
 >
-> You have been warned.
+> You have been warned. Pick your poison.
+
 
 fenykl is a project providing a firmware mod for early era Olympus Micro Four Thirds cameras. It consists of a small firmware patch that provides a mod loader to load a second stage binary from the SD card. 
+
+
+> [!WARNING]
+> This is an early stage experimental project. I do not believe it is ready for care-free users.
 
 ## Features
 
