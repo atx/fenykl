@@ -1,4 +1,5 @@
-/* The main plugin's R/B swap hook (sdk/projects/main/main_rbswap_hook.c) in the GDB simulator, with
+/* The main plugin's R/B swap hook (sdk/projects/main/main_rbswap_hook.c, bound here as main_img_hook.c
+   binds it in the plugin) in the GDB simulator, with
    img_exec.S (img_exec at its real address with its real entry bytes), ../hooks/sim_start.S and
    ../hooks/support.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
      1   install failed, or a pass changed the result or a callee-saved register / SP
@@ -62,6 +63,8 @@ static int saw(const int16_t *in, const int16_t *out)
 	return same(seen_mat, in) && same(mat(), out);
 }
 
+FENYKL_HOOK(img_exec, main_rbswap_exec);
+
 void plugin_main(uint32_t load_base, uint32_t image_size)
 {
 	volatile struct main_rbswap_hook_state *s = FENYKL_SHARED_PTR(main_rbswap_hk);
@@ -74,7 +77,7 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	for (unsigned i = 0; i < sizeof(struct main_rbswap_hook_state) / 4; i++)
 		words[i] = 0;
 
-	if (main_rbswap_hook_install() != 0)
+	if (fenykl_hook_install(&fenykl_hook_img_exec) != 0)
 		fail |= 1;
 
 	if (pass(7, 1, camera) != 0x2d00)

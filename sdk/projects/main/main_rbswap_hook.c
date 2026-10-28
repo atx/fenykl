@@ -1,8 +1,8 @@
 /*
- * main: the img_exec hook of the R/B swap, free of other firmware calls so that the
- * simulator test (tests/sim/main/) runs it on img_exec's real entry bytes. It writes P x M:
- * rows 0 and 2 of the camera's matrix exchanged. IMG_CTRL's layout and the pass classes are the
- * target's (body.h, img_exec).
+ * main: the R/B swap's part of the img_exec hook (main_img_hook.c), free of other firmware calls
+ * so that the simulator test (tests/sim/main/) runs it on img_exec's real entry bytes. It writes
+ * P x M: rows 0 and 2 of the camera's matrix exchanged. IMG_CTRL's layout and the pass classes
+ * are the target's (body.h, img_exec).
  *
  * img_exec is synchronous: the pass packs ashMat into the IPU shadow and has finished before it
  * returns [verified], so the restore cannot undo the swap. Only ucMode classes 0/1
@@ -32,7 +32,7 @@ static void main_rbswap_pxm(int16_t *out, const int16_t *m)
 	}
 }
 
-static unsigned int main_rbswap_exec(void *ctrl)
+unsigned int main_rbswap_exec(void *ctrl)
 {
 	volatile struct main_rbswap_hook_state *s = FENYKL_SHARED_PTR(main_rbswap_hk);
 	const volatile uint8_t *c = ctrl;
@@ -92,10 +92,4 @@ static unsigned int main_rbswap_exec(void *ctrl)
 	for (i = 0; i < FENYKL_IMG_MAT_N; i++)
 		m[i] = saved[i];
 	return r;
-}
-FENYKL_HOOK(img_exec, main_rbswap_exec);
-
-int main_rbswap_hook_install(void)
-{
-	return fenykl_hook_install(&fenykl_hook_img_exec);
 }

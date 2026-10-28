@@ -2,10 +2,12 @@
  * main: the polished daily-use plugin. Starts logging, configuration and the HUD library,
  * binds the hook (main_hooks.c), installs the settings page (sdk/lib/ui.c) and runs every
  * feature's tick, the Fn override (main_fn.c) and the R/B swap's log (main_rbswap.c)
- * from one task loop. Log: C:\FENYKL.LOG; options: C:\FENYKL.CF0/CF1. A target without the hud
- * or event capability gets neither the HUD nor the Fn override (MAIN_HUD).
+ * from one task loop; peaking (main_peak.c) has a task of its own. Log: C:\FENYKL.LOG;
+ * options: C:\FENYKL.CF0/CF1. A target without the hud or event capability gets neither the
+ * HUD nor the Fn override (MAIN_HUD).
  */
 #include "main.h"
+#include "main_peak.h"
 #include "main_rbswap.h"
 #if FENYKL_HAS_AFC
 #include <afc.h>
@@ -67,6 +69,7 @@ static void main_log_apply(const struct fenykl_cfg_opt *o, int32_t old)
 		fenykl_log_set_level(main_feats[i]->log, level);
 	main_fn_set_level(level);
 	main_rbswap_set_level(level);
+	main_peak_set_level(level);
 	if (o)
 		fenykl_log_info(&main_log, "log level %s (was %s)", main_log_names[main_log_level],
 				main_log_names[old]);
@@ -134,6 +137,22 @@ static bool main_start_hud(void)
 		return false;
 	}
 	return true;
+}
+#endif
+
+#if FENYKL_HAS_IMG_EXEC
+/* The img_exec hook carries the R/B swap and peaking. */
+static void main_start_img(void)
+{
+	int r = main_img_hook_install();
+
+	if (r) {
+		fenykl_log_err(&main_log, "hook img_exec install %d: no R/B swap, no peaking", r);
+		return;
+	}
+	fenykl_log_info(&main_log, "hook img_exec installed");
+	main_rbswap_start();
+	main_peak_start();
 }
 #endif
 
@@ -223,6 +242,7 @@ static void main_status(const struct fenykl_hud_stats *hs)
 			main_feats[i]->status();
 	main_fn_status();
 	main_rbswap_status();
+	main_peak_status();
 }
 
 void plugin_main(uint32_t load_base, uint32_t image_size)
@@ -234,7 +254,9 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	fenykl_log_info(&main_log, "main, load %08x size %x, log init %d", load_base,
 			image_size, r);
 	main_start_cfg();
-	main_rbswap_start();
+#if FENYKL_HAS_IMG_EXEC
+	main_start_img();
+#endif
 #if MAIN_HUD
 	main_st.drawing = main_start_hud();
 	if (main_st.drawing)

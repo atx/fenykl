@@ -451,4 +451,328 @@ static inline unsigned int fenykl_img_mode_class(unsigned int mode)
 }
 #endif
 
+#if FENYKL_HAS_PEAK
+/*
+ * Line pass: a second engine-2 pass on a copy of the live-view pass's IMG_CTRL. Output 2 (the
+ * face-detection output, Y8, 640x480 stock) whole at 320x240 and its area halved: the resizer
+ * low-passes the edge image. Overlay: img2 in format 3 placed by api_disp_Disp_LayerCustom
+ * (DISPLAY command 6); a flip writes the img2 shadow, address and enable bit under the update hold,
+ * as disp_img1_set_addr_locked does for img1.
+ */
+#define FENYKL_PEAK_CTRL_SIZE 0xC8u
+#define FENYKL_PEAK_LN_W 320u
+#define FENYKL_PEAK_LN_H 240u
+#define FENYKL_PEAK_LUM_BYTES (2u * 0x1E3C0u)	/* two RECFILE blocks */
+#define FENYKL_PEAK_LUT_N 256u
+#define FENYKL_PEAK_SHADOW_N 6u
+#define FENYKL_OVL_RED 0xFF0000FFu		/* R << 24 | G << 16 | B << 8 | alpha [camera] */
+
+#define FBODY_C_W1 0x10u		/* output 1: display, YUYV */
+#define FBODY_C_W1B 0x14u		/* output 2: face detection, Y8 */
+#define FBODY_C_W1C 0x18u
+#define FBODY_C_W1D 0x1Cu
+#define FBODY_C_W2 0x20u
+#define FBODY_C_FNRY 0x24u
+#define FBODY_C_FNRC 0x28u
+#define FBODY_C_LUM 0x40u
+#define FBODY_C_OUT_HW 0x8Eu		/* u16 output 1 whole, Vw at +2 */
+#define FBODY_C_OUT2_HW 0x92u		/* u16 output 2 whole, Vw at +2 */
+#define FBODY_C_AREA_HS 0x98u		/* u16 output 1 area start, Vs at +2 */
+#define FBODY_C_AREA_HW 0x9Cu		/* u16 output 1 area size, Vw at +2 */
+#define FBODY_C_AREA2_HS 0xA0u		/* u16 output 2 area start, Vs at +2 */
+#define FBODY_C_AREA2_HW 0xA4u		/* u16 output 2 area size, Vw at +2 */
+#define FBODY_C_LUM_HW 0xBAu		/* u8, Vw at +1 */
+#define FBODY_MODE_LV 7u
+#define FBODY_F_ALT_CTX 0x2u
+#define FBODY_F_2000 0x2000u
+#define FBODY_F_2PLANE 0x10000u
+#define FBODY_F_OUT2 0x4000000u
+#define FBODY_F_ART 0x20000000u
+#define FBODY_FD_W 640u
+#define FBODY_FD_H 480u
+#define FBODY_LUM_CELL 16u		/* assumed upper bound of bytes per LUM cell */
+#define FBODY_PHYS 0x3FFFFFFFu		/* the display reads back addresses without bits 30-31 */
+
+#define FBODY_X_LUT_A 0x5ACu
+#define FBODY_X_LUT_B 0x11C4u
+#define FBODY_X_EDGE_A 0x280u
+#define FBODY_X_LIM_A 0x284u
+#define FBODY_X_EDGE_B 0xF6Cu
+#define FBODY_X_LIM_B 0xF70u
+#define FBODY_EDGE_GAIN 255u
+#define FBODY_EDGE_LIM 0x03FF03FFu
+
+#define FBODY_EN_IMG2 0x10u
+#define FBODY_FMT_KEEP 0xFF0FCE00u	/* all but format, bits 12-13 and alpha */
+#define FBODY_FMT3 0x00301000u		/* format 3, bit 12 as disp_fmt_set sets it */
+#define FBODY_ALPHA_FULL 0x80u
+#define FBODY_DEV_TFT 1u
+#define FBODY_CAMTOP_CLIP 8u
+
+/* api_disp_Disp_LayerCustom's request: a layer and the parameter block */
+struct fbody_wh {
+	uint16_t w, h;
+};
+
+struct fbody_layer {
+	struct fbody_wh *from_area, *from_target, *from_coord, *to_target, *to_coord;
+	uint32_t addr[2];
+	uint8_t type;
+};
+
+struct fbody_custom {
+	void *bg;
+	struct fbody_layer *img[3], *osd[3];
+	uint32_t blink;
+	int8_t mixorder;
+	uint8_t color_range;
+};
+
+struct fenykl_ovl {
+	struct fbody_wh from_area, from_target, from_coord, to_target, to_coord;
+	struct fbody_layer layer;
+	struct fbody_custom custom;
+	uint32_t fmt, conv, alpha;	/* stock img2 setup */
+};
+
+static const uint16_t fbody_shadow_off[FENYKL_PEAK_SHADOW_N] = {
+	FBODY_X_LUT_A, FBODY_X_LUT_B, FBODY_X_EDGE_A, FBODY_X_LIM_A, FBODY_X_EDGE_B, FBODY_X_LIM_B,
+};
+
+static inline uint32_t fbody_c16(const void *c, uint32_t off)
+{
+	return *(const uint16_t *)((const uint8_t *)c + off);
+}
+
+static inline void fbody_set16(void *c, uint32_t off, uint32_t v)
+{
+	*(uint16_t *)((uint8_t *)c + off) = (uint16_t)v;
+}
+
+static inline uint32_t fbody_c8(const void *c, uint32_t off)
+{
+	return ((const uint8_t *)c)[off];
+}
+
+static inline bool fenykl_peak_lv_pass(const void *ctrl)
+{
+	uint32_t flag = fenykl_rd32((uint32_t)ctrl + FENYKL_IMG_CTRL_FLAG);
+	uint32_t need = FENYKL_IMG_FLAG_ENGINE2 | FBODY_F_OUT2;
+
+	if (fenykl_rd8((uint32_t)ctrl + FENYKL_IMG_CTRL_MODE) != FBODY_MODE_LV)
+		return false;
+	if ((flag & need) != need)
+		return false;
+	return !(flag & (FBODY_F_ALT_CTX | FBODY_F_2000 | FBODY_F_2PLANE | FBODY_F_ART));
+}
+
+static inline bool fenykl_peak_same_layout(const void *a, const void *b)
+{
+	static const uint8_t off16[] = {
+		FBODY_C_OUT_HW, FBODY_C_OUT_HW + 2, FBODY_C_OUT2_HW, FBODY_C_OUT2_HW + 2,
+		FBODY_C_AREA_HS, FBODY_C_AREA_HS + 2, FBODY_C_AREA_HW, FBODY_C_AREA_HW + 2,
+		FBODY_C_AREA2_HS, FBODY_C_AREA2_HS + 2, FBODY_C_AREA2_HW, FBODY_C_AREA2_HW + 2,
+	};
+
+	for (unsigned int i = 0; i < sizeof(off16); i++)
+		if (fbody_c16(a, off16[i]) != fbody_c16(b, off16[i]))
+			return false;
+	return fbody_c16(a, FBODY_C_LUM_HW) == fbody_c16(b, FBODY_C_LUM_HW);
+}
+
+static inline const char *fenykl_peak_layout(const void *ctrl, struct fenykl_peak_layout *l)
+{
+	uint32_t hw = fbody_c16(ctrl, FBODY_C_OUT_HW), vw = fbody_c16(ctrl, FBODY_C_OUT_HW + 2);
+	uint32_t a2w = fbody_c16(ctrl, FBODY_C_AREA2_HW), a2v = fbody_c16(ctrl, FBODY_C_AREA2_HW + 2);
+	uint32_t lum = fbody_c8(ctrl, FBODY_C_LUM_HW) * fbody_c8(ctrl, FBODY_C_LUM_HW + 1) *
+		       FBODY_LUM_CELL;
+
+	if (fbody_c16(ctrl, FBODY_C_OUT2_HW) != FBODY_FD_W ||
+	    fbody_c16(ctrl, FBODY_C_OUT2_HW + 2) != FBODY_FD_H)
+		return "output 2 not 640x480";
+	if (fbody_c16(ctrl, FBODY_C_AREA2_HS) || fbody_c16(ctrl, FBODY_C_AREA2_HS + 2) || !a2w ||
+	    !a2v || a2w > FBODY_FD_W || a2v > FBODY_FD_H || a2w % 8)
+		return "output 2 area not handled";
+	if (!hw || !vw || hw > 2048 || vw > 2048)
+		return "output 1 not handled";
+	if (lum > FENYKL_PEAK_LUM_BYTES)
+		return "LUM output too large";
+	*l = (struct fenykl_peak_layout){
+		.out1_bytes = hw * vw * 2,
+		.ln_w = (uint16_t)(a2w / 2), .ln_h = (uint16_t)(a2v / 2),
+		.x = (uint16_t)fbody_c16(ctrl, FBODY_C_AREA_HS),
+		.y = (uint16_t)fbody_c16(ctrl, FBODY_C_AREA_HS + 2),
+		.w = (uint16_t)fbody_c16(ctrl, FBODY_C_AREA_HW),
+		.h = (uint16_t)fbody_c16(ctrl, FBODY_C_AREA_HW + 2),
+	};
+	if (!l->w || !l->h)
+		return "output 1 area empty";
+	return NULL;
+}
+
+static inline void fenykl_peak_line_ctrl(void *copy, const struct fenykl_peak_layout *l,
+					 uint32_t out1, uint32_t line, uint32_t lum)
+{
+	uint32_t c = (uint32_t)copy;
+
+	fenykl_wr32(c + FBODY_C_W1, out1);
+	fenykl_wr32(c + FBODY_C_W1B, line);
+	fenykl_wr32(c + FBODY_C_W1C, 0);
+	fenykl_wr32(c + FBODY_C_W1D, 0);
+	fenykl_wr32(c + FBODY_C_W2, 0);
+	fenykl_wr32(c + FBODY_C_FNRY, 0);
+	fenykl_wr32(c + FBODY_C_FNRC, 0);
+	fenykl_wr32(c + FBODY_C_LUM, lum);
+	fbody_set16(copy, FBODY_C_OUT2_HW, FENYKL_PEAK_LN_W);
+	fbody_set16(copy, FBODY_C_OUT2_HW + 2, FENYKL_PEAK_LN_H);
+	fbody_set16(copy, FBODY_C_AREA2_HW, l->ln_w);
+	fbody_set16(copy, FBODY_C_AREA2_HW + 2, l->ln_h);
+}
+
+static inline uint32_t fenykl_peak_out1(const void *ctrl)
+{
+	return fenykl_rd32((uint32_t)ctrl + FBODY_C_W1) & FBODY_PHYS;
+}
+
+static inline void fenykl_peak_shadow_patch(uint32_t *saved, uint32_t coring,
+					    const uint16_t *lut_zero)
+{
+	uint32_t patch[FENYKL_PEAK_SHADOW_N];
+
+	for (unsigned int i = 0; i < FENYKL_PEAK_SHADOW_N; i++)
+		saved[i] = fenykl_rd32(FW_IMG_CTX_E2 + fbody_shadow_off[i]);
+	patch[0] = (uint32_t)lut_zero;
+	patch[1] = (uint32_t)lut_zero;
+	patch[2] = (saved[2] & 0xFFu) | coring << 8 | FBODY_EDGE_GAIN << 16;
+	patch[3] = FBODY_EDGE_LIM;
+	patch[4] = (saved[4] & 0xFFu) | coring << 8 | FBODY_EDGE_GAIN << 16;
+	patch[5] = FBODY_EDGE_LIM;
+	for (unsigned int i = 0; i < FENYKL_PEAK_SHADOW_N; i++)
+		fenykl_wr32(FW_IMG_CTX_E2 + fbody_shadow_off[i], patch[i]);
+	fenykl_wr8(FW_IMG_LUT_DIRTY, 1);
+	fenykl_wr8(FW_IMG_LUT_DIRTY + 2, 1);
+}
+
+/* The registers and LUT RAM are written: the next pass must load the stock LUTs again. */
+static inline void fenykl_peak_shadow_restore(const uint32_t *saved)
+{
+	for (unsigned int i = 0; i < FENYKL_PEAK_SHADOW_N; i++)
+		fenykl_wr32(FW_IMG_CTX_E2 + fbody_shadow_off[i], saved[i]);
+	fenykl_wr8(FW_IMG_LUT_DIRTY, 1);
+	fenykl_wr8(FW_IMG_LUT_DIRTY + 2, 1);
+}
+
+static inline bool fenykl_disp_rear(void)
+{
+	return fenykl_rd8(FW_DISP_DEV) == FBODY_DEV_TFT;
+}
+
+static inline bool fenykl_lv_magnified(void)
+{
+	return fenykl_rd8(FW_CAMTOP_STATE) == FBODY_CAMTOP_CLIP;
+}
+
+static inline bool fenykl_gui_still_lv(void)
+{
+	uint32_t s = fenykl_rd8(FW_GUI_STATE);
+
+	if (!fenykl_gui_live_view())
+		return false;
+	/* STILL_BASIC, STILL_HISTO, STILL_HS, STILL_OFF, STILL_SLOPE */
+	return s == 0x03u || s == 0x04u || s == 0x05u || s == 0x09u || s == 0x0Bu;
+}
+
+static inline uint32_t fenykl_disp_lv_latched(void)
+{
+	return fenykl_rd32(FW_DISP_IMG1_LATCHED) & FBODY_PHYS;
+}
+
+static inline bool fenykl_ovl_free(void)
+{
+	return fenykl_rd32(FW_DISP_IMG2_SHADOW) == 0;
+}
+
+/* disp_hw_hold: false holds the register update, true releases it. */
+static inline void fbody_disp_hold(bool release)
+{
+	uint32_t bits = fenykl_rd32(FW_DISP_HOLD_STATE) == 0x10u ? 0x20u : 0x60u;
+	uint32_t reg = release ? FW_DISP_UPD_RELEASE : FW_DISP_UPD_HOLD;
+
+	fenykl_wr32(reg, fenykl_rd32(reg) | bits);
+}
+
+/* DISPLAY command 6 for img2 alone; addr 0 takes it down. */
+static inline unsigned int fbody_ovl_custom(struct fenykl_ovl *o, uint32_t addr)
+{
+	o->layer = (struct fbody_layer){
+		.from_area = &o->from_area, .from_target = &o->from_target,
+		.from_coord = &o->from_coord, .to_target = &o->to_target, .to_coord = &o->to_coord,
+		.addr = { addr, 0 },
+	};
+	o->custom = (struct fbody_custom){
+		.img = { 0, &o->layer, 0 }, .blink = 0xFFFFFFFFu, .mixorder = -1,
+		.color_range = 0xFFu,
+	};
+	return fw_api_disp_Disp_LayerCustom(&o->custom);
+}
+
+static inline void fenykl_ovl_flip(uint32_t buf)
+{
+	fenykl_wr32(FW_DISP_IMG2_SHADOW, buf);
+	fbody_disp_hold(false);
+	fenykl_wr32(FW_DISP_IMG2_ADDR, buf);
+	fenykl_wr32(FW_DISP_LAYER_EN, fenykl_rd32(FW_DISP_LAYER_EN) | FBODY_EN_IMG2);
+	fbody_disp_hold(true);
+}
+
+static inline unsigned int fenykl_ovl_show(struct fenykl_ovl *o, uint32_t buf, uint16_t w,
+					   uint16_t h, uint16_t to_x, uint16_t to_y, uint16_t to_w,
+					   uint16_t to_h)
+{
+	uint32_t psw;
+	unsigned int r;
+
+	o->fmt = fenykl_rd32(FW_DISP_IMG2_FMT);
+	o->conv = fenykl_rd32(FW_DISP_IMG2_CONV);
+	o->alpha = fenykl_rd32(FW_DISP_IMG2_ALPHA);
+	fenykl_wr32(FW_DISP_IMG2_ALPHA, FBODY_ALPHA_FULL);
+	fenykl_wr32(FW_DISP_IMG2_FMT, (o->fmt & FBODY_FMT_KEEP) | FBODY_FMT3 | 2 * FBODY_ALPHA_FULL);
+	fenykl_wr32(FW_DISP_IMG2_CONV, 0);
+	o->from_area = (struct fbody_wh){ FENYKL_PEAK_LN_W, FENYKL_PEAK_LN_H };
+	o->from_target = (struct fbody_wh){ w, h };
+	o->from_coord = (struct fbody_wh){ 0, 0 };
+	o->to_target = (struct fbody_wh){ to_w, to_h };
+	o->to_coord = (struct fbody_wh){ to_x, to_y };
+	r = fbody_ovl_custom(o, buf);
+	if (r)
+		return r;
+	/* Enabled now: a DISPLAY commit may be far off while only the live view flips. */
+	psw = fenykl_irq_save();
+	fenykl_ovl_flip(buf);
+	fenykl_irq_restore(psw);
+	return 0;
+}
+
+static inline uint32_t fenykl_ovl_latched(void)
+{
+	return fenykl_rd32(FW_DISP_IMG2_LATCHED) & FBODY_PHYS;
+}
+
+static inline unsigned int fenykl_ovl_hide(struct fenykl_ovl *o)
+{
+	unsigned int r = fbody_ovl_custom(o, 0);
+	uint32_t psw = fenykl_irq_save();
+
+	fenykl_wr32(FW_DISP_IMG2_SHADOW, 0);
+	fbody_disp_hold(false);
+	fenykl_wr32(FW_DISP_LAYER_EN, fenykl_rd32(FW_DISP_LAYER_EN) & ~FBODY_EN_IMG2);
+	fenykl_wr32(FW_DISP_IMG2_ALPHA, o->alpha);
+	fenykl_wr32(FW_DISP_IMG2_FMT, o->fmt);
+	fenykl_wr32(FW_DISP_IMG2_CONV, o->conv);
+	fbody_disp_hold(true);
+	fenykl_irq_restore(psw);
+	return r;
+}
+#endif
+
 #endif

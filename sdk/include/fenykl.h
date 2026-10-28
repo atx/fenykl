@@ -47,6 +47,20 @@ static inline int fenykl_fclose(void *fp)
 /* fw_sprintf: at most 8 variadic words. */
 #define fenykl_sprintf(...) fw_sprintf(__VA_ARGS__)
 
+/* Task and interrupt helpers, implemented per target in fenykl_target.h (E-PL3 only so far). */
+/* Masks this core's interrupts; fenykl_irq_restore(the result) undoes it. */
+static inline uint32_t fenykl_irq_save(void);
+static inline void fenykl_irq_restore(uint32_t psw);
+/* A task running entry (FENYKL_TASK) at priority prio (lower runs first), stack from the heap: its
+   id, < 0 on failure. */
+static inline int fenykl_task_create(const char *name, void (*entry)(void), int prio,
+				     uint32_t stack_bytes);
+/* Waits for fenykl_task_wake or ticks (ms): 0 woken (also by a wakeup queued while running),
+   FENYKL_TASK_ETIMEOUT. fenykl_task_sleep does not take wakeups. */
+static inline int fenykl_task_wait(int ticks);
+/* Wakes task id from fenykl_task_wait, or queues it for its next wait; any task. 0 or < 0. */
+static inline int fenykl_task_wake(int id);
+
 /*
  * FW_TIMER_NOW: free-running 30-bit counter at 1 MHz (counts down; this counts up), both
  * cores. FENYKL_TIMER_ELAPSED is the wrap-safe difference.

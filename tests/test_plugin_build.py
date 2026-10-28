@@ -250,7 +250,7 @@ def test_fw_sprintf_with_eight_variadic_words_builds(tmp_path):
 # ---- capability tables and the shared main plugin ----
 
 MAIN_DIR = sdk.SDK / "projects" / "main"
-BODY_CAPABILITIES = ("afc", "lens", "batt", "shot", "img_exec")
+BODY_CAPABILITIES = ("afc", "lens", "batt", "shot", "img_exec", "peak")
 
 
 def test_main_names_no_firmware_symbol():
@@ -366,6 +366,7 @@ def test_main_builds_without_the_body_capabilities(tmp_path):
         "feat_fmeter",
         "act_shot",
         "main_rbswap_hk",
+        "main_peak_mark",
     ):
         assert f" {name}\n" not in symbols
     assert " fenykl_hook_img_exec\n" not in symbols

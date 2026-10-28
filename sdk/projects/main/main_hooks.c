@@ -1,7 +1,7 @@
 /*
  * main: the hook adapter. FENYKL_HOOK_* and the originals are generated from plugin.toml, so
- * the hooks are bound here and only call library entry points. Exception: img_exec is bound in
- * main_rbswap_hook.c, which the simulator test runs on its own.
+ * the hooks are bound here and only call library entry points. Exceptions: img_exec is bound in
+ * main_img_hook.c (the R/B swap and peaking), img_hw_start in main_peak.c.
  */
 #include "main.h"
 

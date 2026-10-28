@@ -29,6 +29,7 @@ HUD's battery percentage (runs on the camera; no Fn override) and `hello` on the
 | event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`); **on the camera** through `projects/main`, counters clean (`docs/key.md` 4) |
 | USB boot skip (`fenykl_usb_attached`, power-on factor 0x60551630 == 0x400) | **works on the camera**: a cable-started boot skips the plugin, a power-button boot runs it |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | **on the camera**: the gate closed on a cable plugged into a running E-PL3; reopening after the USB session corrupted the FAT (2026-10-19), so the gate now stays closed until power-off once a cable was seen; that rule: simulator (`tests/test_log_sim.py`, `tests/test_cfg_sim.py`) |
+| E-PL3 focus peaking (`peak` group in `arch/epl3/fenykl_body.h`, `projects/main`) | **works on the camera** in `projects/main`, tried by hand without a log check: red edges over the still live view, slight lag. Known: the overlay can stop updating after MF assist is left with a half press; no peaking in the MF assist (magnified) view |
 | E-M10 II HUD (`lib/hud.c` + `lib/hud_em10ii.c`: INFO-screen property, LCD/EVF region, palette pick below 0x80, camera font and live-view images) | simulator (`tests/test_hud_sim.py`: text with the E-M10 II font and images, the visibility predicate, output device, palette pick); camera (a probe, 2026-10: drawing on LCD and EVF, INFO values, index 0x00 transparent in the EVF); `projects/main`'s battery percentage (2026-10-23: on the basic and histogram INFO screens, hidden in MENU, the Super Control Panel and playback) |
 | E-M10 II own contrast client (`lib/afc.c` with `arch/em10ii/fenykl_body.h`) and `projects/main`'s focus meter | **works on the camera** (2026-10-26): the read-only meter in S-AF and C-AF; in MF 4 attaches, callbacks in an ISR at 31 or 64 frames/s, every stop done, S-AF locking after MF, no error, no call on another core. Not run: a half press while attached |
 | E-M10 II hooks (`arch/em10ii/hooks.c`, CPU0 I-cache invalidate) | simulator (`tests/test_sim.py`, `hooks_em10ii`); the I-cache invalidate verified on the camera with a probe (2026-10); a hook probe installed its hooks on the camera (2026-10-19) and removed them cleanly, CPU0 only (2026-10-20) |
@@ -104,6 +105,7 @@ carries on as stock. `fenykl.h` provides:
 | `fenykl_rd8/16/32(a)`, `fenykl_wr8/16/32(a, v)`, `fenykl_dram_ptr(a, align)` | volatile reads and writes of firmware memory; `fenykl_dram_ptr`: `a` lies in the cached DRAM window (`firmware.toml` `dram_start`..`dram_end`) or its uncached alias and is aligned |
 | `FENYKL_TIMER_NOW()`, `FENYKL_TIMER_ELAPSED(from, to)` | the free-running 1 MHz timer (30 bit, both cores) and the wrap-safe difference of two readings |
 | `fenykl_task_sleep`, `fenykl_fopen`, `fenykl_fwrite`, `fenykl_fclose`, `fenykl_sprintf`, `FENYKL_ORIG(name)` | the same firmware services under SDK names (every target has them), for plugins that name no `fw_` symbol (Body API) |
+| `fenykl_irq_save`, `_restore`, `fenykl_task_create`, `_wait`, `_wake` | task and interrupt helpers (E-PL3 so far; `fenykl_task_wait` returns early on `fenykl_task_wake`, `fenykl_task_sleep` does not) |
 | `memcpy`, `memmove`, `memset`, `memcmp` | linked in (GCC emits calls to them even with `-ffreestanding`) |
 
 There is no libc: no `printf`, `malloc` comes from the firmware (`fw_malloc`/`fw_free`), formatted text
@@ -230,6 +232,7 @@ cpu1_unproven = ["img_exec"]
 | `afc` | also `fenykl_af_mf`, `_half`, `_target_area`, `_all_targets`, `_grid`; the contrast driver protocol for `lib/afc.c`: `fenykl_cnt_*`, `FENYKL_CNT_*` | `take_focus`, `trg_snapshot`, props 0x88B2/0x84D1, `take_fcs_af_mode2fcs`, fcs's contrast context and DMA buffer, the driver's client slots (E-M10 II: `trg_half`, the `fcs_*` grid words, fcs's fc buffer, the driver's client list `cnt_unit`) |
 | `shot` | `fenykl_disp_*`, `fenykl_osd_*`, `fenykl_frames_*`, `fenykl_recfile_*`, `fenykl_dram`, `fenykl_cached`, `FENYKL_DISP_*`, `FENYKL_OSD_*`, `FENYKL_FRAMES_*` | `mov_img1_shadow`, `mov_disp_flip_tbl`, display registers, `disp_img3_*`, `frame_palette`, `gpi_*`, `osd_shadow`, `osd_palettes`, `recfile_*` |
 | `img_exec` | `FENYKL_IMG_*` (IMG_CTRL, IMG_PARAM offsets), `fenykl_img_mode_class` | img_mode_class's table |
+| `peak` | `fenykl_peak_*` (line pass after a live-view pass, its shadow patch), `fenykl_ovl_*` (an alpha overlay layer), `fenykl_disp_rear`, `fenykl_lv_magnified`, `fenykl_gui_still_lv`, `fenykl_disp_lv_latched` | IMG_CTRL output offsets, `img_ctx_e2`, `img_lut_dirty`, `disp_img2_*`, `disp_hold_state`, `disp_upd_*`, `disp_layer_en`, `api_disp_Disp_LayerCustom`, `camtop_state`, `disp_dev`, `tslp_tsk`, `OlyTaskWakeup` |
 
 `projects/main` is written this way (`tests/test_plugin_build.py` fails on any `fw_`/`FW_` name in it);
 `hello` and the bird detector keep using the firmware directly. The test sees main's own files only: SDK headers main
@@ -237,7 +240,7 @@ includes still carry target values (`fenykl.h`'s `FENYKL_TIMER_NOW` reads `FW_TI
 `FENYKL_HUD_*` canvas, states and palette indices are per camera). The `afc` capability covers both
 the own contrast client (`lib/afc.c`, with the body's request, contrast_setting, event, DMA buffer,
 foreign-client and live-view layouts: `fenykl_cnt_*`) and the firmware client's reads (`fenykl_af_*`);
-the E-PL3 and the E-M10 II implement it. The `shot` and `img_exec` groups mirror the E-PL3's
+the E-PL3 and the E-M10 II implement it. The `shot`, `img_exec` and `peak` groups mirror the E-PL3's
 encodings and will be reshaped when a second camera implements them.
 
 ### Getting output: write a file

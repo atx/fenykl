@@ -28,18 +28,17 @@ struct main_rbswap_hook_state {
 
 extern struct main_rbswap_hook_state main_rbswap_hk;
 
-/* main_rbswap_hook.c, plugin task: 0 = patched (fenykl_hook_install) */
-int main_rbswap_hook_install(void);
+/* main_rbswap_hook.c: img_exec with the swap (main_img_hook.c); any task, any core */
+unsigned int main_rbswap_exec(void *ctrl);
 
 /* main_rbswap.c, plugin task */
-int main_rbswap_start(void);
+void main_rbswap_start(void);
 void main_rbswap_tick(void);
 void main_rbswap_set_level(unsigned int level);
 void main_rbswap_status(void);
 #else
-static inline int main_rbswap_start(void)
+static inline void main_rbswap_start(void)
 {
-	return 0;
 }
 
 static inline void main_rbswap_tick(void)

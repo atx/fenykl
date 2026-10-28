@@ -28,6 +28,8 @@ firmware functions placed at their real firmware addresses. Every C test program
 - main_rbswap: the main plugin's R/B swap hook (sdk/projects/main/main_rbswap_hook.c) on img_exec's
   real entry bytes: option off, P x M on live view and stills, the class and identity filters, the
   restore and a matrix kept when it changed during the pass, no IMG_PARAM, the counters.
+- main_peak_mark: the main plugin's peaking mark (sdk/projects/main/main_peak_mark.c) against a
+  per-pixel neighbour count: random images over widths and thresholds, patterns, the cap.
 - shot: the screenshot library's pixel work (sdk/lib/shot_pix.c): YCbCr to RGB against a BT.601
   reference, palettes, live view placement, alpha blending, 4-bpp nibble order, layer order, the
   face/AF frame layer (scaling, transparent indices, stacking), the 16:9 stretch and the PPM header.
@@ -242,6 +244,14 @@ PROGRAMS = {
         "mocked": ["img_exec", *SUPPORT],
         "hooks": ["img_exec"],
         "cpu1_unproven": ["img_exec"],
+    },
+    "main_peak_mark": {
+        "sources": [
+            SIM / "main" / "test_main_peak_mark.c",
+            PROJECTS / "main" / "main_peak_mark.c",
+            SIM / "hooks" / "sim_start.S",
+        ],
+        "memory": [DRAM, POWERON],
     },
     "shot": {
         "sources": [

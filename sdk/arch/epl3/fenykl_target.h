@@ -31,6 +31,41 @@ static inline void fenykl_dcache_flush(void)
 	fw_dcache_purge_all_irqsafe();
 }
 
+#define FENYKL_TASK_ETIMEOUT (-50)
+
+static inline uint32_t fenykl_irq_save(void)
+{
+	uint32_t psw = fw_psw_get();
+
+	fw_irq_disable_all();
+	return psw;
+}
+
+static inline void fenykl_irq_restore(uint32_t psw)
+{
+	fw_irq_mask_restore(psw);
+}
+
+static inline int fenykl_task_create(const char *name, void (*entry)(void), int prio,
+				     uint32_t stack_bytes)
+{
+	void *stack = fw_malloc(stack_bytes);
+
+	if (!stack)
+		return -1;
+	return fw_OlyTaskCreate(name, entry, 2, 0, prio, stack_bytes, stack);
+}
+
+static inline int fenykl_task_wait(int ticks)
+{
+	return fw_tslp_tsk(ticks);
+}
+
+static inline int fenykl_task_wake(int id)
+{
+	return fw_OlyTaskWakeup(id);
+}
+
 /* Descriptor of a slot (fenykl_slot_<name>, generated from firmware.toml by fwapi.slot_asm).
    Replaced with FENYKL_SLOT_REPLACE, restored with fenykl_slot_restore (lib/slots.c). */
 struct fenykl_slot {

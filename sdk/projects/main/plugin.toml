@@ -24,9 +24,16 @@ sources = ["feat_batt.c"]
 [capabilities.shot]
 sources = ["act_shot.c"]
 
-# The R/B swap hooks img_exec (main_rbswap_hook.c). It reaches CPU1 only through IMG_CALLIMG, which
-# has no client in v1.6; the hook passes CPU1 passes through unchanged and counts them.
+# The R/B swap and peaking hook img_exec (main_img_hook.c). It reaches CPU1 only through IMG_CALLIMG,
+# which has no client in v1.6; the hook passes CPU1 passes through unchanged and counts them.
 [capabilities.img_exec]
-sources = ["main_rbswap.c", "main_rbswap_hook.c"]
+sources = ["main_img_hook.c", "main_rbswap.c", "main_rbswap_hook.c"]
 hooks = ["img_exec"]
 cpu1_unproven = ["img_exec"]
+
+# Peaking (main_peak.c) follows a live-view pass in the img_exec hook with a line pass, whose shadow
+# the img_hw_start hook patches; both pass CPU1 calls through untouched.
+[capabilities.peak]
+sources = ["main_peak.c", "main_peak_mark.c"]
+hooks = ["img_hw_start"]
+cpu1_unproven = ["img_hw_start"]

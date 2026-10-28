@@ -1,6 +1,6 @@
 /*
- * main: option "R/B swap", the plugin task's side. The img_exec hook (main_rbswap_hook.c)
- * is installed at start whatever the option and passes through while it is off; the option only
+ * main: option "R/B swap", the plugin task's side. The img_exec hook (main_img_hook.c) is
+ * installed at start whatever the option and passes through while it is off; the option only
  * sets the hook's enable word. Each swapped still logs its input matrix, so the camera run can
  * check the coefficient range.
  */
@@ -19,7 +19,7 @@ static FENYKL_LOG_MODULE(main_rbswap_log, "rbswap", FENYKL_LOG_INFO);
 
 static void main_rbswap_apply(const struct fenykl_cfg_opt *o, int32_t old);
 
-static FENYKL_CFG_GROUP(main_grp_image, "Image", 3);
+FENYKL_CFG_GROUP(main_grp_image, "Image", 3);
 FENYKL_CFG_BOOL(main_rbswap_on, "main.rbswap.on", "R/B swap", &main_grp_image, 0,
 		.on_change = main_rbswap_apply);
 
@@ -31,22 +31,15 @@ static void main_rbswap_apply(const struct fenykl_cfg_opt *o, int32_t old)
 	fenykl_log_info(&main_rbswap_log, "R/B swap %s", main_rbswap_on ? "on" : "off");
 }
 
-int main_rbswap_start(void)
+/* After the img_exec hook is installed. */
+void main_rbswap_start(void)
 {
 	volatile struct main_rbswap_hook_state *s = FENYKL_SHARED_PTR(main_rbswap_hk);
-	int r;
 
 	s->enable = main_rbswap_on != 0;
-	r = main_rbswap_hook_install();
-	if (r) {
-		fenykl_log_err(&main_rbswap_log, "hook img_exec install %d: no R/B swap", r);
-		return r;
-	}
 	main_rbswap_st.installed = true;
 	main_rbswap_st.m_seq = s->m_seq;
-	fenykl_log_info(&main_rbswap_log, "hook img_exec installed, R/B swap %s",
-			main_rbswap_on ? "on" : "off");
-	return 0;
+	fenykl_log_info(&main_rbswap_log, "R/B swap %s", main_rbswap_on ? "on" : "off");
 }
 
 /*
