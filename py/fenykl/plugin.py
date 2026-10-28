@@ -28,6 +28,7 @@ LIB_CAPABILITIES = {
     "ui.c": "ui",
     "ui_epl3.c": "ui",
     "ui_em10ii.c": "ui",
+    "precap_em10ii.c": "precap",
 }
 # Keys of a plugin.toml [capabilities.<name>] table.
 CAPABILITY_KEYS = ("sources", "hooks", "cpu1_unproven")

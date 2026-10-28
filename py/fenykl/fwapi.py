@@ -601,7 +601,7 @@ def select(
     the plugin's own, target.toml `sdk_cpu1_unproven` for the SDK's."""
     hints = {
         "hook": "; appevent_post: the event layer, sdk/docs/event.md",
-        "slot": "; the E-M10 II settings page, sdk/docs/ui.md",
+        "slot": "; the E-M10 II settings page and pre-capture, sdk/docs/ui.md, precap.md",
     }
     for kind, names, sdk_names in (
         ("hook", hooks, sdk_hooks),

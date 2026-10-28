@@ -1,8 +1,9 @@
 # Olympus OM-D E-M10 Mark II with the fenykl-loader firmware. Plugin runtime: start, string, log and
 # cfg libraries, the settings page (lib/ui.c + ui_em10ii.c), the HUD library (lib/hud.c +
 # hud_em10ii.c), the body API's batt and afc groups (fenykl_body.h), the own contrast client
-# (lib/afc.c), data slots (lib/slots.c), code hooks (hooks.c, CPU0 I-cache only) and the event layer
-# (lib/event.c); no CPU1 runtime or key layer (its key map is the E-PL3's) yet.
+# (lib/afc.c), pre-capture (lib/precap_em10ii.c), data slots (lib/slots.c), code hooks (hooks.c,
+# CPU0 I-cache only) and the event layer (lib/event.c); no CPU1 runtime or key layer (its key map is
+# the E-PL3's) yet.
 model = "E-M10II"                      # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
 toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
 cflags = "toolchain/cflags"            # relative to the fenykl checkout
@@ -14,15 +15,23 @@ max_size = 0x67000                     # bytes the loader reads; the loader stac
 # appevent_post: the event layer (sdk/lib/event.c, docs/event.md).
 sdk_hooks = ["appevent_post"]
 # Slots the SDK binds itself, generated for every plugin; plugin.toml may not list them. The settings
-# page (lib/ui_em10ii.c) takes over the Eye-Fi row of Custom menu tab K with them.
-sdk_slots = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
+# page (lib/ui_em10ii.c) takes over the Eye-Fi row of Custom menu tab K with the first three;
+# pre-capture (lib/precap_em10ii.c) wraps the Base sequence's frame done, take fail and take end.
+sdk_slots = [
+  "mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn",
+  "seq_frame_done", "seq_take_fail", "seq_take_end",
+]
 # The SDK's hooks and slots whose CPU1 scope is unproven, acknowledged (as a plugin's cpu1_unproven).
-# Slots: CPU0 only by static analysis; the settings page counts calls on other cores and touches
-# nothing. appevent_post: two Wi-Fi tasks post from CPU1; the event layer counts such an entry in its
-# own uncached line and calls the stock function, nothing else.
-sdk_cpu1_unproven = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn", "appevent_post"]
-# SDK features of this camera (see epl3/target.toml).
-capabilities = ["event", "ui", "hud", "batt", "afc"]
+# Slots: CPU0 only by static analysis; the settings page and pre-capture count calls on other cores
+# and only pass them to the stock function. appevent_post: two Wi-Fi tasks post from CPU1; the event
+# layer counts such an entry in its own uncached line and calls the stock function, nothing else.
+sdk_cpu1_unproven = [
+  "mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn",
+  "seq_frame_done", "seq_take_fail", "seq_take_end", "appevent_post",
+]
+# SDK features of this camera (see epl3/target.toml). precap: pre-capture in silent sequential H
+# (lib/precap_em10ii.c), which needs the fully electronic shutter.
+capabilities = ["event", "ui", "hud", "batt", "afc", "precap"]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]
