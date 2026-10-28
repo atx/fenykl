@@ -99,6 +99,14 @@
 #define MAIN_LAYOUT_FMETER_CELL_W 8
 #define MAIN_LAYOUT_FMETER_CELL_H 9
 
+/*
+ * Pre-capture tag ("PRE", "PRE!"): one LV line on the battery's x, 3 rows below the focus meter
+ * (y 40..48). Not yet checked against this body's stock items.
+ */
+#define MAIN_LAYOUT_PRECAP_X MAIN_LAYOUT_BATT_X
+#define MAIN_LAYOUT_PRECAP_Y 52
+#define MAIN_LAYOUT_PRECAP_W 64
+
 #elif MAIN_HUD
 #error "main: no layout for this target"
 #endif

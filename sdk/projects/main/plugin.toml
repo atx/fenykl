@@ -21,6 +21,9 @@ sources = ["feat_fmeter.c"]
 [capabilities.batt]
 sources = ["feat_batt.c"]
 
+[capabilities.precap]
+sources = ["feat_precap.c"]
+
 [capabilities.shot]
 sources = ["act_shot.c"]
 

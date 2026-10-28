@@ -29,6 +29,7 @@ extern const struct main_feat feat_focus;
 extern const struct main_feat feat_dof;
 extern const struct main_feat feat_fmeter;
 extern const struct main_feat feat_batt;
+extern const struct main_feat feat_precap;
 
 /* feat_focus.c, for feat_dof.c */
 uint32_t feat_focus_read(void);
@@ -81,5 +82,9 @@ extern const struct fenykl_cfg_group main_grp_image;
 /* main_hooks.c */
 int main_hooks_install(void);
 void main_hooks_draw_off(void);
+#if FENYKL_HAS_PRECAP
+/* cw_updateDisplay calls while a pre-capture burst runs */
+uint32_t main_hooks_precap_calls(void);
+#endif
 
 #endif

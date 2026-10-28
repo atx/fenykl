@@ -32,6 +32,9 @@ static const struct main_feat *const main_feats[] = {
 #if FENYKL_HAS_BATT
 	&feat_batt,
 #endif
+#if FENYKL_HAS_PRECAP
+	&feat_precap,
+#endif
 	NULL,
 };
 

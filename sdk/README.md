@@ -32,7 +32,7 @@ HUD's battery percentage (runs on the camera; no Fn override) and `hello` on the
 | E-PL3 focus peaking (`peak` group in `arch/epl3/fenykl_body.h`, `projects/main`) | **works on the camera** in `projects/main`, tried by hand without a log check: red edges over the still live view, slight lag. Known: the overlay can stop updating after MF assist is left with a half press; no peaking in the MF assist (magnified) view |
 | E-M10 II HUD (`lib/hud.c` + `lib/hud_em10ii.c`: INFO-screen property, LCD/EVF region, palette pick below 0x80, camera font and live-view images) | simulator (`tests/test_hud_sim.py`: text with the E-M10 II font and images, the visibility predicate, output device, palette pick); camera (a probe, 2026-10: drawing on LCD and EVF, INFO values, index 0x00 transparent in the EVF); `projects/main`'s battery percentage (2026-10-23: on the basic and histogram INFO screens, hidden in MENU, the Super Control Panel and playback) |
 | E-M10 II own contrast client (`lib/afc.c` with `arch/em10ii/fenykl_body.h`) and `projects/main`'s focus meter | **works on the camera** (2026-10-26): the read-only meter in S-AF and C-AF; in MF 4 attaches, callbacks in an ISR at 31 or 64 frames/s, every stop done, S-AF locking after MF, no error, no call on another core. Not run: a half press while attached |
-| E-M10 II pre-capture (`lib/precap_em10ii.c`, `precap` capability) and `projects/main`'s option and `PRE` tag | builds; the mechanism (injected press, hold 6, commit, cancel, fail-safes) **works on the camera** in a prototype plugin (2026-10-28: 7 silent H bursts, 46 files matching the log); the library form, its full settings gate and slot restore not run yet |
+| E-M10 II pre-capture (`lib/precap_em10ii.c`, `precap` capability) and `projects/main`'s option and `PRE` tag | builds; the mechanism (injected press, hold 6, commit, cancel, fail-safes) **works on the camera** in a prototype plugin (2026-10-28: 7 silent H bursts, 46 files matching the log); the library form in `projects/main` tried by hand (2026-10-28), without a log check |
 | E-M10 II hooks (`arch/em10ii/hooks.c`, CPU0 I-cache invalidate) | simulator (`tests/test_sim.py`, `hooks_em10ii`); the I-cache invalidate verified on the camera with a probe (2026-10); a hook probe installed its hooks on the camera (2026-10-19) and removed them cleanly, CPU0 only (2026-10-20) |
 
 ## Development loop
@@ -779,8 +779,8 @@ payload. Loaders older than this format reject `FNL2` files as well.
    CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.
    `event`, `key`, `hud`, `ui`, `afc`, `shot` and `precap` select library files (`LIB_CAPABILITIES`
    in `py/fenykl/plugin.py`): without them `lib/event.c`, `key.c` (its key map is the E-PL3's),
-   `hud.c`, `ui.c`, `afc.c` + `afc_sm.c`, `shot.c` + `shot_pix.c`, `precap_em10ii.c` are not built. `ui` also needs the
-   camera's page, `lib/ui_<camera>.c`.
+   `hud.c`, `ui.c`, `afc.c` + `afc_sm.c`, `shot.c` + `shot_pix.c`, `precap_em10ii.c` are not
+   built. `ui` also needs the camera's page, `lib/ui_<camera>.c`.
    `afc`, `lens`, `batt`, `shot` and `img_exec` are groups of `include/body.h`: list one once
    `arch/<camera>/fenykl_body.h` implements it (the file must exist, with the GUI predicates, before
    a plugin including `body.h` builds). Plugin files under `[capabilities.<name>]` follow them.

@@ -9,8 +9,8 @@ Status: the mechanism (key control, hold, commit, cancel, fail-safes) is camera-
 plugin on the E-M10 II v1.4 (2026-10-28, silent seq H JPEG, S-AF, 1/1000 s): 7 bursts, 46 files, the
 file count matching the log exactly, consecutive numbers, all files distinct, no fail-safe. This
 library is that prototype without its arming window, burst length limit and diagnostics, with the full
-settings gate and the slot restore below. Not run on the camera yet in this form; neither RAW,
-RAW+JPEG, MF nor the gate's individual props were tried.
+settings gate and the slot restore below. In this form only tried by hand on the camera, without a
+log check; neither RAW, RAW+JPEG, MF nor the gate's individual props were checked.
 
 ## 1. What it does
 
