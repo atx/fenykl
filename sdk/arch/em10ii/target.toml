@@ -1,8 +1,8 @@
 # Olympus OM-D E-M10 Mark II with the fenykl-loader firmware. Plugin runtime: start, string, log and
 # cfg libraries, the settings page (lib/ui.c + ui_em10ii.c), the HUD library (lib/hud.c +
-# hud_em10ii.c), the body API's batt group (fenykl_body.h), data slots (lib/slots.c), code hooks
-# (hooks.c, CPU0 I-cache only) and the event layer (lib/event.c); no CPU1 runtime, key layer (its key
-# map is the E-PL3's) or AF control yet.
+# hud_em10ii.c), the body API's batt and afc groups (fenykl_body.h), the own contrast client
+# (lib/afc.c), data slots (lib/slots.c), code hooks (hooks.c, CPU0 I-cache only) and the event layer
+# (lib/event.c); no CPU1 runtime or key layer (its key map is the E-PL3's) yet.
 model = "E-M10II"                      # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
 toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
 cflags = "toolchain/cflags"            # relative to the fenykl checkout
@@ -22,7 +22,7 @@ sdk_slots = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
 # own uncached line and calls the stock function, nothing else.
 sdk_cpu1_unproven = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn", "appevent_post"]
 # SDK features of this camera (see epl3/target.toml).
-capabilities = ["event", "ui", "hud", "batt"]
+capabilities = ["event", "ui", "hud", "batt", "afc"]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]

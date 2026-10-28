@@ -30,6 +30,7 @@ HUD's battery percentage (runs on the camera; no Fn override) and `hello` on the
 | USB boot skip (`fenykl_usb_attached`, power-on factor 0x60551630 == 0x400) | **works on the camera**: a cable-started boot skips the plugin, a power-button boot runs it |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | **on the camera**: the gate closed on a cable plugged into a running E-PL3; reopening after the USB session corrupted the FAT (2026-10-19), so the gate now stays closed until power-off once a cable was seen; that rule: simulator (`tests/test_log_sim.py`, `tests/test_cfg_sim.py`) |
 | E-M10 II HUD (`lib/hud.c` + `lib/hud_em10ii.c`: INFO-screen property, LCD/EVF region, palette pick below 0x80, camera font and live-view images) | simulator (`tests/test_hud_sim.py`: text with the E-M10 II font and images, the visibility predicate, output device, palette pick); camera (a probe, 2026-10: drawing on LCD and EVF, INFO values, index 0x00 transparent in the EVF); `projects/main`'s battery percentage (2026-10-23: on the basic and histogram INFO screens, hidden in MENU, the Super Control Panel and playback) |
+| E-M10 II own contrast client (`lib/afc.c` with `arch/em10ii/fenykl_body.h`) and `projects/main`'s focus meter | **works on the camera** (2026-10-26): the read-only meter in S-AF and C-AF; in MF 4 attaches, callbacks in an ISR at 31 or 64 frames/s, every stop done, S-AF locking after MF, no error, no call on another core. Not run: a half press while attached |
 | E-M10 II hooks (`arch/em10ii/hooks.c`, CPU0 I-cache invalidate) | simulator (`tests/test_sim.py`, `hooks_em10ii`); the I-cache invalidate verified on the camera with a probe (2026-10); a hook probe installed its hooks on the camera (2026-10-19) and removed them cleanly, CPU0 only (2026-10-20) |
 
 ## Development loop
@@ -226,7 +227,7 @@ cpu1_unproven = ["img_exec"]
 | (all) | `fenykl_gui_live_view`, `fenykl_gui_playback` | `gui_super` |
 | `lens` | `fenykl_lens_attached`, `_focus_mm`, `_focal_mm`, `_av`, `_iris_av` | `lens_attached`, `lens_obj_dst`, `lens_focal_length_now`, prop 0xA03A, `av_effect` |
 | `batt` | `fenykl_batt_read`, `fenykl_power_src`, `fenykl_power_src_batt` | `bchk_ad_read` under semaphore 5, `power_src(_check)` (E-M10 II: `batt_vbat`, the 1 Hz check's stored value, and `power_src(_check)`) |
-| `afc` | also `fenykl_af_mf`, `_half`, `_target_area`, `_all_targets`, `_grid` | `take_focus`, `trg_snapshot`, props 0x88B2/0x84D1, `take_fcs_af_mode2fcs`, fcs's contrast context and DMA buffer |
+| `afc` | also `fenykl_af_mf`, `_half`, `_target_area`, `_all_targets`, `_grid`; the contrast driver protocol for `lib/afc.c`: `fenykl_cnt_*`, `FENYKL_CNT_*` | `take_focus`, `trg_snapshot`, props 0x88B2/0x84D1, `take_fcs_af_mode2fcs`, fcs's contrast context and DMA buffer, the driver's client slots (E-M10 II: `trg_half`, the `fcs_*` grid words, fcs's fc buffer, the driver's client list `cnt_unit`) |
 | `shot` | `fenykl_disp_*`, `fenykl_osd_*`, `fenykl_frames_*`, `fenykl_recfile_*`, `fenykl_dram`, `fenykl_cached`, `FENYKL_DISP_*`, `FENYKL_OSD_*`, `FENYKL_FRAMES_*` | `mov_img1_shadow`, `mov_disp_flip_tbl`, display registers, `disp_img3_*`, `frame_palette`, `gpi_*`, `osd_shadow`, `osd_palettes`, `recfile_*` |
 | `img_exec` | `FENYKL_IMG_*` (IMG_CTRL, IMG_PARAM offsets), `fenykl_img_mode_class` | img_mode_class's table |
 
@@ -234,9 +235,10 @@ cpu1_unproven = ["img_exec"]
 `hello` and the bird detector keep using the firmware directly. The test sees main's own files only: SDK headers main
 includes still carry target values (`fenykl.h`'s `FENYKL_TIMER_NOW` reads `FW_TIMER_NOW`, `hud.h`'s
 `FENYKL_HUD_*` canvas, states and palette indices are per camera). The `afc` capability covers both
-the own contrast client (`lib/afc.c`) and the firmware client's reads (`fenykl_af_*`). The `shot`,
-`img_exec` and AF grid groups mirror the E-PL3's encodings and will be reshaped when a second camera
-implements them.
+the own contrast client (`lib/afc.c`, with the body's request, contrast_setting, event, DMA buffer,
+foreign-client and live-view layouts: `fenykl_cnt_*`) and the firmware client's reads (`fenykl_af_*`);
+the E-PL3 and the E-M10 II implement it. The `shot` and `img_exec` groups mirror the E-PL3's
+encodings and will be reshaped when a second camera implements them.
 
 ### Getting output: write a file
 
@@ -496,6 +498,8 @@ Declared on the E-M10 II:
 |---|---|---|
 | `mode_cond` / slot `mode_cond_eyefi` 0x60AFF404 | `calls`, stock 0x6071DDE0 | `unsigned cond(void)`: mode-check condition 113 of setting 0x193 (Eye-Fi); 0 = allowed |
 | `menu_row` / slots `eyefi_ok_fn` 0x60D2F5A4, `eyefi_right_fn` 0x60D2F484 | `calls`, empty | `int fn(void *actuator)`: row callback of the Eye-Fi row's OK/RIGHT dispatch records in Custom menu tab K; 4 = continue with the stock pop-up |
+| `cam_cnt_frame_cb` | `calls` | as on the E-PL3: request +0x4C, events masked by +0x6C (1 frame start, 2 data complete, 0x200 error; `lib/afc.c`) |
+| `cam_req_done_cb` | `calls` | as on the E-PL3: request +0x38 |
 
 **SDK slots.** These three slots are the settings page's (`lib/ui_em10ii.c`): `target.toml` lists
 them in `sdk_slots`, the generator emits their descriptors for every plugin, and a `plugin.toml` that

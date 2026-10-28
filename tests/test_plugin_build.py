@@ -54,6 +54,8 @@ def test_feature_libraries_follow_the_target_capabilities():
         "hud_em10ii.c",
     }
     assert names("em10ii") == {
+        "afc.c",
+        "afc_sm.c",
         "card.c",
         "cfg.c",
         "event.c",
@@ -329,6 +331,20 @@ def test_capability_tables_are_checked(tmp_path, tables, error):
     config, sources = capability_plugin(tmp_path, tables)
     with pytest.raises(plugin.BuildError, match=re.escape(error)):
         plugin.select_capabilities(config, tmp_path, sources, sdk.target("epl3"))
+
+
+@needs_toolchain
+def test_main_links_the_focus_meter_and_the_own_contrast_client_for_the_em10ii(tmp_path):
+    plugin.build(MAIN_DIR, tmp_path, sdk.target("em10ii"))
+    symbols = (tmp_path / "plugin.map").read_text()
+    for name in (
+        "feat_fmeter",
+        "fenykl_afc_poll",
+        "fenykl_cb_cam_cnt_frame_cb_afc_frame_cb",
+        "fenykl_cb_cam_req_done_cb_afc_done_cb",
+        "fw_cam_request",
+    ):
+        assert f" {name}\n" in symbols
 
 
 @needs_toolchain

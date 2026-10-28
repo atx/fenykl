@@ -7,7 +7,9 @@
  */
 #include "main.h"
 #include "main_rbswap.h"
+#if FENYKL_HAS_AFC
 #include <afc.h>
+#endif
 #include <body.h>
 #include <ui.h>
 

@@ -1,5 +1,5 @@
 /*
- * main: focus meter: a row of ten cells under the green AF dot
+ * main: focus meter: a row of ten cells (main_layout.h)
  * showing the AF statistics' HPF3 of the metered area on an absolute log2 scale (main_fmeter.c).
  * Read-only polling of the statistics DMA buffer every tick, no hook; in MF the SDK's own contrast
  * client (sdk/lib/afc.c) provides the statistics. Drawn from the stock exposure-row cells
@@ -10,8 +10,9 @@
 #include "main.h"
 #include "main_fmeter.h"
 
-#define FEAT_FMETER_ROWS_MAX 6u
-#define FEAT_FMETER_H3 2u		/* channel: HPF1, HPF2, HPF3, HPFV */
+#define FEAT_FMETER_ROWS_MAX 9u		/* the E-M10 II's 9 x 9 grid; the E-PL3's has at most 6 rows */
+#define FEAT_FMETER_H3 2u		/* channel: HPF1, HPF2, HPF3 */
+#define FEAT_FMETER_SEC_MS 1000u
 #define FEAT_FMETER_KEY_MF 0xFFFF0000u	/* log key of the own client's values */
 /* Own-client gates that hide the bar in MF; the others (half-press, fcs, slots) hold it. */
 #define FEAT_FMETER_MF_HIDE (FENYKL_AFC_G_SNAP | FENYKL_AFC_G_LV | FENYKL_AFC_G_MOVIE | \
@@ -35,6 +36,7 @@ struct feat_fmeter_state {
 	uint32_t samples;	/* new frames */
 	uint32_t renders;	/* bars drawn */
 	uint32_t refused;	/* renders refused by the library */
+	uint32_t sec_at, sec_samples, sec_calls;	/* at the last per-second line */
 };
 
 static struct feat_fmeter_state feat_fmeter_st = {
@@ -210,6 +212,28 @@ static void feat_fmeter_hide(void)
 	fenykl_log_dbg(&feat_fmeter_log, "hidden (show %d)", feat_fmeter_show);
 }
 
+/* Live view only: new values and frame callbacks of the last second, the bar and the gates. */
+static void feat_fmeter_log_sec(void)
+{
+	struct feat_fmeter_state *st = &feat_fmeter_st;
+	const struct fenykl_afc *a = fenykl_afc_get();
+	const struct main_fmeter_bar *b = &st->norm.bar;
+
+	if (st->now - st->sec_at < FEAT_FMETER_SEC_MS)
+		return;
+	st->sec_at = st->now;
+	if (fenykl_gui_live_view()) {
+		fenykl_log_dbg(&feat_fmeter_log, "%s values %u cb %u v %u",
+			       fenykl_af_mf() ? "mf" : "af", st->samples - st->sec_samples,
+			       a->cb.calls - st->sec_calls, st->last[FEAT_FMETER_H3]);
+		fenykl_log_dbg(&feat_fmeter_log, "  lit %u peak %u gates %03x %s",
+			       b->shown ? b->lit : 0, b->peak, a->gates,
+			       fenykl_afc_state_name[a->sm.state]);
+	}
+	st->sec_samples = st->samples;
+	st->sec_calls = a->cb.calls;
+}
+
 static void feat_fmeter_tick(void)
 {
 	struct feat_fmeter_state *st = &feat_fmeter_st;
@@ -226,6 +250,7 @@ static void feat_fmeter_tick(void)
 	feat_fmeter_read(&in);
 	st->samples += in.fresh;
 	main_fmeter_step(&st->norm, &in, st->now);
+	feat_fmeter_log_sec();
 	bar = st->norm.bar;
 	if (!bar.shown) {
 		feat_fmeter_hide();
@@ -265,6 +290,12 @@ static void feat_fmeter_status(void)
 	fenykl_log_info(&feat_fmeter_log, "mf %s gates %03x attaches %u err %s",
 			fenykl_afc_state_name[a->sm.state], a->gates, a->attaches,
 			fenykl_afc_err_name[a->sm.err]);
+	fenykl_log_info(&feat_fmeter_log, "  cb %u st %u cp %u err %u", a->cb.calls, a->cb.st,
+			a->cb.cp, a->cb.err);
+	fenykl_log_info(&feat_fmeter_log, "  irq %u bad a0 %u other core %u gap %u us", a->cb.irq,
+			a->cb.bad_req, fenykl_afc_other_core(), a->cb.gap_us);
+	fenykl_log_info(&feat_fmeter_log, "  done %u stops by cb %u snaps %u torn %u", a->cb.done,
+			a->cb.cb_stops, a->snaps, a->torn);
 }
 
 const struct main_feat feat_fmeter = {

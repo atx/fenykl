@@ -143,6 +143,133 @@ static inline bool fenykl_af_grid(struct fenykl_af_grid *g)
 	g->cut3 = (uint16_t)fenykl_rd16(ctx + FBODY_CTX_CUT3);
 	return true;
 }
+
+#define FENYKL_CNT_SET_SIZE 0x104u
+#define FENYKL_CNT_SET_INFO 0x90u
+#define FENYKL_CNT_SET_NUMBER 0x00u
+#define FENYKL_CNT_REQ_SIZE 0x40u
+#define FENYKL_CNT_EV_ST 0x400u		/* AF_ST */
+#define FENYKL_CNT_EV_CP 0x800u		/* AF_CP */
+#define FENYKL_CNT_EV_ERR 0u
+#define FENYKL_CNT_DMA_WORDS 512u	/* 4 channels x 5 rows x 16 words, 768 bytes of slack */
+#define FENYKL_CNT_DMA_ALIGN 64u
+#define FENYKL_CNT_DMA_STATS 0u
+#define FENYKL_CNT_STATS_CHANNELS 4u	/* HPF1, HPF2, HPF3, HPFV */
+
+#define FBODY_TF_MOVIE 0x07u
+#define FBODY_TF_LV_MODE 0xD4u
+#define FBODY_CTX_REQ 0x2DCu		/* fcs's cam_request object */
+#define FBODY_CTX_SETTING 0x378u
+#define FBODY_SET_UPDATE 0x08u		/* u16 update bits, cleared by cam_cnt_apply */
+#define FBODY_SET_DMA 0x88u
+#define FBODY_SET_ENDLESS 0xFFFFu
+#define FBODY_SET_ALL 0x1FFFu		/* every setting-driven update bit (0x1..0x1000) */
+#define FBODY_CL_SETTING 0x08u		/* driver client +8: its contrast_setting */
+#define FBODY_SNAP_COLS 7u		/* pattern 0 / 0xD: 7 x 5 */
+#define FBODY_SNAP_ROWS 5u
+
+/* The 0x40-byte request object. */
+struct fbody_cnt_req {
+	uint16_t type;		/* +0x00 */
+	uint8_t flag;		/* +0x02 = 1 */
+	uint8_t pad;
+	uint32_t expo;		/* +0x04: 0, the driver keeps its sensor info */
+	uint32_t smode;		/* +0x08 */
+	uint32_t r0c, r10;
+	uint32_t setting;	/* +0x14 contrast_setting */
+	uint32_t r18, r1c;
+	uint32_t step;		/* +0x20: 0 selects the async contrast path */
+	uint32_t r24;
+	uint32_t done_cb;	/* +0x28 */
+	uint32_t frame_cb;	/* +0x2C */
+	uint32_t events;	/* +0x30 */
+	uint32_t arg;		/* +0x34 */
+	uint32_t r38, r3c;
+};
+
+_Static_assert(sizeof(struct fbody_cnt_req) == FENYKL_CNT_REQ_SIZE, "request is 0x40 bytes");
+
+static inline uint32_t fenykl_cnt_fcs_setting(uint8_t *pat, uint8_t *cols, uint8_t *rows)
+{
+	uint32_t tf = fenykl_rd32(FW_TAKE_FOCUS_PTR), ctx = fenykl_rd32(FW_FCS_CONTRAST_CTX);
+	uint32_t set = ctx + FBODY_CTX_SETTING, p;
+
+	if (!tf || !ctx || fenykl_rd8(FW_FCS_AF_EVAL_STATE) != 2 || fenykl_af_half())
+		return 0;
+	if (fenykl_rd8(tf + FBODY_TF_MODE) == FBODY_TF_MF || fenykl_rd8(tf + FBODY_TF_MOVIE))
+		return 0;
+	p = fenykl_rd8(ctx + FBODY_CTX_PATTERN);
+	if ((p != 0 && p != 0xD) || fenykl_rd8(ctx + FBODY_CTX_COLS) != FBODY_SNAP_COLS ||
+	    fenykl_rd8(ctx + FBODY_CTX_ROWS) != FBODY_SNAP_ROWS)
+		return 0;
+	if (fenykl_rd16(set + FENYKL_CNT_SET_NUMBER) != FBODY_SET_ENDLESS ||
+	    fenykl_rd32(set + FBODY_SET_DMA) != FW_FCS_DMA_BUF ||
+	    fenykl_rd32(ctx + FBODY_CTX_REQ + 0x14u) != set)
+		return 0;
+	*pat = (uint8_t)p;
+	*cols = FBODY_SNAP_COLS;
+	*rows = FBODY_SNAP_ROWS;
+	return set;
+}
+
+static inline void fenykl_cnt_setting_prep(uint8_t *set, uint32_t dma)
+{
+	*(volatile uint16_t *)(set + FENYKL_CNT_SET_NUMBER) = FBODY_SET_ENDLESS;
+	*(volatile uint16_t *)(set + FBODY_SET_UPDATE) = FBODY_SET_ALL;
+	*(uint32_t *)(set + FBODY_SET_DMA) = dma;
+}
+
+static inline void fenykl_cnt_req_prep(void *req, uint32_t set, uint32_t frame_cb, uint32_t done_cb,
+				       uint32_t arg)
+{
+	struct fbody_cnt_req *rq = req;
+
+	rq->type = 7;
+	rq->flag = 1;
+	rq->setting = set;
+	rq->done_cb = done_cb;
+	rq->frame_cb = frame_cb;
+	rq->events = FENYKL_CNT_EV_ST | FENYKL_CNT_EV_CP;
+	rq->arg = arg;
+}
+
+/* Owner of a driver slot word: 0 empty, 1 set's, 2 foreign. */
+static inline uint32_t fbody_cnt_slot_owner(uint32_t slot, uint32_t set)
+{
+	uint32_t cl = fenykl_rd32(slot);
+
+	if (!cl)
+		return 0;
+	return fenykl_rd32(cl + FBODY_CL_SETTING) == set ? 1 : 2;
+}
+
+static inline bool fenykl_cnt_foreign(uint32_t set)
+{
+	return fbody_cnt_slot_owner(FW_CNT_CLIENT, set) == 2 ||
+	       fbody_cnt_slot_owner(FW_CNT_QUEUED, set) == 2;
+}
+
+/* Stills screens of SS_REC: Basic, Histogram, H&S, STILL_OFF, STILL_OVER, level gauge. */
+static inline bool fenykl_cnt_lv(void)
+{
+	uint32_t st = fenykl_rd8(FW_GUI_STATE);
+
+	if (fenykl_rd8(FW_GUI_SUPER) != FENYKL_GUI_SS_REC)
+		return false;
+	return (st >= 0x03 && st <= 0x05) || (st >= 0x09 && st <= 0x0B);
+}
+
+static inline bool fenykl_cnt_movie(void)
+{
+	uint32_t tf = fenykl_rd32(FW_TAKE_FOCUS_PTR);
+
+	return !tf || fenykl_rd8(tf + FBODY_TF_MOVIE) || fenykl_rd8(tf + FBODY_TF_LV_MODE);
+}
+
+static inline bool fenykl_cnt_drv_dbg(void)
+{
+	return fenykl_rd16(FW_CNT_DRV_DBG) != 0;
+}
 #endif
 
 #if FENYKL_HAS_SHOT

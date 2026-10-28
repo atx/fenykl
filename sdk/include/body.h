@@ -5,8 +5,8 @@
  * arch/<camera>/fenykl_body.h (static inline, so a call costs what the firmware read costs).
  * Every group but the GUI is a capability (target.toml): a target without it has no declarations,
  * and plugin.toml [capabilities.<name>] builds the plugin files that use it only where it exists.
- * The shot, img_exec and AF grid groups mirror the E-PL3's encodings (buffer index ^ 1, hide mask
- * bits, IMG_CTRL offsets, HPF channel layout): expect to reshape them with a second implementation.
+ * The shot and img_exec groups mirror the E-PL3's encodings (buffer index ^ 1, hide mask bits,
+ * IMG_CTRL offsets): expect to reshape them with a second implementation.
  */
 #ifndef _FENYKL_BODY_H
 #define _FENYKL_BODY_H
@@ -52,11 +52,12 @@ static inline uint32_t fenykl_power_src(void);
 static inline bool fenykl_power_src_batt(uint32_t src);
 #endif
 
-/* --- afc: also the firmware's own contrast client and AF settings; CPU0 --- */
+/* --- afc: the firmware's own contrast client, AF settings and the contrast driver; CPU0 --- */
 #if FENYKL_HAS_AFC
 #define FENYKL_AF_AREA_NONE (-1)
 
-/* The firmware client's statistics grid: channels HPF1, HPF2, HPF3, HPFV, chan_words u32 apart. */
+/* The firmware client's statistics grid: channels HPF1, HPF2, HPF3 (E-PL3: and HPFV), chan_words
+   u32 apart. */
 struct fenykl_af_grid {
 	const volatile uint32_t *buf;	/* DMA buffer, uncached */
 	uint32_t chan_words;
@@ -75,6 +76,35 @@ static inline int fenykl_af_target_area(void);
 static inline bool fenykl_af_all_targets(void);
 /* The firmware client's grid into *g; false while it has none (MF, or freed). Values unchecked. */
 static inline bool fenykl_af_grid(struct fenykl_af_grid *g);
+
+/*
+ * The contrast driver's client protocol, for the own client (lib/afc.c). Also from fenykl_body.h:
+ * FENYKL_CNT_SET_SIZE (contrast_setting bytes), FENYKL_CNT_SET_INFO (its leading parameter part;
+ * the driver writes the rest), FENYKL_CNT_SET_NUMBER (offset of its u16 frame count: 0xFFFF
+ * endless, 0 = detach at the next frame), FENYKL_CNT_REQ_SIZE (cam_request object bytes),
+ * FENYKL_CNT_EV_ST, FENYKL_CNT_EV_CP, FENYKL_CNT_EV_ERR (frame callback events: frame start, data
+ * complete, error; 0 if the body has none), FENYKL_CNT_DMA_WORDS and FENYKL_CNT_DMA_ALIGN (the
+ * client's DMA buffer), FENYKL_CNT_DMA_STATS (word offset in it of the statistics a plugin reads)
+ * and FENYKL_CNT_STATS_CHANNELS (their HPF channels, from HPF1).
+ */
+/* fcs's contrast_setting while fcs runs a grid the own client may copy (stills framing through AF,
+   no half-press); its grid pattern, cols and rows into *pat, *cols, *rows. 0 otherwise. */
+static inline uint32_t fenykl_cnt_fcs_setting(uint8_t *pat, uint8_t *cols, uint8_t *rows);
+/* Readies set, a copy of fcs's, for an attach writing into dma (uncached): endless, every update
+   bit fcs uses. */
+static inline void fenykl_cnt_setting_prep(uint8_t *set, uint32_t dma);
+/* Fills the zeroed request req for an attach of set with the callbacks; arg where the body has
+   a callback argument. */
+static inline void fenykl_cnt_req_prep(void *req, uint32_t set, uint32_t frame_cb, uint32_t done_cb,
+				       uint32_t arg);
+/* The driver has a client linked other than the one of set. */
+static inline bool fenykl_cnt_foreign(uint32_t set);
+/* The GUI shows a stills live-view screen the own client may run on. */
+static inline bool fenykl_cnt_lv(void);
+/* Movie mode, or another live-view mode the own client must avoid (true without take_focus). */
+static inline bool fenykl_cnt_movie(void);
+/* The driver runs a debug mode (false on a body without one). */
+static inline bool fenykl_cnt_drv_dbg(void);
 #endif
 
 /* --- shot: display, OSD layers and the lent RECFILE buffer; CPU0 task --- */

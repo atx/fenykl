@@ -24,16 +24,10 @@ int fenykl_hud_output(void)
 	return FENYKL_HUD_OUT_NONE;
 }
 
-/* The firmware's property read (lookup 0x60076078, getter 0x60076FD9) without the call or the
-   core-view mapping 0x600750FD, which is the identity on CPU0: CPU0 reads the object as is. */
 int fenykl_hud_info_screen(void)
 {
-	uint32_t entry = 8u * (HUD_PROP_INFO >> 4) + 4u, obj = 0;
+	uint32_t obj = fbody_prop_obj(HUD_PROP_INFO);
 
-	if (fenykl_rd16(FW_PROP_OVERRIDE_VALID))
-		obj = fenykl_rd32(FW_PROP_OVERRIDE + entry);
-	if (!obj)
-		obj = fenykl_rd32(FW_PROP_TABLE + entry);
 	if (!fenykl_dram_ptr(obj, 1))
 		return -1;
 	return (int8_t)fenykl_rd8(obj);
