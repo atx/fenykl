@@ -125,24 +125,6 @@ returns = "int"
 args = ["d int id"]
 note = "ret [d2,d3],12 at 0x6E62137E; all 162 CALLs use [d2,d3],12 with D0 = id, the only argument read (k_sig_sem 0x6E68937A); returns 0 or -1"
 
-[OlyEventSet]
-address = 0x6E621033
-saves = ["d2", "d3"]
-frame = 0xC
-evidence = "high"
-returns = "int"
-args = ["d int id", "d unsigned pattern"]
-note = "ret [d2,d3],12 at 0x6E62105C (only RET); all 173 CALLs use [d2,d3],12. D0 = flag id (exth), D1 = pattern passed untouched to k_set_flg 0x6E689276 (mov d1,a2 first); ORs pattern into the flag. Returns 0 or -1 (0x6E62104B). hdmi_tx_open_signal 0x6E897EA5 calls it with D0 = u16 (0x6E691A1A), D1 = device"
-
-[OlyEventClear]
-address = 0x6E6210F7
-saves = ["d2", "d3"]
-frame = 0xC
-evidence = "high"
-returns = "int"
-args = ["d int id", "d unsigned mask"]
-note = "ret [d2,d3],12 at 0x6E621120 (only RET); all 30 CALLs use [d2,d3],12. D0 = flag id (exth), D1 = mask passed untouched to k_clr_flg 0x6E6836A7, which ANDs it into the flag (mov a3,d1; and d1,d0 at 0x6E683754): 0 clears all; hdmi_tx_av_setup 0x6E898133 passes 0xFFFFFFFB to drop value 4 (the E_HDMI_INTR reset request). Returns 0 or -1 (0x6E62110F)"
-
 [rpc_fopen]
 address = 0x6E7B817D
 saves = []
@@ -365,22 +347,6 @@ cpu1 = "unproven"
 cpu1_evidence = "static only: callers gpi_flush 0x6EFDB264 (camera: CPU0 only), gpi_set_layer_mask 0x6EFDB8D4, gpi_redisplay/2 0x6EFDB93D/0x6EFDB947 and 0x6EFDBCC5, all in the GUI library; static core map: 5 callers, 0 CPU1 ancestors, CPU0-only [inferred]"
 note = "mov 0x6F1232CC,a1: one absolute-immediate instruction. The only CALL/JMP targets in 0x6EFDB6E3..0x6EFDB6E8 in main-code-01 are the 5 CALLs to the entry, no branch in the objdump listing 0x6EFDB600..0x6EFDB800 lands inside the span, and no word in main-code-01 points into it (cached or uncached alias) (byte scan)"
 
-[mov_lv_disp_flip]
-address = 0x6E8AC521
-saves = ["d2"]
-frame = 0x8
-evidence = "high"
-returns = "void"
-args = []
-note = "ret [d2],8 at 0x6E8AC56D (only RET); all 10 CALLs (0x6E89F72E/0x6E89F757 in mov_lv_frame_still, 0x6E89FA2A/0x6E89FA34, 0x6E89FB04/0x6E89FB0E, 0x6E89FC1B/0x6E89FC25, 0x6E89FEA2/0x6E89FEAC in the movie frame handlers) are `dd .. 80 08` = [d2],8. Unless (u8)0x6060676A != 0: shows display buffer table 0x606067E8[idx 0x60606744] through disp_img1_set_addr_direct, then advances the index"
-
-[mov_lv_disp_flip.hook]
-entry = "call"
-relocate = "fc a8 6a 67 60 60"
-cpu1 = "unproven"
-cpu1_evidence = "static only: core map class cpu0 (task 0x1F MOV_TASK via mov_lv_frame_still), all 10 callers are MOV-task frame handlers, never address-taken"
-note = "movbu (0x6060676A),d0: one absolute-address instruction (same form as gpi_flush). No xref into 0x6E8AC522..0x6E8AC526 and no word in main-code-01 holds 0x6E8AC521..0x6E8AC526 or the uncached alias 0xAE8AC521..0xAE8AC526 (Ghidra xrefs + byte scan)"
-
 [mov_yc_resize_pass]
 address = 0x6E8A41B0
 saves = ["d2", "d3", "a2", "a3"]
@@ -445,22 +411,6 @@ cpu1 = "cpu0-only"
 cpu1_evidence = "static core map: cpu0, task 000f FACE_FD via face_fd_live_loop 0x6E8CD6C9 (its only caller, CALL 0x6E8CD98D)"
 note = "STACK: TSK_FACE_FD has a 0x400-byte stack (task record 0x6E68C228) and the stock path through this function peaks at ~740 bytes below the task entry (live loop 100 + this frame 100 + face_normalize 136 + 404 below it); a wrap adds the unused CALL frame (100) plus stub and handler (~140), leaving no margin for interrupts, so plugins hook fd_hw_shutdown instead. mov a0,(24,sp); movbu d0,(49,sp): SP-relative stores into the CALL frame only. Byte scan of main-code-01 for every PC-relative branch/call form (bcc/jmp/call d8/d16/d32, bvc..bns, calls d16/d32) at any offset: no target in 0x6E8CDF70..0x6E8CDF74 (one false hit at 0x6E8CDF6A is an operand byte of the CALL at 0x6E8CDF67), only CALL 0x6E8CD98D targets the entry; no word holds 0x6E8CDF6F..0x6E8CDF74 or 0xAE8CDF6F..0xAE8CDF74"
 
-[usb_ep0_request]
-address = 0x6F343B09
-saves = ["a2"]
-frame = 0x8
-evidence = "high"
-returns = "void"
-args = ["a const uint8_t *setup"]
-note = "ret [a2],8 at 0x6F343BB8; the request thunks it jumps to (0x6F343B4C..0x6F343BAB) also end in ret [a2],8 or branch to 0x6F343BB8. Both CALLs use [a2],8 with A0 = 0xA07BAA0E, the 8-byte setup packet (u8 bmRequestType, u8 bRequest, u16 wValue, wIndex, wLength) that usb_ep0_read_setup 0x6F3439B3 copies from the FIFO: 0x6F343959 in usb_ep0_setup 0x6F343917 (no data stage), 0x6F343B01 in usb_ep0_recv_next 0x6F343AB4 (host-to-device data stage complete, data at 0xA07BA90C). Looks up bRequest + 1 in usb_ep0_req_table 0x6F35C918 and jumps to the handler; unknown -> usb_ep0_stall 0x6F343BB2 = usb_ep0_finish(0). Interrupt context: usb_isr_core 0x6F3442CD (IRQ 0x5C) -> usb_isr_dispatch -> usb_isr_ep0 -> usb_ep0_event"
-
-[usb_ep0_request.hook]
-entry = "call"
-relocate = "f8 44 01 a5 00"
-cpu1 = "cpu0-only"
-cpu1_evidence = "static: only usb_ep0_setup and usb_ep0_recv_next call it, both reached only from usb_isr_ep0 <- usb_isr_dispatch <- usb_isr_core, the IRQ 0x5C handler; usb_irq_init 0x6F340A5E registers it from the PC_UAM task (core map: cpu0), and irq_register 0x6E623CBF writes the handler table and INTC of the calling core"
-note = "movbu (1,a0),d1; cmp 0,d1: no control flow, no PC operand; the bge at 0x6F343B0E reads the flags of the relocated cmp (the trampoline's jmp back keeps them). Byte scan of main-code-01 for every PC-relative branch/call form (bcc/jmp/call d8/d16/d32, bvc..bns, calls d16/d32) at any offset: only the CALLs 0x6F343959 and 0x6F343B01 target 0x6F343B09..0x6F343B0D, both at the entry; no word holds 0x6F343B09..0x6F343B0D or 0xAF343B09..0xAF343B0D. STACK: runs on the CPU0 interrupt stack, 0x200 bytes at 0x47000000 (kcb_template_cpu0 0x6E691CB0 +0x70 size, +0x74 base; irq_common_entry switches SP to base + size - 8 at 0x6E68536C when the nesting byte is 0), shared with nested interrupts. CALL frames from usb_isr_core down to this entry ~56 bytes, plus the level dispatcher (not measured). A wrap adds the stub, the handler frame and the unused CALL frame (8); keep the handler minimal and measure the depth on the camera"
-
 [gpi_get_glyph]
 address = 0x6EFDC0B2
 saves = ["d2", "d3", "a2", "a3"]
@@ -470,24 +420,6 @@ returns = "void"
 args = ["a const unsigned short *key", "a void *out"]
 note = "ret [d2,d3,a2,a3],20 at 0x6EFDC117 (only RET); both CALLs (0x6EFDB661 gpi_text, 0x6EFDCC50) use it. key in A0 = {u16 font_id, u16 size_key, u16 char} (movhu (a0)/(2,a0)/(4,a0)), out in A1 = {u16 w, u16 h, const void *bitmap} (written through a3 = a1), w = h = 0 if not found. Pure lookup in the font/icon resources"
 
-[gui_post_event]
-address = 0x6F09C150
-saves = ["a2"]
-frame = 0x40
-evidence = "high"
-returns = "int"
-args = ["d unsigned code", "d unsigned param"]
-note = "ret [a2],0x40 at 0x6F09C176; callers use the same CALL, e.g. 0x6F07DF3B (StWizardMenu entry: clr d1, D0 = 0x9ABC). gui_evt_make 0x6EFD960B(target 0, code, param) + gui_evq_post 0x6EFD9637. GUI task only (it is a GUI-internal post)"
-
-[gui_show_panel_ex]
-address = 0x6F09C27A
-saves = ["d2", "d3", "a2", "a3"]
-frame = 0x58
-evidence = "high"
-returns = "void"
-args = ["d unsigned panel", "d int force"]
-note = "ret [d2,d3,a2,a3],0x58 at 0x6F09C4DB; callers use the same CALL, e.g. 0x6F073C5B (SS_DEBUGMENU entry), 0x6F0EBE4A. D0 = panel number (u16), D1 = force: same panel and !force only refreshes; otherwise sets gui_cur_panel 0x60352448, purges 0x1002/0x1900/0x1901, queues 0x1100(panel) and 0x9404, sets the layer configuration. GUI task only"
-
 [gui_data_set]
 address = 0x6EFE1903
 saves = ["d2", "a2"]
@@ -496,15 +428,6 @@ evidence = "high"
 returns = "int"
 args = ["a const void *buf", "d unsigned id", "d unsigned size", "a int notify"]
 note = "ret [d2,a2],0x10 at 0x6EFE191E; callers use the same CALL, e.g. 0x6F0A04DE (menu_list_slot_set: buf, D0 = 0xF, D1 = 0x2D8, A1 = notify). Returns 0 without a GUI data store (*0x6034DD24 == 0), else the s16 result of 0x6EFE1AC7. Copies buf into GUI data store slot id, marks it changed for every observer and, with notify (s16), posts GUI event 0x1900 to them. GUI task only"
-
-[gui_data_get]
-address = 0x6EFE18EB
-saves = []
-frame = 4
-evidence = "high"
-returns = "int"
-args = ["a void *buf", "d unsigned id", "d unsigned size"]
-note = "ret [],4 at 0x6EFE1900; callers use the same CALL, e.g. 0x6F0A04CA (menu_list_slot_get: D0 = 0xF, D1 = 0x2D8). Returns 0 without a GUI data store, else the s16 result of 0x6EFE1A4E; copies slot id into buf. GUI task only"
 
 [prop_get_obj]
 address = 0x6E630D48
@@ -560,51 +483,6 @@ returns = "unsigned"
 args = ["a void *req"]
 note = "ret [d2,a2],0xc at 0x6E818E88 (only RET); the CALLs checked (0x6E8191EE, 0x6E8212EA, 0x6E821313, 0x6E82133C, 0x6E8213DB; all 50 in 0x6E818D00..0x6E832A68) use [d2,a2],0xc. A0 = 0x40-byte request, u16 type at +0; returns u16 (exthu). Type 7 with +0x20 == 0 and +0x24 == 0 posts the request to the CAM_CL state machine *(0x605AED60) and returns 0 (0x6E819023 -> 0x6E8193FA): a contrast attach error (0x4585) is not returned. CPU0, task context (fcs_af_eval_run 0x6E7D4E79)"
 
-[api_tft_Set_TypeVideo_Display]
-address = 0x6E871E79
-saves = ["d2"]
-frame = 0x8
-evidence = "high"
-returns = "unsigned"
-args = ["d unsigned fmt"]
-note = "ret [d2],8 at 0x6E871EAC (only RET); both CALLs (0x6EC5BB2E capiod_set_output_props, 0x6EC5BE46 CapIod HDMI connect) use [d2],8 with D0 = format. Writes prop 0xC321 = (u8)fmt through 0x6E630DB8 (A0 = 0, D1 = 0, A1 = value); D0 is what that call leaves (not characterised, both callers ignore it). disp_dev_prepare 0x6E892760 opens HDMI target 4 as device fmt + 3 for fmt 3..8"
-
-[api_tft_Get_TypeVideo_Display]
-address = 0x6E871EAF
-saves = []
-frame = 0x4
-evidence = "high"
-returns = "unsigned"
-args = []
-note = "ret [],4 at 0x6E871ECF (only RET); all 30 CALLs use [],4. Returns extbu of prop 0xC321 read through 0x6E8630D2"
-
-[api_disp_Disp_OpenExec]
-address = 0x6E85BEF5
-saves = ["d2"]
-frame = 0xC
-evidence = "high"
-returns = "unsigned"
-args = ["d unsigned target"]
-note = "ret [d2],12 at 0x6E85BF54 (only RET); both CALLs (0x6EDF5A5E dispctl_openDevice, 0x6EB98154) use [d2],12. D0 = target, extbu: 2 NTSC, 0x12 PAL, 3 HDMI, 4 EVF, else TFT; posts DISPLAY command 2 through 0x6E861A15 and returns its exthu status. The open itself (disp_open_device 0x6E88D354) runs in the DISPLAY task and stores the device u8 0x6060498C last"
-
-[api_disp_Disp_CloseExec]
-address = 0x6E85BF5A
-saves = []
-frame = 0x4
-evidence = "high"
-returns = "unsigned"
-args = []
-note = "ret [],4 at 0x6E85BF78 (only RET); both CALLs (0x6EDF55BF dispctl_closeDevice, 0x6EB9813E) use [],4. Posts DISPLAY command 3 (disp_close_device 0x6E88D3F2: device, last open and through permit = 0) through 0x6E861A15 and returns its exthu status"
-
-[api_disp_Disp_OsdUpdateColorPallet]
-address = 0x6E85CB70
-saves = ["d2", "d3", "a2", "a3"]
-frame = 0x18
-evidence = "high"
-returns = "unsigned"
-args = ["a const unsigned *upd"]
-note = "ret [d2,d3,a2,a3],24 at 0x6E85CC26 (only RET); all 3 CALLs use [d2,d3,a2,a3],24. A0 = 3 words, each nonzero = update that OSD palette; posts DISPLAY command 4 with 3 flag bytes and returns its exthu status. dispctl_openDevice 0x6EDF5A18 calls it with {1, 1, 1} right after api_disp_Disp_OpenExec"
-
 # Callbacks: signatures the firmware enters plugin code with (sdk/README.md, Callbacks and slots).
 # FENYKL_CALLBACK(<name>, fn) gives a C function a reverse entry stub for it; fw_call_<name>(addr, ...)
 # calls a firmware function pointer with it. Fields:
@@ -632,13 +510,6 @@ evidence = "high"
 returns = "void"
 args = ["d unsigned id"]
 note = "usrset_call_change_cb 0x6E8D3411: calls (a0) at 0x6E8D341C with D0 = setting id (exthu); its 3 callers overwrite D0 after it (0x6E8D2751, 0x6E8D2858, 0x6E8D28C2). Stock target usrsetmgr_change_cb 0x6EC0A5DB"
-
-[callbacks.ptp_op_handler]
-entry = "calls"
-evidence = "high"
-returns = "void"
-args = ["a void *request", "a void *response"]
-note = "PTP op handler, registered with ptp_op_register: calls (a2) at 0x6F336223 with A0 = request, A1 = response, result unused (bra after it); runs in PTPCOM with a 2 KiB stack"
 
 [callbacks.gui_action]
 entry = "calls"
@@ -1051,24 +922,6 @@ address = 0x6060498C
 type = "u8"
 evidence = "high"
 note = "open display device: 0 none, 1 TFT, 6..0xB HDMI (6 480p, 7 576p, 8/9 720p, 0xA/0xB 1080i: disp_hdmi_geometry 0x6E8914E9, line counts 0x6E89159A); disp_open_device 0x6E88D354 stores it after disp_dev_prepare, disp_close_device 0x6E88D3F2 clears it"
-
-[data.disp_through_permit]
-address = 0x6060498E
-type = "u8"
-evidence = "high"
-note = "0 or 1; disp_img1_set_addr_direct 0x6E88D066 (the live-view flip's display call) does nothing while it is 0; cleared by disp_close_device, set by DISPLAY commands through 0x6E88D092"
-
-[data.disp_img1_from]
-address = 0x6034C8DC
-type = "u16 [2]"
-evidence = "high"
-note = "img1 source frame width, height: disp_dev_prepare 0x6E892760 sets 800x600 (TFT, composite, EVF) or 1920x1080 (HDMI); disp_img1_geom_update 0x6E893344 maps it 1:1 onto the device area"
-
-[data.disp_img1_fmt_cache]
-address = 0x6034C94D
-type = "u8"
-evidence = "high"
-note = "img1 format of the last geometry build (disp_img1_geom_update 0x6E893344); disp_dev_prepare sets 0"
 
 [data.recfile_used]
 address = 0x605753F0

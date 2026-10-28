@@ -486,7 +486,6 @@ the E-PL3:
 |---|---|---|
 | `appevent_hook1` / slot 0x605FD840 | `calls`, empty | `unsigned hook(unsigned event)`: returns the event, 0 swallows |
 | `usrset_change_cb` / slot 0x6034CCB4 | `calls`, stock 0x6EC0A5DB | `void cb(unsigned id)` after every setting change |
-| `ptp_op_handler` | `calls` | `void handler(void *request, void *response)` for `ptp_op_register` |
 | `gui_action` | `calls` | `unsigned action(void *sm, unsigned code, unsigned p, void *p2)`: GUI state-machine action/entry/exit |
 | `cam_cnt_frame_cb` | `calls` | `void cb(unsigned unk, unsigned events, void *req)`: contrast client frame callback (request +0x2C; `lib/afc.c`) |
 | `cam_req_done_cb` | `calls` | `void cb(unsigned status, void *req)`: camera request done callback (request +0x28) |
