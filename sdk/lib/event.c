@@ -16,6 +16,9 @@ static struct {
 	volatile struct fenykl_event_stats st;
 } evl;
 
+/* No cache coherency: a CPU1 entry writes only this line, uncached, never evl's. */
+static FENYKL_SHARED uint32_t evl_cpu1;
+
 static uint32_t irq_save(void)
 {
 	uint32_t psw = fw_psw_get();
@@ -47,7 +50,7 @@ int fenykl_event_dispatch(uint32_t event, uint32_t param, uint32_t flag)
 	int r;
 
 	if (FENYKL_CORE_ID() != 0) {
-		evl.st.cpu1++;
+		(*FENYKL_SHARED_PTR(evl_cpu1))++;
 		return fw_orig_appevent_post(event, param, flag);
 	}
 	evl.st.events++;
@@ -131,4 +134,5 @@ int fenykl_event_inject(uint32_t event, uint32_t param, uint32_t flag)
 void fenykl_event_get_stats(struct fenykl_event_stats *st)
 {
 	*st = evl.st;
+	st->cpu1 = *FENYKL_SHARED_PTR(evl_cpu1);
 }

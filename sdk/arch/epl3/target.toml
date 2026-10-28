@@ -11,11 +11,11 @@ max_size = 0x7A000                     # bytes the loader reads; the loader stac
 sdk_hooks = ["appevent_post"]
 # SDK features of this camera, each passed to every compile as -DFENYKL_HAS_<NAME>=1 (next to
 # FENYKL_TARGET_EPL3=1). cpu1: the CPU1 worker runtime (cpu1.c); plugin.toml cpu1_sources needs it.
-# event, hud, ui, afc: the library files of those features (lib/event.c + key.c, hud.c, ui.c,
+# event, key, hud, ui, afc: the library files of those features (lib/event.c, key.c, hud.c, ui.c,
 # afc.c + afc_sm.c; py/fenykl/plugin.py LIB_CAPABILITIES) are built only for targets that list them.
 # afc, lens, batt, shot, img_exec: the groups of include/body.h this camera implements
 # (fenykl_body.h); plugin.toml [capabilities.<name>] builds plugin files only where they exist.
-capabilities = ["cpu1", "event", "hud", "ui", "afc", "lens", "batt", "shot", "img_exec"]
+capabilities = ["cpu1", "event", "key", "hud", "ui", "afc", "lens", "batt", "shot", "img_exec"]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]

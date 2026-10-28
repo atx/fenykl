@@ -392,10 +392,10 @@ note = "appevent_post's entry bytes"
 """
 
 
-def _firmware_toml(tmp_path: Path, extra: str) -> Path:
+def _firmware_toml(tmp_path: Path, extra: str, target: sdk.SdkTarget = EPL3) -> Path:
     """The real firmware.toml plus sim-only declarations."""
     toml = tmp_path / "firmware.toml"
-    toml.write_text((EPL3.dir / "firmware.toml").read_text() + extra)
+    toml.write_text((target.dir / "firmware.toml").read_text() + extra)
     return toml
 
 
@@ -425,6 +425,25 @@ def test_hooks_run_in_the_simulator(tmp_path):
 
 EM10II = sdk.target("em10ii")
 
+# The E-M10 II appevent_post span under a sim-only name (as SIMEVENT_TOML for the E-PL3).
+SIMEVENT_EM10II_TOML = """
+[simevent_post]
+address = 0x60042428
+saves = ["d2", "d3", "a2"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["d unsigned event", "d unsigned param", "a unsigned flag"]
+note = "sim-only alias of the E-M10 II appevent_post mock"
+
+[simevent_post.hook]
+entry = "call"
+relocate = "83 f1 e6 fc a9 da 84 c1 a1"
+cpu1 = "cpu0-only"
+cpu1_evidence = "synthetic simulator-only target"
+note = "appevent_post's entry bytes"
+"""
+
 
 def test_em10ii_hooks_run_in_the_simulator(tmp_path):
     """E-M10 II hooks.c on the real appevent_post and cw_updateDisplay spans, incl. the I-cache path."""
@@ -447,9 +466,10 @@ def test_em10ii_hooks_run_in_the_simulator(tmp_path):
             "irq_unlock",
             "dcache_flush_all",
         ],
+        firmware=_firmware_toml(tmp_path, SIMEVENT_EM10II_TOML, EM10II),
         target=EM10II,
-        hooks=["appevent_post", "cw_updateDisplay"],
-        cpu1_unproven=["appevent_post", "cw_updateDisplay"],
+        hooks=["simevent_post", "cw_updateDisplay"],
+        cpu1_unproven=["cw_updateDisplay"],
     )
     assert_exit(result, 0, "tests/sim/hooks_em10ii/test_hooks.c")
 

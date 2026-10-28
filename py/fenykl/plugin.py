@@ -20,7 +20,7 @@ LIB_CAPABILITIES = {
     "afc.c": "afc",
     "afc_sm.c": "afc",
     "event.c": "event",
-    "key.c": "event",
+    "key.c": "key",
     "shot.c": "shot",
     "shot_pix.c": "shot",
     "hud.c": "hud",

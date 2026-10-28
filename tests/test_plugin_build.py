@@ -56,6 +56,7 @@ def test_feature_libraries_follow_the_target_capabilities():
     assert names("em10ii") == {
         "card.c",
         "cfg.c",
+        "event.c",
         "hud.c",
         "hud_em10ii.c",
         "log.c",

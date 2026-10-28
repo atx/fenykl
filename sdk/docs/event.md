@@ -72,8 +72,11 @@ static struct fenykl_event_handler feat_handler = {
 - **Registration** is safe against the hook at any time: the new node is complete before the one
   pointer store that links it, under the CPU0 interrupt mask, so a dispatch sees the old or the new
   chain and two registering contexts cannot lose a node.
-- **CPU1.** `appevent_post` is CPU0-only (static and camera, firmware.toml); a CPU1 entry is counted
-  (`cpu1`), the chain skipped and the stock function called.
+- **CPU1.** On the E-PL3 `appevent_post` is CPU0-only (static and camera, firmware.toml); on the
+  E-M10 II two Wi-Fi tasks post from CPU1 (static, `sdk_cpu1_unproven`). A CPU1 entry is counted
+  (`cpu1`), the chain skipped and the stock function called. The caches are not coherent, so on both
+  targets the CPU1 count lives in its own `FENYKL_SHARED` line, written uncached; nothing else is
+  touched. Handlers therefore run on CPU0 only.
 
 ## 4. Handler rules and counters
 

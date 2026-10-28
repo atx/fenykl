@@ -1,5 +1,7 @@
 /* E-M10 II hook runtime (sdk/arch/em10ii/hooks.c) on the real entry spans of appevent_post and
-   cw_updateDisplay, run in the GDB simulator with sim_start.S and fw.S. In the simulator CHCTR
+   cw_updateDisplay, run in the GDB simulator with sim_start.S and fw.S. The SDK binds appevent_post
+   itself (event layer), so the test hooks its span under the sim-only name simevent_post (same
+   address and bytes, test_sim.py). In the simulator CHCTR
    (0x8070) is plain memory. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
      1   originals before install: appevent_post(5, 7, 100) with 0x77 at 0xA1C184DA = 15+7+100+0x77,
          cw_updateDisplay(1) ran with A1 = 0x60BC53C4
@@ -37,9 +39,9 @@ static struct {
 static int on_event(unsigned event, unsigned param, unsigned flag)
 {
 	t.ev_calls++;
-	return fw_orig_appevent_post(event + 1, param, flag) + 0x1000;
+	return fw_orig_simevent_post(event + 1, param, flag) + 0x1000;
 }
-FENYKL_HOOK(appevent_post, on_event);
+FENYKL_HOOK(simevent_post, on_event);
 
 static void on_update(int show_front)
 {
@@ -150,7 +152,7 @@ static int sim_icache(void)
 
 void plugin_main(uint32_t load_base, uint32_t image_size)
 {
-	struct fenykl_hook *ev = &fenykl_hook_appevent_post, *cw = &fenykl_hook_cw_updateDisplay;
+	struct fenykl_hook *ev = &fenykl_hook_simevent_post, *cw = &fenykl_hook_cw_updateDisplay;
 	volatile uint8_t *ev_entry = FENYKL_UNCACHED(ev->entry);
 	int fail = 0, r;
 

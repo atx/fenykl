@@ -1,7 +1,8 @@
 # Olympus OM-D E-M10 Mark II with the fenykl-loader firmware. Plugin runtime: start, string, log and
 # cfg libraries, the settings page (lib/ui.c + ui_em10ii.c), the HUD library (lib/hud.c +
-# hud_em10ii.c), the body API's batt group (fenykl_body.h), data slots (lib/slots.c) and code hooks
-# (hooks.c, CPU0 I-cache only); no CPU1 runtime, event/key layers or AF control yet.
+# hud_em10ii.c), the body API's batt group (fenykl_body.h), data slots (lib/slots.c), code hooks
+# (hooks.c, CPU0 I-cache only) and the event layer (lib/event.c); no CPU1 runtime, key layer (its key
+# map is the E-PL3's) or AF control yet.
 model = "E-M10II"                      # FENYKL.BIN header model field, checked by the loader (<= 8 ASCII chars)
 toolchain = "mn10300-elf"              # <prefix>/bin/<toolchain>-gcc, prefix from `fenykl toolchain path`
 cflags = "toolchain/cflags"            # relative to the fenykl checkout
@@ -9,17 +10,19 @@ isa_check = "toolchain/isacheck/check_isa.py"  # rejects AM33 instructions; the 
 elf_machine = 89                       # EM_MN10300
 load = 0x60DA5000                      # the loader reads FENYKL.BIN here: the never-loaded gap between sec4 and sec5
 max_size = 0x67000                     # bytes the loader reads; the loader stack follows, up to sec5 at 0x60E10000
-# Hooks the SDK binds itself: none (the event layer is not built for this camera; plugins may hook
-# appevent_post themselves).
-sdk_hooks = []
+# Hooks the SDK binds itself, generated for every plugin; plugin.toml may not list them.
+# appevent_post: the event layer (sdk/lib/event.c, docs/event.md).
+sdk_hooks = ["appevent_post"]
 # Slots the SDK binds itself, generated for every plugin; plugin.toml may not list them. The settings
 # page (lib/ui_em10ii.c) takes over the Eye-Fi row of Custom menu tab K with them.
 sdk_slots = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
-# The SDK's hooks and slots whose CPU1 scope is unproven, acknowledged (as a plugin's cpu1_unproven):
-# CPU0 only by static analysis; the settings page counts calls on other cores and touches nothing.
-sdk_cpu1_unproven = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn"]
+# The SDK's hooks and slots whose CPU1 scope is unproven, acknowledged (as a plugin's cpu1_unproven).
+# Slots: CPU0 only by static analysis; the settings page counts calls on other cores and touches
+# nothing. appevent_post: two Wi-Fi tasks post from CPU1; the event layer counts such an entry in its
+# own uncached line and calls the stock function, nothing else.
+sdk_cpu1_unproven = ["mode_cond_eyefi", "eyefi_ok_fn", "eyefi_right_fn", "appevent_post"]
 # SDK features of this camera (see epl3/target.toml).
-capabilities = ["ui", "hud", "batt"]
+capabilities = ["event", "ui", "hud", "batt"]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]

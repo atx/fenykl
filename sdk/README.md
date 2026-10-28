@@ -768,10 +768,10 @@ payload. Loaders older than this format reject `FNL2` files as well.
 4. List the SDK features it supports in `capabilities` (`target.toml`). Each becomes
    `FENYKL_HAS_<NAME>=1` in every compile, next to `FENYKL_TARGET_<CAMERA>=1`. epl3 has `cpu1` (the
    CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.
-   `event`, `hud`, `ui`, `afc` and `shot` select library files (`LIB_CAPABILITIES` in
-   `py/fenykl/plugin.py`): without them `lib/event.c` + `key.c`, `hud.c`, `ui.c`, `afc.c` +
-   `afc_sm.c`, `shot.c` + `shot_pix.c` are not built. `ui`
-   also needs the camera's page, `lib/ui_<camera>.c`.
+   `event`, `key`, `hud`, `ui`, `afc` and `shot` select library files (`LIB_CAPABILITIES` in
+   `py/fenykl/plugin.py`): without them `lib/event.c`, `key.c` (its key map is the E-PL3's),
+   `hud.c`, `ui.c`, `afc.c` + `afc_sm.c`, `shot.c` + `shot_pix.c` are not built. `ui` also needs the
+   camera's page, `lib/ui_<camera>.c`.
    `afc`, `lens`, `batt`, `shot` and `img_exec` are groups of `include/body.h`: list one once
    `arch/<camera>/fenykl_body.h` implements it (the file must exist, with the GUI predicates, before
    a plugin including `body.h` builds). Plugin files under `[capabilities.<name>]` follow them.
