@@ -3,8 +3,8 @@
  * binds the hook (main_hooks.c), installs the settings page (sdk/lib/ui.c) and runs every
  * feature's tick, the Fn override (main_fn.c) and the R/B swap's log (main_rbswap.c)
  * from one task loop; peaking (main_peak.c) has a task of its own. Log: C:\FENYKL.LOG;
- * options: C:\FENYKL.CF0/CF1. A target without the hud or event capability gets neither the
- * HUD nor the Fn override (MAIN_HUD).
+ * options: C:\FENYKL.CF0/CF1. A target without the hud capability gets no HUD (MAIN_HUD), one
+ * without the key capability no Fn override.
  */
 #include "main.h"
 #include "main_peak.h"

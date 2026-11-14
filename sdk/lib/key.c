@@ -5,11 +5,9 @@
  * key is still down. Hook and tick change a handler's state under the CPU0 interrupt mask; a release
  * that arrives while the tick acts on the hold is handed to the tick, so the order stays press,
  * release. Everything hangs off fenykl_key_add/install: a plugin that never calls them links none of
- * it.
+ * it. The key map is the camera's (key_<camera>.c).
  */
-#include <key.h>
-
-#define KEY_ALL ((FENYKL_KEY_BIT(FENYKL_KEY_COUNT) - 1) & ~FENYKL_KEY_BIT(FENYKL_KEY_NONE))
+#include "key_int.h"
 
 enum {
 	KS_IDLE,
@@ -20,25 +18,6 @@ enum {
 };
 
 FENYKL_LOG_MODULE(fenykl_key_log, "key", FENYKL_LOG_INFO);
-
-/* "camera" = seen through the hook on the camera (2026-10-17) */
-static const uint16_t key_codes[FENYKL_KEY_COUNT] = {
-	[FENYKL_KEY_OK] = 0x0004,	/* camera */
-	[FENYKL_KEY_UP] = 0x0005,	/* camera */
-	[FENYKL_KEY_DOWN] = 0x0006,	/* camera */
-	[FENYKL_KEY_LEFT] = 0x0007,	/* camera */
-	[FENYKL_KEY_RIGHT] = 0x0008,	/* camera */
-	[FENYKL_KEY_INFO] = 0x1205,	/* camera */
-	[FENYKL_KEY_MENU] = 0x0089,	/* camera */
-	[FENYKL_KEY_PLAY] = 0x0087,	/* camera */
-	[FENYKL_KEY_DEL] = 0x0084,	/* camera */
-	[FENYKL_KEY_FN] = 0x000B,	/* camera (also 2026-10-14) */
-	[FENYKL_KEY_REC] = 0x1209,	/* camera: R started and stopped recording */
-	[FENYKL_KEY_HALF] = 0x0100,	/* camera; a shot: HALF, FULL press, FULL, HALF release */
-	[FENYKL_KEY_FULL] = 0x0101,	/* camera */
-	[FENYKL_KEY_POWER] = 0x000C,	/* not exercised */
-	[FENYKL_KEY_MODE_DIAL] = 0x1901,	/* camera: one VALUE per step, poll agrees */
-};
 
 static enum fenykl_event_action key_on_event(struct fenykl_event *ev, void *arg);
 
@@ -70,10 +49,24 @@ static uint32_t key_long_us(const struct fenykl_key_handler *h)
 	return h->long_us ? h->long_us : FENYKL_KEY_LONG_US;
 }
 
+/* The keys this body has: a code in the map. */
+static uint32_t key_avail(void)
+{
+	uint32_t m = 0;
+
+	for (unsigned int k = FENYKL_KEY_NONE + 1; k < FENYKL_KEY_COUNT; k++)
+		if (fenykl_key_codes[k])
+			m |= FENYKL_KEY_BIT(k);
+	return m;
+}
+
+/* Code 0 is no key, also for a key the body lacks (its map entry is 0). */
 static enum fenykl_key key_lookup(uint32_t code)
 {
+	if (!code)
+		return FENYKL_KEY_NONE;
 	for (unsigned int k = FENYKL_KEY_NONE + 1; k < FENYKL_KEY_COUNT; k++)
-		if (key_codes[k] == code)
+		if (fenykl_key_codes[k] == code)
 			return k;
 	return FENYKL_KEY_NONE;
 }
@@ -169,7 +162,7 @@ static bool key_complete(struct fenykl_key_handler *h, struct fenykl_key_event *
 		h->private.replays++;
 		fenykl_log_dbg(&fenykl_key_log, "%s: replay %08x held %u us", h->name, ev->event,
 				 e->held_us);
-		fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | key_codes[e->key], h->private.param,
+		fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | fenykl_key_codes[e->key], h->private.param,
 				    h->private.flag);
 		return false;
 	}
@@ -254,7 +247,7 @@ static void key_tick_one(struct fenykl_key_handler *h, uint32_t now)
 		h->private.replays++;
 		fenykl_log_dbg(&fenykl_key_log, "%s: replay key %u held %u us (tick)", h->name,
 				 e.key, e.held_us);
-		fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | key_codes[e.key], h->private.param,
+		fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | fenykl_key_codes[e.key], h->private.param,
 				    h->private.flag);
 	} else {
 		h->private.longs++;
@@ -276,7 +269,7 @@ static void key_tick_one(struct fenykl_key_handler *h, uint32_t now)
 		h->on(&e, h->arg);
 		return;
 	}
-	fenykl_event_inject(FENYKL_EVENT_KEY_RELEASE | key_codes[e.key], h->private.rel_param,
+	fenykl_event_inject(FENYKL_EVENT_KEY_RELEASE | fenykl_key_codes[e.key], h->private.rel_param,
 			    h->private.rel_flag);
 	key_observe(&e);
 }
@@ -294,7 +287,7 @@ int fenykl_key_add(struct fenykl_key_handler *h)
 	struct fenykl_key_handler **pp;
 	uint32_t psw;
 
-	if (!h->on || !h->keys || (h->keys & ~KEY_ALL) || h->long_us >= FENYKL_KEY_LONG_MAX) {
+	if (!h->on || !h->keys || (h->keys & ~key_avail()) || h->long_us >= FENYKL_KEY_LONG_MAX) {
 		fenykl_log_err(&fenykl_key_log, "add %s: on %p keys %x long_us %u", h->name, h->on,
 			       h->keys, h->long_us);
 		return FENYKL_KEY_EARG;
@@ -340,11 +333,11 @@ void fenykl_key_get_stats(struct fenykl_key_stats *st)
 
 int fenykl_key_inject(enum fenykl_key k)
 {
-	if (!key_is_button(k)) {
-		fenykl_log_err(&fenykl_key_log, "inject: key %u is not a button", k);
+	if (!key_is_button(k) || !fenykl_key_codes[k]) {
+		fenykl_log_err(&fenykl_key_log, "inject: key %u is not a button of this body", k);
 		return FENYKL_KEY_EARG;
 	}
-	fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | key_codes[k], 0, 0);
-	fenykl_event_inject(FENYKL_EVENT_KEY_RELEASE | key_codes[k], 0, 0);
+	fenykl_event_inject(FENYKL_EVENT_KEY_PRESS | fenykl_key_codes[k], 0, 0);
+	fenykl_event_inject(FENYKL_EVENT_KEY_RELEASE | fenykl_key_codes[k], 0, 0);
 	return 0;
 }

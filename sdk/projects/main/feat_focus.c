@@ -18,6 +18,7 @@ struct feat_focus_state {
 	char text[FEAT_FOCUS_TEXT_SIZE];
 	uint32_t changes;	/* values drawn */
 	uint32_t refused;	/* renders refused by the library (font or glyph) */
+	uint32_t read;		/* first read of the tick last logged */
 };
 
 static struct feat_focus_state feat_focus_st = {
@@ -107,8 +108,13 @@ int feat_focus_add(struct fenykl_hud_elem *e, const char *label,
 	return r;
 }
 
+/* The lens readings once, raw, for the log: they check the body's lens group. */
 static int feat_focus_start(void)
 {
+	fenykl_log_info(&feat_focus_log, "lens attached %u focal %u av %u iris %x",
+			fenykl_lens_attached(), fenykl_lens_focal_mm(), fenykl_lens_av(),
+			fenykl_lens_iris_av());
+	fenykl_log_info(&feat_focus_log, "lens obj_dst %u", fenykl_lens_focus_mm());
 	return feat_focus_add(&feat_focus_st.elem, FEAT_FOCUS_LABEL, &feat_focus_log);
 }
 
@@ -121,6 +127,10 @@ static void feat_focus_tick(void)
 	a = feat_focus_read();
 	fenykl_task_sleep(FEAT_FOCUS_PAIR_MS);
 	b = feat_focus_read();
+	if (a != st->read) {
+		st->read = a;
+		fenykl_log_dbg(&feat_focus_log, "read %u, %u", a, b);
+	}
 	if (!feat_focus_filter(&st->filter, a, b, feat_focus_show, &v))
 		return;
 	if (v == FEAT_FOCUS_HIDDEN) {

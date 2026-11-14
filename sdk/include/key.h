@@ -13,8 +13,10 @@
 #include "event.h"
 #include "log.h"
 
-/* Named keys; key.c maps them to the firmware key codes. All but POWER are camera-seen
-   through the hook. No rear dial: it posts no APPEVENT on the camera (key.md 5). */
+/* Named keys; the camera's key map (lib/key_<camera>.c) gives their firmware key codes, 0 for a
+   key the body lacks (fenykl_key_add and fenykl_key_inject refuse it). Dials stay out: the E-PL3's
+   rear dial posts no APPEVENT, the E-M10 II's dials post class 0x0203, passed as unknown (key.md 5).
+   Numbers are not stable: log them, do not store them. */
 enum fenykl_key {
 	FENYKL_KEY_NONE,
 	FENYKL_KEY_OK,
@@ -26,12 +28,15 @@ enum fenykl_key {
 	FENYKL_KEY_MENU,
 	FENYKL_KEY_PLAY,
 	FENYKL_KEY_DEL,
-	FENYKL_KEY_FN,
+	FENYKL_KEY_FN,		/* Fn (E-M10 II: Fn1) */
 	FENYKL_KEY_REC,		/* R (movie) */
 	FENYKL_KEY_HALF,	/* shutter half press (Trg1) */
 	FENYKL_KEY_FULL,	/* shutter full press (Trg2) */
-	FENYKL_KEY_POWER,	/* not exercised on the camera */
-	FENYKL_KEY_MODE_DIAL,	/* VALUE only */
+	FENYKL_KEY_POWER,	/* E-PL3 only, not exercised on the camera */
+	FENYKL_KEY_FN2,		/* E-M10 II only */
+	FENYKL_KEY_FN3,		/* E-M10 II only */
+	FENYKL_KEY_LFN,		/* E-M10 II only: the lens's L-Fn button */
+	FENYKL_KEY_MODE_DIAL,	/* VALUE only; every key before it is a button */
 	FENYKL_KEY_COUNT,
 };
 #define FENYKL_KEY_BIT(k) (1u << (k))
@@ -63,9 +68,10 @@ struct fenykl_key_handler {
 	void (*on)(const struct fenykl_key_event *ev, void *arg);	/* handler rules (key.md 4) */
 	void *arg;
 	uint32_t long_us;	/* 0 = FENYKL_KEY_LONG_US; < FENYKL_KEY_LONG_MAX */
-	/* A long hold replays the press to the firmware instead of LONG. The firmware then sees ONE
-	   late press, not the hold: right for a key whose stock function is one action (Fn), wrong
-	   for arrows in menus and playback (key.md 3.1). */
+	/* A long hold replays the press to the firmware instead of LONG: with fenykl_key_tick at
+	   long_us while the key is held (the firmware sees a held key, long_us late), else at the
+	   release, back to back with it (one late press: a hold or long-press stock function of the
+	   key cannot run). Wrong for arrows in menus and playback (key.md 3.1). */
 	bool long_stock;
 	volatile bool enabled;	/* false: no new claims or deliveries; a held key still completes */
 	struct {
@@ -84,7 +90,7 @@ struct fenykl_key_handler {
 #define FENYKL_KEY_LONG_MAX (1u << 29)
 #define FENYKL_KEY_EVENT_PRIO 128u
 #define FENYKL_KEY_EBUSY (-1)	/* handler already registered */
-#define FENYKL_KEY_EARG (-2)	/* no on, keys empty or unknown bits, long_us too large, bad key */
+#define FENYKL_KEY_EARG (-2)	/* no on, keys empty or not on this body, long_us too large, bad key */
 
 struct fenykl_key_stats {
 	uint32_t presses, releases, values;	/* key-class events in the table (values: mode dial) */
@@ -108,7 +114,7 @@ void fenykl_key_tick(void) FENYKL_CPU0_ONLY("fenykl_key_tick");
 void fenykl_key_get_stats(struct fenykl_key_stats *st);
 
 /* Press+release of k through the stock entry: the firmware acts, ui_key_get_state does not see it.
-   CPU0 task or handler. 0 or FENYKL_KEY_EARG (NONE, the mode dial). */
+   CPU0 task or handler. 0 or FENYKL_KEY_EARG (NONE, the mode dial, a key the body lacks). */
 int fenykl_key_inject(enum fenykl_key k) FENYKL_CPU0_ONLY("fenykl_key_inject");
 
 #endif

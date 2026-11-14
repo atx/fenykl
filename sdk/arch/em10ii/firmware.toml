@@ -86,6 +86,27 @@ note = "boot1b; ret [d2,d3,a2,a3],52 at 0x60069EC7; all 9 CALLs use [d2,d3,a2,a3
 cores = ["cpu0"]
 cores_evidence = "verified: the task is created on the calling core (acre_tsk on the own KCB, Oly task table 0xA1BE33D0 + core * 0x480 at 0x60069DC4); from CPU1 it would be a CPU1 task"
 
+# Task wait and wakeup (fenykl_task_wait/_wake, fenykl_target.h). The AVM layer pairs them the same
+# way: 0x60467EBC waits with tslp_tsk(-1), 0x60467EE0 wakes it with OlyTaskWakeup.
+
+[tslp_tsk]
+address = 0x60037B8B
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x14
+evidence = "high"
+returns = "int"
+args = ["d int timeout"]
+note = "boot1; kernel k_tslp_tsk, no Oly wrapper on this body: ret [d2,d3,a2,a3],20 at 0x60037C43; all 6 CALLs (0x60467EC0, 0x606B645D, 0x60E1D98B, 0x60E1E663, 0x610195BC, 0x6101984B) use [d2,d3,a2,a3],20. Returns -25 (E_CTX) when the KCB +0x10 context byte is set and -17 (E_PAR) for a timeout below -1; else takes one queued wakeup (TCB +0x15, returns 0), returns -50 at timeout 0 (poll), waits forever at -1, otherwise ticks + 1 on the timeout queue, with wait reason 1 (0x600345B7(tcb, 1)), and returns TCB +0x40: 0 woken, -50 timed out (k_dly_tsk maps exactly -50 to 0)"
+
+[OlyTaskWakeup]
+address = 0x600698D7
+saves = ["d2", "d3"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int id"]
+note = "boot1b; ret [d2,d3],12 at 0x60069900; both CALLs (0x6007123D, 0x60467EF8) use [d2,d3],12 with D0 = id. exth d0, then k_wup_tsk 0x60038368: releases a task waiting with reason 1 (tslp_tsk), else counts the wakeup up in TCB +0x15 for its next tslp_tsk (E_QOVR -43 at 255). It does not end OlyTaskSleep (dly_tsk, reason 2). Returns 0, or -1 with an error print"
+
 [malloc]
 address = 0x600233DF
 saves = []
@@ -698,6 +719,42 @@ address = 0x60D3C4C4
 type = "36-byte Custom-list row record"
 evidence = "high"
 note = "sec4 rodata, row 7 of the tab K row table 0x60D3C3EC (rows* of custom_tabs record 13): u16 +0 row id 0x193, +8 title {u16 kind 4, u16 lang 0x5FA 'Eye-Fi', u32 0x60D38D30}, +0x10 help {4, 0x1DF, 0x60D38D30}, +0x18 value table 0x60D39E68 ({u32 value, title} x 2: 0 -> lang 0x5AE, 1 -> lang 0xC6), +0x1C value function 0. The model copies a title with 0x609F6AA1: kind 4 -> lang id at cell +4; kinds 1/2/5/6 -> the ASCII string at the u32 widened into cell +8 (0x609F6B00, unbounded: at most 32 characters). The view (0x60A59995, jump table 0x60D69F54) draws kind 5 as that string verbatim (0x60A59A23); stock value tables use kind 5 (e.g. ISO 0x60D39370)"
+
+# ======================================================================================================
+# --- Lens: the body.h lens group (fenykl_body.h) ---
+# The CPU0 lens code (LENS_MAIN and the lens IRQ 3 completions) writes all of it, in uncached RAM that
+# the firmware itself accesses uncached. Lens record: the pointer u32 0xA1C0004C, set once per boot by
+# its only store 0x6014D85B ((0xA1C00050 + 0x3F) & ~0x3F = 0xA1C00080, from usr0 0x60041CE6 through
+# 0x6014350E and 0x6014D849) and never reallocated at a lens change, so the fixed addresses below equal
+# the reads through the pointer. lens_info_get(0) 0x60149C80 -> 0x6014D92A returns it while
+# lens_attached is set, else 0. The shooting Av is prop 0xA03A (fenykl_body.h).
+
+[lens_focal_length_now]
+address = 0x60171AE1
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "unsigned"
+args = []
+note = "sec1 (callable after Usr0 loaded it); ret [],4 at 0x60171AF6; both CALLs (0x60172074, 0x60172083 in lens_get_focal_info 0x60172053) use [],4 and store D0 with movhu. clr d0; lens_info_get(0); 0 without a lens (no dereference), else 0x60171AF9(record + 4): the zoom step's focal length from the lens's per-step table (record + 0x274, interpolated by 0x60171C62), scaled by a teleconverter's factor, >> 1. Integer mm: the step-0 and last-step values 0xA1C12DF8/0xA1C12DFC are what EXIF writes as LensInfo min/max focal with denominator 1 (0x6016260C). The GUI (api_rec_Get_Zoom_Focal_Length 0x602DEE46) reads the same function. Its call tree only reads memory"
+
+[data.lens_attached]
+address = 0xA1BFFDB4
+type = "u16"
+evidence = "high"
+note = "0 = no electronic lens; the predicate of lens_info_get(0) (0x6014646B), api_rec_Get_LensConnection 0x602D9E94 and EXIF's no-lens branch (0x6016260C). Of its 54 stores one writes 1: 0x601444DD in the lens setup completion 0x60144495, after a setup without error; the others clear it (setup failure, detach, power-down, boot init 0x6014354D, clear loop 0x60146478)"
+
+[data.lens_obj_dst]
+address = 0xA1C0008C
+type = "u32"
+evidence = "high"
+note = "object (focus) distance in mm, 0xFFFFFFFF = infinity: lens record + 0xC, no absolute reference (written through the record pointer). Writers: the M_STATUS_LV parser 0x60151A2E (raw le16 at 0x60151AA4, then raw * 5 or 0xFFFFFFFF for 0xFFFF at 0x60151AC3) and the fast status parser 0x6014F223 (same encoding), both in the lens completion path on CPU0. Refreshed every live-view sync cycle (0x601705FD -> lens_poll_status 0x6016B0DB, no focus-mode test), seen on the camera following S-AF locks, C-AF and the MF ring (kit lens); keeps its last value without a lens"
+
+[data.av_effect]
+address = 0xA1C00090
+type = "u16"
+evidence = "medium"
+note = "live iris word: lens record + 0x10, M_STATUS_LV reply bytes 8..9 (store 0x60151AD0). Scale unknown: the camera read 0x1A2 throughout with the kit lens wide open in P, where APEX x 256 of f/3.5 is about 925; logged only"
 
 # ======================================================================================================
 # --- Contrast driver client: the own contrast client (lib/afc.c) and the AF statistics read path ---

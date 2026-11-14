@@ -1,8 +1,8 @@
 /*
  * main: depth-of-field element: the total depth from the focus distance,
  * the focal length and the shooting aperture (main_dof.c), under a "DoF" label below the focus
- * element; rendered on change only. At level debug every change logs its inputs, so the camera run
- * can check them against `exiftool -DOF` of a JPEG.
+ * element; rendered on change only. At level debug every change of its inputs and of the depth is
+ * logged, so the camera run can check them against `exiftool -DOF` of a JPEG.
  */
 #include "main.h"
 #include "main_dof.h"
@@ -21,6 +21,7 @@ struct feat_dof_state {
 	char text[FEAT_DOF_TEXT_SIZE];		/* on screen, "" while hidden */
 	uint32_t changes;	/* values drawn */
 	uint32_t refused;	/* renders refused by the library (font or glyph) */
+	uint32_t in[4];		/* s, f, av, iris last logged */
 };
 
 static struct feat_dof_state feat_dof_st = {
@@ -57,6 +58,21 @@ static void feat_dof_hide(void)
 		       feat_dof_show);
 }
 
+/* At level debug, the inputs whenever one changes (av follows AE in P and S). */
+static void feat_dof_log_inputs(uint32_t s, uint32_t f, uint32_t av)
+{
+	struct feat_dof_state *st = &feat_dof_st;
+	uint32_t iris = fenykl_lens_iris_av();
+
+	if (s == st->in[0] && f == st->in[1] && av == st->in[2] && iris == st->in[3])
+		return;
+	st->in[0] = s;
+	st->in[1] = f;
+	st->in[2] = av;
+	st->in[3] = iris;
+	fenykl_log_dbg(&feat_dof_log, "s %u f %u av %u iris %u", s, f, av, iris);
+}
+
 static bool feat_dof_same(const char *a, const char *b)
 {
 	while (*a && *a == *b)
@@ -84,6 +100,7 @@ static void feat_dof_tick(void)
 	}
 	f = fenykl_lens_focal_mm();
 	av = fenykl_lens_av();
+	feat_dof_log_inputs(s, f, av);
 	/* Av 0 is f/1.0, but also the prop before AE has set it */
 	if (!av || !main_dof_calc(&d, s, f, av, FEAT_DOF_COC_UM)) {
 		feat_dof_hide();
@@ -102,9 +119,7 @@ static void feat_dof_tick(void)
 	for (unsigned int i = 0; i < sizeof(text); i++)
 		st->text[i] = text[i];
 	st->changes++;
-	fenykl_log_dbg(&feat_dof_log, "s %u f %u av %u iris %u", s, f, av,
-		       fenykl_lens_iris_av());
-	fenykl_log_dbg(&feat_dof_log, "  N1000 %u near %u far %u dof %u", d.n1000, d.near, d.far,
+	fenykl_log_dbg(&feat_dof_log, "N1000 %u near %u far %u dof %u", d.n1000, d.near, d.far,
 		       d.depth);
 }
 

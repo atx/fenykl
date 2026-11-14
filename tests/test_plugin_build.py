@@ -52,6 +52,7 @@ def test_feature_libraries_follow_the_target_capabilities():
     assert names("epl3") == {p.name for p in plugin.LIB.glob("*.c")} - {
         "ui_em10ii.c",
         "hud_em10ii.c",
+        "key_em10ii.c",
         "precap_em10ii.c",
     }
     assert names("em10ii") == {
@@ -62,6 +63,8 @@ def test_feature_libraries_follow_the_target_capabilities():
         "event.c",
         "hud.c",
         "hud_em10ii.c",
+        "key.c",
+        "key_em10ii.c",
         "log.c",
         "log_rec.c",
         "precap_em10ii.c",
@@ -349,6 +352,26 @@ def test_main_links_the_focus_meter_contrast_client_and_precap_for_the_em10ii(tm
         "fenykl_cb_seq_frame_done_cb_precap_frame_done",
     ):
         assert f" {name}\n" in symbols
+
+
+@needs_toolchain
+def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path):
+    """Focus distance, DoF and the Fn override with the E-M10 II key map and lens readings. Without
+    an Fn action on this body the key install is not reachable, so only the tick links."""
+    plugin.build(MAIN_DIR, tmp_path, sdk.target("em10ii"))
+    symbols = (tmp_path / "plugin.map").read_text()
+    for name in (
+        "feat_focus",
+        "feat_dof",
+        "main_fn_tick",
+        "fenykl_key_tick",
+        "fenykl_key_codes",
+        "fw_lens_focal_length_now",
+    ):
+        assert f" {name}\n" in symbols
+    assert re.search(
+        r"\.rodata\.fenykl_key_codes\n\s+0x\w+\s+0x\w+ \S*/lib_key_em10ii\.c\.o\n", symbols
+    )
 
 
 @needs_toolchain

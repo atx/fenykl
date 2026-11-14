@@ -21,6 +21,11 @@ static inline bool fenykl_gui_playback(void)
 	return fenykl_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_PLAY;
 }
 
+static inline bool fenykl_gui_menu(void)
+{
+	return fenykl_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_MENU;
+}
+
 #if FENYKL_HAS_LENS
 #define FBODY_PROP_AV 0xA03Au		/* setting 3001: shooting Av, u16 */
 

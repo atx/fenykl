@@ -47,7 +47,7 @@ static inline int fenykl_fclose(void *fp)
 /* fw_sprintf: at most 8 variadic words. */
 #define fenykl_sprintf(...) fw_sprintf(__VA_ARGS__)
 
-/* Task and interrupt helpers, implemented per target in fenykl_target.h (E-PL3 only so far). */
+/* Task and interrupt helpers, implemented per target in fenykl_target.h. */
 /* Masks this core's interrupts; fenykl_irq_restore(the result) undoes it. */
 static inline uint32_t fenykl_irq_save(void);
 static inline void fenykl_irq_restore(uint32_t psw);

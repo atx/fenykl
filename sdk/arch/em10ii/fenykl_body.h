@@ -1,11 +1,12 @@
-/* E-M10 II part of body.h (included from there): the GUI, batt and afc groups on the v1.4
+/* E-M10 II part of body.h (included from there): the GUI, lens, batt and afc groups on the v1.4
    firmware's data. The other groups are not implemented on this body (target.toml capabilities). */
 #ifndef FENYKL_BODY_TARGET_H
 #define FENYKL_BODY_TARGET_H
 
 #define FENYKL_GUI_SS_LV 0x01u		/* super state of the live-view screens */
 #define FENYKL_GUI_ST_LV 0x08u		/* its state while live view is shown */
-#define FENYKL_GUI_SS_PLAY 0x06u	/* single playback, from static analysis only */
+#define FENYKL_GUI_SS_MENU 0x11u	/* main menu (SsMenu), the plugin settings page included */
+#define FENYKL_GUI_SS_PLAY 0x06u	/* playback: camera-seen as 0x06xx */
 
 /* A property's object, 0 if unregistered: the lookup 0x60076078 (the override table first) without
    the getter 0x60076FD9's core-view mapping 0x600750FD, which is the identity on CPU0. */
@@ -34,6 +35,43 @@ static inline bool fenykl_gui_playback(void)
 {
 	return FENYKL_GUI_SUPER(fenykl_gui_state()) == FENYKL_GUI_SS_PLAY;
 }
+
+static inline bool fenykl_gui_menu(void)
+{
+	return fenykl_rd8(FW_GUI_SUPER) == FENYKL_GUI_SS_MENU;
+}
+
+#if FENYKL_HAS_LENS
+#define FBODY_PROP_AV 0xA03Au		/* setting 3001: shooting Av, u16, written on CPU0 */
+
+static inline bool fenykl_lens_attached(void)
+{
+	return fenykl_rd16(FW_LENS_ATTACHED) != 0;
+}
+
+static inline uint32_t fenykl_lens_focus_mm(void)
+{
+	return fenykl_rd32(FW_LENS_OBJ_DST);
+}
+
+static inline uint32_t fenykl_lens_focal_mm(void)
+{
+	return fw_lens_focal_length_now() & 0xFFFFu;
+}
+
+static inline uint32_t fenykl_lens_av(void)
+{
+	uint32_t p = fbody_prop_obj(FBODY_PROP_AV);
+
+	return fenykl_dram_ptr(p, 2) ? fenykl_rd16(p) : 0;
+}
+
+/* A raw word of unknown scale on this body (firmware.toml av_effect). */
+static inline uint32_t fenykl_lens_iris_av(void)
+{
+	return fenykl_rd16(FW_AV_EFFECT);
+}
+#endif
 
 #if FENYKL_HAS_BATT
 #define FBODY_SRC_BATT 0x200u

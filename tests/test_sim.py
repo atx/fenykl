@@ -51,6 +51,9 @@ firmware functions placed at their real firmware addresses. Every C test program
   cw_updateDisplay spans: install, calls through stub and trampoline, remove, EBYTES and the
   bounded I-cache wait (stuck ICBUSY -> EICACHE, stock bytes back), and a one-byte code patch.
 - slots: callbacks and slots, plus synthetic callback shapes.
+- key_em10ii: the key layer with the E-M10 II key map over the event layer and the E-M10 II hook
+  runtime: Fn1 claimed in live view and the menu, Fn2/Fn3/REC/L-Fn/RIGHT decoded, the E-PL3's POWER
+  code and code 0 unknown, POWER refused by add and inject.
 - ui_em10ii: the E-M10 II settings page (sdk/lib/ui_em10ii.c) entered through its slot words and
   screen methods: install all or nothing, the push onto a fake menu app, the slot 0x38 image,
   keys, an edit, MENU through the app's pop method, the delete, the default handler.
@@ -482,6 +485,35 @@ def test_em10ii_hooks_run_in_the_simulator(tmp_path):
         cpu1_unproven=["cw_updateDisplay"],
     )
     assert_exit(result, 0, "tests/sim/hooks_em10ii/test_hooks.c")
+
+
+def test_em10ii_key_map_runs_in_the_simulator(tmp_path):
+    """The key layer with the E-M10 II key map, through the patched appevent_post on a recording
+    mock at its real address."""
+    key = SIM / "key_em10ii"
+    result = run_in_simulator(
+        tmp_path,
+        "keysim_em10ii",
+        [key / "test_key.c", SIM / "hooks_em10ii" / "sim_start.S", key / "fw.S"],
+        # DRAM up to the GUI bytes and the init byte appevent_post's span reads, with its uncached
+        # alias; the timer; the mock bodies.
+        [
+            ("--memory-alias", "0x60000000,0x2000000,0xa0000000"),
+            TIMER,
+            region("0x6eb00000,0x10000"),
+        ],
+        mocked=[
+            "appevent_post",
+            "psw_get",
+            "irq_disable_all",
+            "irq_mask_restore",
+            "irq_lock",
+            "irq_unlock",
+            "dcache_flush_all",
+        ],
+        target=EM10II,
+    )
+    assert_exit(result, 0, "tests/sim/key_em10ii/test_key.c")
 
 
 def test_em10ii_ui_runs_in_the_simulator(tmp_path):

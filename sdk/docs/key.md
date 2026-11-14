@@ -1,13 +1,16 @@
 # Key layer (`sdk/lib/key.c`)
 
-Status: simulator-tested (`tests/sim/key/`); two camera runs with a key probe (2026-10-17): every
-key code but POWER seen through the hook, all on `ui_key_task`, layer counters clean (section 4).
-The rear dial posts no APPEVENT and is not part of the layer (section 5). A claim consumes a key's
-events but does **not** hide a hold from the firmware (section 3.1). Used by main's Fn override
-(short Fn runs the action, long Fn replays the stock function on release) and the Fn screenshot of
-birddetect6. Linked into every plugin, like all of `sdk/lib/`; a plugin that does not call
-`fenykl_key_*` gets no byte of it
-(`--gc-sections`).
+Status: simulator-tested (`tests/sim/key/`, and the E-M10 II key map in `tests/sim/key_em10ii/`);
+E-PL3: two camera runs with a key probe (2026-10-17): every key code but POWER seen through the
+hook, all on `ui_key_task`, layer counters clean (section 4). E-M10 II: the key map's codes are
+camera-seen through a hook probe (section 5), the layer itself has not run on that camera. The
+E-PL3's rear dial posts no APPEVENT and is not part of the layer (section 5). A claim consumes a
+key's events but does **not** hide a hold from the firmware (section 3.1). Used by main's Fn
+override (short Fn runs the action; a held Fn is replayed to the firmware by `fenykl_key_tick` at
+`long_us` while still held, so the stock function runs late) and the Fn screenshot of birddetect6.
+main's tick-timed replay has not yet run on either camera: the E-PL3 runs so far replayed at the
+release. The library is built for targets with the `key` capability; a plugin that does not call
+`fenykl_key_*` gets no byte of it (`--gc-sections`).
 
 ## 1. What it does
 
@@ -43,7 +46,7 @@ DEBUG lines: set `fenykl_key_log.level = FENYKL_LOG_DEBUG` to see them).
 | `fenykl_key_tick()` | plugin task, optional, every ~50 ms | LONG / the replay at `long_us` while held (section 3) |
 | `fenykl_key_get_stats(st)` | any | layer counters (section 4) |
 | `fenykl_key_inject(k)` | CPU0 task or handler | press + release of a button through the stock entry (`fenykl_event_inject`): the firmware acts, `ui_key_get_state` keeps reporting the key up; `EARG` for NONE and the mode dial |
-| `fenykl_gui_state()` | any | from `body.h` (key.h includes it): GUI super state << 8 \| state, the camera's own encoding; E-PL3: u8 bytes at 0x60702278, `FENYKL_GUI_SUPER()`, `FENYKL_GUI_SS_REC` (0x02, every live-view screen), `_MENU` (0x03), `_PLAY` (0x06) from `arch/epl3/fenykl_body.h`. A plugin for several cameras asks `fenykl_gui_live_view()` / `fenykl_gui_playback()` instead |
+| `fenykl_gui_state()` | any | from `body.h` (key.h includes it): GUI super state << 8 \| state, the camera's own encoding; E-PL3: u8 bytes at 0x60702278, `FENYKL_GUI_SUPER()`, `FENYKL_GUI_SS_REC` (0x02, every live-view screen), `_MENU` (0x03), `_PLAY` (0x06) from `arch/epl3/fenykl_body.h`. A plugin for several cameras asks `fenykl_gui_live_view()` / `fenykl_gui_menu()` / `fenykl_gui_playback()` instead |
 
 A handler node is the plugin's static storage and stays added for the boot; `enabled = false`
 stops new claims and deliveries (a key it already holds still completes). The fields under
@@ -148,6 +151,10 @@ blocking firmware calls, no `fenykl_hud_text`/`draw`, no `fenykl_cfg_set`, no `f
 small frames; state shared with the plugin task in single word stores (e.g. a `req++`).
 `fenykl_log_*`, `fenykl_event_inject` and `fenykl_key_inject` are allowed.
 
+E-M10 II (static, not measured): key-class events come from UI_IN (priority 44, stack 0x800),
+PWR_STANDBY (wake keys, stack 0x800) and PER_EYE_SENSOR (0x02022301 only, stack 0x400). The last
+one pays the layer's lookup on a 1 KiB stack; its code is in no map, so nothing is delivered there.
+
 Layer counters (`struct fenykl_key_stats`): `presses`, `releases`, `values` (mode dial), `claimed`
 (presses and mode dial values a handler claimed), `unknown` and `last_unknown`, `ticks_long` (LONGs and
 replays the tick decided). Per handler, under `private`: `shorts`, `longs`, `replays`, `busy`.
@@ -158,22 +165,31 @@ margin unchanged.
 
 ## 5. Keys
 
-Adding a key is one line in `key_codes[]`.
+Each camera has its key map, `fenykl_key_codes[]` in `lib/key_<camera>.c` (built with `key.c` for that
+camera only). Adding a key is one line there, plus an enum entry before `FENYKL_KEY_MODE_DIAL`
+for a new button (`key_is_button` is `k < MODE_DIAL`); the enum numbers shift, so nothing may
+store them. A key the body lacks has code 0: `key_lookup` never returns it, `fenykl_key_add`
+refuses a handler listing it and `fenykl_key_inject` refuses it (`FENYKL_KEY_EARG`).
 
-| key | code | evidence |
-| --- | --- | --- |
-| OK, UP, DOWN, LEFT, RIGHT | 0x0004..0x0008 | camera-seen |
-| INFO, MENU, PLAY, DEL | 0x1205, 0x0089, 0x0087, 0x0084 | camera-seen |
-| FN | 0x000B | camera-seen (2026-10-14) |
-| REC | 0x1209 | camera-seen: two R presses started and stopped recording (GUI 0x020F -> 0x0212) |
-| HALF, FULL | 0x0100, 0x0101 | camera-seen; a shot posts HALF press, FULL press, FULL release, HALF release |
-| POWER | 0x000C | code verified; not exercised |
-| MODE_DIAL | 0x1901 (class 0x0202) | camera-seen: one VALUE per step, `fw_ui_key_get_state(0x02021901)` agreed every time |
+| key | E-PL3 | E-M10 II | evidence |
+| --- | --- | --- | --- |
+| OK, UP, DOWN, LEFT | 0x0004..0x0007 | same | camera-seen on both |
+| RIGHT | 0x0008 | same | E-PL3 camera-seen; E-M10 II: key state seen on the camera, the map entry is a button (static), no event seen yet |
+| INFO, MENU, PLAY, DEL | 0x1205, 0x0089, 0x0087, 0x0084 | same | camera-seen on both |
+| FN | 0x000B | 0x000B (Fn1) | camera-seen on both (E-PL3 2026-10-14) |
+| REC | 0x1209 | 0x120A | camera-seen: R presses started and stopped recording (E-PL3 GUI 0x020F -> 0x0212) |
+| HALF, FULL | 0x0100, 0x0101 | same | camera-seen; a shot posts HALF press, FULL press, FULL release, HALF release |
+| POWER | 0x000C | 0 | E-PL3: code verified, not exercised. E-M10 II: the lever is a switch posting the value 0x0202000C (the power-off event): mapped, a claimer could consume it |
+| FN2, FN3 | 0 | 0x1209, 0x1224 | camera-seen |
+| LFN | 0 | 0x2202 | the lens's L-Fn: a button in the static key map, its level set by the lens driver; no event seen yet |
+| MODE_DIAL | 0x1901 (class 0x0202) | same | camera-seen: one VALUE per step (E-PL3: `fw_ui_key_get_state(0x02021901)` agreed every time) |
 
-Not in the table, passed as `unknown`: 0x0202121C (VALUE, twice while the lens release button was
-held; LpSw [inferred]) and 0x02031902, the rear dial event of the static analysis.
+Not in the table, passed as `unknown`: on the E-PL3 0x0202121C (VALUE, twice while the lens release
+button was held; LpSw [inferred]) and 0x02031902, the rear dial event of the static analysis; on the
+E-M10 II the dials' 0x02031903 (front) and 0x02031902 (rear), one per detent and without a delta,
+the eye sensor's 0x02022301 and switch values such as 0x02021215, 0x02022402 and 0x02021519.
 
-**No rear dial.** In the recheck the rear dial was turned (the shutter speed / exposure values
+**No rear dial (E-PL3).** In the recheck the rear dial was turned (the shutter speed / exposure values
 on screen changed), but the hook saw no APPEVENT at all in that window (only the periodic
 0x04030020), and the step counters at 0x60551610/12, polled every 50 ms, stayed 0. The dial input
 takes another path (unknown), so the layer offers no rear dial key.
@@ -196,4 +212,7 @@ nothing; busy handlers; the tick before and at `long_us` for both kinds, and a r
 the tick delivers LONG arriving after it; claimed and passed mode dial values; unknown codes and
 classes (0x02031902 among them);
 a disabled holder completing; `add` errors and install idempotence; `fenykl_key_inject`; the
-counters.
+counters. `tests/sim/key_em10ii/test_key.c` runs the layer with the E-M10 II key map through the
+E-M10 II hook runtime: Fn1, Fn2, Fn3 and REC decode to their keys, a claimed Fn1 completes as
+SHORT, the E-PL3's codes 0x000C (POWER) and 0x1209 (its REC) decode as Fn2 or not at all, and
+`add` and `inject` refuse POWER.

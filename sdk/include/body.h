@@ -24,6 +24,8 @@ static inline uint16_t fenykl_gui_state(void);
 static inline bool fenykl_gui_live_view(void);
 /* The GUI shows single playback. */
 static inline bool fenykl_gui_playback(void);
+/* The GUI shows the main menu (the plugin settings page included). */
+static inline bool fenykl_gui_menu(void);
 
 /* --- lens: lens and exposure readings; CPU0 --- */
 #if FENYKL_HAS_LENS
@@ -31,11 +33,13 @@ static inline bool fenykl_gui_playback(void);
 static inline bool fenykl_lens_attached(void);
 /* Object (focus) distance in mm, 0xFFFFFFFF = infinity; meaningless without a lens. */
 static inline uint32_t fenykl_lens_focus_mm(void);
-/* Focal length in integer mm of the live lens state (the firmware's default without a lens). */
+/* Focal length in integer mm of the live lens state; without a lens the firmware's default
+   (E-PL3) or 0 (E-M10 II). */
 static inline uint32_t fenykl_lens_focal_mm(void);
 /* Shooting Av, APEX x 256; 0 while unset (also f/1.0). */
 static inline uint32_t fenykl_lens_av(void);
-/* Live iris Av, APEX x 256 (for logs: not checked against the shooting Av). */
+/* Live iris word, for logs only: APEX x 256 on the E-PL3 (not checked against the shooting Av),
+   of unknown scale on the E-M10 II. */
 static inline uint32_t fenykl_lens_iris_av(void);
 #endif
 

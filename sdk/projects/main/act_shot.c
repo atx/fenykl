@@ -8,9 +8,7 @@
 
 static bool act_shot_claim(void)
 {
-	uint32_t ss = FENYKL_GUI_SUPER(fenykl_gui_state());
-
-	return ss == FENYKL_GUI_SS_REC || ss == FENYKL_GUI_SS_MENU;
+	return fenykl_gui_live_view() || fenykl_gui_menu();
 }
 
 static int act_shot_start(uint32_t press_us)

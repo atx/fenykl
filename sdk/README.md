@@ -26,7 +26,7 @@ HUD's battery percentage (runs on the camera; no Fn override) and `hello` on the
 | logging library (`lib/log*.c`) | **works on the camera**: init, `"a"` append, overflow counters, CPU1 ring, hook and console tee, flushes into standby. Not run: wake from standby, the 4 MiB cap. `fw_malloc` refuses more than 0x3FFC bytes |
 | configuration, HUD and settings page libraries (`lib/cfg.c`, `lib/hud.c`, `lib/ui.c` + `lib/ui_epl3.c`) | simulator (`tests/`); **on the camera** (E-PL3) through `projects/main` |
 | E-M10 II settings page (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); **works on the camera** in `projects/main` (2026-10-21 and 2026-10-23): "Fenykl" row, page open, RIGHT stepping the value, MENU popping the page, half press closing the menu, reopen after a half press, `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle; all on CPU0. Not run: dials, LEFT, several rows |
-| event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`); **on the camera** through `projects/main`, counters clean (`docs/key.md` 4) |
+| event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`); E-PL3: **on the camera** through `projects/main`, counters clean (`docs/key.md` 4); main's Fn override with the tick-timed replay (`fenykl_key_tick`, the key probe's tick path ran in `docs/key.md` 3.1) not yet run on the camera. E-M10 II: simulator only (`key_em10ii`) |
 | USB boot skip (`fenykl_usb_attached`, power-on factor 0x60551630 == 0x400) | **works on the camera**: a cable-started boot skips the plugin, a power-button boot runs it |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | **on the camera**: the gate closed on a cable plugged into a running E-PL3; reopening after the USB session corrupted the FAT (2026-10-19), so the gate now stays closed until power-off once a cable was seen; that rule: simulator (`tests/test_log_sim.py`, `tests/test_cfg_sim.py`) |
 | E-PL3 focus peaking (`peak` group in `arch/epl3/fenykl_body.h`, `projects/main`) | **works on the camera** in `projects/main`, tried by hand without a log check: red edges over the still live view, slight lag. Known: the overlay can stop updating after MF assist is left with a half press; no peaking in the MF assist (magnified) view |
@@ -227,8 +227,8 @@ cpu1_unproven = ["img_exec"]
 
 | capability | API | E-PL3 source |
 |---|---|---|
-| (all) | `fenykl_gui_live_view`, `fenykl_gui_playback` | `gui_super` |
-| `lens` | `fenykl_lens_attached`, `_focus_mm`, `_focal_mm`, `_av`, `_iris_av` | `lens_attached`, `lens_obj_dst`, `lens_focal_length_now`, prop 0xA03A, `av_effect` |
+| (all) | `fenykl_gui_live_view`, `fenykl_gui_menu`, `fenykl_gui_playback` | `gui_super` |
+| `lens` | `fenykl_lens_attached`, `_focus_mm`, `_focal_mm`, `_av`, `_iris_av` | `lens_attached`, `lens_obj_dst`, `lens_focal_length_now`, prop 0xA03A, `av_effect` (E-M10 II: the same names in the lens record; focal length 0 without a lens, `av_effect` of unknown scale) |
 | `batt` | `fenykl_batt_read`, `fenykl_power_src`, `fenykl_power_src_batt` | `bchk_ad_read` under semaphore 5, `power_src(_check)` (E-M10 II: `batt_vbat`, the 1 Hz check's stored value, and `power_src(_check)`) |
 | `afc` | also `fenykl_af_mf`, `_half`, `_target_area`, `_all_targets`, `_grid`; the contrast driver protocol for `lib/afc.c`: `fenykl_cnt_*`, `FENYKL_CNT_*` | `take_focus`, `trg_snapshot`, props 0x88B2/0x84D1, `take_fcs_af_mode2fcs`, fcs's contrast context and DMA buffer, the driver's client slots (E-M10 II: `trg_half`, the `fcs_*` grid words, fcs's fc buffer, the driver's client list `cnt_unit`) |
 | `shot` | `fenykl_disp_*`, `fenykl_osd_*`, `fenykl_frames_*`, `fenykl_recfile_*`, `fenykl_dram`, `fenykl_cached`, `FENYKL_DISP_*`, `FENYKL_OSD_*`, `FENYKL_FRAMES_*` | `mov_img1_shadow`, `mov_disp_flip_tbl`, display registers, `disp_img3_*`, `frame_palette`, `gpi_*`, `osd_shadow`, `osd_palettes`, `recfile_*` |
@@ -778,9 +778,10 @@ payload. Loaders older than this format reject `FNL2` files as well.
    `FENYKL_HAS_<NAME>=1` in every compile, next to `FENYKL_TARGET_<CAMERA>=1`. epl3 has `cpu1` (the
    CPU1 worker runtime, `cpu1.c`); a plugin with `cpu1_sources` does not build for a camera without it.
    `event`, `key`, `hud`, `ui`, `afc`, `shot` and `precap` select library files (`LIB_CAPABILITIES`
-   in `py/fenykl/plugin.py`): without them `lib/event.c`, `key.c` (its key map is the E-PL3's),
-   `hud.c`, `ui.c`, `afc.c` + `afc_sm.c`, `shot.c` + `shot_pix.c`, `precap_em10ii.c` are not
-   built. `ui` also needs the camera's page, `lib/ui_<camera>.c`.
+   in `py/fenykl/plugin.py`): without them `lib/event.c`, `key.c`, `hud.c`, `ui.c`, `afc.c` +
+   `afc_sm.c`, `shot.c` + `shot_pix.c`, `precap_em10ii.c` are not built. `ui` also needs the
+   camera's page, `lib/ui_<camera>.c`, and `key` its key map, `lib/key_<camera>.c`
+   (`docs/key.md` 5).
    `afc`, `lens`, `batt`, `shot` and `img_exec` are groups of `include/body.h`: list one once
    `arch/<camera>/fenykl_body.h` implements it (the file must exist, with the GUI predicates, before
    a plugin including `body.h` builds). Plugin files under `[capabilities.<name>]` follow them.

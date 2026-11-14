@@ -1,11 +1,16 @@
 /*
  * main: option "Fn override". A short Fn press runs the chosen action (main_fn_acts[]) in
- * the plugin task; a long press gives the stock Fn function back at the release (long_stock).
+ * the plugin task; a press held FENYKL_KEY_LONG_US is replayed to the firmware while still held
+ * (long_stock, decided by fenykl_key_tick), so the stock Fn function runs, that much late.
  * With "none" nothing is claimed, and the key layer (sdk/docs/key.md) is installed only once an
- * action is chosen. Presses while an action is busy are ignored and logged.
+ * action is chosen; the handler claims only after the install is on the card. Presses while an
+ * action is busy are ignored and logged.
  */
 #include "main.h"
+#include <event.h>
 #include <key.h>
+
+#define MAIN_FN_FLUSH_TRIES 20		/* fenykl_log_flush busy: MAIN_TICK_MS apart */
 
 /* The actions of the target's capabilities (plugin.toml). */
 enum main_fn_action {
@@ -79,8 +84,20 @@ static void main_fn_on_key(const struct fenykl_key_event *ev, void *arg)
 
 static struct fenykl_key_handler main_fn_key = {
 	.name = "fn", .keys = FENYKL_KEY_BIT(FENYKL_KEY_FN), .claim = main_fn_claim,
-	.on = main_fn_on_key, .long_stock = true, .enabled = true,
+	.on = main_fn_on_key, .long_stock = true,
 };
+
+/* Puts the queued log on the card; the flusher task may be in a flush. */
+static int main_fn_flush(void)
+{
+	int r = fenykl_log_flush();
+
+	for (unsigned int i = 1; r == FENYKL_LOG_EBUSY && i < MAIN_FN_FLUSH_TRIES; i++) {
+		fenykl_task_sleep(MAIN_TICK_MS);
+		r = fenykl_log_flush();
+	}
+	return r;
+}
 
 static void main_fn_install(void)
 {
@@ -97,6 +114,10 @@ static void main_fn_install(void)
 	st->installed = true;
 	st->done = st->req;
 	fenykl_log_info(&main_fn_log, "key layer installed for %s", main_fn_names[main_fn_action]);
+	r = main_fn_flush();
+	if (r)
+		fenykl_log_warn(&main_fn_log, "log flush %d before the first claim", r);
+	main_fn_key.enabled = true;
 }
 
 void main_fn_tick(void)
@@ -111,6 +132,7 @@ void main_fn_tick(void)
 		main_fn_install();
 		return;
 	}
+	fenykl_key_tick();
 	if (st->busy) {
 		if (req != st->done) {
 			st->ignored += req - st->done;
@@ -148,12 +170,25 @@ void main_fn_set_level(unsigned int level)
 void main_fn_status(void)
 {
 	struct main_fn_state *st = &main_fn_st;
+	struct fenykl_event_stats es;
+	struct fenykl_key_stats ks;
 
 	if (!st->installed)
 		return;
 	fenykl_log_info(&main_fn_log, "fn %s: presses %u ignored %u, replays %u",
 			main_fn_names[main_fn_action], st->done, st->ignored,
 			main_fn_key.private.replays);
+	fenykl_log_dbg(&main_fn_log, "  shorts %u longs %u busy %u", main_fn_key.private.shorts,
+		       main_fn_key.private.longs, main_fn_key.private.busy);
+	fenykl_key_get_stats(&ks);
+	fenykl_log_dbg(&main_fn_log, "  key presses %u releases %u values %u claimed %u",
+		       ks.presses, ks.releases, ks.values, ks.claimed);
+	fenykl_log_dbg(&main_fn_log, "  key unknown %u last %08x ticks_long %u", ks.unknown,
+		       ks.last_unknown, ks.ticks_long);
+	fenykl_event_get_stats(&es);
+	fenykl_log_dbg(&main_fn_log, "  events %u consumed %u injected %u nested %u", es.events,
+		       es.consumed, es.injected, es.nested);
+	fenykl_log_dbg(&main_fn_log, "  events bypassed %u cpu1 %u", es.bypassed, es.cpu1);
 	for (unsigned int i = 0; i < MAIN_FN_ACTIONS; i++)
 		if (main_fn_acts[i])
 			main_fn_acts[i]->status();
