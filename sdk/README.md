@@ -234,6 +234,7 @@ cpu1_unproven = ["img_exec"]
 | `shot` | `fenykl_disp_*`, `fenykl_osd_*`, `fenykl_frames_*`, `fenykl_recfile_*`, `fenykl_dram`, `fenykl_cached`, `FENYKL_DISP_*`, `FENYKL_OSD_*`, `FENYKL_FRAMES_*` | `mov_img1_shadow`, `mov_disp_flip_tbl`, display registers, `disp_img3_*`, `frame_palette`, `gpi_*`, `osd_shadow`, `osd_palettes`, `recfile_*` |
 | `img_exec` | `FENYKL_IMG_*` (IMG_CTRL, IMG_PARAM offsets), `fenykl_img_mode_class` | img_mode_class's table |
 | `peak` | `fenykl_peak_*` (line pass after a live-view pass, its shadow patch), `fenykl_ovl_*` (an alpha overlay layer), `fenykl_disp_rear`, `fenykl_lv_magnified`, `fenykl_gui_still_lv`, `fenykl_disp_lv_latched` | IMG_CTRL output offsets, `img_ctx_e2`, `img_lut_dirty`, `disp_img2_*`, `disp_hold_state`, `disp_upd_*`, `disp_layer_en`, `api_disp_Disp_LayerCustom`, `camtop_state`, `disp_dev`, `tslp_tsk`, `OlyTaskWakeup` |
+| `wb_base` | `fenykl_wb_base_slot`, `_base_head`, `_base_entry_ok`, `fenykl_wb_mode`, `fenykl_wb_lv_matrix`, `FENYKL_WB_BASE_N`, `FENYKL_WB_MAT_N` | not on the E-PL3 (E-M10 II: the registry words of the colour-matrix base properties 0xAA6A/0xAA4A/0xAA5A, WB prop 0x8121, `wb_lv_cmx`) |
 
 `projects/main` is written this way (`tests/test_plugin_build.py` fails on any `fw_`/`FW_` name in it);
 `hello` and the bird detector keep using the firmware directly. The test sees main's own files only: SDK headers main
@@ -782,7 +783,7 @@ payload. Loaders older than this format reject `FNL2` files as well.
    `afc_sm.c`, `shot.c` + `shot_pix.c`, `precap_em10ii.c` are not built. `ui` also needs the
    camera's page, `lib/ui_<camera>.c`, and `key` its key map, `lib/key_<camera>.c`
    (`docs/key.md` 5).
-   `afc`, `lens`, `batt`, `shot` and `img_exec` are groups of `include/body.h`: list one once
+   `afc`, `lens`, `batt`, `shot`, `img_exec`, `peak` and `wb_base` are groups of `include/body.h`: list one once
    `arch/<camera>/fenykl_body.h` implements it (the file must exist, with the GUI predicates, before
    a plugin including `body.h` builds). Plugin files under `[capabilities.<name>]` follow them.
 5. Give `firmware.toml` a `[data.<name>]` entry for every `FW_<NAME>` the libraries and

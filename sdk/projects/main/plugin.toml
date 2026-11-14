@@ -27,10 +27,11 @@ sources = ["feat_precap.c"]
 [capabilities.shot]
 sources = ["act_shot.c"]
 
-# The R/B swap and peaking hook img_exec (main_img_hook.c). It reaches CPU1 only through IMG_CALLIMG,
-# which has no client in v1.6; the hook passes CPU1 passes through unchanged and counts them.
+# The R/B swap and peaking hook img_exec (main_img_hook.c); the option and the E-PL3 task side are
+# main_rbswap.c (every target). It reaches CPU1 only through IMG_CALLIMG, which has no client in
+# v1.6; the hook passes CPU1 passes through unchanged and counts them.
 [capabilities.img_exec]
-sources = ["main_img_hook.c", "main_rbswap.c", "main_rbswap_hook.c"]
+sources = ["main_img_hook.c", "main_rbswap_hook.c"]
 hooks = ["img_exec"]
 cpu1_unproven = ["img_exec"]
 
@@ -40,3 +41,7 @@ cpu1_unproven = ["img_exec"]
 sources = ["main_peak.c", "main_peak_mark.c"]
 hooks = ["img_hw_start"]
 cpu1_unproven = ["img_hw_start"]
+
+# The E-M10 II's R/B swap: no hook, the colour-matrix bases repointed to swapped copies.
+[capabilities.wb_base]
+sources = ["main_rbswap_wb.c", "main_rbswap_base.c"]

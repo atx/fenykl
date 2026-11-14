@@ -4,6 +4,7 @@
  * P x M: rows 0 and 2 of the camera's matrix exchanged. IMG_CTRL's layout and the pass classes
  * are the target's (body.h, img_exec).
  *
+ * P x M (main_rbswap_pxm) keeps the row sums of 0x80, so the row-sum packer reproduces it exactly.
  * img_exec is synchronous: the pass packs ashMat into the IPU shadow and has finished before it
  * returns [verified], so the restore cannot undo the swap. Only ucMode classes 0/1
  * read ashMat; the others use a ROM matrix. Class 0/1 passes with an identity ashMat are skipped:
@@ -17,19 +18,6 @@ FENYKL_SHARED struct main_rbswap_hook_state main_rbswap_hk;
 static bool main_rbswap_identity(const volatile int16_t *m)
 {
 	return !(m[1] || m[2] || m[3] || m[5] || m[6] || m[7]);
-}
-
-/*
- * P x M: rows 0 and 2 exchanged, R' = M row 2, B' = M row 0. Row sums stay 0x80, so the row-sum
- * packer reproduces it exactly.
- */
-static void main_rbswap_pxm(int16_t *out, const int16_t *m)
-{
-	for (unsigned int i = 0; i < 3; i++) {
-		out[i] = m[6 + i];
-		out[3 + i] = m[3 + i];
-		out[6 + i] = m[i];
-	}
 }
 
 unsigned int main_rbswap_exec(void *ctrl)

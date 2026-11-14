@@ -1081,3 +1081,12 @@ address = 0xA1C29020
 type = "pool descriptor (uncached)"
 evidence = "high"
 note = "EXIF pool (id 0x1500), 28 blocks of 0xA400 at 0xBDB753C0, layout as pool_prim"
+
+# --- Colour-matrix bases (body.h wb_base): the registry words are data.prop_table / prop_override;
+# this entry only feeds the R/B swap's log ---
+
+[data.wb_lv_cmx]
+address = 0xA1C180F8
+type = "s16 [9]"
+evidence = "high"
+note = "WB_MOV's live-view colour matrix (out = base x light matrix, 0x80 = 1.0), uncached: written by the WB_MOV task (CPU2) at 0x60217688 (init 0x602171F4) and by wb_mov_lv_awb 0x60217FE0 (wbinfo +0x12 of wb_get_matrix 0x602117D7), copied to the take-info by 0x60217A47 (reads 0x60217B1A)"

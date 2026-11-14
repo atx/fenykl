@@ -1,21 +1,15 @@
 /*
- * main: option "R/B swap", the plugin task's side. The img_exec hook (main_img_hook.c) is
- * installed at start whatever the option and passes through while it is off; the option only
- * sets the hook's enable word. Each swapped still logs its input matrix, so the camera run can
- * check the coefficient range.
+ * main: option "R/B swap" and, on the E-PL3, the plugin task's side. The img_exec hook
+ * (main_img_hook.c) is installed at start whatever the option and passes through while it is off;
+ * the option only sets the hook's enable word. Each swapped still logs its input matrix, so the
+ * camera run can check the coefficient range. The E-M10 II's task side is main_rbswap_wb.c, which
+ * follows the option from its tick.
  */
 #include "main.h"
 #include "main_rbswap.h"
 
-struct main_rbswap_state {
-	bool installed;
-	bool cpu1_seen;		/* the hook ran on CPU1 (logged once) */
-	uint32_t m_seq;		/* hook m_seq at the last logged matrix */
-};
-
-static struct main_rbswap_state main_rbswap_st;
-
-static FENYKL_LOG_MODULE(main_rbswap_log, "rbswap", FENYKL_LOG_INFO);
+#if MAIN_RBSWAP
+FENYKL_LOG_MODULE(main_rbswap_log, "rbswap", FENYKL_LOG_INFO);
 
 static void main_rbswap_apply(const struct fenykl_cfg_opt *o, int32_t old);
 
@@ -23,13 +17,31 @@ FENYKL_CFG_GROUP(main_grp_image, "Image", 3);
 FENYKL_CFG_BOOL(main_rbswap_on, "main.rbswap.on", "R/B swap", &main_grp_image, 0,
 		.on_change = main_rbswap_apply);
 
+/* Any task (the cfg task, the settings page): the E-M10 II's registry work waits for the tick. */
 static void main_rbswap_apply(const struct fenykl_cfg_opt *o, int32_t old)
 {
 	(void)o;
 	(void)old;
+#if FENYKL_HAS_IMG_EXEC
 	FENYKL_SHARED_PTR(main_rbswap_hk)->enable = main_rbswap_on != 0;
+#endif
 	fenykl_log_info(&main_rbswap_log, "R/B swap %s", main_rbswap_on ? "on" : "off");
 }
+
+void main_rbswap_set_level(unsigned int level)
+{
+	fenykl_log_set_level(&main_rbswap_log, level);
+}
+#endif
+
+#if FENYKL_HAS_IMG_EXEC
+struct main_rbswap_state {
+	bool installed;
+	bool cpu1_seen;		/* the hook ran on CPU1 (logged once) */
+	uint32_t m_seq;		/* hook m_seq at the last logged matrix */
+};
+
+static struct main_rbswap_state main_rbswap_st;
 
 /* After the img_exec hook is installed. */
 void main_rbswap_start(void)
@@ -74,11 +86,6 @@ void main_rbswap_tick(void)
 	st->m_seq = seq;
 }
 
-void main_rbswap_set_level(unsigned int level)
-{
-	fenykl_log_set_level(&main_rbswap_log, level);
-}
-
 void main_rbswap_status(void)
 {
 	const volatile struct main_rbswap_hook_state *s = FENYKL_SHARED_PTR(main_rbswap_hk);
@@ -92,3 +99,4 @@ void main_rbswap_status(void)
 	fenykl_log_info(&main_rbswap_log, "  identity %u no_param %u kept %u cpu1 %u", s->identity,
 			s->no_param, s->kept, s->cpu1);
 }
+#endif

@@ -1,7 +1,7 @@
 /*
  * main: the polished daily-use plugin. Starts logging, configuration and the HUD library,
  * binds the hook (main_hooks.c), installs the settings page (sdk/lib/ui.c) and runs every
- * feature's tick, the Fn override (main_fn.c) and the R/B swap's log (main_rbswap.c)
+ * feature's tick, the Fn override (main_fn.c) and the R/B swap's task side (main_rbswap*.c)
  * from one task loop; peaking (main_peak.c) has a task of its own. Log: C:\FENYKL.LOG;
  * options: C:\FENYKL.CF0/CF1. A target without the hud capability gets no HUD (MAIN_HUD), one
  * without the key capability no Fn override.
@@ -259,6 +259,9 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	main_start_cfg();
 #if FENYKL_HAS_IMG_EXEC
 	main_start_img();
+#endif
+#if FENYKL_HAS_WB_BASE
+	main_rbswap_start();
 #endif
 #if MAIN_HUD
 	main_st.drawing = main_start_hud();

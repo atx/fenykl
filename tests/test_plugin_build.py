@@ -255,7 +255,7 @@ def test_fw_sprintf_with_eight_variadic_words_builds(tmp_path):
 # ---- capability tables and the shared main plugin ----
 
 MAIN_DIR = sdk.SDK / "projects" / "main"
-BODY_CAPABILITIES = ("afc", "lens", "batt", "shot", "img_exec", "peak")
+BODY_CAPABILITIES = ("afc", "lens", "batt", "shot", "img_exec", "peak", "wb_base")
 
 
 def test_main_names_no_firmware_symbol():
@@ -339,7 +339,7 @@ def test_capability_tables_are_checked(tmp_path, tables, error):
 
 
 @needs_toolchain
-def test_main_links_the_focus_meter_contrast_client_and_precap_for_the_em10ii(tmp_path):
+def test_main_links_the_focus_meter_contrast_client_precap_and_rb_swap_for_the_em10ii(tmp_path):
     plugin.build(MAIN_DIR, tmp_path, sdk.target("em10ii"))
     symbols = (tmp_path / "plugin.map").read_text()
     for name in (
@@ -350,6 +350,8 @@ def test_main_links_the_focus_meter_contrast_client_and_precap_for_the_em10ii(tm
         "fw_cam_request",
         "feat_precap",
         "fenykl_cb_seq_frame_done_cb_precap_frame_done",
+        "fenykl_cfg_main_rbswap_on",
+        "main_rbswap_base_assert",
     ):
         assert f" {name}\n" in symbols
 
@@ -393,6 +395,7 @@ def test_main_builds_without_the_body_capabilities(tmp_path):
         "feat_fmeter",
         "act_shot",
         "main_rbswap_hk",
+        "main_rbswap_on",
         "main_peak_mark",
     ):
         assert f" {name}\n" not in symbols

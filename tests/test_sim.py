@@ -28,6 +28,11 @@ firmware functions placed at their real firmware addresses. Every C test program
 - main_rbswap: the main plugin's R/B swap hook (sdk/projects/main/main_rbswap_hook.c) on img_exec's
   real entry bytes: option off, P x M on live view and stills, the class and identity filters, the
   restore and a matrix kept when it changed during the pass, no IMG_PARAM, the counters.
+- main_rbswap_base: the main plugin's E-M10 II R/B swap registry work
+  (sdk/projects/main/main_rbswap_base.c) on a fake property registry: first store under the
+  interrupt mask, no store while the copy holds, a rebuilt registry, a stock changed in place, a slot
+  moved to the override table (also one holding the copy), invalid objects and entries refused, the
+  restore.
 - main_peak_mark: the main plugin's peaking mark (sdk/projects/main/main_peak_mark.c) against a
   per-pixel neighbour count: random images over widths and thresholds, patterns, the cap.
 - shot: the screenshot library's pixel work (sdk/lib/shot_pix.c): YCbCr to RGB against a BT.601
@@ -91,6 +96,9 @@ SUPPORT = [
     "cache_invalidate", "cache_enable", "cache_busy",
 ]  # fmt: skip
 TCB_TABLE = 0x6E690A50
+EM10II = sdk.target("em10ii")
+# E-M10 II DRAM up to the GUI and menu data with its uncached alias (the mock bodies are apart).
+EM10II_DRAM = ("--memory-alias", "0x60000000,0x2000000,0xa0000000")
 # tests/sim/log/fw.S, cfg/fw.S and ui/fw.S
 UI_MOCKED = [
     "psw_get", "irq_disable_all", "irq_mask_restore", "ui_key_get_state", "sprintf",
@@ -247,6 +255,17 @@ PROGRAMS = {
         "mocked": ["img_exec", *SUPPORT],
         "hooks": ["img_exec"],
         "cpu1_unproven": ["img_exec"],
+    },
+    "main_rbswap_base": {
+        "sources": [
+            SIM / "main" / "test_main_rbswap_base.c",
+            PROJECTS / "main" / "main_rbswap_base.c",
+            SIM / "main" / "rbswap_fw.S",
+            SIM / "hooks_em10ii" / "sim_start.S",
+        ],
+        "memory": [EM10II_DRAM, region("0x6eb00000,0x10000")],
+        "mocked": ["psw_get", "irq_disable_all", "irq_mask_restore"],
+        "target": EM10II,
     },
     "main_peak_mark": {
         "sources": [
@@ -436,8 +455,6 @@ def test_hooks_run_in_the_simulator(tmp_path):
     assert_exit(result, 0, "tests/sim/hooks/test_hooks.c")
 
 
-EM10II = sdk.target("em10ii")
-
 # The E-M10 II appevent_post span under a sim-only name (as SIMEVENT_TOML for the E-PL3).
 SIMEVENT_EM10II_TOML = """
 [simevent_post]
@@ -527,7 +544,7 @@ def test_em10ii_ui_runs_in_the_simulator(tmp_path):
         [ui / "test_ui.c", SIM / "hooks_em10ii" / "sim_start.S", ui / "fw.S"],
         # DRAM up to the GUI and menu data with its uncached alias, the timer, the mock bodies.
         [
-            ("--memory-alias", "0x60000000,0x2000000,0xa0000000"),
+            EM10II_DRAM,
             TIMER,
             region("0x6eb00000,0x10000"),
         ],

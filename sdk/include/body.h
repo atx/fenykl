@@ -1,9 +1,9 @@
 /*
  * Camera body state for plugins that name no firmware symbol (projects/main): the GUI, the lens,
  * the battery, the firmware's AF statistics, the display and OSD buffers, the img_exec pass
- * layout and the peaking passes and overlay. The API is the same on every target; each target
- * implements it in its own arch/<camera>/fenykl_body.h (static inline, so a call costs what the
- * firmware read costs).
+ * layout, the peaking passes and overlay and the colour-matrix bases. The API is the same on every
+ * target; each target implements it in its own arch/<camera>/fenykl_body.h (static inline, so a
+ * call costs what the firmware read costs).
  * Every group but the GUI is a capability (target.toml): a target without it has no declarations,
  * and plugin.toml [capabilities.<name>] builds the plugin files that use it only where it exists.
  * The shot, img_exec and peak groups mirror the E-PL3's encodings (buffer index ^ 1, hide mask
@@ -173,6 +173,29 @@ static inline void fenykl_recfile_free(uint32_t buf);
 
 /* The pass class of mode: 0 and 1 apply the colour matrix, 2 and 3 do not. */
 static inline unsigned int fenykl_img_mode_class(unsigned int mode);
+#endif
+
+/* --- wb_base: the colour-matrix bases in the property registry; CPU0 task --- */
+#if FENYKL_HAS_WB_BASE
+/*
+ * Every live-view and still colour matrix is B x M (3 x 3 s16, row major) with M per light source
+ * and FENYKL_WB_BASE_N bases B; a base with rows 0 and 2 exchanged swaps R and B in every pass. A
+ * base is changed by storing the uncached address of a copy (FENYKL_SHARED) in its registry word,
+ * never by writing the stock object. Also from fenykl_body.h: FENYKL_WB_BASE_N and FENYKL_WB_MAT_N
+ * (entries of a matrix).
+ */
+
+/* Uncached address of the registry word that holds base i's object address (i < FENYKL_WB_BASE_N),
+   in the firmware's lookup order. */
+static inline uint32_t fenykl_wb_base_slot(unsigned int i);
+/* The other word of slot's registry entry, for logs. */
+static inline uint32_t fenykl_wb_base_head(uint32_t slot);
+/* slot's registry entry is base i's: its other word names the base's property and size. */
+static inline bool fenykl_wb_base_entry_ok(unsigned int i, uint32_t slot);
+/* The WB setting in the target's encoding, for logs; -1 if unreadable. */
+static inline int fenykl_wb_mode(void);
+/* The live-view colour matrix the firmware last computed into m (FENYKL_WB_MAT_N), for logs. */
+static inline void fenykl_wb_lv_matrix(int16_t *m);
 #endif
 
 /* --- peak: a line image pass after the live-view pass and an alpha overlay layer; CPU0 --- */

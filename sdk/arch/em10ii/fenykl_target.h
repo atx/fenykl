@@ -30,19 +30,6 @@
    task cannot starve the watchdog kicker; any priority below 55 could. */
 #define FENYKL_LIB_TASK_PRIO 55
 
-/* Writes the D-cache back to DRAM and invalidates it, as the firmware's callers of dcache_flush_all do
-   (0x60073886..0x60073897): there is no IRQ-safe wrapper on this body. Task context, CPU0. */
-static inline void fenykl_dcache_flush(void)
-{
-	unsigned int cookie = fw_irq_lock(0);
-
-	fw_dcache_flush_all();
-	fw_irq_unlock(cookie);
-}
-
-/* tslp_tsk's result on a timeout */
-#define FENYKL_TASK_ETIMEOUT (-50)
-
 static inline uint32_t fenykl_irq_save(void)
 {
 	uint32_t psw = fw_psw_get();
@@ -55,6 +42,19 @@ static inline void fenykl_irq_restore(uint32_t psw)
 {
 	fw_irq_mask_restore(psw);
 }
+
+/* Writes the D-cache back to DRAM and invalidates it, as the firmware's callers of dcache_flush_all do
+   (0x60073886..0x60073897): there is no IRQ-safe wrapper on this body. Task context, CPU0. */
+static inline void fenykl_dcache_flush(void)
+{
+	unsigned int cookie = fw_irq_lock(0);
+
+	fw_dcache_flush_all();
+	fw_irq_unlock(cookie);
+}
+
+/* tslp_tsk's result on a timeout */
+#define FENYKL_TASK_ETIMEOUT (-50)
 
 /* malloc refuses more than 0x4000 bytes; OlyTaskCreate remaps priorities 8..11 to 45/46/54/55. */
 static inline int fenykl_task_create(const char *name, void (*entry)(void), int prio,

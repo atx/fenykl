@@ -8,17 +8,22 @@
 #define FENYKL_GUI_SS_MENU 0x11u	/* main menu (SsMenu), the plugin settings page included */
 #define FENYKL_GUI_SS_PLAY 0x06u	/* playback: camera-seen as 0x06xx */
 
-/* A property's object, 0 if unregistered: the lookup 0x60076078 (the override table first) without
-   the getter 0x60076FD9's core-view mapping 0x600750FD, which is the identity on CPU0. */
+/* The registry word holding a property's object: the entry the lookup 0x60076078 reads, the
+   override table's while it is in use and its object is non-zero. */
+static inline uint32_t fbody_prop_slot(unsigned int prop)
+{
+	uint32_t entry = 8u * (prop >> 4) + 4u;
+
+	if (fenykl_rd16(FW_PROP_OVERRIDE_VALID) && fenykl_rd32(FW_PROP_OVERRIDE + entry))
+		return FW_PROP_OVERRIDE + entry;
+	return FW_PROP_TABLE + entry;
+}
+
+/* A property's object, 0 if unregistered: the lookup without the getter 0x60076FD9's core-view
+   mapping 0x600750FD, which is the identity on CPU0. */
 static inline uint32_t fbody_prop_obj(unsigned int prop)
 {
-	uint32_t entry = 8u * (prop >> 4) + 4u, obj = 0;
-
-	if (fenykl_rd16(FW_PROP_OVERRIDE_VALID))
-		obj = fenykl_rd32(FW_PROP_OVERRIDE + entry);
-	if (!obj)
-		obj = fenykl_rd32(FW_PROP_TABLE + entry);
-	return obj;
+	return fenykl_rd32(fbody_prop_slot(prop));
 }
 
 static inline uint16_t fenykl_gui_state(void)
@@ -284,6 +289,58 @@ static inline bool fenykl_cnt_movie(void)
 static inline bool fenykl_cnt_drv_dbg(void)
 {
 	return false;
+}
+#endif
+
+#if FENYKL_HAS_WB_BASE
+#define FENYKL_WB_BASE_N 3u
+#define FENYKL_WB_MAT_N 9u
+/* u8 WB kind: 0 auto, 1 preset, 2 one-touch, 3 custom Kelvin, 4 Underwater (inferred from the
+   kind map of 0x604F0F5A and the paired 0/4 branches at 0x60217F0F, 0x6051CC3B) */
+#define FBODY_PROP_WB 0x8121u
+
+/*
+ * 0xAA6A: base of the preset and one-touch light matrices (wb_get_matrix 0x602117D7 at 0x60211815);
+ * 0xAA4A: of the other family (0x6021184F) and the sRGB take matrix table (0x60510C29..); 0xAA5A:
+ * of the AdobeRGB take table (0x60510D6D..). No other code names them. The firmware reads them
+ * through the registry at every use, CPU1/CPU2 through to_uncached, which keeps 0xA... addresses.
+ * Their stock objects are constants in the firmware image (descriptors 0x600A64DC, 0x600A64F4,
+ * 0x600A650C of the table 0x6009ED3C, registered with no data block), in no saved block.
+ */
+static inline unsigned int fbody_wb_base_prop(unsigned int i)
+{
+	static const uint16_t prop[FENYKL_WB_BASE_N] = { 0xAA6Au, 0xAA4Au, 0xAA5Au };
+
+	return prop[i];
+}
+
+static inline uint32_t fenykl_wb_base_slot(unsigned int i)
+{
+	return fbody_prop_slot(fbody_wb_base_prop(i));
+}
+
+/* u16 id, u16 element count: the registry fill 0x600760D6 copies both from the descriptor. */
+static inline uint32_t fenykl_wb_base_head(uint32_t slot)
+{
+	return fenykl_rd32(slot - 4u);
+}
+
+static inline bool fenykl_wb_base_entry_ok(unsigned int i, uint32_t slot)
+{
+	return fenykl_wb_base_head(slot) == (FENYKL_WB_MAT_N << 16 | fbody_wb_base_prop(i));
+}
+
+static inline int fenykl_wb_mode(void)
+{
+	uint32_t p = fbody_prop_obj(FBODY_PROP_WB);
+
+	return fenykl_dram_ptr(p, 1) ? (int)fenykl_rd8(p) : -1;
+}
+
+static inline void fenykl_wb_lv_matrix(int16_t *m)
+{
+	for (unsigned int i = 0; i < FENYKL_WB_MAT_N; i++)
+		m[i] = (int16_t)fenykl_rd16(FW_WB_LV_CMX + 2u * i);
 }
 #endif
 

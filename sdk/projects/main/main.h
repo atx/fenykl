@@ -72,10 +72,12 @@ static inline void main_fn_status(void)
 }
 #endif
 
-/* main_img_hook.c: the img_exec hook of the R/B swap and peaking; 0 = installed. Their options
-   are on the "Image" page (main_rbswap.c). */
+/* main_img_hook.c: the img_exec hook of the R/B swap and peaking; 0 = installed. */
 #if FENYKL_HAS_IMG_EXEC
 int main_img_hook_install(void);
+#endif
+/* The "Image" page of the R/B swap and peaking options (main_rbswap.c). */
+#if FENYKL_HAS_IMG_EXEC || FENYKL_HAS_WB_BASE
 extern const struct fenykl_cfg_group main_grp_image;
 #endif
 
