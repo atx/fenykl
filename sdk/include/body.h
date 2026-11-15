@@ -6,8 +6,8 @@
  * call costs what the firmware read costs).
  * Every group but the GUI is a capability (target.toml): a target without it has no declarations,
  * and plugin.toml [capabilities.<name>] builds the plugin files that use it only where it exists.
- * The shot, img_exec and peak groups mirror the E-PL3's encodings (buffer index ^ 1, hide mask
- * bits, IMG_CTRL offsets, display layers): expect to reshape them with a second implementation.
+ * The img_exec and peak groups mirror the E-PL3's encodings (IMG_CTRL offsets, display layers):
+ * expect to reshape them with a second implementation. The shot group has two (E-PL3, E-M10 II).
  */
 #ifndef _FENYKL_BODY_H
 #define _FENYKL_BODY_H
@@ -112,23 +112,59 @@ static inline bool fenykl_cnt_movie(void);
 static inline bool fenykl_cnt_drv_dbg(void);
 #endif
 
-/* --- shot: display, OSD layers and the lent RECFILE buffer; CPU0 task --- */
+/* --- shot: display, OSD layers and a buffer lent for the screenshot; CPU0 task --- */
 #if FENYKL_HAS_SHOT
 /*
- * Also from fenykl_body.h: FENYKL_DISP_W, FENYKL_DISP_H (the panel: the OSD canvas it shows),
- * FENYKL_DISP_SQUARE_W (its width at square pixels), FENYKL_DISP_LV_PITCH, FENYKL_DISP_LV_BYTES
- * (the live-view buffers), FENYKL_OSD_LAYERS, FENYKL_OSD_PLANE_W, FENYKL_OSD_PLANE_H (an OSD
- * buffer) and, per layer,
+ * Also from fenykl_body.h: FENYKL_DISP_W_MAX, FENYKL_DISP_H_MAX (the largest canvas),
+ * FENYKL_OSD_LAYERS, FENYKL_OSD_PLANE_W, FENYKL_OSD_PLANE_H (an OSD buffer) and, per layer,
  * initializers FENYKL_OSD_BPP, FENYKL_OSD_PAL_ENTRIES and FENYKL_OSD_PAL_FIRST (its entries in
- * fenykl_osd_palettes(), FENYKL_OSD_PAL_TOTAL in all), FENYKL_OSD_STACK (layers bottom to top),
- * FENYKL_FRAMES_PITCH, FENYKL_FRAMES_H and FENYKL_FRAMES_PAL (the face/AF frame layer).
+ * fenykl_osd_palettes(), FENYKL_OSD_PAL_TOTAL in all); FENYKL_OSD_PAL_YCC (1: palette entries are
+ * {Y, Cb, Cr, alpha}, 0: {R, G, B, alpha}), FENYKL_OSD_ALPHA_MAX (the opaque palette alpha),
+ * FENYKL_OSD_SHADOW_LAGS (1: after the GUI's flip the display keeps showing the old buffer until
+ * its commit), FENYKL_OSD_STACK (layers bottom to top), FENYKL_FRAMES_PITCH, FENYKL_FRAMES_H and
+ * FENYKL_FRAMES_PAL (the face/AF frame layer); for the screenshot FENYKL_SHOT_STRIP_ROWS and
+ * FENYKL_SHOT_STRIP_LENT (rows per written strip; 1 = the strip is at the end of the lent buffer,
+ * 0 = in .bss) and FENYKL_SHOT_REGS (struct fenykl_shot_reg initializers: the registers each
+ * attempt logs at DEBUG and a raw dump records).
  */
 
-/* a is a word-aligned DRAM address whose next bytes lie below the firmware image. */
+/* What the panel shows. */
+struct fenykl_disp_geom {
+	uint16_t w, h;			/* the canvas: panel pixels */
+	uint16_t square_w;		/* canvas width at square pixels: the file's */
+	uint16_t osd_w, osd_h;		/* visible OSD region from the plane origin, scaled to w x h */
+	uint16_t osd_alpha[3];		/* global alpha per OSD layer, 0x100 = opaque */
+	uint32_t lv_pitch, lv_bytes;	/* the live-view buffers */
+};
+
+/* The camera state the screenshot's start and abort rules read (fenykl_shot_gate). */
+struct fenykl_shot_cond {
+	bool ready;			/* fenykl_disp_ready(): needed to start */
+	bool movie;			/* movie mode, or no shooting state */
+	bool playback;			/* the GUI in playback */
+	bool still_shared;		/* stills go to a pool over the lent memory */
+	uint32_t mode;			/* changes with the display output */
+	int buf_free;			/* free blocks of the lent pool, for the log */
+	uint32_t pool_used;		/* blocks of the lent pool in use, a mask: a start needs none */
+	uint32_t other_used;		/* pools over the lent memory in use, a mask of the body's list */
+};
+
+/* A register for the raw dump's sidecar. */
+struct fenykl_shot_reg {
+	const char *name;
+	uint32_t addr;
+	uint8_t bytes;			/* 1, 2 or 4 */
+};
+
+/* a is a word-aligned DRAM address whose next bytes lie in the firmware's RAM (any alias). */
 static inline bool fenykl_dram(uint32_t a, uint32_t bytes);
 /* Cached alias of a DRAM address. */
 static inline uint32_t fenykl_cached(uint32_t a);
-/* The live-view buffer the display shows (any alias). */
+/* The display's registers are live (not switching between output devices). */
+static inline bool fenykl_disp_ready(void);
+/* What the panel shows into *g; false on an output the screenshot does not support. */
+static inline bool fenykl_disp_geom(struct fenykl_disp_geom *g);
+/* The live-view buffer the display shows (any alias), 0 = none. */
 static inline uint32_t fenykl_disp_lv(void);
 /* Where buffer lv is placed on the display; false (*x, *y untouched) if it is not a live-view
    display buffer. */
@@ -137,7 +173,7 @@ static inline bool fenykl_disp_lv_pos(uint32_t lv, uint32_t *x, uint32_t *y);
 static inline uint32_t fenykl_disp_img1_x(void);
 static inline uint32_t fenykl_disp_img1_y(void);
 static inline uint32_t fenykl_disp_mix(void);
-/* Bits per pixel the GUI set for layer l. */
+/* Bits per pixel of layer l's buffers. */
 static inline unsigned int fenykl_osd_bpp(unsigned int l);
 /* Buffer index the GUI draws into; between frames the shown one is this ^ 1. */
 static inline uint32_t fenykl_osd_draw_buf(void);
@@ -147,7 +183,7 @@ static inline uint32_t fenykl_osd_hide_mask(void);
 static inline uint32_t fenykl_osd_buf(unsigned int l, unsigned int b);
 /* The buffer of layer l the display shows (any alias). */
 static inline uint32_t fenykl_osd_shown(unsigned int l);
-/* All layer palettes: {Y, Cb, Cr, alpha} per entry. */
+/* All layer palettes, 4 bytes per entry (FENYKL_OSD_PAL_YCC). */
 static inline const uint8_t *fenykl_osd_palettes(void);
 /* The firmware's face/AF frame layer (FENYKL_FRAMES_PITCH x FENYKL_FRAMES_H palette indices): the
    buffer the display shows (any alias, 0 = none), its source size w x h scaled to to_w x to_h from
@@ -155,11 +191,13 @@ static inline const uint8_t *fenykl_osd_palettes(void);
 static inline uint32_t fenykl_frames_shown(void);
 static inline void fenykl_frames_geom(uint16_t *w, uint16_t *h, uint16_t *to_w, uint16_t *to_h);
 static inline const uint8_t *fenykl_frames_palette(void);
-/* RECFILE has a free run for bytes: fenykl_recfile_alloc would not block. */
-static inline bool fenykl_recfile_fits(uint32_t bytes);
-/* Lends bytes of RECFILE, uncached; blocks until free. fenykl_recfile_free gives it back. */
-static inline uint32_t fenykl_recfile_alloc(uint32_t bytes);
-static inline void fenykl_recfile_free(uint32_t buf);
+/* The state the screenshot's gate reads, into *c. */
+static inline void fenykl_shot_cond(struct fenykl_shot_cond *c);
+/* Lends bytes of firmware memory, uncached, without blocking (E-PL3: a RECFILE run, E-M10 II: PRIM
+   block 0); 0 = none. fenykl_shot_buf_free(*handle) gives it back: the firmware's
+   status, 0 = freed. */
+static inline uint32_t fenykl_shot_buf_alloc(uint32_t bytes, uint32_t *handle);
+static inline uint32_t fenykl_shot_buf_free(uint32_t handle);
 #endif
 
 /* --- img_exec: the layout an img_exec hook reads; any core --- */

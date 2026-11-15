@@ -196,7 +196,11 @@ playback).
   0x8321 (`fenykl_hud_info_screen`: 1 basic info, 0 image only, 0x11 Custom1, 0x12 Custom2, the same on
   the LCD and in the EVF; Custom1/2 show the histogram and the level gauge by default), read from
   the property registry like the firmware's lookup 0x60076078 (override table first while it is
-  valid). `FENYKL_HUD_INFO_SCREENS` = basic info and Custom1.
+  valid; `fenykl_hud_prop` reads any s8 property the same way). `FENYKL_HUD_INFO_SCREENS` = basic
+  info and Custom1. Open: the movie live view takes its INFO screen from property 0x8B01 (the
+  firmware's INFO selector 0x60913732 switches to it when 0x609136A9 sees setting 0x2C, prop
+  0x8551, or setting 0x3B6A at 1 through the settings layer), so there the HUD follows the still
+  live view's 0x8321; main logs 0x8321, 0x8B01, 0x8551 and the decision on every change.
 - **Output and region** (`fenykl_hud_output`): `disp_device` 1 = rear LCD, shows the 720 x 480 canvas
   1:1; 6 = built-in EVF, shows its left 640 x 480 (`FENYKL_HUD_EVF_W`) scaled to 1024 x 768; anything
   else (closed, external) hides the HUD. Elements are fixed rectangles, so a layout for both outputs

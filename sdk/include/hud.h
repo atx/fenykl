@@ -83,6 +83,8 @@ enum fenykl_hud_output {
 int fenykl_hud_output(void);
 /* The live-view INFO screen (FENYKL_HUD_INFO_*), or -1 if its property is not registered. */
 int fenykl_hud_info_screen(void);
+/* An s8 property's value (the INFO screen is 0x8321), or -1 if it is not registered. */
+int fenykl_hud_prop(unsigned int prop);
 /* Index < FENYKL_HUD_PAL_ENTRIES of the opaque live layer-1 palette entry nearest to rgb (0xRRGGBB,
    sum of squared differences), or -1 if none is opaque. */
 int fenykl_hud_color(uint32_t rgb);

@@ -42,6 +42,7 @@ static const struct main_feat *const main_feats[] = {
 struct main_state {
 	uint32_t ticks;
 	uint16_t gui;			/* super << 8 | state last logged */
+	int32_t hud_seen[4];		/* E-M10 II: INFO screen, its movie props, visible, last logged */
 	bool drawing;			/* HUD up, hook installed, no CPU1 call seen */
 	bool started[sizeof(main_feats) / sizeof(main_feats[0])];
 };
@@ -204,10 +205,37 @@ static void main_check_cpu1(const struct fenykl_hud_stats *hs)
 }
 #endif
 
+#if MAIN_HUD && FENYKL_TARGET_EM10II
+/* The movie live view picks its INFO screen from prop 0x8B01, not 0x8321: the firmware's INFO
+   selector 0x60913732 takes setting 0x34C (prop 0x8B01) when 0x609136A9 sees setting 0x2C (prop
+   0x8551) or 0x3B6A at 1 through the settings layer, whose value mapping is not known. Logged on
+   every change, so that a run shows the values in still and movie live view. */
+static void main_log_hud(uint16_t gui)
+{
+	int32_t v[4] = { fenykl_hud_info_screen(), fenykl_hud_prop(0x8B01), fenykl_hud_prop(0x8551),
+			 fenykl_hud_visible() };
+	bool same = gui == main_st.gui;
+
+	for (unsigned int i = 0; i < 4; i++) {
+		same = same && v[i] == main_st.hud_seen[i];
+		main_st.hud_seen[i] = v[i];
+	}
+	if (same)
+		return;
+	main_st.gui = gui;
+	fenykl_log_info(&main_log, "gui %02x:%02x info %d %s", gui >> 8, gui & 0xFF, v[0],
+			v[3] ? "visible" : "hidden");
+	fenykl_log_info(&main_log, "  movie info %d, prop 8551 %d", v[1], v[2]);
+}
+#endif
+
 static void main_log_gui(void)
 {
 	uint16_t gui = fenykl_gui_state();
 
+#if MAIN_HUD && FENYKL_TARGET_EM10II
+	main_log_hud(gui);
+#else
 	if (gui == main_st.gui)
 		return;
 	main_st.gui = gui;
@@ -216,6 +244,7 @@ static void main_log_gui(void)
 			fenykl_hud_visible() ? "visible" : "hidden");
 #else
 	fenykl_log_info(&main_log, "gui %02x:%02x", gui >> 8, gui & 0xFF);
+#endif
 #endif
 }
 

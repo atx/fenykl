@@ -11,17 +11,23 @@
      128 stretch: identity, constant row, end pixels or monotonicity broken
      256 PPM header text or length
      512 frames: wrong scaling, index 0 or one past the entries drawn, not over the live view or
-         not under the layers */
+         not under the layers
+     1024 layout: the lent run is not the E-PL3's 1 551 336 bytes in the order LV, L0, L1, L2,
+         frames, strip */
 #include <stddef.h>
 #include "../../../sdk/lib/shot_int.h"
 
+#define T_W 720u		/* the E-PL3 panel */
+#define T_H 480u
+#define T_SQ 853u
+
 uint32_t sim_exit_code = 99;
 
-static uint8_t t_lv[2][2 * FENYKL_DISP_W];
-static uint8_t t_l8[2][FENYKL_DISP_W];
-static uint8_t t_l4[2][FENYKL_DISP_W / 2];
-static uint8_t t_rgb[3 * FENYKL_DISP_W];
-static uint8_t t_out[3 * FENYKL_DISP_SQUARE_W];
+static uint8_t t_lv[2][2 * T_W];
+static uint8_t t_l8[2][T_W];
+static uint8_t t_l4[2][T_W / 2];
+static uint8_t t_rgb[3 * T_W];
+static uint8_t t_out[3 * T_SQ];
 
 static bool t_px(const uint8_t *rgb, unsigned int x, unsigned int r, unsigned int g,
 		 unsigned int b)
@@ -86,7 +92,7 @@ static uint32_t t_palette(void)
 	static const uint8_t ycca[] = { 0, 128, 128, 0x0F, 200, 50, 180, 0x38, 128, 128, 128, 0 };
 	uint8_t rgba[12], rgb[3];
 
-	fenykl_shot_palette(ycca, 3, rgba);
+	fenykl_shot_palette(ycca, 3, 0x100, rgba);
 	for (unsigned int i = 0; i < 3; i++) {
 		fenykl_shot_ycc_rgb(ycca[4 * i], ycca[4 * i + 1], ycca[4 * i + 2], rgb);
 		if (rgba[4 * i] != rgb[0] || rgba[4 * i + 1] != rgb[1] || rgba[4 * i + 2] != rgb[2])
@@ -97,7 +103,7 @@ static uint32_t t_palette(void)
 
 static void t_frame(struct fenykl_shot_frame *f)
 {
-	*f = (struct fenykl_shot_frame){ 0 };
+	*f = (struct fenykl_shot_frame){ .w = T_W, .h = T_H };
 }
 
 static uint32_t t_live_view(void)
@@ -125,10 +131,10 @@ static uint32_t t_live_view(void)
 	    !t_px(t_rgb, 6, 128, 128, 128) || !t_px(t_rgb, 11, 128, 128, 128))
 		return 8;
 	if (!t_px(t_rgb, 3, 0, 0, 0) || !t_px(t_rgb, 12, 0, 0, 0) ||
-	    !t_px(t_rgb, FENYKL_DISP_W - 1, 0, 0, 0))
+	    !t_px(t_rgb, T_W - 1, 0, 0, 0))
 		return 8;
 	fenykl_shot_compose(&f, 11, t_rgb);
-	for (unsigned int x = 0; x < FENYKL_DISP_W; x++)
+	for (unsigned int x = 0; x < T_W; x++)
 		if (!t_px(t_rgb, x, 0, 0, 0))
 			return 8;
 	return 0;
@@ -146,9 +152,9 @@ static uint32_t t_blend(void)
 	t_frame(&f);
 	f.lv = t_lv[1];
 	f.lv_pitch = 0;		/* every row the same */
-	f.lv_w = FENYKL_DISP_W;
+	f.lv_w = T_W;
 	f.lv_h = 1;
-	for (unsigned int x = 0; x < FENYKL_DISP_W; x += 2) {	/* grey 255, then grey 50 */
+	for (unsigned int x = 0; x < T_W; x += 2) {	/* grey 255, then grey 50 */
 		t_lv[1][2 * x] = t_lv[1][2 * x + 2] = x < 8 ? 255 : 50;
 		t_lv[1][2 * x + 1] = t_lv[1][2 * x + 3] = 128;
 	}
@@ -158,7 +164,7 @@ static uint32_t t_blend(void)
 	t_l8[0][8] = 2;
 	t_l8[0][9] = 3;
 	t_l8[0][10] = 7;	/* past the 4 entries */
-	f.layer[0] = (struct fenykl_shot_layer){ t_l8[0], sizeof(t_l8[0]), 8, 4, t_pal };
+	f.layer[0] = (struct fenykl_shot_layer){ t_l8[0], sizeof(t_l8[0]), 8, 4, t_pal, T_W, T_H };
 	fenykl_shot_compose(&f, 0, t_rgb);
 	if (!t_px(t_rgb, 0, 255, 255, 255) || !t_px(t_rgb, 1, 255, 255, 255))
 		return 16;
@@ -179,7 +185,7 @@ static uint32_t t_4bpp(void)
 	t_l4[0][0] = 0x10;	/* x 0: index 0, x 1: index 1 */
 	t_l4[0][1] = 0x03;	/* x 2: index 3, x 3: index 0 */
 	t_l4[0][2] = 0x1F;	/* x 4: 15 (past 4 entries), x 5: 1 */
-	f.layer[1] = (struct fenykl_shot_layer){ t_l4[0], sizeof(t_l4[0]), 4, 4, t_pal };
+	f.layer[1] = (struct fenykl_shot_layer){ t_l4[0], sizeof(t_l4[0]), 4, 4, t_pal, T_W, T_H };
 	fenykl_shot_compose(&f, 0, t_rgb);
 	if (!t_px(t_rgb, 0, 0, 0, 0) || !t_px(t_rgb, 1, 255, 255, 255) ||
 	    !t_px(t_rgb, 2, 106, 0, 26) || !t_px(t_rgb, 3, 0, 0, 0))	/* (c * 8) / 15 */
@@ -196,8 +202,8 @@ static uint32_t t_order(void)
 	t_l8[1][0] = 0;
 	t_l8[1][1] = 0;
 	t_l4[1][0] = 0x00;	/* x 0 and 1 */
-	f.layer[0] = (struct fenykl_shot_layer){ t_l8[1], sizeof(t_l8[1]), 8, 1, red };
-	f.layer[2] = (struct fenykl_shot_layer){ t_l4[1], sizeof(t_l4[1]), 4, 1, blue };
+	f.layer[0] = (struct fenykl_shot_layer){ t_l8[1], sizeof(t_l8[1]), 8, 1, red, T_W, T_H };
+	f.layer[2] = (struct fenykl_shot_layer){ t_l4[1], sizeof(t_l4[1]), 4, 1, blue, T_W, T_H };
 	fenykl_shot_compose(&f, 0, t_rgb);
 	if (!t_px(t_rgb, 0, 0, 0, 255))
 		return 64;
@@ -217,8 +223,8 @@ static uint32_t t_frames(void)
 	t_frame(&f);
 	f.lv = t_lv[1];
 	f.lv_pitch = 0;		/* every row the same */
-	f.lv_w = FENYKL_DISP_W;
-	f.lv_h = FENYKL_DISP_H;
+	f.lv_w = T_W;
+	f.lv_h = T_H;
 	for (unsigned int i = 0; i < sizeof(t_lv[1]); i++)
 		t_lv[1][i] = 128;
 	f.frames = (struct fenykl_shot_frames){ pix, 4, 4, 2, 8, 4, 3, fpal };
@@ -235,32 +241,32 @@ static uint32_t t_frames(void)
 		return 512;
 	t_l8[1][0] = 0;
 	t_l8[1][4] = 1;
-	f.layer[0] = (struct fenykl_shot_layer){ t_l8[1], sizeof(t_l8[1]), 8, 1, red };
+	f.layer[0] = (struct fenykl_shot_layer){ t_l8[1], sizeof(t_l8[1]), 8, 1, red, T_W, T_H };
 	fenykl_shot_compose(&f, 0, t_rgb);
 	return t_px(t_rgb, 0, 255, 0, 0) && t_px(t_rgb, 4, 0, 255, 0) ? 0 : 512;
 }
 
 static uint32_t t_stretch(void)
 {
-	for (unsigned int i = 0; i < 3 * FENYKL_DISP_W; i++)
-		t_rgb[i] = (uint8_t)(i / 3 * 250 / (FENYKL_DISP_W - 1) + i % 3);
-	fenykl_shot_stretch(t_rgb, FENYKL_DISP_W, t_out, FENYKL_DISP_W);
-	for (unsigned int i = 0; i < 3 * FENYKL_DISP_W; i++)
+	for (unsigned int i = 0; i < 3 * T_W; i++)
+		t_rgb[i] = (uint8_t)(i / 3 * 250 / (T_W - 1) + i % 3);
+	fenykl_shot_stretch(t_rgb, T_W, t_out, T_W);
+	for (unsigned int i = 0; i < 3 * T_W; i++)
 		if (t_out[i] != t_rgb[i])
 			return 128;
-	fenykl_shot_stretch(t_rgb, FENYKL_DISP_W, t_out, FENYKL_DISP_SQUARE_W);
+	fenykl_shot_stretch(t_rgb, T_W, t_out, T_SQ);
 	for (unsigned int c = 0; c < 3; c++) {
 		if (t_out[c] != t_rgb[c] ||
-		    t_out[3 * (FENYKL_DISP_SQUARE_W - 1) + c] != t_rgb[3 * (FENYKL_DISP_W - 1) + c])
+		    t_out[3 * (T_SQ - 1) + c] != t_rgb[3 * (T_W - 1) + c])
 			return 128;
-		for (unsigned int x = 1; x < FENYKL_DISP_SQUARE_W; x++)
+		for (unsigned int x = 1; x < T_SQ; x++)
 			if (t_out[3 * x + c] < t_out[3 * (x - 1) + c])
 				return 128;
 	}
-	for (unsigned int i = 0; i < 3 * FENYKL_DISP_W; i++)
+	for (unsigned int i = 0; i < 3 * T_W; i++)
 		t_rgb[i] = (uint8_t)(77 + i % 3);
-	fenykl_shot_stretch(t_rgb, FENYKL_DISP_W, t_out, FENYKL_DISP_SQUARE_W);
-	for (unsigned int i = 0; i < 3 * FENYKL_DISP_SQUARE_W; i++)
+	fenykl_shot_stretch(t_rgb, T_W, t_out, T_SQ);
+	for (unsigned int i = 0; i < 3 * T_SQ; i++)
 		if (t_out[i] != 77 + i % 3)
 			return 128;
 	return 0;
@@ -277,12 +283,26 @@ static bool t_same(const char *a, const char *b, unsigned int n)
 static uint32_t t_ppm(void)
 {
 	char h[FENYKL_SHOT_HDR_MAX];
-	unsigned int n = fenykl_shot_ppm_header(h, FENYKL_DISP_SQUARE_W, FENYKL_DISP_H);
+	unsigned int n = fenykl_shot_ppm_header(h, T_SQ, T_H);
 
 	if (n != 15 || !t_same(h, "P6\n853 480\n255\n", n))
 		return 256;
 	n = fenykl_shot_ppm_header(h, 7, 1);
 	return n == 11 && t_same(h, "P6\n7 1\n255\n", n) ? 0 : 256;
+}
+
+static uint32_t t_layout(void)
+{
+	struct fenykl_disp_geom g;
+	struct fenykl_shot_layout lay;
+
+	fenykl_disp_geom(&g);
+	fenykl_shot_layout(&g, &lay);
+	if (lay.lv != 0 || lay.lv_row != 1440 || lay.osd[0] != 691200 || lay.osd_row[0] != 360 ||
+	    lay.osd[1] != 864000 || lay.osd_row[1] != 720 || lay.osd[2] != 1209600)
+		return 1024;
+	return lay.frames == 1382400 && lay.snap == 1489920 && lay.strip == 61416 &&
+	       lay.bytes == 1551336 ? 0 : 1024;
 }
 
 void plugin_main(uint32_t load_base, uint32_t image_size)
@@ -292,6 +312,6 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	(void)load_base;
 	(void)image_size;
 	fail = t_ycc_fixed() | t_ycc_sweep() | t_palette() | t_live_view() | t_blend() | t_4bpp() |
-	       t_order() | t_frames() | t_stretch() | t_ppm();
+	       t_order() | t_frames() | t_stretch() | t_ppm() | t_layout();
 	sim_exit_code = fail;
 }

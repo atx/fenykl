@@ -576,9 +576,9 @@ note = "output device per display (display 0 = panel, 1 = external), written by 
 
 [data.osd_palette]
 address = 0x619AE019
-type = "u8 [0x400]"
+type = "u8 [0x500]"
 evidence = "high"
-note = "osddraw copy of the plane-2 (GPI layer 1, 8 bpp) palette: pointer table 0x60F2F95C = {0x619AE499 plane 0, 0x619AE419 plane 1, 0x619AE019 plane 2}, entry counts 0x60F2F954 = {0x20, 0x20, 0x100}. 4 bytes per index: bytes 0..2 colour, written by 0x60E179EA from gpi_apply_palettes 0x60930C49 (ARGB word split R, G, B [inferred order]), byte 3 = alpha >> 3 (0..32, 0x60E17B60). Dirty flags 0x619AE013 + 2 * plane (colour) and +1 (alpha); committed by 0x60E17846. Not 4-byte aligned"
+note = "osddraw copies of the three OSD palettes, contiguous: GPI layer 1 (plane 2) 256 entries, layer 0 (plane 1) 32 at 0x619AE419, layer 2 (plane 0) 32 at 0x619AE499; pointer table 0x60F2F95C = {0x619AE499 plane 0, 0x619AE419 plane 1, 0x619AE019 plane 2}, entry counts 0x60F2F954 = {0x20, 0x20, 0x100}, layer-to-plane map 0x60BC51B0 = 01 02 00. 4 bytes per index: bytes 0..2 R, G, B (written by 0x60E179EA from gpi_apply_palettes 0x60930C49; the hardware word load 0x602F342B weights byte 0 with 0x4C8B = 0.299), byte 3 = alpha >> 3, 0..32 (bound < 0x21 at 0x60E17B60), passed unscaled into the hardware word A << 24 | Cr << 16 | Cb << 8 | Y. Dirty flags 0x619AE013 + 2 * plane (colour) and +1 (alpha); committed by 0x60E17846. Not 4-byte aligned"
 
 # --- HUD library (lib/hud.c): the camera font, the stock images, layer 1's depth and the live-view
 # INFO screen. Read by hand in the v1.4 main code: every CALL operand (byte scan of call d16/d32), every
@@ -1068,7 +1068,7 @@ note = "take context shock mode, written by take_setup 0x60234075: 0 normal, 1 a
 address = 0xA1C28708
 type = "pool descriptor (uncached)"
 evidence = "high"
-note = "PRIM picture pool (id 0x0000), built once at boot from 0x6050A0B9 (12 blocks of 0x1895000 at 0xA33E8C00): u32 +4 in-use mask, u16 +0x14 free, u16 +0x18 total. One block per take handle in silent H"
+note = "PRIM picture pool (id 0x0000), built once at boot from 0x6050A0B9 (12 blocks of 0x1895000 at 0xA33E8C00): u32 +4 in-use mask (bit i = block i), u16 +0x14 free, u16 +0x18 total, u32 +0x40 reserve mask (data.imgwork_mode). One block per take handle in silent H; a still's take handle gets its frame here (take_buf_alloc 0x6022DF9D -> 0x6022E7A3 -> imgbuff_alloc(&id, 0), pool 0x2700 instead while prop 0xE951 != 0)"
 
 [data.pool_thum]
 address = 0xA1C2874C
@@ -1090,3 +1090,112 @@ address = 0xA1C180F8
 type = "s16 [9]"
 evidence = "high"
 note = "WB_MOV's live-view colour matrix (out = base x light matrix, 0x80 = 1.0), uncached: written by the WB_MOV task (CPU2) at 0x60217688 (init 0x602171F4) and by wb_mov_lv_awb 0x60217FE0 (wbinfo +0x12 of wb_get_matrix 0x602117D7), copied to the take-info by 0x60217A47 (reads 0x60217B1A)"
+
+# --- screenshot (lib/shot.c, the body's shot group): the image-pool API that lends PRIM block 0,
+# the pools over its memory, and display 0's registers and shadows. CALL operands counted by a byte scan of main-code-01
+# (call d16/d32 to the entry), RETs read at the stated addresses.
+
+[imgbuff_alloc]
+address = 0x6050AC48
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x28
+evidence = "high"
+returns = "unsigned"
+args = ["a unsigned short *id", "d unsigned pool"]
+note = "sec3; ret [d2,d3,a2,a3],0x28 at 0x6050AD30, all 43 CALLs [d2,d3,a2,a3],0x28. A0 = where the block id goes, D0 = pool id (id >> 8 indexes the descriptor table 0x6061858C, < 0x51). Takes the first free block of the pool (free count u16 at descriptor +0x14 decremented); returns 0, 0x9B01 when no block is free, 0x9B02 for a bad pool id, 0x9B03 on a lock failure (not a short pool); never waits for a free block, but may sleep briefly (k_dly_tsk) while the pool lock is contended: task context only. A failure prints a trace only. For PRIM (id 0) it takes the lowest free index (loop 0x6050C31D from 0), so the id is 0x0001 + index; it first calls 0x6050B555, which only traces when pool 0x0200 is busy (result discarded at 0x6050ACA3)"
+
+[imgbuff_addr]
+address = 0x6050AEAA
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x28
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned id"]
+note = "sec3; ret [d2,d3,a2,a3],0x28 at 0x6050AF85, all 171 CALLs [d2,d3,a2,a3],0x28. D0 = block id (pool id + block index + 1); returns D0 = base + index * block size (uncached) through the pool method at vtable 0x606189A0 +8 (0x6050C547), also for a block that is not allocated (with a trace); 0 only for block index 0 or > 0x20 (0x6050C558) or a bad pool id"
+
+[imgbuff_free]
+address = 0x6050AD33
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "unsigned"
+args = ["d unsigned id"]
+note = "sec3; ret [],4 at 0x6050AD3C, all 49 CALLs [],4; wrapper of 0x6050AD3F(0, id). Returns 0, or an error code for a block that is not allocated"
+
+[data.pool_table]
+address = 0x6061858C
+type = "{u32 descriptor, u32 next id} [81]"
+evidence = "high"
+note = "sec3 rodata, the imgbuff pool lookup table, indexed by pool id >> 8 (imgbuff_alloc refuses ids >= 0x5100); descriptor 0 = no pool. Entries read from the v1.4 image: 0x0000 0xA1C28708 (PRIM), 0x0200 0xA1C2878C, 0x0300 0xA1C28968, 0x0400 0xA1C28D20, 0x0600 0xA1C28DA0, 0x0800 0xA1C28DE0, 0x0E00 0xA1C28F60, 0x1F00 0xA1C29598, 0x2000 0xA1C29774, 0x2700 0xA1C29AD0, 0x2A00 0xA1C29BD0, 0x3A00 0xA1C2A264, 0x3E00 0xA1C2A364, 0x4200 0xA1C2A580, 0x4F00 0xA1C2AE70. Every descriptor keeps u16 +0x14 free and u16 +0x18 total: the free-count method 0x6050C5D8 (movhu (0x14,a0)) is shared by the basic vtable 0x606189A0 and the large-count vtable 0x60618A48 (constructor 0x6050CBED: 0x0200, 0x0300, 0x1F00, 0x2000; in-use bitmap at +0x40 instead of +4), the allocs decrement it (0x6050C396, 0x6050CDE0), the free increments it (0x6050C468)"
+
+[data.pool_0e00]
+address = 0xA1C28F60
+type = "imgbuff pool descriptor (uncached)"
+evidence = "high"
+note = "pool 0x0E00 (pool_table entry 0xE), two 0x3F4800-byte blocks at 0xBDC943C0: api_play_Alloc_ImageHandle_Ext 0x602D2E6B kind 2. Layout as pool_prim; logged only"
+
+[data.imgwork_mode]
+address = 0xA1C2B048
+type = "u16"
+evidence = "high"
+note = "imgwork mode 0/1/2: table 0x60618580 = {0, 8, 3} reserved PRIM blocks; a switch (0x6050B670) sets pool_prim +0x40 to ((1 << n) - 1) << (12 - n), blocks 4..11 or 9..11 (0x6050CB6C)"
+
+[data.disp_state]
+address = 0xA1C19FC2
+type = "u8"
+evidence = "high"
+note = "display 0 state: 2 while its registers are live; written by the DISPLAY task at 0x602E397F, 0x602E3CB0, 0x602E5601, read at 0x60042492 before the palette load. Drops for ~250 ms on an LCD/EVF switch [camera]"
+
+[data.disp_layer_en]
+address = 0x9C000030
+type = "u32 MMIO"
+evidence = "high"
+note = "display 0 layer enable: 0x20 img1, 0x10 img2, 0x08 img3, 0x04/0x02/0x01 the OSD layers at 0x044/0x048/0x04C; written from the shadows by 0x602F751F (store 0x602F7560). 0x27 in live view; on MENU open 0x17 the first time after power-on (img1 off), 0x37 later [camera]. Read-only use"
+
+[data.disp_img_latched]
+address = 0x9C001C38
+type = "u32 MMIO [3]"
+evidence = "high"
+note = "scanned-out address of img1, img2, img3 (bit 31 clear, e.g. 0x3E47D3C0), read by 0x602F729B, 0x602F72B7, 0x602F72C3. img1 = the live-view buffer the panel shows; MENU points img2 at the live-view block shown when it opens [camera]"
+
+[data.disp_img_jump]
+address = 0x9C000050
+type = "u32 MMIO [3]"
+evidence = "high"
+note = "img1..3 line jump / 64 (stride), written by the device setup at 0x602F7C50 and per layer update; 0x3C (3840 bytes) for the live-view buffers [camera]"
+
+[data.disp_img1_x]
+address = 0x9C0000A4
+type = "u32 MMIO"
+evidence = "high"
+note = "img1 window: x start << 16 | width (device setup 0x602F7BAC, commit read 0x602F82D3); 720 on the LCD, 1024 on the EVF [camera]"
+
+[data.disp_img1_y]
+address = 0x9C0000A8
+type = "u32 MMIO"
+evidence = "medium"
+note = "img1 window: y start << 16 | y end"
+
+[data.disp_img1_h]
+address = 0x9C0000AC
+type = "u32 MMIO"
+evidence = "high"
+note = "img1 window height (device setup 0x602F7C03); 480 on the LCD, 768 on the EVF [camera]"
+
+[data.disp_mix]
+address = 0x9C0001A4
+type = "u32 MMIO"
+evidence = "high"
+note = "OSD mix order code, bits 0-2 (device setup store 0x602F7CDB, runtime 0x602F7078); 3 = layer 1 over 0 over 2 in every live-view and menu scenario seen [camera]"
+
+[data.disp_osd_alpha]
+address = 0x9C0002E0
+type = "u32 MMIO [3]"
+evidence = "high"
+note = "global alpha of osd idx 2, 1, 0 (GPI layers 2, 0, 1), 0x100 = opaque; device setup 0x602F7CBC..0x602F7CC8, EVF fade 0x602E7DB0..0x602E7DCB. 0x100 on the LCD, 0xCC on the EVF [camera]"
+
+[data.osd_shadow]
+address = 0xA1C1A070
+type = "u32 [3]"
+evidence = "high"
+note = "display driver shadow of osd idx 0, 1, 2 = the requested buffers of GPI layers 1, 0, 2; written by the layer updates (0x602F24E8, 0x602F285C, 0x602F2D34, 0x602F3114, ...), copied to 0x9C00004C/48/44 by the commit (0x602F8367..0x602F83A2). Holds the old buffer between the gpi_draw_buf toggle and the DISPLAY-task commit (~13 % of polls in live view [camera])"

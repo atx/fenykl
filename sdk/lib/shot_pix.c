@@ -1,5 +1,5 @@
 /*
- * The screenshot's pixel work (shot_int.h).
+ * The screenshot's pixel work and rules (shot_int.h).
  */
 #include "shot_int.h"
 
@@ -28,11 +28,24 @@ void fenykl_shot_ycc_rgb(unsigned int y, unsigned int cb, unsigned int cr, uint8
 	rgb[2] = shot_clamp(l + SHOT_K_BU * u);
 }
 
-void fenykl_shot_palette(const uint8_t *ycca, unsigned int n, uint8_t *rgba)
+/* E-PL3: {Y, Cb, Cr, alpha 0..15 in the low nibble}; E-M10 II: {R, G, B, alpha 0..32}. */
+void fenykl_shot_palette(const uint8_t *src, unsigned int n, unsigned int global, uint8_t *rgba)
 {
-	for (unsigned int i = 0; i < n; i++, ycca += 4, rgba += 4) {
-		fenykl_shot_ycc_rgb(ycca[0], ycca[1], ycca[2], rgba);
-		rgba[3] = ycca[3] & FENYKL_SHOT_ALPHA_MAX;
+	if (global > 0x100)
+		global = 0x100;
+	for (unsigned int i = 0; i < n; i++, src += 4, rgba += 4) {
+		unsigned int a;
+
+		if (FENYKL_OSD_PAL_YCC) {
+			fenykl_shot_ycc_rgb(src[0], src[1], src[2], rgba);
+			a = src[3] & FENYKL_SHOT_ALPHA_MAX;
+		} else {
+			rgba[0] = src[0];
+			rgba[1] = src[1];
+			rgba[2] = src[2];
+			a = src[3] < FENYKL_SHOT_ALPHA_MAX ? src[3] : FENYKL_SHOT_ALPHA_MAX;
+		}
+		rgba[3] = (uint8_t)(a * global >> 8);
 	}
 }
 
@@ -63,17 +76,22 @@ static void shot_blend(uint8_t *d, const uint8_t *c)
 		d[i] = (uint8_t)((c[i] * a + d[i] * (FENYKL_SHOT_ALPHA_MAX - a)) / FENYKL_SHOT_ALPHA_MAX);
 }
 
-static void shot_layer(const struct fenykl_shot_layer *l, unsigned int y, uint8_t *rgb)
+/* Canvas row y of w pixels from the nearest source pixels: sx = x * l->w / w, without a divide. */
+static void shot_layer(const struct fenykl_shot_layer *l, unsigned int y, unsigned int w,
+		       unsigned int h, uint8_t *rgb)
 {
-	const uint8_t *s = l->pix + y * l->pitch;
+	const uint8_t *s = l->pix + y * l->h / h * l->pitch;
+	unsigned int sx = 0, err = 0;
 
-	for (unsigned int x = 0; x < FENYKL_DISP_W; x++, rgb += 3) {
-		unsigned int i = s[x * l->bpp / 8];
+	for (unsigned int x = 0; x < w; x++, rgb += 3) {
+		unsigned int i = s[sx * l->bpp / 8];
 
 		if (l->bpp == 4)
-			i = x & 1 ? i >> 4 : i & 0x0F;
+			i = sx & 1 ? i >> 4 : i & 0x0F;
 		if (i < l->entries)
 			shot_blend(rgb, l->pal + 4 * i);
+		for (err += l->w; err >= w; err -= w)
+			sx++;
 	}
 }
 
@@ -95,7 +113,7 @@ static void shot_frames(const struct fenykl_shot_frames *fr, unsigned int y, uin
 
 void fenykl_shot_compose(const struct fenykl_shot_frame *f, unsigned int y, uint8_t *rgb)
 {
-	for (unsigned int i = 0; i < 3 * FENYKL_DISP_W; i++)
+	for (unsigned int i = 0; i < 3u * f->w; i++)
 		rgb[i] = 0;
 	if (f->lv && y >= f->lv_y && y < f->lv_y + f->lv_h)
 		shot_lv(f, y, rgb);
@@ -103,7 +121,7 @@ void fenykl_shot_compose(const struct fenykl_shot_frame *f, unsigned int y, uint
 		shot_frames(&f->frames, y, rgb);
 	for (unsigned int l = 0; l < FENYKL_SHOT_LAYERS; l++)
 		if (f->layer[l].pix)
-			shot_layer(&f->layer[l], y, rgb);
+			shot_layer(&f->layer[l], y, f->w, f->h, rgb);
 }
 
 void fenykl_shot_stretch(const uint8_t *in, unsigned int in_w, uint8_t *out, unsigned int out_w)
@@ -150,4 +168,40 @@ unsigned int fenykl_shot_ppm_header(char *out, unsigned int w, unsigned int h)
 	p = shot_dec(p, 255);
 	*p++ = '\n';
 	return (unsigned int)(p - out);
+}
+
+void fenykl_shot_layout(const struct fenykl_disp_geom *g, struct fenykl_shot_layout *lay)
+{
+	static const uint8_t bpp[FENYKL_SHOT_LAYERS] = FENYKL_OSD_BPP;
+	uint32_t off;
+
+	lay->lv = 0;
+	lay->lv_row = 2u * g->w;
+	off = lay->lv_row * g->h;
+	for (unsigned int l = 0; l < FENYKL_SHOT_LAYERS; l++) {
+		lay->osd[l] = off;
+		lay->osd_row[l] = (uint32_t)g->osd_w * bpp[l] / 8;
+		off += lay->osd_row[l] * g->osd_h;
+	}
+	lay->frames = off;
+	lay->snap = off + FENYKL_FRAMES_PITCH * FENYKL_FRAMES_H;
+	lay->strip = 3u * g->square_w * FENYKL_SHOT_STRIP_ROWS;
+	lay->bytes = lay->snap + (FENYKL_SHOT_STRIP_LENT ? lay->strip : 0);
+}
+
+const char *fenykl_shot_gate(const struct fenykl_shot_cond *c, const struct fenykl_shot_cond *start)
+{
+	if (c->movie)
+		return "movie mode";
+	if (c->playback)
+		return "playback";
+	if (c->still_shared)
+		return "stills go to the lent memory";
+	if (c->other_used)
+		return "a pool over the lent memory in use";
+	if (start)
+		return c->mode != start->mode ? "output changed" : NULL;
+	if (!c->ready)
+		return "display not ready";
+	return c->pool_used ? "a picture in the lent pool" : NULL;
 }

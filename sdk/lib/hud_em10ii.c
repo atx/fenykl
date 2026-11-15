@@ -24,13 +24,18 @@ int fenykl_hud_output(void)
 	return FENYKL_HUD_OUT_NONE;
 }
 
-int fenykl_hud_info_screen(void)
+int fenykl_hud_prop(unsigned int prop)
 {
-	uint32_t obj = fbody_prop_obj(HUD_PROP_INFO);
+	uint32_t obj = fbody_prop_obj(prop);
 
 	if (!fenykl_dram_ptr(obj, 1))
 		return -1;
 	return (int8_t)fenykl_rd8(obj);
+}
+
+int fenykl_hud_info_screen(void)
+{
+	return fenykl_hud_prop(HUD_PROP_INFO);
 }
 
 bool hud_em10ii_visible(uint32_t states)

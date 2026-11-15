@@ -37,7 +37,8 @@ firmware functions placed at their real firmware addresses. Every C test program
   per-pixel neighbour count: random images over widths and thresholds, patterns, the cap.
 - shot: the screenshot library's pixel work (sdk/lib/shot_pix.c): YCbCr to RGB against a BT.601
   reference, palettes, live view placement, alpha blending, 4-bpp nibble order, layer order, the
-  face/AF frame layer (scaling, transparent indices, stacking), the 16:9 stretch and the PPM header.
+  face/AF frame layer (scaling, transparent indices, stacking), the 16:9 stretch, the PPM header and
+  the E-PL3's lent RECFILE layout.
 - afc_sm: the contrast client's attach/detach state machine (sdk/lib/afc_sm.c): boot delay, settle
   and cooldown, the stop on a gate, the callback's stop, a stop pending while live view is off, and
   every error path ending passive.
@@ -59,6 +60,15 @@ firmware functions placed at their real firmware addresses. Every C test program
 - key_em10ii: the key layer with the E-M10 II key map over the event layer and the E-M10 II hook
   runtime: Fn1 claimed in live view and the menu, Fn2/Fn3/REC/L-Fn/RIGHT decoded, the E-PL3's POWER
   code and code 0 unknown, POWER refused by add and inject.
+- shot_em10ii: the screenshot on the E-M10 II body (sdk/lib/shot_pix.c): the EVF's 640 x 480 OSD
+  scaled 1.6x by nearest pixel and the LCD's 1:1, RGB palettes with alpha 0..32 and the global
+  alpha, blending, the start and abort rules, the LCD and EVF layouts in PRIM block 0.
+- shot_em10ii run: the E-M10 II screenshot (sdk/lib/shot.c) on a fake LCD display against mocks
+  of the image pool and the file server: the body's lend of PRIM block 0 (another block given
+  back, a refused alloc), the start rules (a PRIM frame in flight, prop 0xE951, a pool over block
+  0, movie, playback), a whole shot with the raw pieces while a still takes block 1, and aborts
+  during the PPM (block 0 back first, the partial PPM removed) and during the raw pieces (the PPM
+  kept).
 - ui_em10ii: the E-M10 II settings page (sdk/lib/ui_em10ii.c) entered through its slot words and
   screen methods: install all or nothing, the push onto a fake menu app, the slot 0x38 image,
   keys, an edit, MENU through the app's pop method, the delete, the default handler.
@@ -562,6 +572,65 @@ def test_em10ii_ui_runs_in_the_simulator(tmp_path):
         target=EM10II,
     )
     assert_exit(result, 0, "tests/sim/ui_em10ii/test_ui.c")
+
+
+def test_em10ii_shot_runs_in_the_simulator(tmp_path):
+    """E-M10 II screenshot rules and pixel work: shot_pix.c built with the E-M10 II body."""
+    result = run_in_simulator(
+        tmp_path,
+        "shotsim_em10ii",
+        [SIM / "shot" / "test_shot_em10ii.c", SIM / "hooks_em10ii" / "sim_start.S"],
+        # DRAM (payload, stack) with its uncached alias, the mock section.
+        [
+            ("--memory-alias", "0x60000000,0x1000000,0xa0000000"),
+            region("0x6eb00000,0x10000"),
+        ],
+        target=EM10II,
+    )
+    assert_exit(result, 0, "tests/sim/shot/test_shot_em10ii.c")
+
+
+def test_em10ii_shot_run_in_the_simulator(tmp_path):
+    """E-M10 II screenshot (shot.c, the body's lend) on a fake LCD display against mocks of the
+    image pool, the file server and the kernel."""
+    run = SIM / "shot_em10ii"
+    result = run_in_simulator(
+        tmp_path,
+        "shotrun_em10ii",
+        [run / "test_shot_run.c", SIM / "hooks_em10ii" / "sim_start.S", run / "fw.S"],
+        # DRAM up to the GUI, display and pool data with its uncached alias, PRIM block 0, the
+        # live-view and OSD buffers with theirs, the display registers, the timer, the mock bodies.
+        [
+            ("--memory-alias", "0x60000000,0x2000000,0xa0000000"),
+            ("--memory-alias", "0x63000000,0x2000000,0xa3000000"),
+            ("--memory-alias", "0x7e000000,0x2000000,0xbe000000"),
+            region("0x9c000000,0x2000"),
+            TIMER,
+            region("0x6eb00000,0x10000"),
+        ],
+        mocked=[
+            "psw_get",
+            "irq_disable_all",
+            "irq_mask_restore",
+            "irq_lock",
+            "irq_unlock",
+            "dcache_flush_all",
+            "OlyTaskSleep",
+            "sprintf",
+            "ui_key_get_state",
+            "fileif_get_media_status",
+            "rpc_fopen",
+            "rpc_fclose",
+            "rpc_fwrite",
+            "rpc_fremove",
+            "imgbuff_alloc",
+            "imgbuff_addr",
+            "imgbuff_free",
+        ],
+        target=EM10II,
+        timeout=300,
+    )
+    assert_exit(result, 0, "tests/sim/shot_em10ii/test_shot_run.c")
 
 
 SLOTS_TOML = """

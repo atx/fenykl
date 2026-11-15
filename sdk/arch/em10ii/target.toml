@@ -1,6 +1,7 @@
 # Olympus OM-D E-M10 Mark II with the fenykl-loader firmware. Plugin runtime: start, string, log and
 # cfg libraries, the settings page (lib/ui.c + ui_em10ii.c), the HUD library (lib/hud.c +
-# hud_em10ii.c), the body API's lens, batt, afc and wb_base groups (fenykl_body.h), the own contrast client
+# hud_em10ii.c), the body API's lens, batt, afc, wb_base and shot groups (fenykl_body.h), the
+# screenshot (lib/shot.c), the own contrast client
 # (lib/afc.c), pre-capture (lib/precap_em10ii.c), data slots (lib/slots.c), code hooks (hooks.c,
 # CPU0 I-cache only), the event layer (lib/event.c) and the key layer (lib/key.c with this body's
 # key map lib/key_em10ii.c); no CPU1 runtime yet.
@@ -37,6 +38,8 @@ capabilities = [
   "key", "lens",
   # wb_base: the colour-matrix bases in the property registry (body.h, fenykl_body.h)
   "wb_base",
+  # shot: the screenshot (lib/shot.c), PRIM still-image pool block 0 lent for the write
+  "shot",
 ]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.

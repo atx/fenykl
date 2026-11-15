@@ -121,7 +121,7 @@ struct main_peak_state {
 	uint32_t stock[FENYKL_PEAK_CTRL_SIZE / 4];	/* the live-view pass of the shown layout */
 	struct fenykl_peak_layout lay;
 	struct fenykl_ovl ovl;
-	uint32_t alloc, out1, ln, disp, lum, lists, bm;
+	uint32_t alloc, handle, out1, ln, disp, lum, lists, bm;
 	unsigned int back;		/* the overlay buffer drawn next */
 	uint32_t n_lit[2];
 	unsigned int level;		/* shown level */
@@ -331,14 +331,16 @@ static bool main_peak_alloc(struct main_peak_state *st)
 			MAIN_PEAK_ALIGN;
 	uint32_t a;
 
-	if (!fenykl_recfile_fits(size)) {
+	st->alloc = fenykl_shot_buf_alloc(size, &st->handle);
+	if (!st->alloc) {
 		fenykl_log_err(&main_peak_log, "RECFILE has no free run of %u bytes", size);
 		return false;
 	}
-	st->alloc = fenykl_recfile_alloc(size);
 	if (!fenykl_dram(st->alloc, size)) {
 		fenykl_log_err(&main_peak_log, "recfile_alloc(%u) returned %08x", size, st->alloc);
+		fenykl_shot_buf_free(st->handle);
 		st->alloc = 0;
+		st->handle = 0;
 		return false;
 	}
 	a = (uint32_t)FENYKL_UNCACHED(main_peak_round(st->alloc));
@@ -353,8 +355,9 @@ static bool main_peak_alloc(struct main_peak_state *st)
 
 static void main_peak_free(struct main_peak_state *st)
 {
-	fenykl_recfile_free(st->alloc);
+	fenykl_shot_buf_free(st->handle);
 	st->alloc = 0;
+	st->handle = 0;
 }
 
 static void main_peak_show(struct main_peak_state *st)

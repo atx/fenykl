@@ -278,12 +278,12 @@ static inline bool fenykl_cnt_drv_dbg(void)
 #endif
 
 #if FENYKL_HAS_SHOT
-#define FENYKL_DISP_LV_PITCH 1600u	/* 800x600 YUYV */
-#define FENYKL_DISP_LV_BYTES (FENYKL_DISP_LV_PITCH * 600u)
+#define FBODY_LV_PITCH 1600u		/* 800x600 YUYV */
+#define FBODY_LV_BYTES (FBODY_LV_PITCH * 600u)
 /* The panel shows the top-left 720 x 480 of the OSD planes, 16:9: 853 x 480 at square pixels. */
-#define FENYKL_DISP_W 720u
-#define FENYKL_DISP_H 480u
-#define FENYKL_DISP_SQUARE_W 853u	/* 720 * 32 / 27 */
+#define FENYKL_DISP_W_MAX 720u
+#define FENYKL_DISP_H_MAX 480u
+#define FBODY_DISP_SQUARE_W 853u	/* 720 * 32 / 27 */
 #define FENYKL_OSD_LAYERS 3u
 #define FENYKL_OSD_PLANE_W 896u
 #define FENYKL_OSD_PLANE_H 600u
@@ -292,12 +292,30 @@ static inline bool fenykl_cnt_drv_dbg(void)
 #define FENYKL_OSD_PAL_ENTRIES { 16, 256, 8 }
 #define FENYKL_OSD_PAL_FIRST { 256, 0, 272 }
 #define FENYKL_OSD_PAL_TOTAL (256u + 16u + 8u)
+#define FENYKL_OSD_PAL_YCC 1
+#define FENYKL_OSD_ALPHA_MAX 15u
+#define FENYKL_OSD_SHADOW_LAGS 0
 /* bottom to top [inferred from camera OSD dumps; L1 on top (osdcard)]; 0x1A4 is logged at debug */
 #define FENYKL_OSD_STACK { 2, 0, 1 }
 /* img3: the face/AF frames, 8 bpp palette indices, index 0 transparent; above img1, below the OSD */
 #define FENYKL_FRAMES_PITCH 448u
 #define FENYKL_FRAMES_H 240u
 #define FENYKL_FRAMES_PAL 8u
+/* 20 strips of 24 rows in the RECFILE run; RECFILE free blocks are logged only */
+#define FENYKL_SHOT_STRIP_ROWS 24u
+#define FENYKL_SHOT_STRIP_LENT 1
+#define FENYKL_SHOT_REGS {						\
+	{ "img1_shadow", FW_MOV_IMG1_SHADOW, 4 },			\
+	{ "img1_x", FW_DISP_IMG1_X, 4 },				\
+	{ "img1_y", FW_DISP_IMG1_Y, 4 },				\
+	{ "mix", FW_DISP_MIX, 4 },					\
+	{ "img3_shadow", FW_DISP_IMG3_SHADOW, 4 },			\
+	{ "osd_shadow0", FW_OSD_SHADOW, 4 },				\
+	{ "osd_shadow1", FW_OSD_SHADOW + 4, 4 },			\
+	{ "osd_shadow2", FW_OSD_SHADOW + 8, 4 },			\
+	{ "gpi_draw_buf", FW_GPI_DRAW_BUF, 1 },				\
+	{ "gpi_hide_mask", FW_GPI_HIDE_MASK, 2 },			\
+}
 
 #define FBODY_FLIP_ENTRIES 3u
 #define FBODY_RECFILE_BLOCKS 256u
@@ -321,6 +339,27 @@ static inline uint32_t fenykl_cached(uint32_t a)
 static inline bool fenykl_dram(uint32_t a, uint32_t bytes)
 {
 	return fenykl_dram_ptr(a, 4) && fenykl_cached(a) + bytes <= FW_IMAGE_START;
+}
+
+static inline bool fenykl_disp_ready(void)
+{
+	return true;
+}
+
+/* The rear LCD only: the panel's 720 x 480 window of the OSD planes and of the live view. */
+static inline bool fenykl_disp_geom(struct fenykl_disp_geom *g)
+{
+	*g = (struct fenykl_disp_geom){
+		.w = FENYKL_DISP_W_MAX,
+		.h = FENYKL_DISP_H_MAX,
+		.square_w = FBODY_DISP_SQUARE_W,
+		.osd_w = FENYKL_DISP_W_MAX,
+		.osd_h = FENYKL_DISP_H_MAX,
+		.osd_alpha = { 0x100, 0x100, 0x100 },
+		.lv_pitch = FBODY_LV_PITCH,
+		.lv_bytes = FBODY_LV_BYTES,
+	};
+	return true;
 }
 
 static inline uint32_t fenykl_disp_lv(void)
@@ -412,7 +451,8 @@ static inline const uint8_t *fenykl_frames_palette(void)
 	return (const uint8_t *)FW_FRAME_PALETTE;
 }
 
-static inline bool fenykl_recfile_fits(uint32_t bytes)
+/* RECFILE has a free run for bytes: recfile_alloc would not block. */
+static inline bool fbody_recfile_fits(uint32_t bytes)
 {
 	uint32_t blocks = (bytes + FBODY_RECFILE_BLOCK - 1) / FBODY_RECFILE_BLOCK;
 	unsigned int run = 0;
@@ -425,14 +465,30 @@ static inline bool fenykl_recfile_fits(uint32_t bytes)
 	return false;
 }
 
-static inline uint32_t fenykl_recfile_alloc(uint32_t bytes)
+/* No half-press, movie or output rule: the RECFILE allocator accounts for the lent run, so a still
+   taken during the write finds it in use. buf_free counts free RECFILE blocks, for the log. */
+static inline void fenykl_shot_cond(struct fenykl_shot_cond *c)
 {
-	return fw_recfile_alloc(bytes);
+	uint32_t free = 0;
+
+	for (unsigned int i = 0; i < FBODY_RECFILE_BLOCKS; i++)
+		free += !fenykl_rd8(FW_RECFILE_USED + i);
+	*c = (struct fenykl_shot_cond){ .ready = true, .buf_free = free };
 }
 
-static inline void fenykl_recfile_free(uint32_t buf)
+/* A RECFILE run, uncached; the handle is its address. */
+static inline uint32_t fenykl_shot_buf_alloc(uint32_t bytes, uint32_t *handle)
 {
-	fw_recfile_free(buf);
+	if (!fbody_recfile_fits(bytes))
+		return 0;
+	*handle = fw_recfile_alloc(bytes);
+	return *handle;
+}
+
+static inline uint32_t fenykl_shot_buf_free(uint32_t handle)
+{
+	fw_recfile_free(handle);
+	return 0;
 }
 #endif
 

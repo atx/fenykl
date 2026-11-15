@@ -68,6 +68,8 @@ def test_feature_libraries_follow_the_target_capabilities():
         "log.c",
         "log_rec.c",
         "precap_em10ii.c",
+        "shot.c",
+        "shot_pix.c",
         "slots.c",
         "start.c",
         "string.c",
@@ -358,8 +360,8 @@ def test_main_links_the_focus_meter_contrast_client_precap_and_rb_swap_for_the_e
 
 @needs_toolchain
 def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path):
-    """Focus distance, DoF and the Fn override with the E-M10 II key map and lens readings. Without
-    an Fn action on this body the key install is not reachable, so only the tick links."""
+    """Focus distance, DoF and the Fn override with the E-M10 II key map and lens readings; its
+    screenshot action brings the key install and the PRIM block 0 lend."""
     plugin.build(MAIN_DIR, tmp_path, sdk.target("em10ii"))
     symbols = (tmp_path / "plugin.map").read_text()
     for name in (
@@ -368,6 +370,10 @@ def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path)
         "main_fn_tick",
         "fenykl_key_tick",
         "fenykl_key_codes",
+        "fenykl_key_install",
+        "act_shot",
+        "fenykl_shot_start",
+        "fw_imgbuff_alloc",
         "fw_lens_focal_length_now",
     ):
         assert f" {name}\n" in symbols
