@@ -13,6 +13,8 @@ firmware functions placed at their real firmware addresses. Every C test program
 - main_fmt: the main plugin's distance formatter (sdk/projects/main/main_fmt.c): fixed cases at
   every unit bound and rounding carry, and a sweep checking digits, units, half-up rounding and the
   split into a number line of at most 4 characters over the unit line.
+- hud_rle: the HUD library's fmt 0x03 bitmap encoder (sdk/lib/hud_rle.c), read back with a decoder
+  written from the format: pixels, runs within rows, the stock size rule, the buffer bounds.
 - main_dof: the main plugin's depth of field (sdk/projects/main/main_dof.c): fixed cases against
   ExifTool's Composite:DOF formula (kit lens distances, s = inf, far = inf), the f-number from Av,
   invalid inputs, and a sweep checking near <= s <= far and that stopping down deepens and zooming
@@ -217,6 +219,13 @@ PROGRAMS = {
         "sources": [
             SIM / "main" / "test_main_fmt.c",
             PROJECTS / "main" / "main_fmt.c",
+            SIM / "hooks" / "sim_start.S",
+        ],
+        "memory": [DRAM, POWERON],
+    },
+    "hud_rle": {
+        "sources": [
+            SIM / "hud" / "test_hud_rle.c",
             SIM / "hooks" / "sim_start.S",
         ],
         "memory": [DRAM, POWERON],

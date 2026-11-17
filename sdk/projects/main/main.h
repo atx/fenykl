@@ -81,12 +81,10 @@ int main_img_hook_install(void);
 extern const struct fenykl_cfg_group main_grp_image;
 #endif
 
-/* main_hooks.c */
+/* main_hooks.c: the E-PL3 HUD's cw_updateDisplay hook */
+#if FENYKL_HAS_HUD_OVERLAY
 int main_hooks_install(void);
 void main_hooks_draw_off(void);
-#if FENYKL_HAS_PRECAP
-/* cw_updateDisplay calls while a pre-capture burst runs */
-uint32_t main_hooks_precap_calls(void);
 #endif
 
 #endif

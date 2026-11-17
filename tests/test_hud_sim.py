@@ -3,15 +3,17 @@ the stock English font must match the Python font decoder (fenykl.assets) placed
 spacing rules, pixel for pixel, for every alignment, background and clipping case. In the LV style
 the characters of the GUI's image fonts 12 and 16 (read from the firmware's own char -> image
 tables) must be exactly the decoded stock images, and the other characters the font glyph scaled to
-2/3, made bold and given the stock outline rule of sdk/lib/hud.c. test_hud.c checks the hook side (erase counting, hidden
-states, the one-layer override, hide clears) in its exit status and dumps each rendered rectangle;
+2/3, made bold and given the stock outline rule of sdk/lib/hud.c. test_hud.c checks the E-PL3's hook side
+(erase counting, hidden states, the one-layer override, hide clears) in its exit status and dumps
+each rendered rectangle;
 this file builds the font and image tables it serves and compares the dumps. test_hud_draw.c
 decodes the exposure-row cells 1095-1098 with fenykl_hud_image and draws the focus meter's
 10-cell row with fenykl_hud_draw; both dumps are compared with the Python decoder. The image table
 holds the firmware's own encoded image bytes, read from the stock firmware at test time.
 The text cases run for both cameras, each with its own stock font and live-view images (E-M10 II:
 image fonts 14 and 25); test_hud_em10ii.c checks the E-M10 II visibility predicate (GUI state,
-display request, output device, INFO screen property), the output device and the palette pick."""
+display request, output device, INFO screen property), the output device, the palette pick and the
+widget backend (sdk/lib/hud_em10ii.c) against the mocks of fw_em10ii.S."""
 
 import math
 import struct
@@ -31,7 +33,7 @@ from conftest import (
     stock_image,
 )
 
-from fenykl import sdk
+from fenykl import fwapi, sdk
 from fenykl.assets import ASSET_LAYOUTS, Bitmap, common_resource, read_assets
 from fenykl.firmware import identify, unpack_firmware
 
@@ -82,10 +84,38 @@ MEMORY = {
         region("0x6eb00000,0x10000"),
     ],
 }
+# fw.S's mocks besides gpi_get_glyph: the heap and fenykl_irq_save/restore
+MOCKED = ["malloc", "free", "psw_get", "irq_disable_all", "irq_mask_restore"]
 SIM_START = {
     "epl3": SIM / "hooks" / "sim_start.S",
     "em10ii": SIM / "hooks_em10ii" / "sim_start.S",
 }
+# fw_em10ii.S: the D-cache flush, the widget calls and the GUI post, and the stock functions behind
+# the HUD's slots, placed at their stock addresses
+EM10II_MOCKED = [
+    "irq_lock", "irq_unlock", "dcache_flush_all", "gui_widget_create", "gui_container_append",
+    "gui_image_set_handle", "gui_post",
+]  # fmt: skip
+EM10II_STOCK = {
+    "panel_create": "info_panel_create",
+    "panel_destroy": "info_panel_destroy",
+    "app_message": "gui_app_message",
+}
+
+
+def link(camera: str) -> dict:
+    """run_in_simulator's extra sources, mocks and placements of `camera`'s HUD programs."""
+    if camera != "em10ii":
+        return {"sources": [], "mocked": MOCKED, "ldflags": []}
+    slots = fwapi.load(sdk.target("em10ii").dir / "firmware.toml").slots
+    return {
+        "sources": [HUD / "fw_em10ii.S"],
+        "mocked": [*MOCKED, *EM10II_MOCKED],
+        "ldflags": [
+            f"-Wl,--section-start=.fw.{section}=0x{slots[slot].expected:x}"
+            for section, slot in EM10II_STOCK.items()
+        ],
+    }
 
 
 @pytest.fixture(scope="module", params=["epl3", "em10ii"])
@@ -364,12 +394,14 @@ def expected(
 @pytest.fixture(scope="module")
 def cases(camera, font, lv_images, tmp_path_factory) -> list[Case]:
     workdir = tmp_path_factory.mktemp(f"hudsim_{camera}")
+    extra = link(camera)
     result = run_in_simulator(
         workdir,
         "hudsim",
         [
             HUD / "test_hud.c",
             HUD / "fw.S",
+            *extra["sources"],
             SIM_START[camera],
             glyph_table(font, workdir / "glyphs.c"),
             image_table(
@@ -377,7 +409,8 @@ def cases(camera, font, lv_images, tmp_path_factory) -> list[Case]:
             ),
         ],
         MEMORY[camera],
-        mocked=["gpi_get_glyph", "malloc", "free"],
+        mocked=["gpi_get_glyph", *extra["mocked"]],
+        ldflags=extra["ldflags"],
         target=sdk.target(camera),
     )
     assert_exit(result, 0, "tests/sim/hud/test_hud.c")
@@ -429,7 +462,7 @@ def draw_dump(stock_images, tmp_path_factory) -> DrawDump:
             image_table(set(stock_images), workdir / "images.c"),
         ],
         MEMORY["epl3"],
-        mocked=["malloc", "free"],
+        mocked=MOCKED,
     )
     assert_exit(result, 0, "tests/sim/hud/test_hud_draw.c")
     out, images = result.stdout, {}
@@ -484,13 +517,20 @@ def test_cell_row_places_the_stock_cells(draw_dump, stock_images):
         assert row.pixels[y * row.w : (y + 1) * row.w] == bytes([CLEAR]) * row.w
 
 
-def test_em10ii_visibility_output_and_palette(tmp_path):
+def test_em10ii_visibility_palette_and_widgets(tmp_path):
+    extra = link("em10ii")
     result = run_in_simulator(
         tmp_path,
         "hudsim_em10ii",
-        [HUD / "test_hud_em10ii.c", HUD / "fw.S", SIM_START["em10ii"]],
+        [
+            HUD / "test_hud_em10ii.c",
+            HUD / "fw.S",
+            *extra["sources"],
+            SIM_START["em10ii"],
+        ],
         MEMORY["em10ii"],
-        mocked=["malloc", "free"],
+        mocked=extra["mocked"],
+        ldflags=extra["ldflags"],
         target=sdk.target("em10ii"),
     )
     assert_exit(result, 0, "tests/sim/hud/test_hud_em10ii.c")

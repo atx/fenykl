@@ -524,6 +524,24 @@ type = "u32"
 evidence = "high"
 note = "display request of SsCommon state 8: its entry 0x609E0ED2 stores param2 at 0x609E0EED when it matches table 0x60D25C24 (0xF001..0xF005, 0xF712, 0x962C, 0xF007..0xF009); action 31 replaces it (0x609E1091); cleared at 0x609E0A05, 0x609E0FB2, 0x609E107A. Code meanings are inferred"
 
+[data.gui_cur_panel]
+address = 0x615F63B8
+type = "s16"
+evidence = "high"
+note = "id of the GUI panel on screen (an id, not a pointer): ShowPanel 0x60A6DE03(u16 id, flag) returns early when the id equals it and flag is 0, else stores the id (0x60A6DE6E), purges events 0x1100/0x1002/0x1900/0x1901 and posts 0x1100; getter 0x60A6E07D. 0x615F63BA is a separate s16"
+
+[data.gui_lv_panel]
+address = 0x615F4B4C
+type = "s32"
+evidence = "high"
+note = "panel id the live-view info viewer shows: set from gui_cur_panel (getter 0x60A6E07D) by the viewer base 0x609F6951; the viewer's show method 0x60A20772 (vtable 0x60D5A02C) passes it as u16 to ShowPanel 0x60A6DE03 with flag 1 at 0x60A2113E when 0x60A2115F returned 0. Other viewers write it too (0x60A02185, 0x60A02211, 0x60A12F3B)"
+
+[data.gui_app]
+address = 0x615E83BC
+type = "u32 -> app object"
+evidence = "high"
+note = "GUI app object; +0x19C = the panel object on screen (first word its vtable; 0x60C9801C = live-view info panel class, ctor 0x609B4448, widget factory type 0x600A). Only writer 0x6095D5E2, called by the app base ctor 0x6093702A with this (which zeroes +0x19C and +0x4A0) and from WinMain 0x60934F05; getter 0x6095D5D9. The app's panel loader 0x6096111D creates the panel through the widget factory 0x6095D5F0 and swaps it into +0x19C with 0x609376EA (its only caller; also clears +0x4A0 when it held the old panel), then destroys the old panel through its vt[0]. +0x4C s16 = number of rects per widget record the base load copies (vt+0x2B8 0x609398AD), +0x4E s16 = the rect used (vt+0x2B4 0x609398A6); vtable 0x60BD8728"
+
 [data.gpi_layer_vram]
 address = 0x618C8484
 type = "u32 [layer * 2 + buf] -> struct osd_vram, work handle at +0x18"
@@ -755,6 +773,113 @@ address = 0xA1C00090
 type = "u16"
 evidence = "medium"
 note = "live iris word: lens record + 0x10, M_STATUS_LV reply bytes 8..9 (store 0x60151AD0). Scale unknown: the camera read 0x1A2 throughout with the kit lens wide open in P, where APEX x 256 of f/3.5 is about 925; logged only"
+# --- GUI widget toolkit: native items on the live-view info panel (lib/hud_em10ii.c) ---
+# Read by hand in the v1.4 main code (decompile, listing, byte reads). The GUI task (WinMain 0x60934F05,
+# CPU0) owns every object; all widget calls below are for that task only, except gui_post.
+# Panel life cycle (app vt+0x300 0x60961118): the new panel is created (factory type 0x6000 + id, then
+# vt+0x94 -> container create 0x6093A3A2 -> vt+0x1A8) before the old one is destroyed (vt+0x98 -> vt+0x1B0
+# deletes every child of the list panel+0x5C through the child's vt[0] and the deallocator it returns,
+# then vt[0] frees the panel). Panel id 10 is the only id built from type 0x600A = class 0x60C9801C.
+
+[gui_widget_create]
+address = 0x6095D5F0
+saves = ["d2", "a2", "a3"]
+frame = 0x18
+evidence = "high"
+returns = "void *"
+args = ["a void *app", "d unsigned type", "d uint32_t parent", "a const void *record"]
+note = "sec4, widget factory: all 249 CALLs use [d2,a2,a3],0x18 (e.g. the info panel's OnCreate 0x609B452C: A0 = app from 0x6095D5D9, D0 = record type, D1 = panel, A1 = record); type functions return through the common exit 0x60961110 (ret [d2,a2,a3],0x18, bytes df b0 18). Takes the pool from parent->vt[0xF8] (parent +0x1C/+0x1D), looks the u16 type up in the hash table 0x60BD6CE8 ({type, fn} x 264) and tail-jumps to it; 0x8003 -> 0x6095D775: gui_alloc(300), image ctor 0x60970B39 (vtable 0x60BDADDC), pool bytes, load 0x60970E6E(w, record). A0 = widget or 0 (A0 at entry is not read). GUI task only"
+
+[gui_container_append]
+address = 0x6093A4CA
+saves = ["a2"]
+frame = 8
+evidence = "high"
+returns = "int"
+args = ["a void *container", "a void *child"]
+note = "sec4; ret [a2],8 at 0x6093A4DA; all 237 CALLs use [a2],8. container->vt[0x1B8]() (the child list, panel + 0x5C) then list append 0x60939CD0 -> 0x60936A87, which takes a 12-byte node from GUI pool 5; D0 = 1 or 0 (no node). The list is drawn in order (last = on top) and emptied by OnDestroy, which deletes every child. GUI task only"
+
+[gui_image_set_handle]
+address = 0x60971757
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x18
+evidence = "high"
+returns = "void *"
+args = ["a void *widget", "a void *handle", "d unsigned index"]
+note = "sec4; ret [d2,d3,a2,a3],0x18 at 0x609717B2; its one CALL (0x60A58E99 path) uses the same. A0 = image widget, D0 = index (extbu), A1 stored at widget+0xAC[index] (mov a1,(a2) at 0x60971769); returns the old handle in A0. Invalidates (0x609717B5 mode, 0x6093C59D, 0x609365A9) when the draw mode is 2, index is the shown one (+0x84) and a handle is set. DrawContent 0x60970FBB then draws record = *handle via 0x609406A5 instead of the image list's id. GUI task only"
+
+[gui_post]
+address = 0x60A6DC3B
+saves = ["a2"]
+frame = 0x40
+evidence = "high"
+returns = "int"
+args = ["d unsigned code"]
+note = "sec4; ret [a2],0x40 at 0x60A6DC61 (bytes df 20 40); all 227 CALLs use [a2],0x40. Builds the 28-byte GE event {code, 0xFFFE, target 0, 0, 0} (0x6092E234) and posts it with GESetEvent 0x6092E260 (flag 0), which takes the semaphore 0x615E6B70 around the 500-entry ring. The GUI loop hands codes < 0x8000 to app vt+0x24C 0x609388B7, which calls app vt+0x198 (D0 = code) for target 0. Called from the plugin task: serialised by that semaphore [inferred, every stock caller is GUI code]"
+
+[callbacks.gui_panel_create]
+entry = "calls"
+evidence = "high"
+returns = "int"
+args = ["a void *panel"]
+note = "container vt+0x1A8 (OnCreate): container create 0x6093A3A2 enters it with calls (a1) at 0x6093A3DE, A0 = panel, after vt+0x1FC; D0 is read with exth, 0 fails the create. The info panel's 0x609B4503 (movm [d2,d3,a2,a3] .. ret [d2,d3,a2,a3],0x1c) builds its 149 widgets and returns 1"
+
+[callbacks.gui_obj_method]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a void *obj"]
+note = "a widget/container method without arguments, e.g. vt+0x98 (destroy): app show-panel 0x60961118 enters old->vt[0x98] with calls, A0 = the old panel; the panel's 0x6096C6E7 (movm [d2,d3,a2,a3]) ends in 0x6093A49C -> vt+0x1B0, which deletes the children. Result unused"
+
+[callbacks.gui_attach]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a void *obj", "a void *parent"]
+note = "widget vt+0x94, called after the widget was appended: the info panel's OnCreate enters w->vt[0x94] with calls (a2) at 0x609B454B, A0 = widget, A1 = panel; the image widget's is the base 0x6093BE2C. Result unused"
+
+[callbacks.gui_on_message]
+entry = "calls"
+evidence = "high"
+returns = "int"
+args = ["a void *obj", "d unsigned code", "d unsigned p1", "a void *p2"]
+note = "object vt+0x198 (OnMessage): app vt+0x24C 0x609388B7 enters target->vt[0x198] with calls at 0x609388D7 (event target) or 0x609388F0 (target 0: the app), A0 = object, D0 = event code (exthu), D1 = event +0xC, A1 = event +0x10. -1 = not handled (the object dispatcher 0x609371DA then offers it to the children)"
+
+[slots.info_panel_create]
+address = 0x60C981C4
+callback = "gui_panel_create"
+expected = 0x609B4503
+cpu1 = "unproven"
+cpu1_evidence = "static only: the slot is read by container create 0x6093A3A2, reached from panel vt+0x94 in the app's show-panel method 0x60961118, which the GUI loop 0x60934F05 (GUI_TASK, CPU0) runs for event 0x1100; no CPU1/CPU2 path found"
+note = "word +0x1A8 of the live-view info panel vtable 0x60C9801C (panel id 10, the only id built from type 0x600A); the only pointer to 0x609B4503 in main-code-01, which has no CALL caller. sec4 rodata, written in DRAM like the eyefi slots"
+
+[slots.info_panel_destroy]
+address = 0x60C980B4
+callback = "gui_obj_method"
+expected = 0x6096C6E7
+cpu1 = "unproven"
+cpu1_evidence = "static only: called as old->vt[0x98] from the app's show-panel method 0x60961118 (GUI_TASK, CPU0)"
+note = "word +0x98 of the info panel vtable 0x60C9801C. 0x6096C6E7 is shared with other panel vtables; this slot changes the info panel only"
+
+[slots.gui_app_message]
+address = 0x60BD88C0
+callback = "gui_on_message"
+expected = 0x6096311B
+cpu1 = "unproven"
+cpu1_evidence = "static only: read by app vt+0x24C 0x609388B7, called from the GUI loop 0x60934F05 (GUI_TASK, CPU0)"
+note = "word +0x198 of the GUI app vtable 0x60BD8728 (app ctor 0x609630F1); the only pointer to 0x6096311B. Stock: 0x7FFF -> -1, 0x1950 -> 0x60963142, else 0x6096C89A -> object dispatcher 0x609371DA (0x1100 -> vt+0x300 show panel)"
+
+[data.gui_info_iso_record]
+address = 0x60C95AAC
+type = "0x58-byte widget record"
+evidence = "high"
+note = "record of the info panel's ISO item (widget 0x91, type 0x8003, rect list 0x60C94988 (19, 206, 50, 38) x 2, flags 0x50009 (image centred), +0xC 0x60C92288, layer 2, mode 2, count 1, image list 0x60C92C94 {0xFFFF, 0, 0, 0, 0, 0, 310, 0}, +0x3C 0x60C92CA4); entry 0x2A of the info panel's record array 0x615EE3DC + 4 * i (i = 1..0x95), sec4 rodata"
+
+[data.gui_heap_desc]
+address = 0x618C8A00
+type = "16-byte GUI heap descriptors"
+evidence = "high"
+note = "0x60933F6A(pool, sub): pools 1..5 at 0x618C8A00 + 0x10 * (pool - 1), pool 6 (the two panel slots) 0x618C8A50 + 0x10 * sub, pool 7 x 10 at 0x618C8A70, pool 8 0x618C8B10; {u8 pool, u8 sub, .., +4 base, +8 size, +0xC root of the free tree}; a free block has a 0x14-byte header {u8 used, .., +4 size, +8 prev, +0xC smaller, +0x10 larger} (0x609341D3, 0x609341FE). Alloc 0x6093401B and free 0x609340E1 take no lock: read it in the GUI task"
 
 # ======================================================================================================
 # --- Contrast driver client: the own contrast client (lib/afc.c) and the AF statistics read path ---

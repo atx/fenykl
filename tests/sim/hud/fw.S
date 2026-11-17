@@ -29,6 +29,15 @@ _mock_\name:
 	FORWARD	malloc, 4, []
 	FORWARD	free, 4, []
 
+/* fenykl_irq_save/restore: nothing to mask in the simulator; retf [],0 */
+	MOCK	psw_get
+	clr	d0
+	ret	[],0
+	MOCK	irq_disable_all
+	ret	[],0
+	MOCK	irq_mask_restore
+	ret	[],0
+
 /* void sim_write(buf@D0, len@D1): SYS_write to stdout (GDB simulator) */
 	.section .mock,"ax"
 	.global	_sim_write

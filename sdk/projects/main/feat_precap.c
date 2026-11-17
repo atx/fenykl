@@ -126,8 +126,7 @@ static void feat_precap_status(void)
 	const struct feat_precap_state *st = &feat_precap_st;
 
 	fenykl_precap_status();
-	fenykl_log_info(&fenykl_precap_log, "  tag %u changes %u, HUD hook calls in bursts %u",
-			st->shown, st->changes, main_hooks_precap_calls());
+	fenykl_log_info(&fenykl_precap_log, "  tag %u changes %u", st->shown, st->changes);
 	if (st->refused)
 		fenykl_log_warn(&fenykl_precap_log, "  tag refused %u", st->refused);
 }

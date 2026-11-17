@@ -1,17 +1,11 @@
 /*
- * Live-view HUD elements (sdk/docs/hud.md).
- * The GUI queues its drawing during a frame, executes the batch in gpi_flush and then shows the
- * buffer with cw_updateDisplay(0). The plugin's hook on cw_updateDisplay calls fenykl_hud_frame,
- * which copies each published element into the layer-1 buffer about to be shown, after the GUI's
- * batch. Rendering runs in the caller's task; the hook only reads and copies.
+ * Live-view HUD elements (sdk/docs/hud.md), the part both cameras share: the elements, the camera's
+ * font and the stock images, rendering into the elements' bitmaps. How a bitmap reaches the screen
+ * is the camera part's (hud_<camera>.c: hud_show, fenykl_hud_hide, fenykl_hud_tick). Rendering runs
+ * in the caller's task.
  */
 #include "hud_int.h"
 
-#define HUD_LAYER 1
-#define HUD_PLANE 2
-#define HUD_BPP 8
-#define HUD_PITCH 896
-#define HUD_ROWS 600
 #define HUD_GLYPH_FMT 0x09
 #define HUD_IMAGE_FMT 0x03
 #define HUD_IMAGE_BITMAP 0x10		/* struct gui_image: -> RLE bitmap */
@@ -30,11 +24,6 @@
 #define HUD_LV_LETTER_H \
 	(((HUD_LV_GLYPH_H + HUD_LV_SRC_TOP) * HUD_LV_SCALE_N + HUD_LV_SCALE_D - 1) / HUD_LV_SCALE_D)
 #define HUD_LV_DROP 3			/* scaled baseline row 17 onto line row 20, the images' row 19 */
-
-#define HUD_PUB_SHOWN 2u
-#define HUD_PUB_INDEX 1u
-#define HUD_NOT_WRITTEN 0xFFFFFFFFu	/* never a pub value: the sequence number does not get there */
-#define HUD_HIDE_CLEARS 2u		/* clears by fenykl_hud_tick after the one in fenykl_hud_hide */
 
 struct hud_glyph {
 	uint16_t w, h;			/* w = advance cell, h = 32 for Latin */
@@ -56,13 +45,7 @@ struct hud_cell {
 	int16_t adv;
 };
 
-static struct {
-	volatile uint8_t *canvas[2];
-	uint32_t states;
-	struct fenykl_hud_elem *elem[FENYKL_HUD_ELEMS_MAX];
-	volatile unsigned int count;
-	volatile struct fenykl_hud_stats st;
-} hud;
+struct hud_state hud;
 
 /* --- camera font --- */
 
@@ -490,156 +473,13 @@ static int hud_render(const struct fenykl_hud_elem *e, uint32_t *bmp, const char
 	return 0;
 }
 
-/* --- copies into layer 1 --- */
-
-static volatile uint32_t *hud_row_of(const struct fenykl_hud_elem *e, volatile uint8_t *c, int r)
-{
-	return (volatile uint32_t *)(c + (e->y + r) * HUD_PITCH + e->x);
-}
-
-static void hud_copy_box(const struct fenykl_hud_elem *e, volatile uint8_t *c, const uint32_t *bmp)
-{
-	unsigned int words = (unsigned int)e->w / 4;
-
-	for (int r = 0; r < e->h; r++) {
-		volatile uint32_t *dst = hud_row_of(e, c, r);
-		const uint32_t *src = bmp + r * words;
-
-		for (unsigned int x = 0; x < words; x++)
-			dst[x] = src[x];
-	}
-}
-
-static bool hud_box_intact(const struct fenykl_hud_elem *e, volatile uint8_t *c,
-			   const uint32_t *bmp)
-{
-	unsigned int words = (unsigned int)e->w / 4;
-
-	for (int r = 0; r < e->h; r++) {
-		volatile uint32_t *row = hud_row_of(e, c, r);
-		const uint32_t *src = bmp + r * words;
-
-		for (unsigned int x = 0; x < words; x++)
-			if (row[x] != src[x])
-				return false;
-	}
-	return true;
-}
-
-static void hud_clear_box(const struct fenykl_hud_elem *e, volatile uint8_t *c)
-{
-	unsigned int words = (unsigned int)e->w / 4;
-
-	for (int r = 0; r < e->h; r++) {
-		volatile uint32_t *row = hud_row_of(e, c, r);
-
-		for (unsigned int x = 0; x < words; x++)
-			row[x] = FENYKL_HUD_CLEAR * 0x01010101u;
-	}
-}
-
-/* --- visibility --- */
-
-bool fenykl_hud_visible(void)
-{
-#if FENYKL_TARGET_EM10II
-	return hud_em10ii_visible(hud.states);
-#else
-	if (fenykl_rd16(FW_GPI_HIDE_MASK) & 0x10)
-		return false;
-	if (fenykl_rd8(FW_GUI_SUPER) != HUD_SS_REC)
-		return false;
-	unsigned int state = fenykl_rd8(FW_GUI_STATE);
-
-	return state < 32 && (hud.states & FENYKL_HUD_STATE(state));
-#endif
-}
-
-/* --- the hook side (GUI task, CPU0) --- */
-
-/* The layer-1 buffer cw_updateDisplay(0) shows (0x6EFDB6E3). */
-static unsigned int hud_shown_buffer(void)
-{
-	if (fenykl_rd8(FW_GPI_ONE_MODE) == 2 &&
-	    (int16_t)fenykl_rd16(FW_GPI_ONE_LAYER) == HUD_LAYER) {
-		hud.st.overrides++;
-		return (fenykl_rd8(FW_GPI_ONE_BUF) ^ 1u) & 1u;
-	}
-	return fenykl_rd8(FW_GPI_DRAW_BUF) & 1u;
-}
-
-static void hud_draw_shown(struct fenykl_hud_elem *e)
-{
-	uint32_t p = e->pub;
-
-	if (!(p & HUD_PUB_SHOWN))
-		return;
-	if (!fenykl_hud_visible()) {
-		hud.st.hidden++;
-		e->written[0] = HUD_NOT_WRITTEN;
-		e->written[1] = HUD_NOT_WRITTEN;
-		return;
-	}
-	unsigned int b = hud_shown_buffer();
-	const uint32_t *bmp = e->bmp[p & HUD_PUB_INDEX];
-
-	if (e->written[b] == p && !hud_box_intact(e, hud.canvas[b], bmp))
-		hud.st.erased++;
-	hud_copy_box(e, hud.canvas[b], bmp);
-	e->written[b] = p;
-	hud.st.drawn++;
-	if (e->pub != p)
-		e->stale = 1;
-}
-
-void fenykl_hud_frame(int show_front)
-{
-	hud.st.updates++;
-	if (FENYKL_CORE_ID() != 0) {
-		hud.st.cpu1++;
-		return;
-	}
-	/* the firmware tests D0 after exth */
-	if ((int16_t)show_front != 0)
-		return;
-	hud.st.shows++;
-	for (unsigned int i = 0; i < hud.count; i++)
-		hud_draw_shown(hud.elem[i]);
-}
-
 /* --- the task side --- */
 
-/* Draws e into both buffers while visible: the front shows the change at once, the hook redraws at
-   every flip anyway. Visibility is re-checked per buffer to narrow the race with a GUI screen change
-   (the task does not run in the GUI task). An unpublished element is cleared. */
-static void hud_paint(struct fenykl_hud_elem *e)
-{
-	uint32_t p = e->pub;
-
-	for (unsigned int b = 0; b < 2; b++) {
-		if (!fenykl_hud_visible())
-			return;
-		if (p & HUD_PUB_SHOWN)
-			hud_copy_box(e, hud.canvas[b], e->bmp[p & HUD_PUB_INDEX]);
-		else
-			hud_clear_box(e, hud.canvas[b]);
-		e->written[b] = p & HUD_PUB_SHOWN ? p : HUD_NOT_WRITTEN;
-	}
-}
-
-static void hud_publish(struct fenykl_hud_elem *e, uint32_t flags)
+void hud_publish(struct fenykl_hud_elem *e, uint32_t flags)
 {
 	uint32_t p = e->pub;
 
 	e->pub = ((p >> 2) + 1) << 2 | flags;
-}
-
-/* Publishes e's spare bitmap idx, just rendered, and paints it. */
-static void hud_show(struct fenykl_hud_elem *e, uint32_t idx)
-{
-	hud_publish(e, HUD_PUB_SHOWN | idx);
-	e->clears = 0;
-	hud_paint(e);
 }
 
 int fenykl_hud_text(struct fenykl_hud_elem *e, const char *s)
@@ -648,9 +488,9 @@ int fenykl_hud_text(struct fenykl_hud_elem *e, const char *s)
 	int r = hud_render(e, e->bmp[idx], s);
 
 	if (r == FENYKL_HUD_ENOFONT)
-		hud.st.nofont++;
+		hud.nofont++;
 	if (r == FENYKL_HUD_EGLYPH)
-		hud.st.glyph_miss++;
+		hud.glyph_miss++;
 	if (r)
 		return r;
 	hud_show(e, idx);
@@ -672,74 +512,7 @@ int fenykl_hud_draw(struct fenykl_hud_elem *e,
 	return 0;
 }
 
-void fenykl_hud_hide(struct fenykl_hud_elem *e)
-{
-	hud_publish(e, e->pub & HUD_PUB_INDEX);
-	e->clears = HUD_HIDE_CLEARS;
-	hud_paint(e);
-}
-
-void fenykl_hud_tick(void)
-{
-	for (unsigned int i = 0; i < hud.count; i++) {
-		struct fenykl_hud_elem *e = hud.elem[i];
-
-		if (e->stale) {
-			e->stale = 0;
-			hud.st.stale++;
-			hud_paint(e);
-		} else if (e->clears) {
-			e->clears--;
-			hud_paint(e);
-		}
-	}
-}
-
 /* --- setup --- */
-
-static int hud_check_buf(unsigned int b, struct fenykl_hud_buf *out)
-{
-	uint32_t p = fenykl_rd32(FW_GPI_LAYER_VRAM + 4 * (HUD_LAYER * 2 + b));
-
-	*out = (struct fenykl_hud_buf){ .handle = p };
-	if (HUD_HANDLE_BAD(p) || (p & 3))
-		return FENYKL_HUD_EHANDLE;
-	const volatile struct hud_osd_vram *v = (const volatile struct hud_osd_vram *)(uintptr_t)p;
-	uint32_t a = v->pdata;
-
-	out->plane = v->plane;
-	out->width = v->width;
-	out->height = v->height;
-	out->pdata = a;
-	if (v->plane != HUD_PLANE || HUD_SIZE_BAD(v->width, v->height))
-		return FENYKL_HUD_EPLANE;
-	/* cached or uncached DRAM outside the firmware image and the payload */
-	uint32_t off = HUD_DRAM_OFF(a), end = off + HUD_PITCH * HUD_ROWS;
-
-	if (!fenykl_dram_ptr(a, 4) ||
-	    (end > HUD_DRAM_OFF(FW_IMAGE_START) &&
-	     (off < HUD_DRAM_OFF(FW_IMAGE_END) || end > FW_DRAM_END - FW_DRAM_START)))
-		return FENYKL_HUD_EPDATA;
-	return 0;
-}
-
-int fenykl_hud_init(uint32_t states, struct fenykl_hud_buf buf[2])
-{
-	int r = hud_check_buf(0, &buf[0]);
-
-	if (r || (r = hud_check_buf(1, &buf[1])))
-		return r;
-	uint32_t a = HUD_DRAM_OFF(buf[0].pdata), b = HUD_DRAM_OFF(buf[1].pdata);
-
-	if (a < b + HUD_PITCH * HUD_ROWS && b < a + HUD_PITCH * HUD_ROWS)
-		return FENYKL_HUD_EOVERLAP;
-	if (fenykl_rd8(FW_GPI_LAYER_BPP + HUD_LAYER) != HUD_BPP)
-		return FENYKL_HUD_EBPP;
-	hud.canvas[0] = FENYKL_UNCACHED(buf[0].pdata);
-	hud.canvas[1] = FENYKL_UNCACHED(buf[1].pdata);
-	hud.states = states;
-	return 0;
-}
 
 int fenykl_hud_add(struct fenykl_hud_elem *e)
 {
@@ -747,31 +520,17 @@ int fenykl_hud_add(struct fenykl_hud_elem *e)
 	    e->x + e->w > FENYKL_HUD_CANVAS_W || e->y + e->h > FENYKL_HUD_CANVAS_H ||
 	    e->w * e->h > FENYKL_HUD_BITMAP_MAX)
 		return FENYKL_HUD_ERECT;
-	if (!hud.canvas[0])
+	if (!hud.ready)
 		return FENYKL_HUD_EINIT;
 	if (hud.count == FENYKL_HUD_ELEMS_MAX)
 		return FENYKL_HUD_EFULL;
-	e->bmp[0] = fw_malloc((unsigned int)(e->w * e->h));
-	e->bmp[1] = fw_malloc((unsigned int)(e->w * e->h));
-	if (!e->bmp[0] || !e->bmp[1]) {
-		if (e->bmp[0])
-			fw_free(e->bmp[0]);
-		if (e->bmp[1])
-			fw_free(e->bmp[1]);
-		return FENYKL_HUD_ENOMEM;
-	}
+	int r = hud_add(e, hud.count);
+
+	if (r)
+		return r;
 	e->pub = 0;
-	e->written[0] = HUD_NOT_WRITTEN;
-	e->written[1] = HUD_NOT_WRITTEN;
-	e->stale = 0;
-	e->clears = 0;
 	hud.elem[hud.count] = e;
-	__asm__ volatile("" ::: "memory");	/* the hook sees the element before the count */
+	__asm__ volatile("" ::: "memory");	/* the GUI task or hook sees the element before the count */
 	hud.count++;
 	return 0;
-}
-
-void fenykl_hud_get_stats(struct fenykl_hud_stats *st)
-{
-	*st = hud.st;
 }

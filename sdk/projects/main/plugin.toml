@@ -1,8 +1,9 @@
 targets = ["epl3", "em10ii"]
 
-# HUD elements are drawn from a cw_updateDisplay hook (sdk/docs/hud.md). Its CPU1 scope rests on
-# static analysis only; the library counts CPU1 calls and main stops drawing at the first one.
-[capabilities.hud]
+# E-PL3: HUD elements are drawn from a cw_updateDisplay hook (sdk/docs/hud.md). Its CPU1 scope rests
+# on static analysis only; the library counts CPU1 calls and main stops drawing at the first one.
+# The E-M10 II's HUD needs no hook: its elements are GUI widgets (the library's slots).
+[capabilities.hud_overlay]
 sources = ["main_hooks.c"]
 hooks = ["cw_updateDisplay"]
 cpu1_unproven = ["cw_updateDisplay"]

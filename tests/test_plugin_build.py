@@ -63,6 +63,7 @@ def test_feature_libraries_follow_the_target_capabilities():
         "event.c",
         "hud.c",
         "hud_em10ii.c",
+        "hud_rle.c",
         "key.c",
         "key_em10ii.c",
         "log.c",

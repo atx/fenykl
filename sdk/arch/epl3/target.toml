@@ -16,7 +16,12 @@ sdk_hooks = ["appevent_post"]
 # for targets that list them.
 # afc, lens, batt, shot, img_exec, peak: the groups of include/body.h this camera implements
 # (fenykl_body.h); plugin.toml [capabilities.<name>] builds plugin files only where they exist.
-capabilities = ["cpu1", "event", "key", "hud", "ui", "afc", "lens", "batt", "shot", "img_exec", "peak"]
+# hud_overlay: the HUD copies its elements into layer 1 from the plugin's cw_updateDisplay hook
+# (fenykl_hud_frame, lib/hud_epl3.c).
+capabilities = [
+  "cpu1", "event", "key", "hud", "hud_overlay", "ui", "afc", "lens", "batt", "shot", "img_exec",
+  "peak",
+]
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]

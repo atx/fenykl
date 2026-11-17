@@ -26,6 +26,8 @@ LIB_CAPABILITIES = {
     "shot.c": "shot",
     "shot_pix.c": "shot",
     "hud.c": "hud",
+    "hud_rle.c": "hud",
+    "hud_epl3.c": "hud",
     "hud_em10ii.c": "hud",
     "ui.c": "ui",
     "ui_epl3.c": "ui",

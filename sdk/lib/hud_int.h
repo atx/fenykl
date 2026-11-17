@@ -1,6 +1,7 @@
 /*
- * Internals of the HUD library shared by hud.c and the camera's part (hud_<camera>.c): what differs
- * per body in the layer-1 handles, the DRAM alias rules and the stock live-view image ids.
+ * Internals of the HUD library shared by hud.c (elements, rendering) and the camera's part
+ * (hud_<camera>.c: visibility, init, tick and how the elements reach the screen): the shared state,
+ * the camera part's entry points, the fmt 0x03 encoder (hud_rle.c) and what differs per body.
  */
 #ifndef _FENYKL_HUD_INT_H
 #define _FENYKL_HUD_INT_H
@@ -45,8 +46,42 @@ struct hud_osd_vram {
 	uint16_t x, y;
 };
 
-/* hud_em10ii.c: live view on the LCD or the EVF in one of `states` (FENYKL_HUD_INFO bits). */
-bool hud_em10ii_visible(uint32_t states);
 #endif
+
+#define HUD_PUB_SHOWN 2u
+#define HUD_PUB_INDEX 1u
+
+/* hud.c's state; the camera part reads the elements and sets states and ready. */
+struct hud_state {
+	uint32_t states;		/* fenykl_hud_init's visible states */
+	bool ready;			/* fenykl_hud_init succeeded */
+	struct fenykl_hud_elem *elem[FENYKL_HUD_ELEMS_MAX];
+	volatile unsigned int count;
+	uint32_t nofont, glyph_miss;	/* refused renders */
+};
+
+extern struct hud_state hud;
+
+/* hud.c: a new pub for e, the sequence advanced. */
+void hud_publish(struct fenykl_hud_elem *e, uint32_t flags);
+
+/* The camera part: hud_add allocates e's bitmaps and prepares element `index` (0 or
+   FENYKL_HUD_E*, nothing kept); hud_show takes e's spare bitmap idx, just rendered. */
+int hud_add(struct fenykl_hud_elem *e, unsigned int index);
+void hud_show(struct fenykl_hud_elem *e, uint32_t idx);
+
+/* hud_rle.c: words of the largest fmt 0x03 bitmap of w x h pixels (the header and one code per
+   pixel, six per u64), and of one all of a single colour (runs of 4 within each row). */
+#define HUD_RLE_WORDS(w, h) (1 + 2 * (((w) * (h) + 5) / 6))
+#define HUD_RLE_FLAT_WORDS(w, h) (1 + 2 * (((h) * (((w) + 3) / 4) + 5) / 6))
+
+/*
+ * Encodes px (w x h, row-major palette indices, 0 = transparent) into out as the stock bitmap:
+ * u32 header {h-1:12, w-1:12, fmt 0x03:8}, then six 10-bit codes (colour << 2 | run-1, run 1..4,
+ * runs end at the row end) per little-endian u64, the unused codes 0. Returns the stream size in
+ * bytes as the stock image records give it (header + the bytes up to the last code), or -1 if
+ * max_words is too small.
+ */
+int hud_rle_encode(const uint8_t *px, int w, int h, uint32_t *out, int max_words);
 
 #endif
