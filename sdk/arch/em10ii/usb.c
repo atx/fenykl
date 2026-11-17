@@ -7,8 +7,9 @@
 #define FENYKL_EM10II_MEDIA_MOUNTED 0x100u /* fileif_get_media_status: FAT mounted */
 #define FENYKL_EM10II_MEDIA_DCF_MOUNT 0x4000u /* the DCF mount sequence runs */
 
-/* The loader runs a payload only when Usr3 requested the card mount (u16 0x61843F64 == 1), which
-   needs power-on factor 12, the power switch: a boot started by the cable never gets here. */
+/* The loader runs a payload only on a power-switch boot (Usr3 requested the card mount, u16
+   0x61843F64 == 1, power-on factor 12) or on a relay boot (factor 0x1000001, switch on) without a
+   cable: a boot started by the cable (factor 0x400) never gets here. */
 int fenykl_usb_attached(void)
 {
 	return 0;

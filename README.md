@@ -93,7 +93,7 @@ Patch the firmware:
 ```sh
 uv sync
 uv run fenykl patch apply em10ii/fenykl-loader --output E1209999.BIN
-# wrote E1209999.BIN (69599232 bytes, sha256 6eb1bb10ea34bf58142e6f6554d76d75ca9915fe151a8d83a205b5d4e2a9f371)
+# wrote E1209999.BIN (69599232 bytes, sha256 0c42be0e6d151e2d28c5a377574ccd182e3de4178d6e5cd8229a2f4d43859b02)
 ```
 
 Flash it from the SD card:
@@ -109,7 +109,11 @@ Flash it from the SD card:
 6. Switch off, delete `DCOLYMP` from the card (otherwise every power-on with OK held reinstalls it),
    switch on.
 
-The camera now behaves like stock. Setup menu > Firmware still shows body 1.6.
+The camera now behaves like stock. Setup menu > Firmware still shows body 1.4.
+
+To go back, flash the stock `OLY_E_120_1400_0000_0000.BIN` (or an older patched build) the same way,
+renamed to `DCOLYMP/E1209999.BIN`. The OK-held update runs before the loader, so it works whatever
+`FENYKL.BIN` or `FENYKL.TST` holds.
 
 If the camera just boots into live view in step 4, the update did not start. Try once more, holding
 OK firmly before switching on.
@@ -129,8 +133,26 @@ Copy `sdk/projects/main/build/em10ii/FENYKL.BIN` into the **root** of the SD car
 The plugin stores its settings in `FENYKL.CF0`/`FENYKL.CF1` and writes a log to `FENYKL.LOG` in the
 card root. Delete the `.CF*` files to reset the settings.
 
-If anything goes wrong, switch off (take the battery out if the camera hangs), delete `FENYKL.BIN`
-from the card on a PC, and the camera boots like stock again.
+If anything goes wrong, switch off (if the camera hangs, take the battery out and set the switch Off
+before you put it back: a battery inserted with the switch On runs the payload again), delete
+`FENYKL.BIN` and `FENYKL.TST` from the card on a PC, and the camera boots like stock again.
+
+When the loader runs a payload (E-M10 II):
+
+| boot | payload |
+|---|---|
+| power switch On | yes |
+| battery (or a switched dummy battery) connected while the switch is already On | yes, unless a USB cable is in |
+| OK held at power-on (card firmware update) | no |
+| USB cable plugged into the switched-off camera | no |
+| battery inserted with the switch Off, card inserted | no |
+| watchdog reset after a crash | no (expected, not yet measured on the camera) |
+
+On every such boot, if `FENYKL.TST` is in the card root and no USB cable is in, the loader reads it,
+deletes it from the card and only then checks and runs it. A test build copied there therefore runs
+exactly once; when it is missing or broken (bad header or checksum) the loader runs `FENYKL.BIN`
+instead, and the next boot runs `FENYKL.BIN` again. With a cable in, a power-switch boot runs only
+`FENYKL.BIN` and leaves `FENYKL.TST` alone.
 
 ## Settings page
 

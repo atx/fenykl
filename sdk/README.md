@@ -718,6 +718,41 @@ like the rest of fenykl.
 0x1C ...            code and data, linked at 0x6EA7001C
 ```
 
+#### E-M10 II loader: which boots, which file
+
+The `em10ii/fenykl-loader` patch hooks the end of the startup task Usr3 and starts the `FENYKL` task
+(priority 55, 16 KiB stack) only on these boots:
+
+| boot | power-on factor (`*(u32 *)0xA1C17C14`) | conditions |
+|---|---|---|
+| power switch | 12 | Usr3 posted the card mount (`*(u16 *)0x61843F64 == 1`) |
+| relay: battery connected with the switch already On | 0x1000001 | switch input On, Usr3's battery test passed, no USB cable (`ui_key_get_state(0x400) == 1`) |
+
+All other boots run no payload: OK held (card update), the USB cable (0x400), card insertion
+(0x1506), a battery insertion with the switch Off, and 0x1000002 (expected for a watchdog reset, not
+measured on the camera). On a relay boot the gate word is 0 and Usr3 did not mount the card: the
+application did, so its power-off does not send Usr3's unmount either (stock behaviour on that
+boot). A payload that needs to know which boot it runs on reads the factor word: 12 or 0x1000001.
+
+The task waits up to 30 s until the card is ready (`fileif_get_media_status(0) & 0x4100 == 0x100`),
+then:
+
+1. With a USB cable in (or an unknown cable state) a relay boot loads nothing; a power-switch boot
+   loads only `C:\FENYKL.BIN`, as earlier loaders did.
+2. Otherwise `C:\FENYKL.TST` first: if it opens, it is read, closed and deleted (`rpc_fremove`: the
+   directory entry is written when it returns; the freed clusters may reach the card only at a later
+   flush, so a crash can leave lost clusters), and the loader checks with
+   `fileif_exists` that it is gone. Only then the header checks run. A TST that cannot be deleted
+   (read-only attribute, locked card) is never run.
+3. If the TST is absent, could not be deleted or fails a check, `C:\FENYKL.BIN` is tried on the same
+   boot. `FENYKL.BIN` is never deleted.
+
+The payload is entered the same way for both files (D0 = load base, D1 = image size) and cannot tell
+them apart; a test build that must know embeds it itself. Use `FENYKL.TST` for untested code: a crash
+or hang costs one boot, and the next boot runs the stable `FENYKL.BIN`. Whether a watchdog reset after a crash is refused like the
+other non-payload boots is not yet measured on the camera; until it is, a `FENYKL.BIN` that crashes at
+boot may reboot-loop on a relay-powered camera (switch Off or remove the card to stop it).
+
 The format is the same for every camera; `load`, the size limit and `model` are the epl3 values
 (`load`, `max_size`, `model` in `target.toml`). The loader rejects a file whose model field is not
 exactly its own camera's (all 8 bytes, padding included), so a payload built for another camera never

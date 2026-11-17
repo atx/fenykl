@@ -9,6 +9,11 @@ dcache_flush_all = 0x6007f577;
 rpc_fopen = 0x60564829;
 rpc_fread = 0x605649bb;
 rpc_fclose = 0x60564832;
+rpc_fremove = 0x60564bf2;
+fileif_exists = 0x6056561e;
+fileif_get_media_status = 0x6056556d;
+ui_key_get_state = 0x6017f252;
+pwr_wake_input_levels = 0x6007ed42;
 
 SECTIONS
 {

@@ -8,9 +8,12 @@
    Each mock reads its arguments where the firmware function does (sdk/arch/em10ii/firmware.toml
    notes), records them in check.c's globals, clobbers D0/D1/A0/A1/MDR and every register its CALL
    saves, and returns with the firmware function's own RET. OlyTaskSleep advances the scenario: in the
-   stub (no task created yet) the loaded-section mask becomes scn_loaded1 after scn_sec_after sleeps,
-   in the task fat_mounted[0] becomes 1 after scn_mount_after sleeps. rpc_fread copies scn_file to its
-   buffer. CHCTR (abs16 0x8070) is plain memory here, initialised to 3. Exit status 1xx: see below. */
+   stub (no task created yet) the loaded-section mask becomes scn_loaded1 after scn_sec_after sleeps;
+   in the task fileif_get_media_status returns scn_busy_status until scn_mount_after sleeps have
+   passed, then 0x0700 (ready). The card holds FENYKL.TST (scn_tst, while scn_tst_present and not
+   removed) and FENYKL.BIN (scn_bin, while scn_bin_present); rpc_fopen picks the file by the path's
+   extension, rpc_fread copies it. CHCTR (abs16 0x8070) is plain memory here, initialised to 3. Exit
+   status 1xx: see below. */
 
 	.macro	MOCK name
 	.section .fw.\name,"ax"
@@ -38,10 +41,14 @@ _mock_\name:
 	.endm
 
 	.equ	USR3_SP, 0x618fe000
-	.equ	FP, 0xf11e0000		/* FILE* returned by the rpc_fopen mock */
+	.equ	FP_TST, 0xf11e0001	/* FILE*s returned by the rpc_fopen mock */
+	.equ	FP_BIN, 0xf11e0002
 	.equ	GATE, 0x61843f64
+	.equ	FACTOR, 0xa1c17c14
+	.equ	BATSRC, 0xa1bf8408
+	.equ	BATLVL, 0xa1bf8406
 	.equ	LOADED, 0xa1c18044
-	.equ	MOUNTED, 0xa1c46d10	/* fat_mounted[0] */
+	.equ	READY_STATUS, 0x0700	/* fileif_get_media_status: FAT mounted, no DCF mount */
 	.equ	CHCTR, 0x8070
 	.equ	COOKIE, 0x0c00c1e5	/* irq_lock result */
 
@@ -52,14 +59,15 @@ _sim_start:
 	mov	a0,sp
 	mov	(_scn_gate),d0
 	movhu	d0,(GATE)
+	mov	(_scn_factor),d0
+	mov	d0,(FACTOR)
+	mov	(_scn_batsrc),d0
+	movhu	d0,(BATSRC)
+	mov	(_scn_batlvl),d0
+	movhu	d0,(BATLVL)
 	mov	(_scn_loaded0),d0
 	movbu	d0,(LOADED)
-	mov	(_scn_mount_after),d0
-	cmp	0,d0
-	bne	3f
-	mov	1,d0			/* card mounted from the start */
-	movhu	d0,(MOUNTED)
-3:	mov	3,d0
+	mov	3,d0
 	movhu	d0,(CHCTR)
 	mov	0x5eed0d02,d2
 	mov	0x5eed0d03,d3
@@ -150,11 +158,6 @@ _sim_start:
 	bra	3f
 2:	mov	d0,(_task_sleep_ticks)	/* task: the card mounts */
 	COUNT	_task_sleeps
-	mov	(_scn_mount_after),d1
-	cmp	d1,d0
-	bcs	3f
-	mov	1,d0
-	movhu	d0,(MOUNTED)
 3:	mov	(_stub_sleeps),d0
 	mov	(_task_sleeps),d1
 	add	d1,d0
@@ -167,26 +170,44 @@ _sim_start:
 	clr	d0
 	ret	[d2],8
 
-/* FILE *rpc_fopen(path@A0, mode@A1) -> A0; ret [],4 */
+/* FILE *rpc_fopen(path@A0, mode@A1) -> A0; ret [],4. Records the first 4 paths; character 10
+   of "C:\FENYKL.TST" / "C:\FENYKL.BIN" selects the file. */
 	MOCK	rpc_fopen
-	mov	a0,(_fopen_path)
 	mov	a1,(_fopen_mode)
-	COUNT	_fopen_count
-	movhu	(MOUNTED),d0
-	cmp	1,d0
-	beq	1f
-	EXIT	104			/* opened before the card was mounted */
-1:	mov	0,a0
-	mov	(_scn_file_present),d1
+	mov	(_fopen_count),d0
+	cmp	4,d0
+	bcc	1f
+	asl2	d0
+	mov	_fopen_paths,a1
+	add	d0,a1
+	mov	a0,(a1)
+1:	COUNT	_fopen_count
+	mov	(_status_calls_ready),d0
+	cmp	0,d0
+	bne	1f
+	EXIT	104			/* opened before the card was ready */
+1:	movbu	(10,a0),d0
+	mov	0,a0
+	cmp	0x54,d0			/* 'T' */
+	bne	2f
+	mov	(_scn_tst_present),d1
+	mov	(_fremove_done),d0
+	cmp	0,d0
+	bne	3f
 	cmp	0,d1
-	beq	2f
-	mov	FP,a0
-2:	SCRATCH
+	beq	3f
+	mov	FP_TST,a0
+	bra	3f
+2:	mov	(_scn_bin_present),d1
+	cmp	0,d1
+	beq	3f
+	mov	FP_BIN,a0
+3:	SCRATCH
 	mov	0xdead0003,d0
 	ret	[],4
 
 /* int rpc_fread(buf@A0, size@D0, n@D1, fp@A1) -> D0 = items; ret [d2,d3,a2,a3],0x18.
-   Copies min(n, file length) bytes to buf. */
+   Copies min(n, file length) bytes of the file behind fp to buf. */
 	MOCK	rpc_fread
 	mov	a0,(_fread_buf)
 	mov	d0,(_fread_size)
@@ -194,13 +215,21 @@ _sim_start:
 	mov	a1,(_fread_fp)
 	COUNT	_fread_count
 	mov	(_fread_buf),a0
-	mov	(_scn_file_len),d0
-	mov	(_fread_n),d1
+	mov	(_scn_bin_len),d0
+	mov	_scn_bin,a1
+	mov	(_fread_fp),d1
+	cmp	FP_BIN,d1
+	beq	1f
+	mov	(_scn_tst_len),d0
+	mov	_scn_tst,a1
+	cmp	FP_TST,d1
+	beq	1f
+	EXIT	105			/* read from a FILE* rpc_fopen did not return */
+1:	mov	(_fread_n),d1
 	cmp	d1,d0
 	bls	1f
 	mov	d1,d0			/* D0 = bytes to copy */
 1:	mov	d0,(_fread_result)
-	mov	_scn_file,a1
 	cmp	0,d0
 	beq	3f
 2:	movbu	(a1),d1
@@ -217,6 +246,79 @@ _sim_start:
 	mov	0xdead0004,a0
 	mov	(_fread_result),d0
 	ret	[d2,d3,a2,a3],0x18
+
+/* int rpc_fremove(path@A0) -> D0 (0 = removed); ret [d2,a2,a3],0x18 */
+	MOCK	rpc_fremove
+	mov	a0,(_fremove_path)
+	COUNT	_fremove_count
+	mov	(_fclose_count),d0
+	mov	d0,(_fremove_after_closes)
+	mov	(_scn_remove_result),d0
+	cmp	0,d0
+	bne	1f
+	mov	1,d1
+	mov	d1,(_fremove_done)
+1:	mov	0xdead0d02,d2
+	mov	0xdead0a02,a2
+	mov	0xdead0a03,a3
+	SCRATCH
+	mov	0xdead0004,a0
+	mov	(_scn_remove_result),d0
+	ret	[d2,a2,a3],0x18
+
+/* int fileif_exists(path@A0) -> D0 1 = exists; ret [],8 */
+	MOCK	fileif_exists
+	mov	a0,(_exists_path)
+	COUNT	_exists_count
+	SCRATCH
+	mov	0xdead0004,a0
+	mov	(_scn_exists_after),d0
+	ret	[],8
+
+/* unsigned fileif_get_media_status(drive@D0); ret [d2,a2],0xc */
+	MOCK	fileif_get_media_status
+	mov	d0,(_status_drive)
+	COUNT	_status_calls
+	mov	(_scn_busy_status),d0
+	mov	(_task_sleeps),d1
+	mov	(_scn_mount_after),a0
+	cmp	a0,d1
+	bcs	1f
+	mov	1,d0
+	mov	d0,(_status_calls_ready)
+	mov	READY_STATUS,d0
+1:	mov	0xdead0d02,d2
+	mov	0xdead0a02,a2
+	SCRATCH
+	mov	0xdead0004,a0
+	ret	[d2,a2],0xc
+
+/* unsigned ui_key_get_state(code@D0); ret [d2,d3,a2],0x18 */
+	MOCK	ui_key_get_state
+	mov	d0,(_key_code)
+	COUNT	_key_count
+	mov	0xdead0d02,d2
+	mov	0xdead0d03,d3
+	mov	0xdead0a02,a2
+	SCRATCH
+	mov	0xdead0004,a0
+	mov	(_scn_usb_key),d0
+	ret	[d2,d3,a2],0x18
+
+/* u8 pwr_wake_input_levels(); retf [d2,d3],8 (a leaf: return through MDR) */
+	MOCK	pwr_wake_input_levels
+	COUNT	_levels_count
+	mov	(_create_count),d0
+	cmp	0,d0
+	beq	1f
+	EXIT	106			/* called from the task */
+1:	mov	0xdead0d02,d2
+	mov	0xdead0d03,d3
+	mov	0xdead0001,d1
+	mov	0xdead0002,a1
+	mov	0xdead0004,a0
+	mov	(_scn_levels),d0
+	retf	[d2,d3],8
 
 /* int rpc_fclose(fp@A0); ret [d2,a2,a3],0x10 */
 	MOCK	rpc_fclose
@@ -261,6 +363,10 @@ _sim_start:
 	mov	d0,(_flush_locks)
 	mov	(_fread_count),d0
 	mov	d0,(_flush_after_reads)
+	mov	(_fremove_count),d0
+	mov	d0,(_flush_after_removes)
+	mov	(_exists_count),d0
+	mov	d0,(_flush_after_exists)
 	movhu	(CHCTR),d0
 	mov	d0,(_flush_chctr)
 	mov	0xdead0d02,d2

@@ -15,7 +15,7 @@ import struct
 import subprocess
 import tomllib
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -60,8 +60,8 @@ LOADERS = {
     ),
     "em10ii": Loader(
         "em10ii",
-        "6eb1bb10ea34bf58142e6f6554d76d75ca9915fe151a8d83a205b5d4e2a9f371",
-        frozenset({"task_self_end"}),
+        "0c42be0e6d151e2d28c5a377574ccd182e3de4178d6e5cd8229a2f4d43859b02",
+        frozenset({"task_self_end", "fileif_exists", "pwr_wake_input_levels"}),
     ),
 }
 
@@ -438,93 +438,184 @@ def test_loader_in_simulator(name, sim_objects, tmp_path):
 EM10II = sdk.target("em10ii")
 SIM_EM10II = Path(__file__).resolve().parent / "loader_sim_em10ii"
 # Image (stub, mocks, hook, sec3 mocks, payload area, harness), the gate and Usr3's stack, the
-# uncached words (loaded-section mask, fat_mounted). CHCTR (0x8070) is in the simulator's default
-# memory 0..0xFFFFF.
+# uncached words (battery test, power-on factor, loaded-section mask). CHCTR (0x8070) is in the
+# simulator's default memory 0..0xFFFFF.
 SIM_MEMORY_EM10II = [
     "0x60000000,0x1000000",
     "0x61800000,0x100000",
-    "0xa1c00000,0x100000",
+    "0xa1b00000,0x200000",
 ]
 # Usr3 after the hooked CALL: ret [d2,a2,a3],16
 USR3_TAIL_RET = bytes.fromhex("df b0 10")
 SECTRIES = 300
-TRIES = 100
+TRIES = 300
 SEC45 = 0x18
+FACTOR_SWITCH = 12
+FACTOR_RELAY = 0x1000001
+USB_NONE, USB_CABLE, USB_UNKNOWN = 1, 0, 0xFFFF
+NOT_MOUNTED = 0x0600
+DCF_MOUNT_RUNNING = 0x4700
 
 
 @dataclass(frozen=True)
 class Em10iiScenario:
-    file: bytes
-    accepted: bool
+    bin: bytes | None
+    """FENYKL.BIN on the card (None: absent)."""
+    tst: bytes | None = None
+    """FENYKL.TST on the card (None: absent)."""
     gate: int = 1
     """u16 0x61843F64 at the hook."""
+    factor: int = FACTOR_SWITCH
+    levels: int = 0x10
+    """pwr_wake_input_levels(): bit 0 = power switch (0 = on)."""
+    batsrc: int = 0x100
+    batlvl: int = 0
+    usb_key: int = USB_NONE
+    """ui_key_get_state(0x400)."""
     loaded0: int = 0x1F
     """Loaded-section mask at the hook; it becomes loaded1 after sec_after stub sleeps."""
     loaded1: int = 0x1F
     sec_after: int = 1
     mount_after: int = 0
-    """Task sleeps before fat_mounted[0] becomes 1 (0 = mounted at the start)."""
-    file_present: bool = True
+    """Task sleeps before the media status reads ready (0 = ready at the start)."""
+    busy_status: int = NOT_MOUNTED
+    remove_result: int = 0
+    exists_after: int = 0
+
+
+def _accepted(file: bytes | None) -> bool:
+    return (
+        file is not None
+        and payload.check_image(file) is None
+        and payload.parse_header(file).model == payload.model_field(EM10II.model)
+    )
 
 
 def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
     good = _image(test_payload, EM10II)
+    # A distinct valid TST: its size tells which file ran.
+    tst = _image(test_payload, EM10II, len(good) + 0x40)
     epl3 = _image(test_payload, EPL3)
+    bad_tst = _with_header(tst, sum=payload.parse_header(tst).sum ^ 1)
+    relay = {"gate": 0, "factor": FACTOR_RELAY}
     return {
-        **{
-            name: Em10iiScenario(file, ok)
-            for name, (file, ok) in file_cases(test_payload, EM10II).items()
-        },
-        "E-PL3 image": Em10iiScenario(epl3, False),
-        "gate 0 (wake boot)": Em10iiScenario(good, True, gate=0),
-        "gate 2": Em10iiScenario(good, True, gate=2),
-        "gate 0x101": Em10iiScenario(good, True, gate=0x101),
-        "sec4 and sec5 loaded after 5 sleeps": Em10iiScenario(
-            good, True, loaded0=0x07, sec_after=5
-        ),
+        **{name: Em10iiScenario(file) for name, (file, _) in file_cases(test_payload, EM10II).items()},
+        "E-PL3 image": Em10iiScenario(epl3),
+        # Boot kinds.
+        "gate 0 (wake boot)": Em10iiScenario(good, gate=0),
+        "gate 2": Em10iiScenario(good, gate=2),
+        "gate 0x101": Em10iiScenario(good, gate=0x101),
+        "switch boot, switch input reads off later": Em10iiScenario(good, levels=0x11),
+        "switch boot with a cable": Em10iiScenario(good, usb_key=USB_CABLE),
+        "relay": Em10iiScenario(good, **relay),
+        "relay, battery level 50": Em10iiScenario(good, **relay, batsrc=0, batlvl=50),
+        "relay, battery level 49": Em10iiScenario(good, **relay, batsrc=0, batlvl=49),
+        "relay, battery source 0x101": Em10iiScenario(good, **relay, batsrc=0x101, batlvl=0),
+        "relay, switch off": Em10iiScenario(good, **relay, levels=0x11),
+        "relay, cable in": Em10iiScenario(good, **relay, usb_key=USB_CABLE),
+        "relay, unknown cable state": Em10iiScenario(good, **relay, usb_key=USB_UNKNOWN),
+        "relay, card mounted after 250 sleeps": Em10iiScenario(good, **relay, mount_after=250),
+        "relay, no card": Em10iiScenario(good, **relay, mount_after=10000),
+        "relay, TST": Em10iiScenario(good, tst, **relay),
+        "watchdog factor 0x1000002": Em10iiScenario(good, gate=0, factor=0x1000002),
+        "cable boot factor 0x400": Em10iiScenario(good, gate=0, factor=0x400),
+        "card insertion factor 0x1506": Em10iiScenario(good, gate=0, factor=0x1506),
+        "factor 12 without the gate": Em10iiScenario(good, gate=0, factor=FACTOR_SWITCH),
+        "factor 0x1000003": Em10iiScenario(good, gate=0, factor=0x1000003),
+        # Sections and card.
+        "sec4 and sec5 loaded after 5 sleeps": Em10iiScenario(good, loaded0=0x07, sec_after=5),
         "sec5 loaded on the last try": Em10iiScenario(
-            good, True, loaded0=0x0F, sec_after=SECTRIES - 1
+            good, loaded0=0x0F, sec_after=SECTRIES - 1
         ),
-        "sec5 never loaded": Em10iiScenario(good, True, loaded0=0x0F, sec_after=10000),
-        "sec4 not loaded, sec5 bit set": Em10iiScenario(
-            good, True, loaded0=0x17, sec_after=10000
+        "sec5 never loaded": Em10iiScenario(good, loaded0=0x0F, sec_after=10000),
+        "sec4 not loaded, sec5 bit set": Em10iiScenario(good, loaded0=0x17, sec_after=10000),
+        "valid after 5 sleeps for the mount": Em10iiScenario(good, mount_after=5),
+        "valid, mounted on the last try": Em10iiScenario(good, mount_after=TRIES - 1),
+        "DCF mount running until the last try": Em10iiScenario(
+            good, mount_after=TRIES - 1, busy_status=DCF_MOUNT_RUNNING
         ),
-        "valid after 5 sleeps for the mount": Em10iiScenario(good, True, mount_after=5),
-        "valid, mounted on the last try": Em10iiScenario(
-            good, True, mount_after=TRIES - 1
+        "DCF mount never ends": Em10iiScenario(
+            good, mount_after=10000, busy_status=DCF_MOUNT_RUNNING
         ),
-        "no card": Em10iiScenario(good, True, mount_after=10000),
-        "no file": Em10iiScenario(good, True, file_present=False),
-        "no file, mounted after 5 sleeps": Em10iiScenario(
-            good, True, mount_after=5, file_present=False
-        ),
+        "no card": Em10iiScenario(good, mount_after=10000),
+        "no file": Em10iiScenario(None),
+        "no file, mounted after 5 sleeps": Em10iiScenario(None, mount_after=5),
+        # FENYKL.TST.
+        "TST and BIN": Em10iiScenario(good, tst),
+        "TST only": Em10iiScenario(None, tst),
+        "bad TST, BIN": Em10iiScenario(good, bad_tst),
+        "bad TST only": Em10iiScenario(None, bad_tst),
+        "empty TST, BIN": Em10iiScenario(good, b""),
+        "E-PL3 TST, BIN": Em10iiScenario(good, epl3),
+        "TST not removed, BIN": Em10iiScenario(good, tst, remove_result=-1),
+        "TST not removed, no BIN": Em10iiScenario(None, tst, remove_result=-1),
+        "TST still there after the remove, BIN": Em10iiScenario(good, tst, exists_after=1),
+        "TST and bad BIN": Em10iiScenario(_with_header(good, magic=0), tst),
+        "bad TST and bad BIN": Em10iiScenario(_with_header(good, magic=0), bad_tst),
+        "TST, no card": Em10iiScenario(good, tst, mount_after=10000),
+        "TST on a wake boot": Em10iiScenario(good, tst, gate=0),
+        "TST, relay with a cable": Em10iiScenario(good, tst, **relay, usb_key=USB_CABLE),
+        "TST, switch boot with a cable": Em10iiScenario(good, tst, usb_key=USB_CABLE),
+        "TST only, switch boot with a cable": Em10iiScenario(None, tst, usb_key=USB_CABLE),
+        "TST, switch boot, unknown cable state": Em10iiScenario(good, tst, usb_key=USB_UNKNOWN),
     }
+
+
+def test_em10ii_file_cases_agree_with_the_payload_checker():
+    for name, (file, ok) in file_cases(bytes(4), EM10II).items():
+        assert _accepted(file) == ok, name
 
 
 @dataclass(frozen=True)
 class Em10iiExpected:
-    created: int
-    stub_sleeps: int
-    task_sleeps: int
-    fopens: int
-    opened: int
-    called: int
+    created: int = 0
+    stub_sleeps: int = 0
+    levels: int = 0
+    task_sleeps: int = 0
+    status_calls: int = 0
+    keys: int = 0
+    paths: tuple[str, ...] = ()
+    """Files rpc_fopen is asked for, in order."""
+    opened: int = 0
+    removes: int = 0
+    exists: int = 0
+    ran: bytes | None = None
 
 
-def em10ii_expected(scenario: Em10iiScenario) -> Em10iiExpected:
-    if scenario.gate != 1:
-        return Em10iiExpected(0, 0, 0, 0, 0, 0)
-    if scenario.loaded0 & SEC45 == SEC45:
+def em10ii_expected(s: Em10iiScenario) -> Em10iiExpected:
+    """The loader's specification as a decision table."""
+    switch_on = s.levels & 1 == 0
+    battery = s.batsrc == 0x100 or s.batlvl >= 50
+    relay = s.gate != 1 and s.factor == FACTOR_RELAY
+    levels = int(relay)
+    if s.gate != 1 and not (relay and switch_on and battery):
+        return Em10iiExpected(levels=levels)
+    if s.loaded0 & SEC45 == SEC45:
         stub_sleeps = 0
-    elif scenario.sec_after < SECTRIES and scenario.loaded1 & SEC45 == SEC45:
-        stub_sleeps = scenario.sec_after
+    elif s.sec_after < SECTRIES and s.loaded1 & SEC45 == SEC45:
+        stub_sleeps = s.sec_after
     else:
-        return Em10iiExpected(0, SECTRIES, 0, 0, 0, 0)
-    if scenario.mount_after >= TRIES:
-        return Em10iiExpected(1, stub_sleeps, TRIES, 0, 0, 0)
-    opened = int(scenario.file_present)
-    called = int(opened and scenario.accepted)
-    return Em10iiExpected(1, stub_sleeps, scenario.mount_after, 1, opened, called)
+        return Em10iiExpected(stub_sleeps=SECTRIES, levels=levels)
+    boot = Em10iiExpected(1, stub_sleeps, levels)
+    if s.mount_after >= TRIES:
+        return replace(boot, task_sleeps=TRIES, status_calls=TRIES)
+    boot = replace(boot, task_sleeps=s.mount_after, status_calls=s.mount_after + 1, keys=1)
+    cable = s.usb_key != USB_NONE
+    if cable and relay:
+        return boot
+    paths, opened, removes, exists = ([] if cable else ["TST"]), 0, 0, 0
+    if s.tst is not None and not cable:
+        opened, removes = 1, 1
+        if s.remove_result == 0:
+            exists = 1
+            if s.exists_after == 0 and _accepted(s.tst):
+                return replace(boot, paths=("TST",), opened=1, removes=1, exists=1, ran=s.tst)
+    paths.append("BIN")
+    opened += s.bin is not None
+    ran = s.bin if _accepted(s.bin) else None
+    return replace(
+        boot, paths=tuple(paths), opened=opened, removes=removes, exists=exists, ran=ran
+    )
 
 
 @pytest.fixture(scope="module")
@@ -570,25 +661,39 @@ def em10ii_sim_objects(tmp_path_factory) -> tuple[Path, list[Path]]:
     return payload_bin, objects
 
 
-def _em10ii_scenario_source(scenario: Em10iiScenario, file: Path) -> str:
+def _em10ii_scenario_source(scenario: Em10iiScenario, tst: Path, bin_: Path) -> str:
     expected = em10ii_expected(scenario)
     values = {
         "gate": scenario.gate,
+        "factor": scenario.factor,
+        "levels": scenario.levels,
+        "batsrc": scenario.batsrc,
+        "batlvl": scenario.batlvl,
+        "usb_key": scenario.usb_key,
         "loaded0": scenario.loaded0,
         "loaded1": scenario.loaded1,
         "sec_after": scenario.sec_after,
         "mount_after": scenario.mount_after,
-        "file_present": int(scenario.file_present),
+        "busy_status": scenario.busy_status,
+        "remove_result": scenario.remove_result & 0xFFFFFFFF,
+        "exists_after": scenario.exists_after,
+        "tst_present": int(scenario.tst is not None),
+        "bin_present": int(scenario.bin is not None),
+        "tst_len": len(scenario.tst or b""),
+        "bin_len": len(scenario.bin or b""),
         "expect_created": expected.created,
         "expect_stub_sleeps": expected.stub_sleeps,
         "expect_task_sleeps": expected.task_sleeps,
-        "expect_fopens": expected.fopens,
+        "expect_status_calls": expected.status_calls,
+        "expect_levels": expected.levels,
+        "expect_keys": expected.keys,
+        "expect_fopens": len(expected.paths),
+        "expect_paths": sum(1 << i for i, p in enumerate(expected.paths) if p == "BIN"),
         "expect_opened": expected.opened,
-        "expect_called": expected.called,
-        "expect_size": payload.parse_header(scenario.file).size
-        if expected.called
-        else 0,
-        "file_len": len(scenario.file),
+        "expect_removes": expected.removes,
+        "expect_exists": expected.exists,
+        "expect_called": int(expected.ran is not None),
+        "expect_size": payload.parse_header(expected.ran).size if expected.ran else 0,
     }
     hook, stub = LOADERS["em10ii"].patch.edits
     hook_bytes = ",".join(f"0x{b:02x}" for b in hook.replacement + USR3_TAIL_RET)
@@ -603,7 +708,14 @@ def _em10ii_scenario_source(scenario: Em10iiScenario, file: Path) -> str:
     ]
     for name, value in values.items():
         lines += [f"\t.global _scn_{name}", f"_scn_{name}:\t.long {value}"]
-    lines += ["\t.global _scn_file", f'_scn_file:\t.incbin "{file}"', ""]
+    lines += [
+        "\t.global _scn_tst",
+        f'_scn_tst:\t.incbin "{tst}"',
+        "\t.balign 4",
+        "\t.global _scn_bin",
+        f'_scn_bin:\t.incbin "{bin_}"',
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -612,15 +724,13 @@ def _em10ii_scenario_source(scenario: Em10iiScenario, file: Path) -> str:
 def test_em10ii_loader_in_simulator(name, em10ii_sim_objects, tmp_path):
     payload_bin, objects = em10ii_sim_objects
     scenario = em10ii_scenarios(payload_bin.read_bytes())[name]
-    accepted = payload.check_image(scenario.file) is None and payload.parse_header(
-        scenario.file
-    ).model == payload.model_field(EM10II.model)
-    assert accepted == scenario.accepted
 
-    file = tmp_path / "FENYKL.BIN"
-    file.write_bytes(scenario.file)
+    tst = tmp_path / "FENYKL.TST"
+    tst.write_bytes(scenario.tst or b"")
+    bin_ = tmp_path / "FENYKL.BIN"
+    bin_.write_bytes(scenario.bin or b"")
     source = tmp_path / "scenario.S"
-    source.write_text(_em10ii_scenario_source(scenario, file))
+    source.write_text(_em10ii_scenario_source(scenario, tst, bin_))
     scenario_obj = tmp_path / "scenario.o"
     _run([EM10II.tool("as"), "-o", str(scenario_obj), str(source)])
     placement = [

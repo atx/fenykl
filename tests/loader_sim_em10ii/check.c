@@ -8,7 +8,9 @@
 #define STACK_SIZE 0x4000u
 #define STUB 0x6005e000u
 #define STUB_MAX_SIZE 0x2000u
-#define FP 0xf11e0000u
+#define FP_TST 0xf11e0001u
+#define FP_BIN 0xf11e0002u
+#define KEY_USB 0x400u
 #define COOKIE 0x0c00c1e5u
 #define TICKS 100u
 #define CHCTR_RESET 3u			/* ICEN | DCEN, as the harness starts; the loader leaves it */
@@ -18,12 +20,17 @@ const char *create_name;
 uint32_t create_entry, create_mode, create_exinf, create_prio, create_size, create_base;
 uint32_t create_count, selfend_count;
 uint32_t stub_sleep_ticks, stub_sleeps, task_sleep_ticks, task_sleeps;
-const char *fopen_path, *fopen_mode;
+const char *fopen_paths[4], *fopen_mode;
 uint32_t fopen_count;
 uint32_t fread_buf, fread_size, fread_n, fread_fp, fread_count, fread_result;
 uint32_t fclose_fp, fclose_count;
+const char *fremove_path, *exists_path;
+uint32_t fremove_count, fremove_done, fremove_after_closes, exists_count;
+uint32_t status_drive, status_calls, status_calls_ready;
+uint32_t key_code, key_count, levels_count;
 uint32_t lock_level, lock_count, unlock_cookie, unlock_count, unlock_chctr;
-uint32_t flush_count, flush_locks, flush_after_reads, flush_chctr;
+uint32_t flush_count, flush_locks, flush_after_reads, flush_after_removes, flush_after_exists,
+	flush_chctr;
 
 /* Written by the test payload (payload.S). */
 struct {
@@ -33,6 +40,8 @@ struct {
 /* Scenario. */
 extern uint32_t scn_expect_created, scn_expect_stub_sleeps, scn_expect_task_sleeps;
 extern uint32_t scn_expect_fopens, scn_expect_opened, scn_expect_called, scn_expect_size;
+extern uint32_t scn_expect_levels, scn_expect_keys, scn_expect_removes, scn_expect_exists;
+extern uint32_t scn_expect_status_calls, scn_expect_paths;	/* bit i: open i is the BIN */
 
 static int streq(const char *a, const char *b)
 {
@@ -68,10 +77,18 @@ int sim_finish(void)
 	CHECK(21, task_sleeps == scn_expect_task_sleeps);
 	CHECK(22, task_sleeps == 0 || task_sleep_ticks == TICKS);
 	CHECK(23, fopen_count == scn_expect_fopens);
-	if (fopen_count) {
-		CHECK(24, streq(fopen_path, "C:\\FENYKL.BIN"));
+	for (uint32_t i = 0; i < fopen_count && i < 4; i++)
+		CHECK(24, streq(fopen_paths[i],
+				(scn_expect_paths >> i & 1) ? "C:\\FENYKL.BIN" : "C:\\FENYKL.TST"));
+	if (fopen_count)
 		CHECK(25, streq(fopen_mode, "r"));
-	}
+	CHECK(26, levels_count == scn_expect_levels);
+	CHECK(27, key_count == scn_expect_keys);
+	if (key_count)
+		CHECK(28, key_code == KEY_USB);
+	CHECK(29, status_calls == scn_expect_status_calls);
+	if (status_calls)
+		CHECK(39, status_drive == 0);
 
 	CHECK(30, fread_count == scn_expect_opened);
 	CHECK(31, fclose_count == scn_expect_opened);
@@ -79,9 +96,17 @@ int sim_finish(void)
 		CHECK(32, fread_buf == LOAD);
 		CHECK(33, fread_size == 1);
 		CHECK(34, fread_n == MAX_SIZE);
-		CHECK(35, fread_fp == FP);
-		CHECK(36, fclose_fp == FP);
+		CHECK(35, fread_fp == FP_TST || fread_fp == FP_BIN);
+		CHECK(36, fclose_fp == fread_fp);
 	}
+	CHECK(37, fremove_count == scn_expect_removes);
+	if (fremove_count) {
+		CHECK(38, streq(fremove_path, "C:\\FENYKL.TST"));
+		CHECK(55, fremove_after_closes >= 1);
+	}
+	CHECK(56, exists_count == scn_expect_exists);
+	if (exists_count)
+		CHECK(57, streq(exists_path, "C:\\FENYKL.TST"));
 
 	CHECK(40, lock_count == scn_expect_called);
 	CHECK(41, unlock_count == scn_expect_called);
@@ -90,7 +115,9 @@ int sim_finish(void)
 		CHECK(43, lock_level == 0);
 		CHECK(44, unlock_cookie == COOKIE);
 		CHECK(45, flush_locks == 1);
-		CHECK(46, flush_after_reads == 1);
+		CHECK(46, flush_after_reads == scn_expect_opened);
+		CHECK(49, flush_after_removes == scn_expect_removes);
+		CHECK(58, flush_after_exists == scn_expect_exists);
 		CHECK(47, flush_chctr == CHCTR_RESET);
 		CHECK(48, unlock_chctr == CHCTR_RESET);
 	}
