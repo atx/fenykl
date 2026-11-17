@@ -5,14 +5,12 @@
 </p>
 
 > [!WARNING]
-> Most of the code and research in this repository was produced by a liberal application of frontier LLMs.
+> Most of the code and research in this repository was produced by a liberal application of frontier LLMs. But don't worry, I was wearing my hacking bath robe I wore for many CTFs back in my day.
 >
-> But don't worry: I know a thing or two about cybersecurity, so the repository also features a dose of "hacker dude in pyjamas eating a hotdog over his keyboard" type of engineering.
->
-> You have been warned. Pick your poison.
+> You have been warned.
 
 
-fenykl is a project providing a firmware mod for early era Olympus Micro Four Thirds cameras. It consists of a small firmware patch that provides a mod loader to load a second stage binary from the SD card. 
+fenykl is a project providing a firmware mod infrastructure for the E-M10 Mark II and E-PL3. It consists of a small firmware patch that provides a mod loader to load a second stage binary from the SD card and a custom plugin infrastructure allowing plugins written in C to hook the firmware functions and alter the camera functionality. 
 
 
 > [!WARNING]
@@ -20,43 +18,67 @@ fenykl is a project providing a firmware mod for early era Olympus Micro Four Th
 
 ## Features
 
-At the moment, only relatively elementary modifications have been implemented, enhancing the HUD and adding support for native blue-red channel swap.
+<table align="center">
+  <tr>
+    <td><strong>Pre-capture<strong></td>
+    <td>A half-press in silent sequential H mode triggers a continuous burst that keeps the latest 6 frames in memory. Fully pressing the shutter button dumps these frames onto the SD card. Needs flash off, long-exposure NR off and S-AF or MF.</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Focus distance and Depth of field readout</strong>
+    </td>
+    <td>The numbers that end up in EXIF get reported in the HUD too.</td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Focus meter</strong>
+    </td>
+    <td>
+      A contrast bar under the battery readout, showing how much does the AF module think it is focused.
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Battery %</strong></td>
+    <td>Shows a guesstimated battery precentage instead of the original stock battery icon</td>
+  </tr>
+  <tr>
+    <td><strong>R/B swap</strong></td>
+    <td>Swaps the red and blue channels (useful for IR photography)</td>
+  </tr>
+  <tr>
+    <td><strong>Screenshot (can be mapped to Fn in the Fenykl config menu)</strong></td>
+    <td>Saves a PPM screenshot of the live view</td>
+  </tr>
+</table>
 
-![Basic info screen with the main plugin: battery percentage, focus distance and depth of field, focus meter, R/B swap](pics/main-info-screen.png)
+
+![Basic info screen with the main plugin](pics/main-info-screen.png)
 
 ## Supported cameras
 
-Only the E-PL3 is supported. Support for the the E-M10 Mark II is underway.
+The E-M10 Mark II is the primary target now. Limited support for the E-PL3 is still available but I have decided to shift my focus.
 
-## High level overview of function
-
-This repository provides code that can patch an original firmware image (not distributed here, but the binaries are floating on the internets) to 
-include a "mod loader". This mod loader then looks for a `FENYKL.BIN` binary on the SD card and if it finds it, it loads it into memory and executes it. 
-This allows safe recovery and updating without having to reflash the entire firmware image every time.
-
-Internally, the mod then works its magic by hooking internal firmware functions and controlling various camera functions.
-
-## How to install on the E-PL3
+## How to install on the E-M10 Mark II
 
 > [!CAUTION]
-> This can brick your camera. Make sure you do not care about it enough to not be sad if it gets fucked by installing random software from the internets.
+> This can potentially brick your camera. Make sure you do not care about it enough to not be sad if it gets fucked by installing random software from the internets.
 
-You need Linux with [uv](https://docs.astral.sh/uv/) (Python 3.12+), and an E-PL3 with body firmware
-1.6 (Setup menu > Firmware).
+You need Linux with [uv](https://docs.astral.sh/uv/) (Python 3.12+), and an E-M10 Mark II with body firmware
+1.4 (Setup menu > Firmware).
 
-Get the stock firmware `OLY_E_086_1600_0000_0000.BIN` somewhere. You can find the binaries floating on the internet in dumps 
+Get the stock firmware `OLY_E_120_1400_0000_0000.BIN` somewhere. You can find the binaries floating on the internet in dumps 
 from questionable sources, or they might be somehow extractable from the Olympus updater software. Put it into `firmware/`
 in this repository.
 
 Validate it is the correct one:
 
 ```sh
-sha256sum firmware/OLY_E_086_1600_0000_0000.BIN
-# 89b70dd65c6739de1cd762777205953ee15864df73369b84815df7ed8a0eb4b1
+sha256sum firmware/OLY_E_120_1400_0000_0000.BIN
+# ff9d302318ecf6e06c0b31c181fc6a185e93623e819749db31cec7977fa92052
 ```
 
-Build the mn10300-elf cross toolchain (GCC 16.2, binutils 2.47) once. The loader does not need it,
-plugins do. It downloads the sources (arguments: download directory, build directory), needs a
+Build the mn10300-elf cross toolchain (GCC 16.2, binutils 2.47) once.
+It downloads the sources (arguments: download directory, build directory), needs a
 host C/C++ compiler and make, about 3.5 GB in the build directory and about 15 minutes:
 
 ```sh
@@ -70,16 +92,16 @@ Patch the firmware:
 
 ```sh
 uv sync
-uv run fenykl patch apply epl3/fenykl-loader --output E0869999.BIN
-# wrote E0869999.BIN (46596160 bytes, sha256 ac1db3e8cc54a1f41c4daba261a5058c228f94640548a53ba4be7d93ad509c32)
+uv run fenykl patch apply em10ii/fenykl-loader --output E1209999.BIN
+# wrote E1209999.BIN (69599232 bytes, sha256 6eb1bb10ea34bf58142e6f6554d76d75ca9915fe151a8d83a205b5d4e2a9f371)
 ```
 
 Flash it from the SD card:
 
-1. Charge the battery fully. Take off the lens and anything on the accessory port.
-2. Format a plain SD/SDHC card in the camera (no Eye-Fi or other Wi-Fi card).
-3. Create the folder `DCOLYMP` in the card root and copy `E0869999.BIN` into it. The name must be
-   exactly `DCOLYMP/E0869999.BIN`, upper case, and it must be the only `E086*.BIN` there.
+1. Charge the battery fully. Take off the lens.
+2. Format a plain SD/SDHC card in the camera.
+3. Create the folder `DCOLYMP` in the card root and copy `E1209999.BIN` into it. The name must be
+   exactly `DCOLYMP/E1209999.BIN`, upper case, and it must be the only `E120*.BIN` there.
 4. Camera off, card in. Hold **OK** and switch the camera on. Keep holding OK until the orange lamp
    on the front lights up, then let go. The screen stays black.
 5. Wait a few minutes until the lamp blinks rapidly. **Do not switch off or open the battery or
@@ -99,10 +121,10 @@ OK firmly before switching on.
 
 ```sh
 uv run fenykl plugin build sdk/projects/main
-uv run fenykl payload info sdk/projects/main/build/epl3/FENYKL.BIN   # must end with "loader accepts"
+uv run fenykl payload info sdk/projects/main/build/em10ii/FENYKL.BIN   # must end with "loader accepts"
 ```
 
-Copy `sdk/projects/main/build/epl3/FENYKL.BIN` into the **root** of the card, not into `DCOLYMP/`.
+Copy `sdk/projects/main/build/em10ii/FENYKL.BIN` into the **root** of the SD card.
 
 The plugin stores its settings in `FENYKL.CF0`/`FENYKL.CF1` and writes a log to `FENYKL.LOG` in the
 card root. Delete the `.CF*` files to reset the settings.
@@ -113,7 +135,9 @@ from the card on a PC, and the camera boots like stock again.
 ## Settings page
 
 To configure fenykl and verify that it got loaded, 
-go into MENU > Custom menu, tab **J** > last row **Fenykl**, then OK.
+go into MENU > Custom menu, tab **K** > row **Fenykl**, then OK on it to get into the custom config screen.
+
+![Basic info screen with the main plugin](pics/settings-screen.png)
 
 A changed setting takes effect at once and is saved two seconds later.
 
