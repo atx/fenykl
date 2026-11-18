@@ -23,16 +23,13 @@ LIB_CAPABILITIES = {
     "afc_sm.c": "afc",
     "event.c": "event",
     "key.c": "key",
-    "key_epl3.c": "key",
     "key_em10ii.c": "key",
     "shot.c": "shot",
     "shot_pix.c": "shot",
     "hud.c": "hud",
     "hud_rle.c": "hud",
-    "hud_epl3.c": "hud",
     "hud_em10ii.c": "hud",
     "ui.c": "ui",
-    "ui_epl3.c": "ui",
     "ui_em10ii.c": "ui",
     "precap_em10ii.c": "precap",
     "devmon_proto.c": "devmon",
@@ -60,7 +57,7 @@ def _plugin_toml(plugin_dir: Path) -> dict:
     path = plugin_dir / "plugin.toml"
     if not path.is_file():
         raise BuildError(
-            f'{path} missing (it lists the cameras, e.g. targets = ["epl3"])'
+            f'{path} missing (it lists the cameras, e.g. targets = ["em10ii"])'
         )
     return tomllib.loads(path.read_text())
 
@@ -207,7 +204,6 @@ def link(
     firmware: Path | None = None,
     slots: Sequence[str] = (),
     cpu1_sources: Sequence[Path] = (),
-    run_on_usb: bool = False,
     opted_in: Sequence[str] = (),
 ) -> Path:
     """Compile the plugin sources with the runtime, the firmware thunks, the stubs of `hooks` and of
@@ -217,7 +213,6 @@ def link(
     0. Every file gets FENYKL_TARGET_<NAME> and FENYKL_HAS_<CAPABILITY> (target.toml; an opt-in
     capability only when in `opted_in`).
     `firmware` replaces the target's firmware.toml (simulator tests).
-    `run_on_usb` lets the runtime call plugin_main on a boot started by the USB cable.
     `opted_in`: the OPT_IN_CAPABILITIES whose library files to link (lib_sources)."""
     gen = outdir / "gen"
     try:
@@ -243,7 +238,6 @@ def link(
         f"-I{gen}",
         f"-DFENYKL_LOAD_BASE=0x{target.load:X}u",
         f"-DFENYKL_REGION_END=0x{target.region_end:X}u",
-        f"-DFENYKL_RUN_ON_USB={1 if run_on_usb else 0}",
         f"-DFENYKL_TARGET_{target.name.upper()}=1",
         *(
             f"-DFENYKL_HAS_{c.upper()}=1"
@@ -338,11 +332,6 @@ def build(
         raise BuildError(
             f"plugin.toml lists cpu1_sources, but target {target.name} has no cpu1 capability"
         )
-    run_on_usb = config.get("run_on_usb", False)
-    if not isinstance(run_on_usb, bool):
-        raise BuildError(
-            f"plugin.toml: run_on_usb must be true or false, not {run_on_usb!r}"
-        )
     for cap in with_capabilities:
         if cap not in OPT_IN_CAPABILITIES or cap not in target.capabilities:
             raise BuildError(
@@ -364,7 +353,6 @@ def build(
         cpu1_unproven=cpu1_unproven,
         slots=config.get("slots", []),
         cpu1_sources=cpu1_sources,
-        run_on_usb=run_on_usb,
         opted_in=opted_in,
     )
     if isa_check:

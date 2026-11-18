@@ -34,8 +34,13 @@ sdk_cpu1_unproven = [
   "seq_frame_done", "seq_take_fail", "seq_take_end", "appevent_post",
   "info_panel_create", "info_panel_destroy", "gui_app_message",
 ]
-# SDK features of this camera (see epl3/target.toml). precap: pre-capture in silent sequential H
-# (lib/precap_em10ii.c), which needs the fully electronic shutter.
+# SDK features of this camera, each passed to every compile as -DFENYKL_HAS_<NAME>=1 (next to
+# FENYKL_TARGET_EM10II=1). event, key, hud, ui, afc, precap, shot, devmon: the library files of
+# those features (py/fenykl/plugin.py LIB_CAPABILITIES) are built only for targets that list them.
+# afc, lens, batt, shot, wb_base: the groups of include/body.h this camera implements
+# (fenykl_body.h); plugin.toml [capabilities.<name>] builds plugin files only where they exist.
+# precap: pre-capture in silent sequential H (lib/precap_em10ii.c), which needs the fully
+# electronic shutter. No cpu1 (a CPU1 runtime, which plugin.toml cpu1_sources needs) yet.
 capabilities = [
   "event", "ui", "hud", "batt", "afc", "precap",
   # key: the key layer (lib/key.c + key_em10ii.c); lens: the lens group of fenykl_body.h

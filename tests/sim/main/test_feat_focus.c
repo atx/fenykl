@@ -1,5 +1,5 @@
 /* The main plugin's focus show/hide and outlier rules (sdk/projects/main/feat_focus_filter.c) in
-   the GDB simulator, with ../hooks/sim_start.S. One filter runs through t_steps in order;
+   the GDB simulator, with ../hooks_em10ii/sim_start.S. One filter runs through t_steps in order;
    plugin_main sets sim_exit_code to 0 (pass), 1 + the index of the first step whose result differs,
    or 200 if the counters at the end differ. */
 #include "../../../sdk/projects/main/feat_focus_filter.h"

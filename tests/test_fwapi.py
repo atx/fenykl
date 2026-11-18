@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import pytest
-from conftest import EPL3, needs_toolchain, stock_image
+from conftest import EM10II, needs_toolchain, stock_image
 
-from fenykl import fwapi, sdk
+from fenykl import fwapi
 from fenykl.firmware import TARGETS, unpack_firmware
 
 
@@ -128,6 +128,8 @@ def test_only_cpu0_only_prototypes_carry_the_cpu1_error():
 
 # ---- Hooks ----
 
+EM10II_TOML = EM10II.dir / "firmware.toml"
+
 RELOCATABLE_SPAN = "42 08 46 0c f1 d0"  # mov d0,(8,sp); mov d1,(12,sp); mov a0,d0
 
 
@@ -180,7 +182,7 @@ def test_relocator_refuses_a_span_that_ends_inside_an_instruction(tmp_path):
     # 'fc ac ..' (movhu abs32) is 6 bytes; cut to 5 bytes -> no instruction boundary.
     func = hooked(relocate="42 08 46 0c fc ac be 1a 69")
     with pytest.raises(fwapi.ApiError, match="inside an instruction"):
-        fwapi.relocated_instructions(func, EPL3.tool("objdump"), tmp_path)
+        fwapi.relocated_instructions(func, EM10II.tool("objdump"), tmp_path)
 
 
 @needs_toolchain
@@ -188,7 +190,7 @@ def test_relocator_refuses_control_flow_in_the_span(tmp_path):
     # ui_key_dispatch's entry: mov 0,d1 (5 byte reg), then a conditional branch 'c9 05'.
     func = hooked(relocate="82 aa 00 c9 05")
     with pytest.raises(fwapi.ApiError, match="cannot relocate"):
-        fwapi.relocated_instructions(func, EPL3.tool("objdump"), tmp_path)
+        fwapi.relocated_instructions(func, EM10II.tool("objdump"), tmp_path)
 
 
 @needs_toolchain
@@ -196,12 +198,12 @@ def test_relocator_refuses_a_special_register_operand(tmp_path):
     # mov d1,psw (f2 f7) touches PSW: not position-independent in a trampoline.
     func = hooked(relocate="42 08 46 0c f2 f7")
     with pytest.raises(fwapi.ApiError, match="cannot relocate"):
-        fwapi.relocated_instructions(func, EPL3.tool("objdump"), tmp_path)
+        fwapi.relocated_instructions(func, EM10II.tool("objdump"), tmp_path)
 
 
 @needs_toolchain
 def test_relocator_accepts_the_reviewed_span(tmp_path):
-    insns = fwapi.relocated_instructions(hooked(), EPL3.tool("objdump"), tmp_path)
+    insns = fwapi.relocated_instructions(hooked(), EM10II.tool("objdump"), tmp_path)
     assert insns == ["mov d0,(8,sp)", "mov d1,(12,sp)", "mov a0,d0"]
 
 
@@ -214,25 +216,21 @@ def test_select_hooks_needs_an_acknowledgement_for_an_unproven_cpu1_scope():
 
 
 def test_select_hooks_rejects_an_undeclared_target():
-    api = fwapi.load(sdk.target("epl3").dir / "firmware.toml")
+    api = fwapi.load(EM10II_TOML)
     with pytest.raises(fwapi.ApiError, match="no hook declared"):
         fwapi.select(api, hooks=["dbg_puts"])
 
 
-@pytest.mark.parametrize("name", ["epl3", "em10ii"])
-def test_declared_relocate_bytes_match_the_stock_image(name):
+def test_declared_relocate_bytes_match_the_stock_image():
     """Every hook's relocate span must be the bytes actually at the entry in the stock firmware."""
-    fw = unpack_firmware(stock_image(name))
+    fw = unpack_firmware(stock_image("em10ii"))
     code = fw.blocks[fw.find_block("main-code-01")].body
-    base = TARGETS[name].load_addresses["main-code-01"]
-    for f in fwapi.load(sdk.target(name).dir / "firmware.toml").functions:
+    base = TARGETS["em10ii"].load_addresses["main-code-01"]
+    for f in fwapi.load(EM10II_TOML).functions:
         if f.hook is None:
             continue
         off = f.address - base
         assert code[off : off + len(f.hook.relocate)] == f.hook.relocate, f.name
-
-
-EM10II_TOML = sdk.target("em10ii").dir / "firmware.toml"
 
 
 def test_em10ii_unproven_hooks_patch_one_aligned_8_byte_block():
@@ -247,7 +245,6 @@ def test_em10ii_unproven_hooks_patch_one_aligned_8_byte_block():
 
 # ---- Callbacks and slots ----
 
-EPL3_TOML = sdk.target("epl3").dir / "firmware.toml"
 CALLBACK = """
 [callbacks.cb]
 entry = "calls"
@@ -386,7 +383,7 @@ def test_call_thunk_reads_gcc_arguments_after_the_target():
 
 
 def test_em10ii_slots_match_the_stock_image():
-    """A slot in the loaded image holds its stock value (the E-PL3 slots are all RAM words)."""
+    """A slot in the loaded image holds its stock value."""
     fw = unpack_firmware(stock_image("em10ii"))
     code = fw.blocks[fw.find_block("main-code-01")].body
     base = TARGETS["em10ii"].load_addresses["main-code-01"]

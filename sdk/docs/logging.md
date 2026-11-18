@@ -1,17 +1,17 @@
 # Shared plugin logging (`sdk/lib/log*.c`)
 
-Status: works on the camera (init, `"a"` append, overflow counters, CPU1 ring, logging from a hook,
-console tee, flushes into standby, the card gate closing on a USB cable on the E-PL3); not run on the
-camera: wake from standby, the 4 MiB cap, the rest of the card gate (section 5.1), logging from ISR
-context. Simulator tests: `tests/test_log_sim.py`. Evidence tags:
-[verified] read in a listing/decompile or seen in a camera log; [camera] seen on the camera; [sim]
-measured in the GDB mn10300 simulator running the firmware's own code (section 9); [inferred].
+Status: works on the camera in `projects/main` (init, flushes); not run on the camera: CPU1 producers, wake from standby, the 4 MiB cap, the card gate
+(section 5.1), logging from ISR context; the console tee has nothing to read on this firmware
+(section 7). Evidence tags: [verified] read in a listing/decompile or seen in a camera log; [camera]
+seen on the camera; [sim] measured in the GDB mn10300 simulator (the `fw_sprintf` counts ran the
+E-PL3 firmware's formatter, and times derived from counts assume its 162 MHz; this camera's are not
+measured); [inferred].
 
 ## 1. Overview
 
 - One API for plugin features: levels, modules, no copied buffer code.
 - Callable from any context on either core: a plugin task, a firmware hook on any task, an ISR-context
-  hook, a CPU1 worker. No file I/O, no blocking, no formatting outside the flusher.
+  hook, a hook on CPU1. No file I/O, no blocking, no formatting outside the flusher.
 - One file `C:\FENYKL.LOG`, appended across boots with a boot header; a 4 MiB size cap applied at init
   only (deleted and started fresh). No rotation, no numbered files.
 - Timestamps from `timer_now` (1 MHz, section 6.1). No RTC.
@@ -27,12 +27,10 @@ Design rules:
   nothing once formatting is out of the producers.
 - **No host-side decoder.** The file is plain text; the fenykl CLI is not involved.
 - **No tee by default.** The tee is opt-in and polls a buffer, it patches no code (section 7).
-- **No cross-core lock.** Each core has its own ring; the CPU0 flusher is the only consumer. The
-  firmware's `bset` lock word 0x8FF00100 is the IPU's, not ours, and a hook must never spin.
+- **No cross-core lock.** CPU0 has its own ring, the other cores ring 1 (section 4.2); the CPU0 flusher is the only consumer, and a
+  hook must never spin.
 - The entry point picks the ring by core id (section 4.2), so a hook that may run on CPU1 needs no
   special code, but a `cpu1_unproven` hook stays `cpu1_unproven`.
-- The E-PL3 build of `hello` does not use the library, so it validates the SDK without its failure
-  modes.
 
 ## 2. API
 
@@ -81,8 +79,8 @@ int fenykl_log_flush(void);      /* drains both rings into the file and closes i
                                     returns: 0, EOPEN (records stay queued), EBUSY (another
                                     flush is running, or before init) or ENOCARD
                                     (card gate closed, section 5.1) */
-int fenykl_log_task_start(void); /* "FYKLOG", priority FENYKL_LIB_TASK_PRIO (E-PL3 12, E-M10 II
-                                    55), 4 KiB stack: flushes every flush_ms or when a ring is
+int fenykl_log_task_start(void); /* "FYKLOG", priority FENYKL_LIB_TASK_PRIO (55), 4 KiB
+                                    stack: flushes every flush_ms or when a ring is
                                     half full; polls the tee every 20 ms */
 void fenykl_log_set_level(struct fenykl_log_module *mod, unsigned level);
 void fenykl_log_get_stats(struct fenykl_log_stats *out);
@@ -103,7 +101,7 @@ Context rules (what each entry point may do):
 | plugin task on CPU0 (`plugin_main`, `FENYKL_TASK`) | yes | yes |
 | hook or slot replacement on a firmware task (CPU0) | yes (masks CPU0 interrupts for ~40 instructions) | **no** (file RPC blocks; `fenykl_hook_install` rules) |
 | hook in ISR context (CPU0) | yes (same path: `irq_disable_all`/`irq_mask_restore` keep the PSW) | no |
-| CPU1 worker, CPU1 hook | yes (CPU1 ring, uncached) | no (`rpc_*` are CPU0-only; compile error in `cpu1_sources`) |
+| CPU1 hook, `cpu1_sources` code (no target builds it yet) | yes (CPU1 ring, uncached) | no (`rpc_*` are CPU0-only; compile error in `cpu1_sources`) |
 
 Integration with the task model: `plugin_main` calls `fenykl_log_init` once the card is there (it is:
 the loader waited for it), then either calls `fenykl_log_flush` from its own loop or
@@ -150,16 +148,16 @@ into a text line with `fw_sprintf(line, fmt, a0, a1, a2, a3)` and writes text to
 | instructions per 5-argument line, producer side | 4586 + copy into the ring (~700 for 42 bytes with the byte `memcpy`) [sim] | 1002 + copy [sim] | 48 incl. the IRQ mask calls [sim] |
 | producer stack | ~370 bytes below the caller [sim] | ~250 bytes [sim] | ~32 bytes |
 | ring bytes per line | ~45-80 | ~45-80 | 32 |
-| CPU1 | `fw_sprintf` is callable on CPU1, but the line still needs a ring | same | same path as CPU0 |
+| CPU1 | not possible: `fw_sprintf` is CPU0-only (`firmware.toml`) | works, the line still needs a ring | same path as CPU0 |
 | host decoding | none | none | none (text file) |
 | code | 0 (firmware) | ~350 bytes [sim] | ~100 bytes writer + the flusher's format loop |
-| risk | formatting inside a hook: 370 B of stack on an unknown firmware stack (`usr1` has 2 KiB), `fw_sprintf` reentrancy only [inferred] (section 9) | own code, reentrant by construction | `%s` arguments must still be valid at flush time |
+| risk | formatting inside a hook: 370 B of stack on an unknown firmware stack, `fw_sprintf` reentrancy unknown | own code, reentrant by construction | `%s` arguments must still be valid at flush time |
 
 At 162 MHz and ~1.3 cycles/instruction, a `fw_sprintf` line costs ~35-40 us, the record ~0.4 us
 [inferred from sim counts; the sim has no cache or DRAM stalls]. Per-frame logging at 60 fps from a hook
 would spend 2.4 ms/s on text, 25 us/s on records; what matters more is hook latency and stack, and
 that CPU1 and ISR producers need no formatter at all. The flusher pays the same `fw_sprintf` cost at
-`FENYKL_LIB_TASK_PRIO` (12 on the E-PL3, 55 on the E-M10 II) where it is harmless (1000 lines/s =
+`FENYKL_LIB_TASK_PRIO` (55) where it is harmless (1000 lines/s =
 4 % of CPU0).
 
 `%s` rule: the pointer must be valid at flush time: a string literal, or a static buffer whose content
@@ -213,8 +211,8 @@ free-running 32-bit counters; a record's slot is `counter % records`.
 
 ### 4.2 Producer rules
 
-- `fenykl_log_rec` reads `FENYKL_CORE_ID()` (`0x8050`) and picks the ring: core 0 -> ring 0, core 1 ->
-  ring 1. One function for every context; hooks that may run on CPU1 need no special code.
+- `fenykl_log_rec` reads `FENYKL_CORE_ID()` (`0x8050`) and picks the ring: core 0 -> ring 0, any other
+  core -> ring 1 (on this three-core body CPU1 and CPU2 would share it, with no lock between them). One function for every context; hooks that may run on CPU1 need no special code.
 - **Ring 0 is multi-producer under the CPU0 interrupt mask**: `psw = fw_psw_get(); fw_irq_disable_all();
   ... fw_irq_mask_restore(psw)` (the same primitives `hooks.c` uses; all three are per-core, `[],0`
   CALLs [verified firmware.toml]). This serialises tasks, hooks on other tasks and ISR-context hooks on
@@ -239,56 +237,46 @@ free-running 32-bit counters; a record's slot is `counter % records`.
 - **Ring 1 drops the newest** (classic SPSC: the producer cannot move `tail`) and counts `dropped`. A
   dropped record still uses up its `seq`, so the flusher prints the gap as `[lost N]`, but only once the
   next ring 1 record arrives; `dropped` counts at once.
-  With a 2 ms CPU1 sleep granularity and a flush every 2 s, 128 slots hold ~60 records/s sustained;
-  a CPU1 worker that logs per frame uses `fenykl_log_trace` and expects drops.
+  With a flush every 2 s, 128 slots hold ~60 records/s sustained; CPU1 code that logs per frame
+  uses `fenykl_log_trace` and expects drops.
 - The flusher writes `[lost N]` lines from `seq` gaps and the counters in the periodic status line.
 - Records queued while `rpc_fopen` fails (card unmounted for USB) stay in the rings until they overflow.
 - Accounting, once both rings are drained: ring 0 `produced = written + lost`, `lost = overwritten`;
-  ring 1 `produced = written + dropped` [camera].
+  ring 1 `produced = written + dropped`.
 
 ## 5. Persistence
 
-Firmware facts [verified in the E-PL3 1.6 decompile, section 9 for addresses]:
+Firmware facts (`firmware.toml`, section 9):
 
-- Mode letters are flag bits: `r` = 1, `w` = 2, `a` = 0x0A, `b`, `+`, `d` = 0x10, `e`, `c`, `h`
-  (`f_open_mode_table` 0x6E979758). After the directory lookup `f_open` sets the position: **not append:
-  position = 0, size field untouched; append (flag 8): position = the entry's size**. So `"w"` does
-  not truncate (matches the camera observation) and `"a"` positions at the end; `"a"` appends
-  on the camera [camera].
-- `f_close` calls `f_flush` only when the file was written (flags & 2 and the dirty mark); `f_flush`
-  writes the pending sector (one read-modify-write of 512 bytes) and rewrites the directory entry. So a
-  batch costs: `open` (directory lookup; for `"a"` the FAT chain walk to the end, linear in the file
-  size [inferred]), the data sectors, one directory update. `rpc_fflush` 0x6E7B820C exists (cmd
-  0x10004, no firmware caller) but is not needed with open/close per batch.
-- **Delete exists**: `rpc_fremove(path)` 0x6E7B82D5 (cmd 0x1000A -> `f_remove_entry(path, 0)`, `ret
-  [],12`, a firmware caller logs `fileif_remove error`). **No rename found**: the file-server
-  dispatch (0x6E7B7FC5) has commands 0x10001-5, 7-0xD, 0x11-0x13; the string `rename %s : %s` has no
-  code reference. Bounded negative: the handlers for 0xB, 0xC, 0x11-0x13 were not decompiled.
-- `rpc_fseek` 0x6E7B82A2 exists (cmd 0x10008 -> `f_seek`, registers not characterised): a fallback if
-  `"a"` fails (open `"w"`, seek to the end, write), untested either way.
+- Mode letters are flag bits: `r` = 1, `w` = 2, `a` = 0x0A, `+` = 3, `b`, `c`,
+  `d`, `e`, `h` (`rpc_fopen`). The library relies on `"w"` not truncating an existing file and `"a"`
+  positioning at its end.
+- **Delete exists**: `rpc_fremove(path)` (cmd 0x1000A; 0 = removed is inferred). No rename is used.
+- `fileif_fseek` exists (cmd 0x10008): a fallback if `"a"` fails (open `"w"`, seek to the end,
+  write), untested.
 
 Strategy:
 
 - **One file, `C:\FENYKL.LOG`, appended across boots.** `fenykl_log_init` measures it: `rpc_fopen(..,
-  "r")` and `rpc_fread` through it in 8 KiB chunks (from `fw_malloc`, which refuses more than 0x3FFC
-  bytes [camera]; else the 4 KiB text buffer):
+  "r")` and `rpc_fread` through it in 8 KiB chunks (from `fw_malloc`, which refuses more than 0x4000
+  bytes; else the 4 KiB text buffer):
   the file RPC has no stat. The cost is linear in the size, at most the 4 MiB cap.
 - **Size cap at init only:** a file larger than `FENYKL_LOG_SIZE_CAP` (4 MiB, compile time) is deleted
   with `rpc_fremove` and started fresh; the new file's first lines say how large the old one was. If
   the delete fails, the log says so and appends anyway. Nothing checks the size during a boot.
-- **Boot header:** a line of `=` and `fenykl log boot: build <FENYKL.BIN sum>, boot cause <E-PL3: byte
-  0x6044151A; E-M10 II: the u32 power-on factor>, timer <timer_now>, file <n> bytes before this boot`.
+- **Boot header:** a line of `=` and `fenykl log boot: build <FENYKL.BIN sum>, boot cause <the u32 power-on
+  factor, 12 = power switch>, timer <timer_now>, file <n> bytes before this boot`.
 - **"w" only for a file that does not exist** (the `"r"` probe failed, or the cap deleted it): `"w"`
   does not truncate, but on a new file it is exact. Every other open is `"a"`.
 - Each flush: `fp = rpc_fopen(name, "a")`, `rpc_fwrite` per 4 KiB of text, `rpc_fclose(fp)`. Never keep
   the file open (USB unmount, card pull). A flush with nothing queued does no file I/O.
 - **If `"a"` fails** on an existing file at init (three tries, 100 ms apart), init returns
   `FENYKL_LOG_EAPPEND` and writes `C:\FENYKL.ERR` (a padded one-line error, `"w"` of a different
-  name). There is no fallback (`rpc_fseek`, padded rewrite): a clear error instead of a silent change
+  name). There is no fallback (`fileif_fseek`, padded rewrite): a clear error instead of a silent change
   of strategy. Later flushes keep trying `"a"`; records queue meanwhile.
 - **Cadence**: `fenykl_log_flush` every `flush_ms` (2 s) or early when a ring is more than half full
-  (the task polls every 100 ms, 20 ms with the tee). Measured cost of a 4 KiB `"w"` rewrite: 0-100 ms
-  [camera]; the cost of `"a"` (its FAT chain walk grows with the file) is not measured; every
+  (the task polls every 100 ms, 20 ms with the tee). The cost of a flush is not measured on this
+  camera; every
   flush over 500 ms is logged and counted (`flush_slow`), the slowest is `flush_max_us`.
 - **Lost on a hang**: the records since the last flush (up to `flush_ms`). Lost on a card pull or USB:
   records that overflow the rings while opens fail or the card gate is closed (section 5.1). There is no crash recovery;
@@ -297,18 +285,14 @@ Strategy:
   records queued at the call are in the file. A CPU0 task calls it on an error path before it gives up
   or hangs; `FENYKL_LOG_EBUSY` means the flusher task is in a flush (sleep and call it again) or init
   has not run.
-- Firmware function added to `firmware.toml`: `rpc_fremove` (`[],12`, A0 = path; read from its `ret`
-  and its one caller). `rpc_fseek` stays out (registers not characterised, not needed).
 
 ### 5.1 Card gate (USB cable at run time)
 
 A cable plugged into a running camera hands the card to the PC in place, while the camera's FAT stays
 mounted [static analysis]; a log write then corrupts the card. Every flush first
 asks `fenykl_card_io_allowed()` (card mounted and no cable seen this boot; README, Startup and USB
-boots). Once a cable was seen the gate stays closed until power-off: on the E-PL3 (2026-10-19) a
-reopened gate after a USB session wrote `FENYKL.LOG` with the camera's FAT state from before the
-session, and the `FENYKL.BIN` the PC had written lost its cluster chain (`fsck.fat`: directory entry
-on a free cluster, dirty bit set).
+boots). Once a cable was seen the gate stays closed until power-off: a gate reopened after a USB session
+would write with the camera's FAT state from before the session over what the PC wrote.
 
 - **Closed:** no file RPC at all. `fenykl_log_flush` returns `FENYKL_LOG_ENOCARD`, counts
   `gate_skipped` (not `open_fail`) and leaves the records in the rings; overflow is counted as usual
@@ -326,8 +310,7 @@ on a free cluster, dirty bit set).
   give up on). The size cap and the boot header run in the first flush with the gate open, before
   the queued records; the header's line carries that flush's stamp, the records keep theirs.
 - **Stamps** of records queued over a closed period of more than 1073 s: section 6.1.
-- On the camera: the cable closes the gate (E-PL3, 2026-10-19). The stay-closed rule is
-  simulator-tested only (README status table).
+- Not run on the camera.
 
 ## 6. Timestamps
 
@@ -366,10 +349,10 @@ seconds and microseconds as two 32-bit words (no 64-bit division, section 10).
 ## 7. Optional firmware console tee
 
 The firmware's `dbg_puts` traffic goes into the log, opt-in with `cfg.tee = 1`, by polling the boot
-capture buffer (no code patch). `uart_putchar` appends every character to `uart_boot_capture`
-0xA07C5E80 (767 bytes, count u16 at 0x8FF00088) while `uart_state[1]` 0x8FF00082 is below 2, which
-on a UART0 camera is forever [verified code path; the camera's variant: runtime]. These are the
-E-PL3 addresses; both bodies list theirs as `uart_tee_*` in `firmware.toml`.
+capture buffer (no code patch). `uart_putchar` appends every character to `uart_tee_buf` 0xA1BB309C
+(767 bytes, count u16 `uart_tee_count` 0x8FF00084) while `uart_tee_state1` 0x8FF0007E is below 2.
+On this firmware the console init sets it to 3 and nothing sets it below 2, so the capture is never on
+[verified code path]: the tee logs once that the capture is off and has nothing else to read.
 
 Every 20 ms the flusher task copies and resets the capture under the CPU0 interrupt mask, splits it
 into lines (`\r` dropped), and logs each line as ring 0 text records of module `fwcon` (a line
@@ -394,7 +377,7 @@ of `.shared` (only with `cpu1_sources`). Per part (estimates):
 | console tee (poll + copy) | ~150 |
 | total | ~2.0 KiB (the examples' hand-rolled logging is ~0.6-1 KiB each) |
 
-RAM: ring 0 16 KiB, ring 1 4 KiB `.shared` (only with a CPU1 worker), staging 1 KiB, text buffer
+RAM: ring 0 16 KiB, ring 1 4 KiB `.shared` (only with `cpu1_sources`), staging 1 KiB, text buffer
 4 KiB, line 256 B, state ~200 B: **~21.5 KiB of payload `.bss`**. Flusher task stack 4 KiB from `fw_malloc` (`fw_sprintf` needs ~370 B, the file RPC a few
 hundred).
 
@@ -405,29 +388,26 @@ CPU per call [sim instruction counts; cycles inferred at ~1.3/instruction, 162 M
 | `fenykl_log_*` filtered out at runtime (level check) | ~6 | 50 ns |
 | record from a CPU0 task or hook (cached code and ring) | 48 | ~0.4 us |
 | record from an ISR-context hook | same | same; interrupts are already masked, the PSW round trip is harmless |
-| record from CPU1 | 48 | ~0.4 us + 8 uncached stores (CPU1 at 162 MHz) |
+| record from CPU1 | 48 | ~0.4 us + 8 uncached stores |
 | `fenykl_log_text`, 100 bytes | ~1500 | ~12 us (5 records; the byte copy dominates) |
 | flusher per record | ~4600 `fw_sprintf` + ~700 copy/stamp | ~45 us; 1000 records/s = 4-5 % of CPU0 at `FENYKL_LIB_TASK_PRIO` |
-| flusher per flush, file part | one `rpc_fopen` + write + `rpc_fclose` | 0-100 ms observed for 4 KiB `"w"`; append not measured |
+| flusher per flush, file part | one `rpc_fopen` + write + `rpc_fclose` | not measured |
 
-## 9. Firmware facts (E-PL3)
+## 9. Firmware facts
 
 | fact | answer | evidence |
 |---|---|---|
-| `"a"` | mode flags 0x0A; `f_open` sets position = size when flag 8 is set, else position 0 with the size kept (no truncation) | [verified] `f_open` 0x6E7BBC77 mode dispatch, handlers 0x6E7BBCDD (`w`: flags \| 2) and 0x6E7BBCE3 (`a`: flags \| 10), then the common open code of 0x6E7BBCDD (position from the size field only when flag 8 is set); camera: `"w"` keeps the tail (README) |
-| truncation | none in `f_open`; a new file name is the only exact way | [verified] as above; `f_flush` 0x6E7BC5EA rewrites the directory entry from the FILE fields |
-| remove / rename | `rpc_fremove` 0x6E7B82D5 (cmd 0x1000A) yes; rename not found (dispatch 0x6E7B7FC5 cmds 1-5, 7-D, 11-13; `rename %s : %s` has no xref) | [verified] decompile; rename [bounded negative] |
-| flush / close cost | `f_close` -> `f_flush` only if written: pending sector RMW + directory entry; `rpc_fflush` 0x6E7B820C exists | [verified] decompile 0x6E7BBE7C, 0x6E7BC5EA |
-| boot cause | byte 0x6044151A from 0x98E00048 / 0x98E00000; watchdog code unknown | [verified] decompile 0x6E6340C0 |
-| locking primitives | `psw_get` 0x6E623B47, `irq_disable_all` 0x6E623B17, `irq_mask_restore` 0x6E623B40, per core, in `firmware.toml`; `irq_mask_raise(level)` 0x6E623B1F not yet; cross-core: only the firmware's `bset` word 0x8FF00100 (IPU), no general lock | [verified] firmware.toml |
-| `fw_sprintf` reentrancy | `vformat_core` 0x6E8F6683 stores `FUN_6e8f6b79()` into the global 0x60610C70, read by its helpers only as `**ptr` compared with characters: the locale decimal point, constant across callers | [inferred] decompile; the firmware calls it from many tasks |
-| `fw_sprintf` cost | 4586 instructions for `"%s t=%u phase=%u heartbeat=%u state=%x"`, 1930 for `"flip %u fc %u"`; output byte-exact; ~370 B of stack | [sim] firmware text2 + `.data` image loaded into `mn10300-elf-run`, `--trace-insn` line counts minus a 10-instruction baseline |
-| formatting in hook context | possible (pure, 370 B stack) but not needed: records are binary | design |
+| open modes | `rpc_fopen` mode chars r (1), w (2), a (0xA), + (3), b, c, d, e, h; open on an unmounted drive fails at once | [verified] `firmware.toml` |
+| remove | `rpc_fremove` 0x60564BF2 (cmd 0x1000A); 0 = removed inferred | [verified] `firmware.toml` |
+| boot cause | u32 power-on factor `data.poweron_factor` 0xA1C17C14, 12 = normal power-on | [verified] `firmware.toml` (evidence medium) |
+| locking primitives | `psw_get` 0x6006D547, `irq_disable_all` 0x6006D517, `irq_mask_restore` 0x6006D540, per core; no cross-core lock is used | [verified] `firmware.toml` |
+| `fw_sprintf` cost | 4586 instructions for `"%s t=%u phase=%u heartbeat=%u state=%x"`, 1930 for `"flip %u fc %u"`; ~370 B of stack | [sim] on the E-PL3 firmware's formatter, `--trace-insn` line counts minus a 10-instruction baseline |
+| formatting in hook context | possible but not needed: records are binary | design |
 
 ## 10. Implementation notes
 
 - The file size is measured by reading the file through at init: the file RPC has no stat, and
-  `rpc_fseek`'s registers are not characterised.
+  `fileif_fseek` is not used.
 - `"w"` only for a missing file. If the `"r"` probe fails while the file exists (card busy), `"w"`
   overwrites from the start; the loader waits for the card before the payload runs, so the case should
   not occur. `"a"` on a missing file is untested.

@@ -2,8 +2,7 @@
  * The plugin's own contrast client (sdk/docs/afc.md): AF statistics in manual focus, where the
  * firmware runs no contrast client. Attaches with cam_request a copy of fcs's contrast_setting
  * (snapshot taken in S-AF/C-AF framing) writing into the library's DMA buffer, detaches on any
- * gate. The firmware layouts are the body's (body.h, afc group). Camera-proven in MF on the
- * E-PL3. Built for targets with the afc capability; zero bytes unless fenykl_afc_poll is called.
+ * gate. The firmware layouts are the body's (body.h, afc group). Built for targets with the afc capability; zero bytes unless fenykl_afc_poll is called.
  */
 #ifndef _FENYKL_AFC_H
 #define _FENYKL_AFC_H

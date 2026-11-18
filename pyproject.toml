@@ -1,7 +1,7 @@
 [project]
 name = "fenykl"
 version = "0.1.0"
-description = "Firmware tools, plugin SDK and main plugin for the Olympus PEN E-PL3"
+description = "Firmware tools, plugin SDK and main plugin for the Olympus OM-D E-M10 Mark II"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

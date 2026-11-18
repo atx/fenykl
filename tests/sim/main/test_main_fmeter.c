@@ -1,5 +1,5 @@
 /* The main plugin's focus meter logic (sdk/projects/main/main_fmeter.c) in the GDB simulator, with
-   ../hooks/sim_start.S: area choice, the absolute log2 scale and the bar driven by synthetic values at
+   ../hooks_em10ii/sim_start.S: area choice, the absolute log2 scale and the bar driven by synthetic values at
    the plugin's 50 ms tick. plugin_main sets sim_exit_code to 0 (pass) or the number of the first failed check. */
 #include "../../../sdk/projects/main/main_fmeter.h"
 

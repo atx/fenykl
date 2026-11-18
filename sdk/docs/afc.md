@@ -1,8 +1,7 @@
 # Own contrast client (`sdk/lib/afc.c`)
 
-Status: E-PL3: camera-proven in a probe plugin (8 clean attach/detach cycles, S-AF locking every
-time afterwards); used by the `main` focus meter in MF. E-M10 II: camera-proven in `main` (4 MF
-attach/stop cycles, S-AF locking afterwards).
+Status: used by the `main` focus meter in MF; camera-proven in `main` (4 MF attach/stop cycles, S-AF
+locking afterwards).
 The pending stop while live view is off (section 3) is simulator-tested only (`tests/sim/afc/`).
 Built for targets with the `afc` capability; a plugin that does not call `fenykl_afc_*` gets no byte
 of it (`--gc-sections`, including the DMA buffer in `.shared`).
@@ -28,28 +27,27 @@ DMA buffer every frame (~60 per second), and detaches before the firmware could 
 - **DMA buffer:** `FENYKL_CNT_DMA_WORDS` in `.shared`, used only through the uncached alias, filled
   with `FENYKL_AFC_DMA_FILL` before each attach (the DMA writes from the second frame on).
 - **Detach:** `contrast_setting.number = 0`; the driver checks it after the frame-start callback of
-  each frame, unlinks the client and calls the done callback (12-18 ms on the E-PL3). The task writes
+  each frame, unlinks the client and calls the done callback. The task writes
   it on a gate; the frame callback writes it itself on a half-press (fastest detach) and at every
   frame after a stop.
-- **Callbacks** (`cam_cnt_frame_cb`, `cam_req_done_cb`): firmware context on CPU0 (E-PL3: interrupt
-  context). Counters, timer stamps, the context (interrupt nesting byte, PSW, A0 of the first frame
+- **Callbacks** (`cam_cnt_frame_cb`, `cam_req_done_cb`): firmware context on CPU0. Counters, timer stamps, the context (interrupt nesting byte, PSW, A0 of the first frame
   callback) and the number = 0 write only. A call on another core counts itself in an uncached word
   and returns; the task then stops the client for the boot (`core`).
 
-| | E-PL3 v1.6 | E-M10 II v1.4 |
-|---|---|---|
-| request | 0x40 bytes: +0x14 setting, +0x28 done, +0x2C frame, +0x30 events, +0x34 argument | 0x88 bytes: +0x1C setting, +0x38 done, +0x4C frame, +0x6C events; no argument |
-| events | 0x400 frame start, 0x800 data complete | 0x001 frame start, 0x002 data complete, 0x200 error |
-| contrast_setting | 0x104 bytes (fcs ctx +0x378), DMA +0x88, update u16 0x1FFF | 0x228 bytes (fcs ctx +0xD24), cnt DMA +0x8C and fc DMA +0x90 (both set to the library's buffer), update u32 0x60FFF |
-| snapshot grid | pattern 0 or 0xD, 7 x 5 | pattern 0, 9 x 9 (vdiv - area_add = 9 rows) |
-| DMA buffer | 2 KiB: HPF1, HPF2, HPF3, HPFV, 5 rows each | 4.5 KiB, 128-byte aligned: cnt (HPF1..3, HPFV) at 0, fc (HPF1..3) at 2.5 KiB, 9 rows each; `fenykl_afc_dma` returns fc |
-| foreign client | slot words 0x605AEFA0/A4, client +8 = setting | list `*(*(u32 *)0x618485BC + 4)`, node +0 setting, +0xC next, pool of 2 |
-| live view | GUI super 0x02, states 0x03..0x05, 0x09..0x0B | GUI super 0x01, state 0x08 |
-| movie | take_focus +7, lv_mode +0xD4 | take_focus +8 |
-| half press | `trg_snapshot` bit 0 clear | u8 0xA1C1801C == 1 |
-| driver debug | u16 0x605AEFD4 | none found |
+| | E-M10 II v1.4 |
+|---|---|
+| request | 0x88 bytes: +0x1C setting, +0x38 done, +0x4C frame, +0x6C events; no argument |
+| events | 0x001 frame start, 0x002 data complete, 0x200 error |
+| contrast_setting | 0x228 bytes (fcs ctx +0xD24), cnt DMA +0x8C and fc DMA +0x90 (both set to the library's buffer), update u32 0x60FFF |
+| snapshot grid | pattern 0, 9 x 9 (vdiv - area_add = 9 rows) |
+| DMA buffer | 4.5 KiB, 128-byte aligned: cnt (HPF1..3, HPFV) at 0, fc (HPF1..3) at 2.5 KiB, 9 rows each; `fenykl_afc_dma` returns fc |
+| foreign client | list `*(*(u32 *)0x618485BC + 4)`, node +0 setting, +0xC next, pool of 2 |
+| live view | GUI super 0x01, state 0x08 |
+| movie | take_focus +8 |
+| half press | u8 0xA1C1801C == 1 |
+| driver debug | none found |
 
-E-M10 II update bits: `cam_cnt_apply` 0x60243E6F applies bits 0x1..0x40000 of the u32 at +8 and
+Update bits: `cam_cnt_apply` 0x60243E6F applies bits 0x1..0x40000 of the u32 at +8 and
 clears it; fcs only ever sets 0x1..0x800, 0x20000 and 0x40000, so the copy sets those (0x60FFF) and
 leaves the five register groups fcs never programs (0x1000, 0x2000..0x10000) alone.
 
@@ -83,7 +81,7 @@ the frame callback) -> idle (done callback) or off.
   half-press (`cb`; its done may come before the task notices: a normal detach), or when no frame
   came for 0.5 s while attached (`stall`, why 0x200: live view went away before the GUI state did).
 - **Pending stop:** the driver detaches at the next frame, so with live view off (MENU, playback: no
-  frames) the done callback comes only when frames resume, seconds later (6.5 s in an E-PL3 run). The
+  frames) the done callback comes only when frames resume, seconds later. The
   stop then stays pending with no timeout (`stop #n pending: no frames`), and no attach happens
   before its done. The 0.5 s done timeout runs only from the first frame after the stop.
 - **Errors, then off for the boot** (one ERR line `off for the boot: <err>`): `req` (`cam_request`
@@ -109,12 +107,12 @@ the frame callback) -> idle (done callback) or off.
 
 ## 5. Risks
 
-- The driver keeps one current and one queued client (E-M10 II: a node pool of 2); a third gets an
+- The driver keeps one current and one queued client (a node pool of 2); a third gets an
   error and fcs's AF would time out once (2000 ticks) [inferred]. The gates (fcs idle, no foreign
   client, no half-press, the frame callback's own stop) keep fcs from wanting the block while
-  attached; E-PL3 camera runs saw no error.
+  attached.
 - Wrong setting fields (a snapshot from another sensor mode): wrong windows, but the DMA writes only
   the snapshot's rows, which the buffer holds with slack.
-- E-M10 II: the callbacks run in an ISR with A0 = the client's request (camera run). MF assist
+- The callbacks run in an ISR with A0 = the client's request (camera run). MF assist
   magnification may change the sensor readout under the copied windows.
 - Nothing is written to firmware settings, flash or properties; fcs's own client is never touched.

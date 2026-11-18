@@ -1,13 +1,11 @@
 /*
- * main: the polished daily-use plugin. Starts logging, configuration and the HUD library (E-PL3:
- * with the hook of main_hooks.c), installs the settings page (sdk/lib/ui.c) and runs every
- * feature's tick, the Fn override (main_fn.c) and the R/B swap's task side (main_rbswap*.c)
- * from one task loop; peaking (main_peak.c) has a task of its own. Log: C:\FENYKL.LOG;
+ * main: the polished daily-use plugin. Starts logging, configuration and the HUD library,
+ * installs the settings page (sdk/lib/ui.c) and runs every feature's tick, the Fn override
+ * (main_fn.c) and the R/B swap's task side (main_rbswap*.c) from one task loop. Log: C:\FENYKL.LOG;
  * options: C:\FENYKL.CF0/CF1. A target without the hud capability gets no HUD (MAIN_HUD), one
  * without the key capability no Fn override.
  */
 #include "main.h"
-#include "main_peak.h"
 #include "main_rbswap.h"
 #if FENYKL_HAS_AFC
 #include <afc.h>
@@ -46,8 +44,8 @@ static const struct main_feat *const main_feats[] = {
 struct main_state {
 	uint32_t ticks;
 	uint16_t gui;			/* super << 8 | state last logged */
-	int32_t hud_seen[MAIN_HUD_SEEN];	/* E-M10 II: main_log_hud's values last logged */
-	bool drawing;			/* HUD up; E-PL3: hook installed, no CPU1 call seen */
+	int32_t hud_seen[MAIN_HUD_SEEN];	/* main_log_hud's values last logged */
+	bool drawing;			/* HUD up */
 	bool started[sizeof(main_feats) / sizeof(main_feats[0])];
 };
 
@@ -77,7 +75,6 @@ static void main_log_apply(const struct fenykl_cfg_opt *o, int32_t old)
 		fenykl_log_set_level(main_feats[i]->log, level);
 	main_fn_set_level(level);
 	main_rbswap_set_level(level);
-	main_peak_set_level(level);
 	if (o)
 		fenykl_log_info(&main_log, "log level %s (was %s)", main_log_names[main_log_level],
 				main_log_names[old]);
@@ -121,32 +118,9 @@ static bool main_wait_gui(void)
 	return false;
 }
 
-#if FENYKL_HAS_HUD_OVERLAY
-/* Layer-1 buffers and the hook. */
-static bool main_start_overlay(void)
-{
-	struct fenykl_hud_buf buf[2] = { 0 };
-	int r = fenykl_hud_init(MAIN_LAYOUT_STATES, buf);
 
-	for (unsigned int b = 0; b < 2; b++)
-		fenykl_log_info(&main_log, "L1b%u handle %08x plane %x pData %08x", b, buf[b].handle,
-				buf[b].plane, buf[b].pdata);
-	if (r) {
-		fenykl_log_err(&main_log, "hud init %d: no HUD", r);
-		return false;
-	}
-	r = main_hooks_install();
-	fenykl_log_info(&main_log, "hook cw_updateDisplay install %d", r);
-	if (r) {
-		fenykl_log_err(&main_log, "no hook: no HUD (nothing patched)");
-		return false;
-	}
-	return true;
-}
-#endif
-
-/* GUI, HUD library (E-PL3: and hook): true if the features may draw. E-M10 II: the elements get
-   their widgets at the next build of the info panel, which follows this at boot. */
+/* GUI, HUD library: true if the features may draw. The elements get their widgets at the next
+   build of the info panel, which follows this at boot. */
 static bool main_start_hud(void)
 {
 	if (!main_wait_gui()) {
@@ -156,9 +130,6 @@ static bool main_start_hud(void)
 	}
 	fenykl_log_info(&main_log, "GUI after %u ticks, font id %u", main_st.ticks,
 			fenykl_hud_font());
-#if FENYKL_HAS_HUD_OVERLAY
-	return main_start_overlay();
-#else
 	int r = fenykl_hud_init(MAIN_LAYOUT_STATES);
 
 	if (r) {
@@ -167,25 +138,9 @@ static bool main_start_hud(void)
 	}
 	fenykl_log_info(&main_log, "hud init 0 (widget slots)");
 	return true;
-#endif
 }
 #endif
 
-#if FENYKL_HAS_IMG_EXEC
-/* The img_exec hook carries the R/B swap and peaking. */
-static void main_start_img(void)
-{
-	int r = main_img_hook_install();
-
-	if (r) {
-		fenykl_log_err(&main_log, "hook img_exec install %d: no R/B swap, no peaking", r);
-		return;
-	}
-	fenykl_log_info(&main_log, "hook img_exec installed");
-	main_rbswap_start();
-	main_peak_start();
-}
-#endif
 
 /* Settings page from a Custom menu row (sdk/docs/ui.md); does not need the HUD. */
 static void main_start_ui(void)
@@ -216,25 +171,9 @@ static void main_start_feats(void)
 	}
 }
 
-#if FENYKL_HAS_HUD_OVERLAY
-/* A hook call on CPU1 stops all drawing for this boot. */
-static void main_check_cpu1(const struct fenykl_hud_stats *hs)
-{
-	if (!main_st.drawing || hs->cpu1 == 0)
-		return;
-	main_st.drawing = false;
-	main_hooks_draw_off();
-	for (unsigned int i = 0; main_feats[i]; i++)
-		if (main_st.started[i])
-			main_feats[i]->stop();
-	fenykl_log_err(&main_log, "cw_updateDisplay ran on CPU1 (%u calls): drawing stopped",
-		       hs->cpu1);
-	fenykl_log_flush();
-}
-#endif
 #endif
 
-#if MAIN_HUD && FENYKL_TARGET_EM10II
+#if MAIN_HUD
 /* The movie live view picks its INFO screen from prop 0x8B01, not 0x8321: the firmware's INFO
    selector 0x60913732 takes setting 0x34C (prop 0x8B01) when 0x609136A9 sees setting 0x2C (prop
    0x8551) or 0x3B6A at 1 through the settings layer, whose value mapping is not known. Logged on
@@ -270,7 +209,7 @@ static void main_log_gui(void)
 {
 	uint16_t gui = fenykl_gui_state();
 
-#if MAIN_HUD && FENYKL_TARGET_EM10II
+#if MAIN_HUD
 	main_log_hud(gui);
 #else
 	if (gui == main_st.gui)
@@ -291,15 +230,7 @@ static void main_status(const struct fenykl_hud_stats *hs)
 	struct fenykl_ui_stats us;
 
 	fenykl_ui_get_stats(&us);
-#if MAIN_HUD && FENYKL_HAS_HUD_OVERLAY
-	fenykl_log_info(&main_log, "status t %u drawing %d updates %u shows %u", main_st.ticks,
-			main_st.drawing, hs->updates, hs->shows);
-	fenykl_log_info(&main_log, "  drawn %u hidden %u erased %u cpu1 %u", hs->drawn, hs->hidden,
-			hs->erased, hs->cpu1);
-	fenykl_log_info(&main_log, "  stale %u override %u nofont %u miss %u", hs->stale,
-			hs->overrides, hs->nofont, hs->glyph_miss);
-	fenykl_log_info(&main_log, "  wiped %u covered %u", hs->wiped, hs->covered);
-#elif MAIN_HUD
+#if MAIN_HUD
 	fenykl_log_info(&main_log, "status t %u drawing %d, hud creates %u made %u", main_st.ticks,
 			main_st.drawing, hs->creates, hs->made);
 	fenykl_log_info(&main_log, "  fail %u destroys %u heap free %u posts %u", hs->failed,
@@ -321,7 +252,6 @@ static void main_status(const struct fenykl_hud_stats *hs)
 			main_feats[i]->status();
 	main_fn_status();
 	main_rbswap_status();
-	main_peak_status();
 }
 
 void plugin_main(uint32_t load_base, uint32_t image_size)
@@ -333,9 +263,6 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	fenykl_log_info(&main_log, "main, load %08x size %x, log init %d", load_base,
 			image_size, r);
 	main_start_cfg();
-#if FENYKL_HAS_IMG_EXEC
-	main_start_img();
-#endif
 #if FENYKL_HAS_WB_BASE
 	main_rbswap_start();
 #endif
@@ -357,9 +284,6 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 		slow = main_st.ticks % MAIN_SLOW == 0;
 #if MAIN_HUD
 		fenykl_hud_get_stats(&hs);
-#if FENYKL_HAS_HUD_OVERLAY
-		main_check_cpu1(&hs);
-#endif
 #endif
 		main_log_gui();
 		main_fn_tick();

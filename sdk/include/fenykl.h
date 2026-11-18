@@ -111,7 +111,7 @@ static inline bool fenykl_dram_ptr(uint32_t a, uint32_t align)
 }
 
 /* Target: nonzero if this boot was started by plugging in the USB cable. The runtime then returns
-   without calling plugin_main, unless plugin.toml sets run_on_usb = true (README, Startup). */
+   without calling plugin_main (README, Startup). */
 int fenykl_usb_attached(void);
 
 /* Target, CPU0 task context (README, Startup and USB boots; unproven on the camera): the USB cable

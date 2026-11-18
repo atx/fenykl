@@ -1,8 +1,7 @@
 # Pre-capture (`sdk/lib/precap_em10ii.c`)
 
-E-M10 II only: pre-capture holds frames of the stock **silent sequential H** burst, which needs the
-fully electronic shutter; the E-PL3 has no electronic shutter and no such burst. Built for targets with
-the `precap` capability (`include/precap.h`); a plugin that does not call `fenykl_precap_*` gets no
+Pre-capture holds frames of the stock **silent sequential H** burst, which needs the fully electronic
+shutter. Built for targets with the `precap` capability (`include/precap.h`); a plugin that does not call `fenykl_precap_*` gets no
 byte of it (`--gc-sections`).
 
 Status: the mechanism (key control, hold, commit, cancel, fail-safes) is camera-proven in a prototype

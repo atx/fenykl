@@ -1,5 +1,5 @@
 /* The main plugin's battery model (sdk/projects/main/main_batt.c) in the GDB simulator, with
-   ../hooks/sim_start.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
+   ../hooks_em10ii/sim_start.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
      1  a curve point, a midpoint between two points or a clamped voltage gives the wrong charge
      2  sweep: the charge decreases while the voltage rises, or leaves 0..1000
      4  counts to cell mV: wrong scale or rounding

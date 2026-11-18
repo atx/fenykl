@@ -1,5 +1,5 @@
 /*
- * E-M10 II key map of the key layer (key.c). UI_IN posts the E-PL3's event shapes (press
+ * E-M10 II key map of the key layer (key.c). UI_IN posts the event shapes (press
  * 0x0200cccc, release 0x0201cccc, value 0x0202cccc, param and flag 0). "static" = the v1.4 key
  * kind tables 0x601A90EC (entry type 2 = button) only, no event seen yet.
  */

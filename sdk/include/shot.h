@@ -1,8 +1,8 @@
 /*
  * Screenshot (sdk/docs/shot.md): what the panel shows, the live view and the GUI's OSD layers, to
- * C:\SHOTnnnn.PPM at square pixels (E-PL3 853 x 480; E-M10 II 720 x 480 on the LCD, 1024 x 768
- * on the EVF). fenykl_shot_start takes the snapshot into firmware memory lent for the write (E-PL3
- * a RECFILE run, E-M10 II block 0 of the PRIM still-image pool); each fenykl_shot_step composes
+ * C:\SHOTnnnn.PPM at square pixels (720 x 480 on the LCD, 1024 x 768 on the EVF).
+ * fenykl_shot_start takes the snapshot into firmware memory lent for the write (block 0 of the PRIM
+ * still-image pool); each fenykl_shot_step composes
  * and writes a strip, so the calling task keeps working during the write. Bodies with the shot
  * capability (body.h).
  */

@@ -1,5 +1,5 @@
 /* The main plugin's distance formatter (sdk/projects/main/main_fmt.c) in the GDB simulator, with
-   ../hooks/sim_start.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
+   ../hooks_em10ii/sim_start.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
      1  a fixed case (unit bounds, rounding carries, extremes) differs from the expected text
      2  return value is not the length, or a write past MAIN_FMT_DIST_SIZE
      4  sweep: a leading zero, a wrong digit count or a unit that does not fit the value

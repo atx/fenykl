@@ -10,7 +10,7 @@
 > You have been warned.
 
 
-fenykl is a project providing a firmware mod infrastructure for the E-M10 Mark II and E-PL3. It consists of a small firmware patch that provides a mod loader to load a second stage binary from the SD card and a custom plugin infrastructure allowing plugins written in C to hook the firmware functions and alter the camera functionality. 
+fenykl is a project providing a firmware mod infrastructure for the E-M10 Mark II. It consists of a small firmware patch that provides a mod loader to load a second stage binary from the SD card and a custom plugin infrastructure allowing plugins written in C to hook the firmware functions and alter the camera functionality. 
 
 
 > [!WARNING]
@@ -56,7 +56,9 @@ fenykl is a project providing a firmware mod infrastructure for the E-M10 Mark I
 
 ## Supported cameras
 
-The E-M10 Mark II is the primary target now. Limited support for the E-PL3 is still available but I have decided to shift my focus.
+The E-M10 Mark II is the primary target now.
+
+E-PL3 support ended; its last state is on the `epl3` branch.
 
 ## How to install on the E-M10 Mark II
 

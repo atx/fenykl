@@ -3,8 +3,7 @@
  * second in live view it reads the battery voltage as the firmware's own checks do
  * (fenykl_batt_read), feeds the model (main_batt.c) and renders on change only: green above 50 %,
  * yellow above 25 %, red below.
- * Hidden on the AC adapter or DC coupler. The stock battery icon is left alone (E-PL3: on these
- * screens the GUI shows it only at its own "low" level).
+ * Hidden on the AC adapter or DC coupler. The stock battery icon is left alone.
  */
 #include "main.h"
 #include "main_batt.h"
@@ -111,8 +110,8 @@ static bool feat_batt_read(uint32_t *v)
 #ifndef FENYKL_HUD_RED
 #define FEAT_BATT_RED_RGB 0xFF0000u
 
-/* No fixed red index (hud.h): the live palette's nearest opaque red, outlined in black like the
-   E-PL3's red ink; ink is left alone without one. */
+/* No fixed red index (hud.h): the live palette's nearest opaque red, outlined in black; ink is left
+   alone without one. */
 static void feat_batt_red(uint8_t *ink)
 {
 	int red = fenykl_hud_color(FEAT_BATT_RED_RGB);

@@ -8,11 +8,11 @@ little-endian. Block header layout::
     | Off | Size | Field                                                  |
     |-----|------|--------------------------------------------------------|
     | 00  | 2    | block type signature, e.g. b"OE"                       |
-    | 02  | 2    | model signature, e.g. 08 60 for the E-PL3              |
+    | 02  | 2    | model signature, e.g. 12 00 for the E-M10 II           |
     | 04  | 4    | unknown1, normally zero (0/1/2 on some lens firmwares) |
     | 08  | 4    | load address                                           |
     | 0C  | 4    | body length                                            |
-    | 10  | 2    | version, BCD (0x1600 = v1.6.0.0)                       |
+    | 10  | 2    | version, BCD (0x1400 = v1.4.0.0)                       |
     | 12  | 2    | unknown2, normally zero                                |
     | 14  | 2    | flags (content type, scrambling)                       |
     | 16  | 6    | unknown3, zero on old firmwares, non-zero on e.g. E-M1 |

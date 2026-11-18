@@ -1,6 +1,6 @@
 # Plugin configuration (`sdk/lib/cfg.c`)
 
-Status: simulator-tested (`tests/test_cfg_sim.py`); used on the camera by `projects/main`. Linked
+Status: used on the camera by `projects/main`. Linked
 into every plugin, like all of `sdk/lib/` (cfg logs through the logging library, `logging.md`,
 module `cfg`).
 
@@ -35,7 +35,7 @@ FENYKL_CFG_ENUM(sym, name, label, group, def, names, ...);        /* names: cons
 | Call | Context | Result |
 | --- | --- | --- |
 | `fenykl_cfg_init()` | CPU0 task, once, before hooks that read options | 0, `ENOFILE` (defaults), `ENOCARD` (gate closed: loaded later), `EDECL` |
-| `fenykl_cfg_task_start()` | CPU0 task | saver task `FYKCFG` (`FENYKL_LIB_TASK_PRIO`: E-PL3 12, E-M10 II 55; 4 KiB `fw_malloc` stack) |
+| `fenykl_cfg_task_start()` | CPU0 task | saver task `FYKCFG` (`FENYKL_LIB_TASK_PRIO` 55; 4 KiB `fw_malloc` stack) |
 | `fenykl_cfg_set(o, v)` | CPU0 task only | 0, `EINVAL` (range), `ECONTEXT` (CPU1) |
 | `fenykl_cfg_save()` | CPU0 task | write now if dirty: 0, `ENOCARD`, `EIO`, `ENOSPC`, `EBUSY` |
 | `fenykl_cfg_dirty()`, `fenykl_cfg_for_each(o)`, `fenykl_cfg_get_stats()` | any CPU0 context | |

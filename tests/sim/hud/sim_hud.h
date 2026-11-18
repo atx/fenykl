@@ -30,7 +30,6 @@
 #define SIM_SUPER FW_GUI_SUPER
 #define SIM_STATE FW_GUI_STATE
 
-#if FENYKL_TARGET_EM10II
 #define SIM_BUF0 0xA1E00000u
 #define SIM_BUF1 0xA1F00000u
 #define SIM_VRAM0 0x619ADF88u		/* the GUI's own place for the handles */
@@ -39,21 +38,12 @@
 #define SIM_INFO_CUSTOM1 0x11
 #define SIM_INFO_IMAGE 0
 static volatile int8_t sim_info;	/* the INFO screen property's object */
-#else
-#define SIM_BUF0 0xA0800000u
-#define SIM_BUF1 0xA0900000u
-#define SIM_VRAM0 0x6066E100u
-#endif
 
 extern const void *const sim_images[];		/* images.c: [id] -> struct gui_image */
 
 uint32_t sim_exit_code = 99;
 volatile uint32_t mreg[5];
-#if FENYKL_TARGET_EM10II
 static uint8_t sim_heap[0x100] __attribute__((aligned(4)));	/* the library takes its pool */
-#else
-static uint8_t sim_heap[0x10000] __attribute__((aligned(4)));
-#endif
 static unsigned int sim_heap_used;
 
 void sim_write(const void *buf, unsigned int len);
@@ -73,7 +63,6 @@ uint32_t c_free(void)
 	return 0;
 }
 
-#if FENYKL_TARGET_EM10II
 #define SIM_WIDGETS 32
 #define SIM_STOCK_MSG 0x55		/* the stock OnMessage's result */
 
@@ -194,14 +183,6 @@ static inline int sim_hud_init(void)
 	sim_setup_widgets();
 	return fenykl_hud_init(FENYKL_HUD_INFO_SCREENS);
 }
-#else
-static inline int sim_hud_init(void)
-{
-	struct fenykl_hud_buf buf[2];
-
-	return fenykl_hud_init(FENYKL_HUD_INFO_SCREENS, buf);
-}
-#endif
 
 static volatile uint8_t *sim_px(uint32_t buf, const struct fenykl_hud_elem *e, int r, int c)
 {
@@ -213,26 +194,6 @@ static void sim_fill(uint32_t buf, const struct fenykl_hud_elem *e, uint8_t v)
 	for (int r = 0; r < e->h; r++)
 		for (int c = 0; c < e->w; c++)
 			*sim_px(buf, e, r, c) = v;
-}
-
-/* 1 if the rectangle in buf is all v */
-static int sim_all(uint32_t buf, const struct fenykl_hud_elem *e, uint8_t v)
-{
-	for (int r = 0; r < e->h; r++)
-		for (int c = 0; c < e->w; c++)
-			if (*sim_px(buf, e, r, c) != v)
-				return 0;
-	return 1;
-}
-
-/* 1 if the rectangle is the same in both buffers */
-static int sim_same(const struct fenykl_hud_elem *e)
-{
-	for (int r = 0; r < e->h; r++)
-		for (int c = 0; c < e->w; c++)
-			if (*sim_px(SIM_BUF0, e, r, c) != *sim_px(SIM_BUF1, e, r, c))
-				return 0;
-	return 1;
 }
 
 static char *sim_dec(char *o, int v)
@@ -251,7 +212,6 @@ static char *sim_dec(char *o, int v)
 	return o;
 }
 
-#if FENYKL_TARGET_EM10II
 /* Live view with the info display on the LCD, INFO screen basic info. */
 static void sim_setup_gui(void)
 {
@@ -283,34 +243,6 @@ static void sim_set_visible(void)
 {
 	sim_info = SIM_INFO_CUSTOM1;
 }
-#else
-/* Basic screen (0x03). */
-static void sim_setup_gui(void)
-{
-	for (unsigned int b = 0; b < 2; b++) {
-		uint32_t v = SIM_VRAM0 + 16 * b;	/* {plane, w, h, pdata} */
-
-		SIM_U32(v) = 2;
-		SIM_U16(v + 4) = SIM_PITCH;
-		SIM_U16(v + 6) = 600;
-		SIM_U32(v + 8) = b ? SIM_BUF1 : SIM_BUF0;
-		SIM_U32(SIM_VRAM_TABLE + 8 + 4 * b) = v;
-	}
-	SIM_U8(SIM_SUPER) = 0x02;
-	SIM_U8(SIM_STATE) = 0x03;
-}
-
-/* Multi View (0x06), and Histogram (0x04). */
-static void sim_set_hidden(void)
-{
-	SIM_U8(SIM_STATE) = 0x06;
-}
-
-static void sim_set_visible(void)
-{
-	SIM_U8(SIM_STATE) = 0x04;
-}
-#endif
 
 /* Two layer-1 buffers, the image table, a visible screen, nothing masked; no font. */
 static void sim_setup_memory(void)

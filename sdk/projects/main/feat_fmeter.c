@@ -10,7 +10,7 @@
 #include "main.h"
 #include "main_fmeter.h"
 
-#define FEAT_FMETER_ROWS_MAX 9u		/* the E-M10 II's 9 x 9 grid; the E-PL3's has at most 6 rows */
+#define FEAT_FMETER_ROWS_MAX 9u		/* the 9 x 9 grid */
 #define FEAT_FMETER_H3 2u		/* channel: HPF1, HPF2, HPF3 */
 #define FEAT_FMETER_SEC_MS 1000u
 #define FEAT_FMETER_KEY_MF 0xFFFF0000u	/* log key of the own client's values */

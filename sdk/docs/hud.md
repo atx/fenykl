@@ -1,25 +1,21 @@
 # HUD library (`sdk/lib/hud.c`)
 
-Status: simulator-tested (`tests/test_hud_sim.py`); on the camera (E-PL3) through `projects/main`
-(its smoke test). E-M10 II (section 6): image widgets on the GUI's info panel, simulator-tested; the
-mechanism ran on the camera with one widget (2026-11-17), `projects/main` with it not yet. Images and colours
-are the ones the GUI draws [camera OSD dumps]. Linked into every plugin, like all of `sdk/lib/`; a
-plugin that does not call it gets no byte of it (`--gc-sections`).
+Status: image widgets on the GUI's info panel (section 6), simulator-tested
+(`tests/test_hud_sim.py`); the mechanism ran on the camera with one widget (2026-11-17),
+`projects/main` with it not yet. Images and colours are the ones the GUI draws [camera OSD dumps].
+Linked into every plugin, like all of `sdk/lib/`; a plugin that does not call it gets no byte of it
+(`--gc-sections`).
 
 ## 1. What it does
 
-Text elements in the live view, without flicker, in one of two styles:
-`FENYKL_HUD_PLAIN`, the loaded language's 32 px UI font, or `FENYKL_HUD_LV`, the look of the stock
-live-view info items (section 3). `lib/hud.c` holds the elements and the rendering, the camera's
-part how they reach the screen: on the E-PL3 (`lib/hud_epl3.c`) on OSD layer 1, as below; on the
-E-M10 II (`lib/hud_em10ii.c`) as GUI widgets, section 6. The GUI only queues its drawing during a frame, executes the batch in `gpi_flush` and then
-shows the buffer with `cw_updateDisplay(0)`. The plugin hooks `cw_updateDisplay` and calls
-`fenykl_hud_frame` before the original; it copies every published element into the layer-1 buffer
-about to be shown, after the GUI's batch, so every shown frame contains it.
+Text elements in the live view, in one of two styles: `FENYKL_HUD_PLAIN`, the loaded language's
+32 px UI font, or `FENYKL_HUD_LV`, the look of the stock live-view info items (section 3).
+`lib/hud.c` holds the elements and the rendering, `lib/hud_em10ii.c` puts them on the screen as GUI
+widgets (section 6).
 
 Rendering (glyph lookup with `gpi_get_glyph`, fmt 0x09 RLE decode, the GUI's spacing rules; in the LV
 style also the stock images, fmt 0x03) runs in the caller's task, into the spare one of two bitmaps per element, which is then published with one 32-bit
-word. The hook only reads that word and copies rows; it makes no firmware calls.
+word.
 
 ## 2. API
 
@@ -27,33 +23,17 @@ Header `sdk/include/hud.h` (the reference). Errors are `FENYKL_HUD_E*` (negative
 
 | Call | Context | Does |
 | --- | --- | --- |
-| `fenykl_hud_init(states, buf[2])` | CPU0 task, once | E-PL3: checks the layer-1 buffers (handles, plane, size, address, overlap, 8 bpp), fills `buf` for the plugin's log, sets the visible states |
-| `fenykl_hud_init(states)` | CPU0 task, once | E-M10 II: checks the stock record the widgets are made from, sets the visible INFO screens, replaces the GUI slots all or nothing (section 6) |
-| `fenykl_hud_add(e)` | CPU0 task, after init | checks `e`'s rectangle, allocates its two bitmaps (`fw_malloc`, `w * h` <= 0x3FFC each) |
-| `fenykl_hud_text(e, s)` | CPU0 task | renders `s`, publishes it, paints it into both buffers if visible (E-M10 II: the next tick sends it to the widget); `ENOFONT` / `EGLYPH` leave `e` unchanged |
-| `fenykl_hud_draw(e, fn, arg)` | CPU0 task | clears `e`'s spare bitmap to `bg`, calls `fn(box, w, h, arg)` to draw into it, then publishes and paints it as `fenykl_hud_text`; a nonzero return of `fn` is returned and leaves `e` unchanged (section 3.1) |
+| `fenykl_hud_init(states)` | CPU0 task, once | checks the stock record the widgets are made from, sets the visible INFO screens, replaces the GUI slots all or nothing (section 6) |
+| `fenykl_hud_add(e)` | CPU0 task, after init | checks `e`'s rectangle, allocates its two bitmaps from the library's pool (section 6) |
+| `fenykl_hud_text(e, s)` | CPU0 task | renders `s` and publishes it; the next tick sends it to the widget; `ENOFONT` / `EGLYPH` leave `e` unchanged |
+| `fenykl_hud_draw(e, fn, arg)` | CPU0 task | clears `e`'s spare bitmap to `bg`, calls `fn(box, w, h, arg)` to draw into it, then publishes it as `fenykl_hud_text`; a nonzero return of `fn` is returned and leaves `e` unchanged (section 3.1) |
 | `fenykl_hud_image(id, px, max, w, h)` | any | decodes stock image `id` (fmt 0x03) from the firmware into `px` (section 3.1) |
-| `fenykl_hud_hide(e)` | CPU0 task | unpublishes `e`; clears its rectangle to `FENYKL_HUD_CLEAR` now and at the next two ticks (if visible); E-M10 II: the next tick shows the empty image |
-| `fenykl_hud_tick()` | CPU0 task, ~100 ms | E-PL3: repaints an element the hook copied while it changed; repeats hide clears; clears the boxes left on the canvas from ~0.5 s hidden on; while visible, repaints an element whose buffers do not hold what it publishes (section 4). E-M10 II: encodes the changes and posts one GUI event (section 6) |
+| `fenykl_hud_hide(e)` | CPU0 task | unpublishes `e`; the next tick shows the empty image |
+| `fenykl_hud_tick()` | CPU0 task, ~100 ms | encodes the changes and posts one GUI event (section 6) |
 | `fenykl_hud_text_width(style, s)` | CPU0 task | width in a style with the current font, for sizing elements |
 | `fenykl_hud_font()`, `fenykl_hud_visible()`, `fenykl_hud_get_stats(st)` | any CPU0 context | font id (0 = none yet), the visibility gate, counters |
-| `fenykl_hud_frame(show_front)` | the plugin's `cw_updateDisplay` hook | E-PL3: copies the elements for `show_front == 0`; counts and skips CPU1 calls |
 
-E-PL3: hooks stay in the plugin (`FENYKL_HOOK_*` and the originals, `FENYKL_ORIG(name)`, are generated per
-plugin from `plugin.toml`), so the plugin owns the two-line adapter:
-
-```c
-static void on_update(int show_front)
-{
-	fenykl_hud_frame(show_front);
-	FENYKL_ORIG(cw_updateDisplay)(show_front);
-}
-FENYKL_HOOK(cw_updateDisplay, on_update);
-```
-
-with `hooks = ["cw_updateDisplay"]` and `cpu1_unproven = ["cw_updateDisplay"]` in `plugin.toml`
-(`main` lists them under `[capabilities.hud_overlay]`, a capability of the E-PL3 only). The E-M10 II
-needs no hook.
+No hook: the plugin's `plugin.toml` lists nothing for the HUD.
 
 ## 3. Parameters
 
@@ -68,23 +48,18 @@ Every placement and style value is a parameter, nothing is hard-coded:
   aligned by its own width, a character before `\n` gets the line-end spacing, and
   `fenykl_hud_text_width` returns the widest line. `\n` counts towards `FENYKL_HUD_TEXT_MAX` (12).
   Later lines draw over the earlier ones' outline and shadow where they meet.
-- **Background:** `bg` per element. `FENYKL_HUD_CLEAR` (0xFF) writes only glyph pixels over a
-  transparent rectangle: the native look, but the rectangle overwrites whatever the GUI had there, so it
-  must be free of stock items in every visible state. `FENYKL_HUD_BLACK` (0x10) or
+- **Background:** `bg` per element. `FENYKL_HUD_CLEAR` (0x00, alpha 0) leaves the rectangle
+  transparent, so only glyph pixels show: the native look. `FENYKL_HUD_BLACK` (0x10) or
   `FENYKL_HUD_TRANSLUCENT` (0x11) draw a box.
 - **Palette:** `ink[3]` per element maps glyph codes 1, 2 (anti-alias) and 3 (body);
   `FENYKL_HUD_WHITE` is `{0x06, 0x05, 0x04}`, the stock items' white [camera]. Coloured inks are
-  the live-view L1 palette's other text ramps (body, 2/3 and 1/3 brightness, as the white one; the
-  stock palette 4, which matches the camera's L1 copy): `FENYKL_HUD_GREEN` `{0x09, 0x08, 0x07}`,
-  `FENYKL_HUD_YELLOW` `{0x03, 0x02, 0x01}` (the stock exposure-compensation yellow [camera]) and
-  `FENYKL_HUD_RED` `{0x10, 0x39, 0x39}` (0x39 is the palette's only red and has no ramp, so the
-  darkest shade is the outline black). Other screens may load another L1 palette (Multi View
-  does), but the HUD is not visible there.
+  the palette's other text ramps (body, 2/3 and 1/3 brightness, as the white one):
+  `FENYKL_HUD_GREEN` `{0x09, 0x08, 0x07}` and `FENYKL_HUD_YELLOW` `{0x03, 0x02, 0x01}`. There is no
+  fixed red: `fenykl_hud_color(rgb)` picks one (section 6).
 - **Style:** `style` per element.
   - `FENYKL_HUD_PLAIN` (0): the UI font as the menus draw it, 19 px caps, 2 px strokes, no outline.
   - `FENYKL_HUD_LV`: the stock live-view info items' look [camera]. `0`-`9`, `+`,
-    `-`, `:` and `.` are the GUI's own images (image font 12 of the remaining-time counter; `.` from
-    image font 16): bold condensed white digits, 17 px tall, with the stock 1 px black outline (0x10)
+    `-`, `:` and `.` are the GUI's own images (image font 14; `.` from image font 25, section 6): bold condensed white digits, 17 px tall, with the stock 1 px black outline (0x10)
     and shadow (0x11, 0x12), 13 px apart (`:` and `.` 6 px). Their white (body 0x04, anti-alias
     0x05, 0x06) is drawn in `ink[2]`, `ink[1]`, `ink[0]`, so `FENYKL_HUD_WHITE` gives the stock
     look and a coloured ink colours the digits; outline and shadow stay. A space is 11 px. Every other character
@@ -98,33 +73,28 @@ Every placement and style value is a parameter, nothing is hard-coded:
     the stock lettering, caps and ascenders 13 px and `m` 9 px against the digits' 17 px, about the
     ratio of the stock "ISO-A" label (14 px) to its value (full-size bold letters were too large on the
     camera).
-- **Visible states:** the `states` mask of `fenykl_hud_init`, bit n = state n of super state 0x02
-  (`SS_REC`). `FENYKL_HUD_INFO_SCREENS` covers the info screens Basic 0x03,
-  Histogram 0x04, Highlight&Shadow 0x05. Layer
-  1 masked (hide mask bit 0x10) always hides.
+- **Visible INFO screens:** the `states` mask of `fenykl_hud_init`, `FENYKL_HUD_INFO(n)` bits;
+  `FENYKL_HUD_INFO_SCREENS` covers basic info and Custom1 (section 6). Layer 1 masked always hides.
 
 ### 3.1 Drawn elements and stock images
 
 For content that is not text, such as the focus meter's row of stock cells, the plugin draws the element itself: `fenykl_hud_draw` hands the callback the
-element's spare bitmap, `w * h` bytes row by row, already filled with `bg`, and publishes it with the
-text path's flicker-free scheme (both canvases painted from the task, the hook copies at every flip).
+element's spare bitmap, `w * h` bytes row by row, already filled with `bg`, and publishes it like a
+text.
 The bytes are layer-1 palette indices; `FENYKL_HUD_CLEAR` is transparent. The callback runs in the
 caller's task, before anything is published.
 
-`fenykl_hud_image` decodes a stock image at runtime from the firmware's common resource (`*(u32
-*)0xAF966010` -> id table -> record +0x10 -> RLE bitmap), the same path as
+`fenykl_hud_image` decodes a stock image at runtime from the firmware's image table (`gui_image_table`
+-> id table -> record +0x10 -> RLE bitmap), the same path as
 the LV digits; nothing is copied into the plugin. Only fmt 0x03 (8 bpp, six 10-bit codes per u64)
 is decoded: its colours are layer-1 indices used 1:1, 0 is transparent and
 stays 0 in `px`. It returns `FENYKL_HUD_EGLYPH` if the table or the image is missing, the image is
 another format, or it has more than `max` pixels. Decode once at start into the plugin's own arrays
-and draw from those; the common resource never moves, so re-decoding is never needed.
+and draw from those.
 
-The exposure-row cells, all 8 x 9 with a 1 px transparent ring (so cells 8 px apart leave the stock
-2 px gap): 1095 white (fill 0x04, border 0x7E), 1096 yellow (0x2E, border 0x10), 1097 orange (0x0D,
-border 0x7E), 1098 green (0x32, border 0x10). The stock exposure scale itself is one joined bar:
-cells at a pitch of 6 px sharing 2 px black separators, unmarked cells palette index 0x35 (grey,
-alpha 170). `projects/main` (`feat_fmeter.c`) draws its focus meter that way: the decoded cells with
-1095's translucent border made black, unlit cells filled with 0x35. The example below shows only the
+The exposure-row cells used by `projects/main`'s focus meter (`feat_fmeter.c`, `main_layout.h`) are
+images 1089 (white: fill 0x04, translucent border 0x11), 1090 (yellow) and 1092 (green), all 8 x 9;
+main draws ten of them 6 px apart, unlit cells filled with 0x2E. The example below shows only the
 callback mechanics.
 
 ```c
@@ -144,32 +114,9 @@ static int fmeter_paint(uint8_t *box, int w, int h, void *arg)
 }
 ```
 
-## 4. Rules and counters (E-PL3)
+## 4. Rules and counters
 
-- Draw at `cw_updateDisplay(0)` only; calls with `show_front != 0` re-show the front, which already
-  holds the elements.
-- An element's whole rectangle is rewritten at each copy, so a new value erases the old one.
-- While hidden, the hook does not touch layer 1, and the GUI does not remove the boxes either: it is
-  retained-mode and on a screen change clears only its own widgets' areas [camera: on the E-M10 II
-  the FD and DoF blocks stayed on the movie screen (GUI state 01:09) and on the image-only INFO
-  screen, which also stops the `cw_updateDisplay` calls]. So `fenykl_hud_tick` clears them: every
-  copy into a buffer records a checksum of the box (rotate-and-add over its words, computed while
-  copying), and from the 5th tick (~0.5 s) hidden in a row on, each hidden tick clears each
-  element's box in each buffer that still has that checksum (so a box the hook copied in a visible
-  blip between two ticks goes too). The check and the clear of one box run with interrupts masked,
-  so the GUI task cannot paint between them: w * h bytes read and written, 3.6 KB each for main's
-  56 x 65 blocks, at most 16 KB (`FENYKL_HUD_BITMAP_MAX`). A box the GUI painted over (menu, Super
-  Control Panel) differs and is left alone. The checksum covers the whole box, so a box the GUI
-  covered only in part is left whole, its uncovered pixels included. The delay keeps the blocks from
-  blinking in the GUI's ~0.3 s hidden windows after a screenshot. Each visible tick repaints an
-  element whose buffers disagree with what it publishes (none after a wipe, or a box left from a
-  hide during a short hidden window), since no flip may follow.
-- Counters (`struct fenykl_hud_stats`): `updates`, `shows`, `drawn`, `hidden` and `overrides` count hook
-  calls and element copies; `erased` counts copies that found the GUI had painted over an element
-  copied into that buffer before (each is a frame the old `gpi_flush`-entry method showed without it);
-  `stale` counts tick repaints after a race; `cpu1` counts hook calls on CPU1 (must stay 0);
-  `nofont` and `glyph_miss` count refused renders; `wiped` and `covered` count the boxes the tick
-  cleared after a hidden stretch and those it left because the GUI had painted over them.
+The widget backend's rules and counters are in section 6.
 
 ## 5. Tests
 
@@ -180,24 +127,10 @@ black box, transparent left-aligned text with every spacing rule, translucent ri
 three lines with other ink, a clipped box; in the LV style main's focus and DoF blocks, every image
 with letters (and `%`) right-aligned on black in orange ink (the images' white in that ink), a centred clipped box) with the decoder's glyphs and images
 placed by the spacing rules and the line pitch, each line aligned by its own width, pixel for pixel.
-LV letters are compared with a Python model of the scaling, bold and outline rule. The C side checks the hook: erase counting, no erase after a hidden
-state or a value published while masked, the tick's wipe (no clear in two hidden windows shorter than
-its delay, a visible tick between them; after it, an intact box cleared in both buffers even though
-two hidden renders replaced both bitmaps, a box the GUI painted over left alone, not at the 4th
-hidden tick but at the 5th; a box the hook copied in a visible blip between two later hidden ticks
-cleared; the repaint on the first visible tick, no erase counted afterwards; an element hidden during
-a short hidden window cleared on the next visible tick), the one-layer override, `show_front != 0`, the three hide
-clears, refused rectangles and texts, LV digits without a font, a missing image table.
+LV letters are compared with a Python model of the scaling, bold and outline rule.
 The image table holds the firmware's own encoded image records and bytes, read from the stock
-firmware when the test runs (nothing stored in the repo). `tests/sim/hud/test_hud_draw.c` decodes
-images 1095-1098 with `fenykl_hud_image` (compared with `fenykl.assets` pixel for pixel), refuses a
-too large digit, the fmt 0x02 AF dot, a missing id and a missing table, draws a 10-cell row of every
-cell kind and faint cells into the focus meter's element (620, 42, 80, 12) through `fenykl_hud_draw`
-(compared with the decoder's cells placed 8 px apart; transparent rows and 2 px gaps checked), and
-checks the callback's arguments, both buffers, and that a callback error leaves the element
-unchanged. The text cases also run for the E-M10 II (its English font and its live-view images,
-read the same way from its stock firmware, at its firmware addresses; there the dump is the
-bitmap the widget's image is encoded from); `tests/sim/hud/test_hud_em10ii.c` checks the E-M10 II
+firmware when the test runs (nothing stored in the repo); the dump is the bitmap the widget's image
+is encoded from. `tests/sim/hud/test_hud_em10ii.c` checks the
 visibility predicate (GUI state, display request, output device, layer mask, INFO screen from the
 property registry and its override table, unregistered property), the output device per
 `disp_device` value, the palette pick (opaque entries below 0x80 only) and the widget backend
@@ -219,8 +152,7 @@ Rendering, styles and elements are the shared ones; `lib/hud_em10ii.c` puts each
 screen as a stock image widget of the GUI and `lib/hud_rle.c` encodes its bitmaps. No hook and no
 layer-1 writes: the GUI draws, clips and repaints the widgets with its own items and deletes them
 with their panel, so the HUD goes with the info panel (movie live view, the menu, playback) and
-comes back with it, with no erase. The E-PL3's overlay showed the boxes on the movie screen, whose
-standby shares the live-view GUI state, and needed wipes when the GUI repainted.
+comes back with it, with no erase.
 
 - **Panel and slots:** the widgets live on the still live-view info panel, panel id 10 (class
   vtable 0x60C9801C, the only panel of that class), which every still INFO screen, the LCD and the
@@ -243,7 +175,7 @@ standby shares the live-view GUI state, and needed wipes when the GUI repainted.
   (the next panel is created before the old one is destroyed). The library never frees a widget.
 - **Updates:** each element has three stock image records (type 0x0E, 8 bpp, fmt 0x03 bitmap read
   through the uncached alias, key 0): two for its content and an empty, all transparent one.
-  `fenykl_hud_text` and `fenykl_hud_draw` render and publish as on the E-PL3. `fenykl_hud_tick`
+  `fenykl_hud_text` and `fenykl_hud_draw` render and publish (section 1). `fenykl_hud_tick`
   encodes each changed element that should show its content into the content record the GUI side
   neither holds as newest nor shows, writes the D-cache back once, and posts the private GUI event
   0x7E47 (no operand in the firmware uses it) once for all elements whose widget shows other than
@@ -285,12 +217,11 @@ standby shares the live-view GUI state, and needed wipes when the GUI repainted.
   after the last create), `posts`, `post_fail`, `unstuck`, `messages`, `swaps`, `cpu1`, `nofont`,
   `glyph_miss`.
 - **Colours:** only indices below 0x80 reach the display (128-entry hardware palette). The stock
-  colours sit at the E-PL3's indices in the live-view layer-1 palette (camera dump) and in 19 of
+  colours sit at the indices of `include/hud.h` in the live-view layer-1 palette (camera dump) and in 19 of
   the 59 stock GUI palettes, about every third (black 0x10, shadows 0x11/0x12, white 4..6, green
   7..9, yellow 1..3);
   `FENYKL_HUD_CLEAR` is 0x00 (alpha 0). There is no fixed red: `fenykl_hud_color(rgb)` picks the
   nearest opaque entry below 0x80 of the live layer-1 palette (`osd_palette`).
-- **Font and images:** `gpi_get_glyph` 0x609315E2 and the font resource pointer as on the E-PL3; the
+- **Font and images:** `gpi_get_glyph` 0x609315E2 and the font resource pointer; the
   image table through the GUI's pointer `gui_image_table`. The LV style's images are image font 14
-  ('-' 1120, '1'..'9' 1121..1129, '0' 1130, ':' 1131, '+' 1132) and '.' 1871 of image font 25: the
-  E-PL3's shapes (13 x 22, ':' and '.' 6 x 22, white 4/5/6, outline 0x10/0x11/0x12).
+  ('-' 1120, '1'..'9' 1121..1129, '0' 1130, ':' 1131, '+' 1132) and '.' 1871 of image font 25 (13 x 22, ':' and '.' 6 x 22, white 4/5/6, outline 0x10/0x11/0x12).

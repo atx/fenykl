@@ -78,15 +78,15 @@ def test_png_rejects_index_beyond_palette():
 
 
 def test_unknown_firmware_names_supported():
-    with pytest.raises(AssetError, match=r"unknown firmware: .*E-PL3 v1\.6"):
+    with pytest.raises(AssetError, match=r"unknown firmware: .*E-M10II v1\.4"):
         read_assets(b"not a firmware")
 
 
-def test_epl3_stock_assets():
-    assets = read_assets(stock_image())
+def test_em10ii_stock_assets():
+    assets = read_assets(stock_image("em10ii"))
     kinds = [asset.kind for asset in assets]
-    assert kinds.count("icon") == 239
-    assert kinds.count("image") == 2193
+    assert kinds.count("icon") == 265
+    assert kinds.count("image") == 4152
     languages = {asset.font.split("_")[0] for asset in assets if asset.kind == "glyph"}
     assert len(languages) == 34
     assert all(max(asset.bitmap.pixels) < len(asset.palette) for asset in assets)

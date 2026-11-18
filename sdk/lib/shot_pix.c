@@ -28,7 +28,8 @@ void fenykl_shot_ycc_rgb(unsigned int y, unsigned int cb, unsigned int cr, uint8
 	rgb[2] = shot_clamp(l + SHOT_K_BU * u);
 }
 
-/* E-PL3: {Y, Cb, Cr, alpha 0..15 in the low nibble}; E-M10 II: {R, G, B, alpha 0..32}. */
+/* Palette entries {R, G, B, alpha 0..32}; {Y, Cb, Cr, alpha 0..15 in the low nibble} where
+   FENYKL_OSD_PAL_YCC. */
 void fenykl_shot_palette(const uint8_t *src, unsigned int n, unsigned int global, uint8_t *rgba)
 {
 	if (global > 0x100)

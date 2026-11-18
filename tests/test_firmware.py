@@ -106,9 +106,8 @@ def test_truncated_rejected():
         unpack_firmware(packed + bytes(4))
 
 
-@pytest.mark.parametrize("name", ["epl3", "em10ii"])
-def test_round_trip(tmp_path, name):
-    original = stock_image(name)
+def test_round_trip(tmp_path):
+    original = stock_image("em10ii")
     firmware = unpack_firmware(original)
     assert pack_firmware(firmware) == original
 
@@ -116,43 +115,33 @@ def test_round_trip(tmp_path, name):
     assert pack_firmware(load_unpacked(tmp_path)) == original
 
 
-# These pin the unpack format of the stock E-PL3 v1.6 image: (file, size, sha256) of every file.
+# These pin the unpack format of the stock E-M10 II v1.4 image: (file, size, sha256) of every file.
 STOCK_UNPACKED = [
     (
         "00.main-code-01.bin",
-        0xD7FFC0,
-        "c291722827a5120fc06ca288b439cae82ebf597ac2cd83eba30a7f0fe6a72687",
+        0x145FFC0,
+        "309682c05a96d3079ebcae598169d487fea7f8b2531d8ae99445d63e80ea7a39",
     ),
     (
         "01.main-lang.bin",
-        0x15FFFC0,
-        "af5a35e02304183c9e716af99b9fb619abb13f5a71e41146986bf9d833e2e20f",
+        0x19FFFC0,
+        "9060299579236c099ec3f318d186cddab004f27eb373b1e6da75e72c4e08179b",
     ),
     (
         "02.main-b106.bin",
-        0x25FFC0,
-        "ae9d7a1cc5f0d3bfeedb4dfecedc70be8a423e9bea7070cee16363fb30eaacfb",
-    ),
-    (
-        "03.main-imgs-02.bin",
-        0x67FFC0,
-        "218b6003e490efc432851e831086cf8f1237f2fde3fade4be93dd89425459941",
-    ),
-    (
-        "04.ibis-code-01.bin",
-        0x10000,
-        "e131370def9d69fe4484592f0cf4bc84c865162007c0cae11405a4911c8b07a2",
+        0x13FFFC0,
+        "5666caec18c928175d09244fe7f48f061fde3f118b113fe6d81e40afd2e6e64c",
     ),
     (
         "manifest.json",
-        0x596,
-        "e81b2f4bad0a1227bcf7e2134b680db27f76173f2ef455d4f4404a1e5933678b",
+        0x366,
+        "45f269972758877646febb0462ff103671eb89a66eb6325803e100ca3808a573",
     ),
 ]
 
 
 def test_stock_unpack_is_pinned(tmp_path):
-    save_unpacked(unpack_firmware(stock_image()), tmp_path)
+    save_unpacked(unpack_firmware(stock_image("em10ii")), tmp_path)
     unpacked = [
         (path.name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
         for path in sorted(tmp_path.iterdir())
@@ -161,7 +150,7 @@ def test_stock_unpack_is_pinned(tmp_path):
 
 
 def test_modified_body_repacks_with_new_checksum():
-    original = stock_image()
+    original = stock_image("em10ii")
     firmware = unpack_firmware(original)
     block_index, byte_index = 0, 0x1234
     block = firmware.blocks[block_index]

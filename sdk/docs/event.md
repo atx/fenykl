@@ -1,17 +1,18 @@
 # Event layer (`sdk/lib/event.c`)
 
-Status: simulator-tested (`tests/sim/event/`); on the camera through a key probe (895 events:
-`nested`, `bypassed`, `cpu1` 0, `injected` as expected; `docs/key.md` 4) and `projects/main`. Its user is
-the key layer (`docs/key.md`); the `appevent_post` hook under it is camera-proven. Linked into every
+Status: simulator-tested under the key layer (`tests/sim/key_em10ii/`); its user is the key layer
+(`docs/key.md`), whose user, main's Fn override, has not run on the camera yet. The `appevent_post`
+entry itself was hooked on the camera by a hook probe (2026-10-19/20: the key codes of
+`docs/key.md` 5). Linked into every
 plugin, like all of `sdk/lib/`; a plugin that does not call `fenykl_event_*` gets no byte of it
 (`--gc-sections`).
 
 ## 1. What it does
 
-Every APPEVENT the firmware posts goes through `appevent_post(event, param, flag)` (48 call sites,
-CPU0 only): keys from `ui_key_task` (`0x0200cccc` press, `0x0201cccc` release, `0x0202` mode dial)
-and system events from other tasks. The rear dial does not come through here: turned
-on the camera, it posted nothing (`docs/key.md` 5). The SDK binds that hook
+Every APPEVENT the firmware posts goes through `appevent_post(event, param, flag)` (52 calls, plus 114
+through the two-argument entry 0x6004241B): keys from UI_IN (`0x0200cccc` press, `0x0201cccc` release,
+`0x0202cccc` values such as the mode dial) and system events from other tasks, two of them on CPU1
+(section 3). The SDK binds that hook
 itself (`sdk_hooks` in `target.toml`): the generator emits its stub for every plugin, and a
 `plugin.toml` that lists `appevent_post` in `hooks` is refused at build time. Plugin code registers
 handlers instead; the hook runs them in priority order and finally posts what is left through the
@@ -72,16 +73,15 @@ static struct fenykl_event_handler feat_handler = {
 - **Registration** is safe against the hook at any time: the new node is complete before the one
   pointer store that links it, under the CPU0 interrupt mask, so a dispatch sees the old or the new
   chain and two registering contexts cannot lose a node.
-- **CPU1.** On the E-PL3 `appevent_post` is CPU0-only (static and camera, firmware.toml); on the
-  E-M10 II two Wi-Fi tasks post from CPU1 (static, `sdk_cpu1_unproven`). A CPU1 entry is counted
-  (`cpu1`), the chain skipped and the stock function called. The caches are not coherent, so on both
-  targets the CPU1 count lives in its own `FENYKL_SHARED` line, written uncached; nothing else is
+- **CPU1.** Two Wi-Fi tasks post from CPU1 (static, `sdk_cpu1_unproven`). A CPU1 entry is counted
+  (`cpu1`), the chain skipped and the stock function called. The caches are not coherent, so the
+  CPU1 count lives in its own `FENYKL_SHARED` line, written uncached; nothing else is
   touched. Handlers therefore run on CPU0 only.
 
 ## 4. Handler rules and counters
 
-The hook runs on the posting task's stack: `ui_key_task` (priority 7, stack 0x800, at least 1452 bytes free in
-the camera probe: key.md 4) for keys, other firmware tasks for system events.
+The hook runs on the posting task's stack: UI_IN (priority 44, stack 0x800; key.md 4) for
+most keys, other firmware tasks for system events.
 
 - No blocking firmware calls (file RPC, task create or sleep, queue waits other than inject), no
   `fenykl_hud_text`/`draw`, no `fenykl_cfg_set`, no `fenykl_event_install`/`remove`. Allowed:
@@ -89,8 +89,8 @@ the camera probe: key.md 4) for keys, other firmware tasks for system events.
   `fenykl_event_add`, setting words the plugin task polls (e.g. a `req++`).
 - Small frames: a handler stays under ~128 bytes of stack and does not recurse.
 - A handler runs again when another task posts while a call on a lower-priority task is preempted
-  (same core, different stacks). State touched from a handler is per-task-safe only for key-class
-  events (all from `ui_key_task`); state shared with the plugin task is written with single word
+  (same core, different stacks). Key-class events come from three tasks (UI_IN, PWR_STANDBY,
+  PER_EYE_SENSOR: key.md 4), so handler state is not per-task-safe even for keys; state shared with the plugin task is written with single word
   stores.
 - **Never post through `fw_appevent_post`** from a handler: that enters the hook again. The hook
   counts entries while another dispatch is in progress (`nested`), logs the first one, and skips the
@@ -109,14 +109,7 @@ everywhere. For the same reason `nested` can be non-zero; a depth guard bounds t
 
 ## 5. Tests
 
-`tests/sim/event/test_event.c` links the real library with the `appevent_post` mock at its real
-address with its real entry bytes (`tests/sim/hooks/appevent.S`, 3 * event + param + flag) and a
-caller that checks the callee-saved registers and SP. Through `fenykl_event_install` and the patched
-entry it checks: prio order with equal prio in registration order and a disabled handler skipped;
-every handler's edit reaching the mock; CONSUME returning 0 and skipping later handlers, with the
-counters; inject from a handler reaching the mock with its own arguments and no handler seeing it;
-a handler calling `fw_appevent_post` (nested 2, bypassed 1, the recursion ends); `add` refusing a
-missing `fn` and a second registration and ordering a late handler; `enabled = false`; remove
-restoring the stock bytes (idempotent) and `fenykl_event_dispatch` without the patch; a CPU1 entry.
-`tests/sim/hooks/test_hooks.c` keeps the plain hook mechanism test on the same mock under the
-sim-only name `simevent_post`, since the SDK now binds `appevent_post`.
+`tests/sim/key_em10ii/test_key.c` runs the layer under the key layer through the patched
+`appevent_post` entry (`docs/key.md` 6). `tests/sim/hooks_em10ii/test_hooks.c` keeps the plain hook
+mechanism test on the same entry span under the sim-only name `simevent_post`, since the SDK binds
+`appevent_post`.

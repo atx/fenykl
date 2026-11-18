@@ -14,8 +14,8 @@
 #include "log.h"
 
 /* Named keys; the camera's key map (lib/key_<camera>.c) gives their firmware key codes, 0 for a
-   key the body lacks (fenykl_key_add and fenykl_key_inject refuse it). Dials stay out: the E-PL3's
-   rear dial posts no APPEVENT, the E-M10 II's dials post class 0x0203, passed as unknown (key.md 5).
+   key the body lacks (fenykl_key_add and fenykl_key_inject refuse it). Dials stay out: they post class
+   0x0203, passed as unknown (key.md 5).
    Numbers are not stable: log them, do not store them. */
 enum fenykl_key {
 	FENYKL_KEY_NONE,
@@ -32,10 +32,10 @@ enum fenykl_key {
 	FENYKL_KEY_REC,		/* R (movie) */
 	FENYKL_KEY_HALF,	/* shutter half press (Trg1) */
 	FENYKL_KEY_FULL,	/* shutter full press (Trg2) */
-	FENYKL_KEY_POWER,	/* E-PL3 only, not exercised on the camera */
-	FENYKL_KEY_FN2,		/* E-M10 II only */
-	FENYKL_KEY_FN3,		/* E-M10 II only */
-	FENYKL_KEY_LFN,		/* E-M10 II only: the lens's L-Fn button */
+	FENYKL_KEY_POWER,	/* no body has it */
+	FENYKL_KEY_FN2,
+	FENYKL_KEY_FN3,
+	FENYKL_KEY_LFN,		/* the lens's L-Fn button */
 	FENYKL_KEY_MODE_DIAL,	/* VALUE only; every key before it is a button */
 	FENYKL_KEY_COUNT,
 };

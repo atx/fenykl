@@ -1,13 +1,11 @@
 /*
  * Camera body state for plugins that name no firmware symbol (projects/main): the GUI, the lens,
- * the battery, the firmware's AF statistics, the display and OSD buffers, the img_exec pass
- * layout, the peaking passes and overlay and the colour-matrix bases. The API is the same on every
+ * the battery, the firmware's AF statistics, the display and OSD buffers and the colour-matrix
+ * bases. The API is the same on every
  * target; each target implements it in its own arch/<camera>/fenykl_body.h (static inline, so a
  * call costs what the firmware read costs).
  * Every group but the GUI is a capability (target.toml): a target without it has no declarations,
  * and plugin.toml [capabilities.<name>] builds the plugin files that use it only where it exists.
- * The img_exec and peak groups mirror the E-PL3's encodings (IMG_CTRL offsets, display layers):
- * expect to reshape them with a second implementation. The shot group has two (E-PL3, E-M10 II).
  */
 #ifndef _FENYKL_BODY_H
 #define _FENYKL_BODY_H
@@ -20,7 +18,7 @@
 /* GUI super state << 8 | state, in the target's own encoding (for logs and target code). */
 static inline uint16_t fenykl_gui_state(void);
 #define FENYKL_GUI_SUPER(gui) ((gui) >> 8)
-/* The GUI shows a live-view screen (E-PL3: super state SS_REC). */
+/* The GUI shows a live-view screen. */
 static inline bool fenykl_gui_live_view(void);
 /* The GUI shows single playback. */
 static inline bool fenykl_gui_playback(void);
@@ -33,13 +31,11 @@ static inline bool fenykl_gui_menu(void);
 static inline bool fenykl_lens_attached(void);
 /* Object (focus) distance in mm, 0xFFFFFFFF = infinity; meaningless without a lens. */
 static inline uint32_t fenykl_lens_focus_mm(void);
-/* Focal length in integer mm of the live lens state; without a lens the firmware's default
-   (E-PL3) or 0 (E-M10 II). */
+/* Focal length in integer mm of the live lens state; 0 without a lens. */
 static inline uint32_t fenykl_lens_focal_mm(void);
 /* Shooting Av, APEX x 256; 0 while unset (also f/1.0). */
 static inline uint32_t fenykl_lens_av(void);
-/* Live iris word, for logs only: APEX x 256 on the E-PL3 (not checked against the shooting Av),
-   of unknown scale on the E-M10 II. */
+/* Live iris word, for logs only: of unknown scale. */
 static inline uint32_t fenykl_lens_iris_av(void);
 #endif
 
@@ -49,7 +45,7 @@ static inline uint32_t fenykl_lens_iris_av(void);
 #define FENYKL_BATT_ESTANDBY (-2)	/* the stock check is off (standby): no read */
 
 /* Battery voltage in the target's A/D counts into *v, read as the firmware's own checks do: 0 or
-   FENYKL_BATT_E*. May block for a few ms (E-PL3: waits for an A/D request). */
+   FENYKL_BATT_E*. */
 static inline int fenykl_batt_read(uint32_t *v);
 /* Power source word, for logs: it changes when the source does. */
 static inline uint32_t fenykl_power_src(void);
@@ -61,7 +57,7 @@ static inline bool fenykl_power_src_batt(uint32_t src);
 #if FENYKL_HAS_AFC
 #define FENYKL_AF_AREA_NONE (-1)
 
-/* The firmware client's statistics grid: channels HPF1, HPF2, HPF3 (E-PL3: and HPFV), chan_words
+/* The firmware client's statistics grid: channels HPF1, HPF2, HPF3, chan_words
    u32 apart. */
 struct fenykl_af_grid {
 	const volatile uint32_t *buf;	/* DMA buffer, uncached */
@@ -193,24 +189,10 @@ static inline void fenykl_frames_geom(uint16_t *w, uint16_t *h, uint16_t *to_w, 
 static inline const uint8_t *fenykl_frames_palette(void);
 /* The state the screenshot's gate reads, into *c. */
 static inline void fenykl_shot_cond(struct fenykl_shot_cond *c);
-/* Lends bytes of firmware memory, uncached, without blocking (E-PL3: a RECFILE run, E-M10 II: PRIM
-   block 0); 0 = none. fenykl_shot_buf_free(*handle) gives it back: the firmware's
-   status, 0 = freed. */
+/* Lends bytes of firmware memory, uncached, without blocking (PRIM block 0); 0 = none.
+   fenykl_shot_buf_free(*handle) gives it back: the firmware's status, 0 = freed. */
 static inline uint32_t fenykl_shot_buf_alloc(uint32_t bytes, uint32_t *handle);
 static inline uint32_t fenykl_shot_buf_free(uint32_t handle);
-#endif
-
-/* --- img_exec: the layout an img_exec hook reads; any core --- */
-#if FENYKL_HAS_IMG_EXEC
-/*
- * Also from fenykl_body.h, offsets into IMG_CTRL (img_exec's argument) and IMG_PARAM:
- * FENYKL_IMG_CTRL_FLAG (u32), FENYKL_IMG_CTRL_PARAM (IMG_PARAM *), FENYKL_IMG_CTRL_MODE (u8 mode),
- * FENYKL_IMG_FLAG_ENGINE2 (flag bit: engine 2), FENYKL_IMG_PARAM_MAT (s16 colour matrix, row major,
- * 0x80 = 1.0) and FENYKL_IMG_MAT_N (its entries).
- */
-
-/* The pass class of mode: 0 and 1 apply the colour matrix, 2 and 3 do not. */
-static inline unsigned int fenykl_img_mode_class(unsigned int mode);
 #endif
 
 /* --- wb_base: the colour-matrix bases in the property registry; CPU0 task --- */
@@ -234,68 +216,6 @@ static inline bool fenykl_wb_base_entry_ok(unsigned int i, uint32_t slot);
 static inline int fenykl_wb_mode(void);
 /* The live-view colour matrix the firmware last computed into m (FENYKL_WB_MAT_N), for logs. */
 static inline void fenykl_wb_lv_matrix(int16_t *m);
-#endif
-
-/* --- peak: a line image pass after the live-view pass and an alpha overlay layer; CPU0 --- */
-#if FENYKL_HAS_PEAK
-/*
- * Needs the shot and img_exec groups. Also from fenykl_body.h: FENYKL_PEAK_CTRL_SIZE (bytes of
- * an img_exec argument copy), FENYKL_PEAK_LN_W, FENYKL_PEAK_LN_H (line image: 1 B/px, row pitch,
- * rows), FENYKL_PEAK_LUM_BYTES (the pass's statistics scratch), FENYKL_PEAK_LUT_N (u16 entries of
- * a Y LUT), FENYKL_PEAK_SHADOW_N (words a shadow patch saves), FENYKL_OVL_RED (an opaque red
- * overlay pixel, 4 B/px) and struct fenykl_ovl (the overlay's firmware request and saved
- * registers, kept by the caller).
- */
-struct fenykl_ovl;
-
-struct fenykl_peak_layout {
-	uint32_t out1_bytes;		/* the pass's display output buffer */
-	uint16_t ln_w, ln_h;		/* line image area from 0,0 */
-	uint16_t x, y, w, h;		/* live-view area in the display output buffer */
-};
-
-/* ctrl (img_exec's argument) is a still live-view pass a line pass may follow. */
-static inline bool fenykl_peak_lv_pass(const void *ctrl);
-/* Live-view passes a and b have the same output layout. */
-static inline bool fenykl_peak_same_layout(const void *a, const void *b);
-/* The layout of live-view pass ctrl into *l; NULL, or why a line pass cannot follow it. */
-static inline const char *fenykl_peak_layout(const void *ctrl, struct fenykl_peak_layout *l);
-/* Turns copy (FENYKL_PEAK_CTRL_SIZE bytes of a live-view pass) into its line pass: display output
-   to out1 (l->out1_bytes), line image to line, statistics to lum (uncached), other outputs off. */
-static inline void fenykl_peak_line_ctrl(void *copy, const struct fenykl_peak_layout *l,
-					 uint32_t out1, uint32_t line, uint32_t lum);
-/* Display output buffer of pass ctrl, physical. */
-static inline uint32_t fenykl_peak_out1(const void *ctrl);
-/* In img_hw_start of a line pass, around the original: the Y LUTs to lut_zero (all 0), the edge
-   coring to coring, edge gain and limits to their maximum; the stock words into saved. */
-static inline void fenykl_peak_shadow_patch(uint32_t *saved, uint32_t coring,
-					    const uint16_t *lut_zero);
-static inline void fenykl_peak_shadow_restore(const uint32_t *saved);
-
-/* The display is the rear LCD. */
-static inline bool fenykl_disp_rear(void);
-/* The live view is magnified (magnify, MF assist). */
-static inline bool fenykl_lv_magnified(void);
-/* The GUI shows a still live-view screen (no menu, panel or movie screen). */
-static inline bool fenykl_gui_still_lv(void);
-/* Physical address of the live-view buffer the display latched for the frame shown. */
-static inline uint32_t fenykl_disp_lv_latched(void);
-
-/* The firmware shows nothing on the overlay layer. */
-static inline bool fenykl_ovl_free(void);
-/* Shows buf (w x h of a FENYKL_PEAK_LN_W pitch, 4 B/px) scaled to to_w x to_h at to_x, to_y of the
-   display, opaque; the stock layer setup into o. The firmware's status, 0 = shown; on any other
-   the caller calls fenykl_ovl_hide. */
-static inline unsigned int fenykl_ovl_show(struct fenykl_ovl *o, uint32_t buf, uint16_t w,
-					   uint16_t h, uint16_t to_x, uint16_t to_y, uint16_t to_w,
-					   uint16_t to_h);
-/* Points the shown overlay at buf; interrupts masked (fenykl_irq_save, fenykl.h). */
-static inline void fenykl_ovl_flip(uint32_t buf);
-/* Physical address of the overlay buffer the display latched. */
-static inline uint32_t fenykl_ovl_latched(void);
-/* Takes the overlay down and puts the stock layer setup back: the firmware's status, 0 = ok. */
-static inline unsigned int fenykl_ovl_hide(struct fenykl_ovl *o);
-
 #endif
 
 #include "fenykl_body.h"

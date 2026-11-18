@@ -211,9 +211,9 @@ def build_parser() -> argparse.ArgumentParser:
         "-t",
         "--target",
         choices=sorted(ASSET_LAYOUTS),
-        default="epl3",
+        default="em10ii",
         help="camera whose stock image in firmware/ is read when FILE.BIN is not given "
-        "(default: epl3)",
+        "(default: em10ii)",
     )
     assets_dump.add_argument(
         "-o",
@@ -271,7 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
     plugin_build.add_argument(
         "--isa-check",
         action="store_true",
-        help="also run the target's ISA check on plugin.elf (epl3: needs Ghidra, toolchain/README.md)",
+        help="also run the target's ISA check on plugin.elf (needs Ghidra, toolchain/README.md)",
     )
     plugin_build.add_argument(
         "--with",

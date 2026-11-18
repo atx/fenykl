@@ -1,6 +1,6 @@
 /*
- * Pre-capture (sdk/docs/precap.md), E-M10 II only: it holds frames of the stock silent sequential H
- * burst, which needs the fully electronic shutter, and the E-PL3 has none.
+ * Pre-capture (sdk/docs/precap.md): it holds frames of the stock silent sequential H burst, which
+ * needs the fully electronic shutter.
  * A half press held 300 ms past AF ready starts the burst with an injected full press; the last 6
  * frames are held unrecorded, the oldest dropped. A real full press saves the held frames and every
  * later one of the burst; a half release cancels it without a file. Outside its settings gate the

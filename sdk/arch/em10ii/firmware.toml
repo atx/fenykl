@@ -27,10 +27,30 @@
 # Only 32-bit arguments. Add a function only when its CALL encoding and argument registers have
 # been read from the firmware; unknown signatures stay out.
 #
-# Hook targets: a `hook` table, fields as in epl3/firmware.toml (sdk/README.md, Hooks). On this body
-# cpu1 = "unproven" covers CPU1 and CPU2, and such an entry must have its 5 patched bytes in one
-# aligned 8-byte block (one I-cache line), so that a core with a stale line runs the stock entry
-# (tests/test_fwapi.py checks it).
+# Hook targets: a `hook` table makes the function hookable (sdk/README.md, Hooks). Fields:
+#   entry          "call": entered by CALL with the operands above (the only supported kind)
+#   relocate       the stock entry bytes, whole instructions, at least 5 (the jmp); they are checked
+#                  against the stock image by the tests and against RAM before every install
+#   cpu1           "cpu0-only" (with evidence that CPU1 never runs it) or "unproven"
+#   cpu1_evidence  what the scope rests on
+#   note           why the span is safe to relocate (no interior branch target, no stored pointer)
+# On this body cpu1 = "unproven" covers CPU1 and CPU2, and such an entry must have its 5 patched
+# bytes in one aligned 8-byte block (one I-cache line), so that a core with a stale line runs the
+# stock entry (tests/test_fwapi.py checks it).
+#
+# Callbacks: signatures the firmware enters plugin code with (sdk/README.md, Callbacks and slots).
+# FENYKL_CALLBACK(<name>, fn) gives a C function a reverse entry stub for it; fw_call_<name>(addr, ...)
+# calls a firmware function pointer with it. Fields:
+#   entry     "calls" (through a pointer: the callee saves and allocates itself), or "call" with
+#             saves and frame as for functions (the caller's CALL carries the callee's operands)
+#   evidence, returns, args, note as for functions; only 32-bit scalars, no "..."
+#
+# Slots: aligned pointer words the firmware calls through (FENYKL_SLOT_REPLACE). Fields:
+#   address   run address of the word
+#   callback  the signature the firmware calls it with (a [callbacks.<name>] table)
+#   expected  its stock value when a plugin runs, also the original that fw_orig_<slot> calls
+#             (0 = empty slot, no original); the runtime refuses to touch any other value
+#   cpu1, cpu1_evidence, note as for hooks (note: where the calls through the word were read)
 #
 # Further down: data (addresses the SDK uses as values, FW_<NAME>).
 
@@ -260,8 +280,8 @@ note = "mov 0x60BC53C4,a1: one 6-byte instruction, so no instruction boundary in
 # Layouts behind the address stay C structs or offsets in the code that reads them.
 
 # --- address map ---
-# Unlike the E-PL3, the code image sits at the bottom of DRAM and the firmware's RAM (variables,
-# pools, bss, kernel stacks, OSD and image buffers) lies above it.
+# The code image sits at the bottom of DRAM and the firmware's RAM (variables, pools, bss, kernel
+# stacks, OSD and image buffers) lies above it.
 
 [data.dram_start]
 address = 0x60000000

@@ -15,9 +15,9 @@ from fenykl.payload import (
     parse_header,
 )
 
-EPL3 = sdk.target("epl3")
-LOAD = EPL3.load
-MAX_SIZE = EPL3.max_size
+EM10II = sdk.target("em10ii")
+LOAD = EM10II.load
+MAX_SIZE = EM10II.max_size
 BASE = LOAD + HEADER_SIZE
 
 
@@ -67,10 +67,10 @@ def test_pack_layout_and_round_trip():
         LOAD,
         HEADER_SIZE + 12,
         HEADER_SIZE + 4,
-        b"E-PL3\0\0\0",
+        b"E-M10II\0",
     )
     assert image[:4] == b"FNL2"
-    assert image[0x14:0x1C] == b"E-PL3\0\0\0"
+    assert image[0x14:0x1C] == b"E-M10II\0"
     assert image[HEADER_SIZE:] == code + bytes(2)
     words = struct.unpack("<3I", image[HEADER_SIZE:])
     assert h.sum == sum(words) & 0xFFFFFFFF
@@ -101,11 +101,11 @@ def test_pack_rejects_bss_into_loader_stack():
 
 def test_pack_rejects_too_big_image():
     with pytest.raises(PayloadError, match="image size"):
-        make_image(bytes(MAX_SIZE - HEADER_SIZE + 4), HEADER_SIZE, EPL3)
+        make_image(bytes(MAX_SIZE - HEADER_SIZE + 4), HEADER_SIZE, EM10II)
 
 
 def _valid() -> bytearray:
-    return bytearray(make_image(bytes(range(256)) * 4, HEADER_SIZE, EPL3))
+    return bytearray(make_image(bytes(range(256)) * 4, HEADER_SIZE, EM10II))
 
 
 def _with_header(field: int, value: int) -> bytes:
@@ -141,8 +141,8 @@ def _flip_body_bit() -> bytes:
         (bytes(_valid()[:0x10]), "shorter than the header"),
         (_with_header(0, 0x334C4E46), "magic"),
         (_fnl1(), "old FNL1 format"),
-        (_with_model(b"E-PL5\0\0\0"), "model 'E-PL5' is no target's (E-M10II, E-PL3)"),
-        (_with_model(b"E-PL3\0\0 "), "is no target's"),
+        (_with_model(b"E-PL5\0\0\0"), "model 'E-PL5' is no target's (E-M10II)"),
+        (_with_model(b"E-M10II "), "is no target's"),
         (_with_header(1, LOAD + 0x1000), "load address"),
         (_with_header(2, 0x10), "< header"),
         (_with_header(2, len(_valid()) - 2), "multiple of 4"),
@@ -158,7 +158,8 @@ def test_loader_reads_at_most_max_size():
     # A header claiming more than the loader reads is rejected even if the file is that long.
     body = bytes(MAX_SIZE)
     image = (
-        struct.pack("<5I8s", MAGIC, LOAD, MAX_SIZE + 4, HEADER_SIZE, 0, b"E-PL3") + body
+        struct.pack("<5I8s", MAGIC, LOAD, MAX_SIZE + 4, HEADER_SIZE, 0, b"E-M10II")
+        + body
     )
     assert "bytes read" in check_image(image)
     # Trailing bytes after a valid image are ignored, as the loader only checks [0, size).
@@ -167,7 +168,7 @@ def test_loader_reads_at_most_max_size():
 
 def test_info_names_the_model_and_rejects_old_images():
     info = describe(bytes(_valid()))
-    assert "model      'E-PL3' (target epl3)" in info
+    assert "model      'E-M10II' (target em10ii)" in info
     assert info.endswith("loader     accepts")
     assert describe(_fnl1()).endswith(
         "rejects: bad magic: old FNL1 format, rebuild the payload"
@@ -175,6 +176,6 @@ def test_info_names_the_model_and_rejects_old_images():
 
 
 def test_pack_rejects_a_model_that_does_not_fit_the_field():
-    target = dataclasses.replace(EPL3, model="E-PL3-LONG")
+    target = dataclasses.replace(EM10II, model="E-M10II-LONG")
     with pytest.raises(PayloadError, match="1..8 ASCII"):
         make_image(bytes(4), HEADER_SIZE, target)

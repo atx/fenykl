@@ -1,55 +1,48 @@
 # Screenshot (`sdk/lib/shot.c`)
 
 Status: the pixel work and the start/abort rules (`shot_pix.c`) are simulator-tested
-(`tests/sim/shot/`). Used by main's Fn override ("screenshot") and by `projects/birddetect6` (short
-Fn in live view or the menu). Built for bodies with the `shot` capability (`include/body.h`): the
-E-PL3 (run on the camera) and the E-M10 II (the PRIM block 0 lend not yet run on the camera). A
+(`tests/sim/shot/`, `tests/sim/shot_em10ii/`). Used by main's Fn override ("screenshot"). Built for
+bodies with the `shot` capability (`include/body.h`); the PRIM block 0 lend has not yet run on the
+camera. A
 plugin that does not call `fenykl_shot_*` gets no byte of it (`--gc-sections`).
 
 ## 1. What it does
 
-Saves what the panel shows, the live view, the firmware's face/AF frames and the GUI's three OSD
+Saves what the panel shows, the live view and the GUI's three OSD
 layers (the camera's own icons, AF targets and any HUD), as `C:\SHOTnnnn.PPM`: binary PPM at square
 pixels.
 
-| | E-PL3 | E-M10 II LCD | E-M10 II EVF |
-|---|---|---|---|
-| panel (canvas) | 720 x 480, 16:9 | 720 x 480 | 1024 x 768 |
-| file | 853 x 480, 1 228 335 bytes | 720 x 480, 1 036 815 bytes | 1024 x 768, 2 359 312 bytes |
-| OSD | 720 x 480 at 1:1; 4/8/4 bpp | 720 x 480 at 1:1; 8 bpp | 640 x 480 scaled 1.6x (nearest pixel); 8 bpp; at the EVF's global alpha 0xCC |
-| palettes | {Y, Cb, Cr, alpha 0..15} | {R, G, B, alpha 0..32} | as LCD |
-| lent buffer | a RECFILE run of 1 551 336 bytes | PRIM block 0 (25 776 128 bytes), 1 728 000 used | 2 494 464 used |
-| strip | 24 rows, at the end of the lent run | 16 rows in `.bss` (49 152 bytes) | as LCD |
-| face/AF frames | img3, drawn | not read (img3's source format is unknown) | |
+| | LCD | EVF |
+|---|---|---|
+| panel (canvas) | 720 x 480 | 1024 x 768 |
+| file | 720 x 480, 1 036 815 bytes | 1024 x 768, 2 359 312 bytes |
+| OSD | 720 x 480 at 1:1; 8 bpp | 640 x 480 scaled 1.6x (nearest pixel); 8 bpp; at the EVF's global alpha 0xCC |
+| palettes | {R, G, B, alpha 0..32} | as LCD |
+| lent buffer | PRIM block 0 (25 776 128 bytes), 1 728 000 used | 2 494 464 used |
+| strip | 16 rows in `.bss` (49 152 bytes) | as LCD |
 
 - **Snapshot** (`fenykl_shot_start`): opens the PPM, flushes the log, reads the output and the
   rules (3), borrows the buffer (`fenykl_shot_buf_alloc`, refused, never waited for, when none is
   free; the PPM is then removed) and copies into it the live-view buffer the display shows, the
-  shown face/AF frame buffer, and the shown buffer of each OSD layer with its palettes. The
+  shown face/AF frame buffer (none on this body, see Face/AF frames below), and the shown buffer of each OSD layer with its palettes. The
   live-view copy starts at a flip and is retried (3 tries) if more than one flip passed during it;
   the frame copy (3 tries) and the OSD copy (5 tries) are retried until no flip happened during
-  them. A torn copy is still saved and logged. On the E-M10 II the OSD copy first waits (up to
+  them. A torn copy is still saved and logged. The OSD copy first waits (up to
   100 ms) until the display shadows hold `b[draw ^ 1]`: between the GUI's flip and the DISPLAY
   task's commit the panel still shows the old buffer, which the GUI may already draw into. A 32-bit
   sum of the snapshot is kept. The rules are checked again after the snapshot and after the header,
   so a rule broken during the copies (up to ~1.5 s with every wait and retry) aborts at once.
-- **Live-view source (E-M10 II):** img2 when the display enables it (the menu points it at the
+- **Live-view source:** img2 when the display enables it (the menu points it at the
   live-view block shown when it opens), else img1, else black.
-- **Face/AF frames (E-PL3):** the firmware's frame task (`TSK_DISP_FRAME`) draws the face-detection
-  frames, and so any face a plugin injects, not on the OSD but into two ping-pong buffers it flips
-  onto the display's third image layer (img3): 8 bpp palette indices, 448-byte pitch, 426 x 240 on
-  the LCD (320 x 240 elsewhere), scaled by the display to 720 x 480, above the live view and below
-  the OSD. Index 0 is transparent; the 8 colours (white, green, orange, ...) come from the frame
-  task's RGB table. The shot reads the shown buffer from the display's img3 shadow and the size from
-  the firmware's img3 layer setup, and scales it the same way (nearest pixel).
+- **Face/AF frames:** img3 is not read (`fenykl_frames_shown` is 0: img3's source format is unknown),
+  so the file has none.
 - **Write** (`fenykl_shot_step`): each call checks the rules (3), composes one strip (live view YUYV
-  to RGB, the face/AF frames, the OSD layers scaled to the canvas and blended bottom to top with
-  their palette alpha), stretches it to square pixels where the panel's are not (E-PL3) and writes
-  it. E-PL3: 20 calls, 8-9 s at one call per 50 ms; E-M10 II: 30 (LCD) or 48 (EVF) calls.
+  to RGB, the OSD layers scaled to the canvas and blended bottom to top with their palette alpha)
+  and writes it: 30 (LCD) or 48 (EVF) calls.
 - **Raw dump** (`fenykl_shot_raw(first)`: the first `first` snapshots of a boot, 0 by default;
-  main sets 2 on the E-M10 II): after the PPM, the snapshot itself, in 64 KiB chunks per call: `SHOTnnnn.LV` (the live view as copied,
+  main sets 2): after the PPM, the snapshot itself, in 64 KiB chunks per call: `SHOTnnnn.LV` (the live view as copied,
   YUYV, `2 * w` bytes per row), `.L0`, `.L1`, `.L2` (each layer's copied rows, `w * bpp / 8` bytes
-  each), `.PAL` (the firmware's palette block as read, E-M10 II 0x500 bytes) and `.REG` (geometry,
+  each), `.PAL` (the firmware's palette block as read, 0x500 bytes) and `.REG` (geometry,
   sources, the lent block and the body's display registers as text), for checking the byte order,
   palettes, alpha and layout against the PPM off the camera. A raw file that fails is logged and
   counted (`raw failed`); the PPM still counts as written.
@@ -73,17 +66,15 @@ Header `sdk/include/shot.h` (the reference). Log module `shot` (`fenykl_shot_log
 | `fenykl_shot_status()` | any task | logs `shots N failed N, torn lv N osd N` (and aborted, overwritten and raw-failed shots, torn frame copies, shots without live view) |
 
 The caller decides when to shoot and serialises: no `fenykl_shot_start` while busy. It must keep
-calling `fenykl_shot_step` until it returns `false`: the buffer is lent until then. Both plugins take
+calling `fenykl_shot_step` until it returns `false`: the buffer is lent until then. main takes
 the press through the key layer (`docs/key.md`): a claimed short Fn in live view or the menu (the
 live view keeps running behind it), `long_stock` for the stock Fn on a long press, presses while busy
 ignored and logged.
 
 ## 3. Resources and rules
 
-- **E-PL3, RECFILE** is the still pipeline's buffer: a still started during the write finds 1.5 MB
-  less free (the pool is 0x1E3F480 bytes). No other rule.
-- **E-M10 II, PRIM block 0** (pool id 0x0000, twelve 0x1895000-byte blocks from 0xA33E8C00): the
-  still path's own accounted pool, the E-M10 II's RECFILE. A still's take handle gets its frame from
+- **PRIM block 0** (pool id 0x0000, twelve 0x1895000-byte blocks from 0xA33E8C00): the
+  still path's own accounted pool. A still's take handle gets its frame from
   it (`take_buf_alloc` 0x6022DF9D -> `imgbuff_alloc(&id, 0)`), so a still taken during the write
   uses the next block and a burst is one frame shorter; the next burst frame waits for a free block
   (`Get_NumberFree` 0x607EAAF9). Block 0 overlaps no heap (the lowest heap base is 0xA963CC00) and
@@ -99,27 +90,26 @@ ignored and logged.
   is lent its burst has one block less, and its after-burst check (PRIM free == total within 5 s of
   a cancel or 30 s of a commit) fails safe if a shot still holds the block then.
 - **Rules** (`fenykl_shot_gate`, on the body's `fenykl_shot_cond`): a shot starts only with the
-  display live (E-M10 II: display state 2) on a supported output (LCD or EVF), no frame in the lent
-  pool (E-M10 II: PRIM in-use mask +4 without the reserve +0x40 is 0), not in movie mode, not in
+  display live (display state 2) on a supported output (LCD or EVF), no frame in the lent
+  pool (PRIM in-use mask +4 without the reserve +0x40 is 0), not in movie mode, not in
   playback (GUI super state 6), with prop 0xE951 at 0 (otherwise takes go to pool 0x2700, over
   block 0; unregistered counts as set) and every pool over block 0 idle. It is aborted, the buffer
   given back first, then the file closed and the partial PPM removed, when movie mode, playback,
   prop 0xE951 or a busy pool over block 0 comes up, when the output device changes (checked after
   the snapshot, after the header and at every step) or when the card gate closes. Half-press and
-  takes are no rule: a still while the block is held uses the next block. The E-PL3 has none of
-  these rules but the card gate. On both bodies a shot that has held the buffer for 30 s is
+  takes are no rule: a still while the block is held uses the next block. A shot that has held the buffer for 30 s is
   aborted. The log is flushed right before the buffer is lent.
 - **Card:** the files go through the firmware's file server like the log; nothing is written while
   `fenykl_card_io_allowed()` is false (a shot in progress then fails with `card gone while
   writing`). A `.bss` strip is written back from the D-cache before each write.
 - **CPU0:** the copies and the strips run in the caller's task. A plugin with time-critical work
-  runs the shot in a task of lower priority (birddetect6: 13, below its control task at 12).
+  runs the shot in a task of lower priority.
 
 ## 4. Log lines (module `shot`)
 
 | line | meaning |
 |---|---|
-| `shot: N free, used X, other pools X`, `  stills shared N, mode X` | each attempt that reaches the lend: PRIM's free count, its in-use mask without the reserve, the busy pools over block 0 (bit i = entry i of the list in 3), prop 0xE951 set, the output device (E-PL3: free RECFILE blocks, the rest 0) |
+| `shot: N free, used X, other pools X`, `  stills shared N, mode X` | each attempt that reaches the lend: PRIM's free count, its in-use mask without the reserve, the busy pools over block 0 (bit i = entry i of the list in 3), prop 0xE951 set, the output device |
 | `raw pieces too: shot N of the first N` | this shot writes the raw pieces |
 | `snapshot WxH in X, N free after the lend`, `  lv flips N, capture N ms`, `LN largest index X of N entries` | the snapshot: lent address, live-view flips during the copy, the largest palette index in each 8-bpp layer of fewer than 256 entries |
 | `snapshot sum X unchanged`, `lent N bytes for N ms`, `  now N free, used X, other pools X`, `SHOTnnnn.PPM written in N ms (capture N ms), N bytes` | done (bytes of every file written) |
@@ -132,17 +122,13 @@ ignored and logged.
 | `live view X not a DRAM buffer: OSD only` (WARN) | no live view in the file |
 | `SHOTnnnn: <what>` (ERR) | failed: `no buffer`, `no OSD planes`, `cannot open`, `write failed`, `close failed`, `card gone while writing`; `buffer X not given back: X` |
 | `SHOTnnnn.EXT: <what>` (ERR) | a raw file: `cannot open`, `write failed`, `close failed` |
-| `lv ...`, `osd ...`, `frames ...`, `img1 regs ...`, `reg NAME ADDR = X`, `no frames layer` (DEBUG) | placement, copy times, retries and the body's registers at each attempt (E-M10 II: display, GUI and take state, PRIM mask/free/total/reserve, imgwork mode, pool 0x0E00) |
+| `lv ...`, `osd ...`, `frames ...`, `img1 regs ...`, `reg NAME ADDR = X`, `no frames layer` (DEBUG) | placement, copy times, retries and the body's registers at each attempt (display, GUI and take state, PRIM mask/free/total/reserve, imgwork mode, pool 0x0E00) |
 
 ## 5. Tests
 
 `tests/test_sim.py`:
 
-- `shot` (`tests/sim/shot/test_shot.c`, E-PL3 body): YCbCr to RGB against a BT.601 reference,
-  palettes, live-view placement, alpha blending, 4-bpp nibble order, layer order, the face/AF frame
-  layer (scaling, transparent indices, stacking), the 16:9 stretch, the PPM header and the lent
-  run's layout (1 551 336 bytes).
-- `shot_em10ii` (`tests/sim/shot/test_shot_em10ii.c`, E-M10 II body): the EVF's 640 x 480 OSD scaled
+- `shot_em10ii` (`tests/sim/shot/test_shot_em10ii.c`): the EVF's 640 x 480 OSD scaled
   1.6x by nearest pixel and the LCD's 1:1, RGB palettes (alpha clamped to 32, the global alpha
   folded in), blending at alpha 0..32, the start and abort rules (which refuse a start, which abort
   a held shot, no free-count rule) and the LCD and EVF layouts.

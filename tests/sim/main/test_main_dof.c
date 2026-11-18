@@ -1,5 +1,5 @@
 /* The main plugin's depth of field (sdk/projects/main/main_dof.c) in the GDB simulator, with
-   ../hooks/sim_start.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
+   ../hooks_em10ii/sim_start.S. plugin_main sets sim_exit_code to the failure bit mask (0 = pass):
      1  a fixed case's near or far limit is off ExifTool's Composite:DOF (exact N = 2^(Av/512),
         c = 15 um) by more than 0.2 % or 1 mm
      2  a fixed case's far limit is infinite in one and finite in the other

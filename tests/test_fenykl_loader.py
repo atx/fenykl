@@ -3,8 +3,8 @@
 For every camera with a loader: the pinned bytes must be what the source assembles to; every CALL in
 the stub must use the register list and frame of the firmware's own call sites; the patch must change
 only the hook and the stub; the loader firmware built from firmware/ must stay byte-identical to the
-pinned build. The pinned bytes must behave as specified in the GDB simulator (tests/loader_sim/ for the
-E-PL3, tests/loader_sim_em10ii/ for the E-M10 Mark II). Run this file as a script to print the bytes
+pinned build. The pinned bytes must behave as specified in the GDB simulator
+(tests/loader_sim_em10ii/). Run this file as a script to print the bytes
 and rewrite the listings after changing a loader.S; paste the bytes into its patch.toml (and, if an
 edit changes length, the sha256 of the stock bytes it now covers into its original_sha256).
 """
@@ -53,25 +53,12 @@ class Loader:
 
 LOADERS = {
     # README.md: the loader firmware with the FNL2 header (model check), reads C:\FENYKL.BIN.
-    "epl3": Loader(
-        "epl3",
-        "ac1db3e8cc54a1f41c4daba261a5058c228f94640548a53ba4be7d93ad509c32",
-        frozenset({"OlyTaskSelfEnd"}),
-    ),
     "em10ii": Loader(
         "em10ii",
         "0c42be0e6d151e2d28c5a377574ccd182e3de4178d6e5cd8229a2f4d43859b02",
         frozenset({"task_self_end", "fileif_exists", "pwr_wake_input_levels"}),
     ),
 }
-
-EPL3 = sdk.target("epl3")
-SIM = Path(__file__).resolve().parent / "loader_sim"
-HOOK, STUB = LOADERS["epl3"].patch.edits
-# The image and the harness; fat_mounted at 0x6059C978.
-SIM_MEMORY = ["0x6e600000,0x600000", "0x60500000,0x100000"]
-# usr1_task after the hooked CALL: ret [d2],8
-USR1_TAIL_RET = bytes.fromhex("df 80 08")
 
 
 def _run(cmd: list[str]) -> str:
@@ -282,157 +269,6 @@ def file_cases(
     }
 
 
-@dataclass(frozen=True)
-class Scenario:
-    file: bytes
-    accepted: bool
-    fail_opens: int = 0
-    """Opens that fail before the card is mounted."""
-    file_present: bool = True
-
-
-def scenarios(test_payload: bytes) -> dict[str, Scenario]:
-    good = _image(test_payload, EPL3)
-    return {
-        **{
-            name: Scenario(file, ok)
-            for name, (file, ok) in file_cases(test_payload, EPL3).items()
-        },
-        "valid after 5 failed opens": Scenario(good, True, fail_opens=5),
-        "valid on the last try": Scenario(good, True, fail_opens=99),
-        "no card": Scenario(good, True, fail_opens=1000),
-        "no file": Scenario(good, True, file_present=False),
-        "no file, mounted after 5 tries": Scenario(
-            good, True, fail_opens=5, file_present=False
-        ),
-    }
-
-
-@pytest.fixture(scope="module")
-def sim_objects(tmp_path_factory) -> tuple[Path, list[Path]]:
-    """Return the test payload body and the harness objects."""
-    work = tmp_path_factory.mktemp("loader_sim")
-    payload_obj = work / "payload.o"
-    payload_elf = work / "payload.elf"
-    payload_bin = work / "payload.bin"
-    _run([EPL3.tool("as"), "-o", str(payload_obj), str(SIM / "payload.S")])
-    _run(
-        [
-            EPL3.tool("ld"),
-            f"-Ttext=0x{EPL3.load + payload.HEADER_SIZE:x}",
-            "-o",
-            str(payload_elf),
-            str(payload_obj),
-        ]
-    )
-    _run(
-        [
-            EPL3.tool("objcopy"),
-            "-O",
-            "binary",
-            "-j",
-            ".text",
-            str(payload_elf),
-            str(payload_bin),
-        ]
-    )
-    objects = [work / "harness.o", work / "check.o"]
-    _run([EPL3.tool("as"), "-o", str(objects[0]), str(SIM / "harness.S")])
-    _run(
-        [
-            EPL3.tool("gcc"),
-            *EPL3.cflags,
-            "-c",
-            str(SIM / "check.c"),
-            "-o",
-            str(objects[1]),
-        ]
-    )
-    return payload_bin, objects
-
-
-def _scenario_source(scenario: Scenario, file: Path) -> str:
-    timed_out = scenario.fail_opens >= 100
-    opened = not timed_out and scenario.file_present
-    status = 1 if not opened else 0 if scenario.accepted else 2
-    called = int(status == 0)
-    values = {
-        "fail_opens": scenario.fail_opens,
-        "file_present": int(scenario.file_present),
-        "expect_fopens": 100 if timed_out else scenario.fail_opens + 1,
-        "expect_sleeps": 100 if timed_out else scenario.fail_opens,
-        "expect_opened": int(opened),
-        "expect_status": status,
-        "expect_called": called,
-        "expect_size": payload.parse_header(scenario.file).size if called else 0,
-        "file_len": len(scenario.file),
-    }
-    hook = ",".join(f"0x{b:02x}" for b in HOOK.replacement + USR1_TAIL_RET)
-    stub = ",".join(f"0x{b:02x}" for b in STUB.replacement)
-    lines = [
-        '\t.section .hook,"ax"',
-        f"\t.byte {hook}",
-        '\t.section .stub,"ax"',
-        f"\t.byte {stub}",
-        "\t.data",
-        "\t.balign 4",
-    ]
-    for name, value in values.items():
-        lines += [f"\t.global _scn_{name}", f"_scn_{name}:\t.long {value}"]
-    lines += ["\t.global _scn_file", f'_scn_file:\t.incbin "{file}"', ""]
-    return "\n".join(lines)
-
-
-# The names do not depend on the payload; the real one is assembled by the sim_objects fixture.
-@needs_toolchain
-@pytest.mark.parametrize("name", list(scenarios(bytes(4))))
-def test_loader_in_simulator(name, sim_objects, tmp_path):
-    payload_bin, objects = sim_objects
-    scenario = scenarios(payload_bin.read_bytes())[name]
-    assert (payload.check_image(scenario.file) is None) == scenario.accepted
-
-    file = tmp_path / "FENYKL.BIN"
-    file.write_bytes(scenario.file)
-    source = tmp_path / "scenario.S"
-    source.write_text(_scenario_source(scenario, file))
-    scenario_obj = tmp_path / "scenario.o"
-    _run([EPL3.tool("as"), "-o", str(scenario_obj), str(source)])
-    placement = [
-        f"--section-start=.fw.{name}=0x{address:x}"
-        for name, address in firmware_symbols(LOADERS["epl3"]).items()
-    ]
-    elf = tmp_path / "sim.elf"
-    _run(
-        [
-            EPL3.tool("ld"),
-            "-T",
-            str(SIM / "sim.ld"),
-            *placement,
-            "--orphan-handling=place",
-            "--no-warn-rwx-segments",
-            "-o",
-            str(elf),
-            *map(str, objects),
-            str(scenario_obj),
-        ]
-    )
-    result = subprocess.run(
-        [
-            EPL3.tool("run"),
-            *(arg for region in SIM_MEMORY for arg in ("--memory-region", region)),
-            str(elf),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert result.returncode == 0, (
-        f"exit status {result.returncode} (see tests/loader_sim/check.c, harness.S)\n"
-        f"{result.stdout}{result.stderr}"
-    )
-
-
 # --- E-M10 Mark II simulator --------------------------------------------------------------------
 
 EM10II = sdk.target("em10ii")
@@ -495,12 +331,13 @@ def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
     good = _image(test_payload, EM10II)
     # A distinct valid TST: its size tells which file ran.
     tst = _image(test_payload, EM10II, len(good) + 0x40)
-    epl3 = _image(test_payload, EPL3)
+    # A valid image for another camera: its model and load address.
+    other = _image(test_payload, replace(EM10II, model="E-M5", load=0x6EA70000))
     bad_tst = _with_header(tst, sum=payload.parse_header(tst).sum ^ 1)
     relay = {"gate": 0, "factor": FACTOR_RELAY}
     return {
         **{name: Em10iiScenario(file) for name, (file, _) in file_cases(test_payload, EM10II).items()},
-        "E-PL3 image": Em10iiScenario(epl3),
+        "another camera's image": Em10iiScenario(other),
         # Boot kinds.
         "gate 0 (wake boot)": Em10iiScenario(good, gate=0),
         "gate 2": Em10iiScenario(good, gate=2),
@@ -546,7 +383,7 @@ def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
         "bad TST, BIN": Em10iiScenario(good, bad_tst),
         "bad TST only": Em10iiScenario(None, bad_tst),
         "empty TST, BIN": Em10iiScenario(good, b""),
-        "E-PL3 TST, BIN": Em10iiScenario(good, epl3),
+        "another camera's TST, BIN": Em10iiScenario(good, other),
         "TST not removed, BIN": Em10iiScenario(good, tst, remove_result=-1),
         "TST not removed, no BIN": Em10iiScenario(None, tst, remove_result=-1),
         "TST still there after the remove, BIN": Em10iiScenario(good, tst, exists_after=1),

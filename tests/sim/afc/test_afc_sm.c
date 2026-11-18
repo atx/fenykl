@@ -1,5 +1,5 @@
 /* The contrast client's attach/detach state machine (sdk/lib/afc_sm.c) in the GDB simulator, with
-   ../hooks/sim_start.S, driven at a ~10 ms poll: boot delay, settle and cooldown, the stop on a gate,
+   ../hooks_em10ii/sim_start.S, driven at a ~10 ms poll: boot delay, settle and cooldown, the stop on a gate,
    the frame callback's own stop, a stop pending while live view is off, and every error path ending
    passive for good. plugin_main sets sim_exit_code to 0
    (pass) or the number of the first failed check. */

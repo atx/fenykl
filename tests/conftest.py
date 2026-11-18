@@ -14,7 +14,7 @@ from fenykl.firmware import TARGETS, StockMissingError
 
 
 @cache
-def stock_image(name: str = "epl3") -> bytes:
+def stock_image(name: str) -> bytes:
     """The stock image of target `name` from firmware/; skips the test when it is absent."""
     target = TARGETS[name]
     try:
@@ -31,13 +31,13 @@ def stock_image(name: str = "epl3") -> bytes:
 
 
 SIM = Path(__file__).resolve().parent / "sim"
-EPL3 = sdk.target("epl3")
+EM10II = sdk.target("em10ii")
 
 
 def _toolchain_missing() -> str:
     """Why the cross toolchain is unusable, "" when it is there."""
     try:
-        EPL3.tool("")
+        EM10II.tool("")
     except sdk.TargetError as e:
         return str(e)
     return ""
@@ -46,11 +46,6 @@ def _toolchain_missing() -> str:
 TOOLCHAIN_MISSING = _toolchain_missing()
 needs_toolchain = pytest.mark.skipif(bool(TOOLCHAIN_MISSING), reason=TOOLCHAIN_MISSING)
 MOCK_BODY = 0x6EB00000
-# The runtime patches and reads .shared through the uncached alias (addr & 0x3FFFFFFF) | 0x80000000;
-# on hardware it aliases the same DRAM, so the simulator maps both to the same cells.
-DRAM_ALIAS = ("--memory-alias", "0x6e600000,0xa00000,0xae600000")
-# The power-on factor word the runtime reads at startup (arch/epl3/usb.c); zero = not a USB boot.
-POWERON = ("--memory-region", "0x60551000,0x1000")
 
 
 def region(spec: str) -> tuple[str, str]:
@@ -66,7 +61,7 @@ def run_in_simulator(
     ldflags: Sequence[str] = (),
     firmware: Path | None = None,
     timeout: int = 60,
-    target: sdk.SdkTarget = EPL3,
+    target: sdk.SdkTarget = EM10II,
     **link,
 ) -> subprocess.CompletedProcess:
     """Link `sources` with the plugin runtime of `target` and run them in the GDB simulator. Entry is _sim_start, `.mock` goes to MOCK_BODY and the `mocked` firmware functions to

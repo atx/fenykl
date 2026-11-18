@@ -91,14 +91,14 @@ def test_adjacent_edits_are_not_overlapping():
     assert unpack_firmware(apply_patches(data, [patch])).blocks[0].body[4:7] == b"abc"
 
 
-def test_epl3_round_trip_changes_only_edited_bytes():
-    stock = stock_image()
+def test_em10ii_round_trip_changes_only_edited_bytes():
+    stock = stock_image("em10ii")
     stock_firmware = unpack_firmware(stock)
     code_original = stock_firmware.blocks[0].body[0x581BC:0x581BE]
     lang_original = stock_firmware.blocks[1].body[0x1000:0x1004]
     lang_replacement = bytes(b ^ 0xFF for b in lang_original)
     patch = _patch(
-        TARGETS["epl3"],
+        TARGETS["em10ii"],
         _edit("main-code-01", 0x581BC, code_original, b"X\0"),
         _edit("main-lang", 0x1000, lang_original, lang_replacement),
     )

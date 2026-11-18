@@ -670,9 +670,7 @@ def test_main_builds_with_the_dev_monitor_on_request(tmp_path):
     syms = _symbol_sections(EM10II.tool("objdump"), tmp_path / "plugin.elf")
     assert "_fenykl_devmon_start" in syms
     with pytest.raises(BuildError, match="opt-in"):
-        plugin.build(
-            main, tmp_path / "epl3", sdk.target("epl3"), with_capabilities=["devmon"]
-        )
+        plugin.build(main, tmp_path / "key", EM10II, with_capabilities=["key"])
 
 
 # The grab's firmware words in the uncached alias (firmware.toml, v1.4).

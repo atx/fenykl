@@ -72,19 +72,9 @@ static inline void main_fn_status(void)
 }
 #endif
 
-/* main_img_hook.c: the img_exec hook of the R/B swap and peaking; 0 = installed. */
-#if FENYKL_HAS_IMG_EXEC
-int main_img_hook_install(void);
-#endif
-/* The "Image" page of the R/B swap and peaking options (main_rbswap.c). */
-#if FENYKL_HAS_IMG_EXEC || FENYKL_HAS_WB_BASE
+/* The "Image" page of the R/B swap option (main_rbswap.c). */
+#if FENYKL_HAS_WB_BASE
 extern const struct fenykl_cfg_group main_grp_image;
-#endif
-
-/* main_hooks.c: the E-PL3 HUD's cw_updateDisplay hook */
-#if FENYKL_HAS_HUD_OVERLAY
-int main_hooks_install(void);
-void main_hooks_draw_off(void);
 #endif
 
 #endif

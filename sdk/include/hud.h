@@ -1,10 +1,8 @@
 /*
  * Live-view HUD elements (sdk/docs/hud.md): text in the camera's 32 px UI font or in the style of the
- * stock live-view info items. E-PL3: copied into OSD layer 1 from the plugin's cw_updateDisplay
- * hook, so every shown frame contains it. E-M10 II: each element is a stock image widget on the
- * live-view info panel, drawn by the GUI. Linked into every plugin. CPU0 only: the task calls init,
- * add, text, hide and tick; on the E-PL3 the hook calls fenykl_hud_frame and then
- * fw_orig_cw_updateDisplay.
+ * stock live-view info items. Each element is a stock image widget on the live-view info panel,
+ * drawn by the GUI. Linked into every plugin. CPU0 only: the task calls init, add, text, hide and
+ * tick.
  */
 #ifndef _FENYKL_HUD_H
 #define _FENYKL_HUD_H
@@ -24,38 +22,14 @@
 #define FENYKL_HUD_BITMAP_MAX 0x3FFC	/* w * h: fw_malloc refuses more. E-M10 II: the elements
 					   share a fixed pool (sdk/lib/hud_em10ii.c) */
 
-#if FENYKL_TARGET_EPL3
-#define FENYKL_HUD_CANVAS_W 720
-#define FENYKL_HUD_CANVAS_H 480
-
-/* Layer-1 palette indices in live view [camera]. */
-#define FENYKL_HUD_CLEAR 0xFF		/* transparent */
-#define FENYKL_HUD_BLACK 0x10
-#define FENYKL_HUD_TRANSLUCENT 0x11	/* black, alpha 8/15 */
-#define FENYKL_HUD_FAINT 0x12		/* black, alpha 4/15 */
-/* ink[] for white text: anti-alias greys 0x06, 0x05 and body 0x04 [camera] */
-#define FENYKL_HUD_WHITE { 0x06, 0x05, 0x04 }
-/* Coloured ink: ramps of body, 2/3 and 1/3 brightness in the live-view L1 palette (stock palette 4,
-   matching the camera's L1 copy), like the white one. Yellow is the stock exposure-compensation
-   text [camera]. Red 0x39 has no ramp; its darkest shade is the black outline colour. */
-#define FENYKL_HUD_GREEN { 0x09, 0x08, 0x07 }
-#define FENYKL_HUD_YELLOW { 0x03, 0x02, 0x01 }
-#define FENYKL_HUD_RED { 0x10, 0x39, 0x39 }
-
-/* Visible states: bit n = GUI state n of super state 0x02 (SS_REC). */
-#define FENYKL_HUD_STATE(n) (1u << (n))
-/* Basic, Histogram, Highlight&Shadow */
-#define FENYKL_HUD_INFO_SCREENS \
-	(FENYKL_HUD_STATE(0x03) | FENYKL_HUD_STATE(0x04) | FENYKL_HUD_STATE(0x05))
-#elif FENYKL_TARGET_EM10II
 /* The live-view info panel's 640 x 480 layout, where the stock items' rects lie: the EVF's screen
    positions. The LCD (720 wide) shows x < 165 at the same place and moves the stock items further
    right (right column +80); where it puts an element there is not verified. */
 #define FENYKL_HUD_CANVAS_W 640
 #define FENYKL_HUD_CANVAS_H 480
 
-/* Layer-1 palette indices: the E-PL3's colours at the same indices in the live-view layer-1
-   palette [camera dump] and in 19 of the 59 stock GUI palettes (about every third). Only indices
+/* Layer-1 palette indices: the same colours in the live-view layer-1 palette [camera dump] and in
+   19 of the 59 stock GUI palettes (about every third). Only indices
    < FENYKL_HUD_PAL_ENTRIES reach the display (128-entry hardware palette). */
 #define FENYKL_HUD_PAL_ENTRIES 0x80
 #define FENYKL_HUD_CLEAR 0x00		/* transparent (alpha 0) */
@@ -102,9 +76,6 @@ void fenykl_hud_panel(struct fenykl_hud_panel *p);
 /* Index < FENYKL_HUD_PAL_ENTRIES of the opaque live layer-1 palette entry nearest to rgb (0xRRGGBB,
    sum of squared differences), or -1 if none is opaque. */
 int fenykl_hud_color(uint32_t rgb);
-#else
-#error "hud: no canvas for this target"
-#endif
 
 enum fenykl_hud_align {
 	FENYKL_HUD_LEFT,
@@ -150,46 +121,8 @@ struct fenykl_hud_elem {
 	/* private */
 	uint32_t *bmp[2];	/* w * h bytes each, rendered text */
 	volatile uint32_t pub;	/* bits 2.. sequence, bit 1 shown, bit 0 bmp index */
-#if FENYKL_TARGET_EPL3
-	volatile uint32_t written[2];	/* pub last copied into each layer-1 buffer while visible */
-	volatile uint32_t sum[2];	/* checksum of the box last copied into each buffer */
-	volatile uint8_t ours[2];	/* the buffer holds that box until wiped, cleared or repainted */
-	volatile uint8_t stale;	/* the hook copied while pub changed */
-	uint8_t clears;		/* hide: clears left for fenykl_hud_tick */
-#endif
 };
 
-#if FENYKL_TARGET_EPL3
-/* What fenykl_hud_init read for one layer-1 buffer (for the plugin's log). */
-struct fenykl_hud_buf {
-	uint32_t handle;	/* struct osd_vram * */
-	uint32_t plane;
-	uint16_t width, height;
-	uint32_t pdata;
-};
-
-struct fenykl_hud_stats {
-	uint32_t updates;	/* hook calls */
-	uint32_t shows;		/* of those, show_front == 0 */
-	uint32_t drawn;		/* element copies into the shown buffer */
-	uint32_t hidden;	/* element copies skipped: state not visible or layer 1 masked */
-	uint32_t erased;	/* the GUI had painted over an element copied earlier into that buffer */
-	uint32_t overrides;	/* the one-layer override chose the shown buffer */
-	uint32_t stale;		/* repaints by fenykl_hud_tick after a race with the hook */
-	uint32_t wiped;		/* boxes cleared by fenykl_hud_tick after a hidden stretch */
-	uint32_t covered;	/* boxes it left alone: the GUI had painted over them */
-	uint32_t cpu1;		/* hook calls on CPU1 (skipped) */
-	uint32_t nofont;	/* renders refused: no font */
-	uint32_t glyph_miss;	/* renders refused: missing glyph or text too long */
-};
-
-/* Checks the layer-1 buffers (buf[2] receives what was read) and sets the states in which elements
-   are shown (FENYKL_HUD_STATE bits). 0 or FENYKL_HUD_E*. */
-int fenykl_hud_init(uint32_t states, struct fenykl_hud_buf buf[2]) FENYKL_CPU0_ONLY("fenykl_hud_init");
-/* From the plugin's cw_updateDisplay hook, before the original: copies the published elements
-   into the buffer about to be shown (show_front == 0 only). Counts and skips CPU1 calls. */
-void fenykl_hud_frame(int show_front);
-#else
 struct fenykl_hud_stats {
 	uint32_t creates;	/* info panel creates (GUI task) */
 	uint32_t made;		/* widgets made in them */
@@ -211,12 +144,10 @@ struct fenykl_hud_stats {
    message slots, all or nothing. Elements get their widgets when the GUI next builds the panel.
    0 or FENYKL_HUD_E*. */
 int fenykl_hud_init(uint32_t states) FENYKL_CPU0_ONLY("fenykl_hud_init");
-#endif
 /* After fenykl_hud_init: checks e's rectangle and allocates its bitmaps; e is not shown until
    fenykl_hud_text. 0 or FENYKL_HUD_E*. */
 int fenykl_hud_add(struct fenykl_hud_elem *e) FENYKL_CPU0_ONLY("fenykl_hud_add");
-/* Renders s and publishes it: E-PL3 to the hook, painted into both buffers if visible; E-M10 II
-   to the next fenykl_hud_tick. 0, or FENYKL_HUD_ENOFONT / EGLYPH (the element is unchanged). */
+/* Renders s and publishes it to the next fenykl_hud_tick. 0, or FENYKL_HUD_ENOFONT / EGLYPH (the element is unchanged). */
 int fenykl_hud_text(struct fenykl_hud_elem *e, const char *s) FENYKL_CPU0_ONLY("fenykl_hud_text");
 /* Clears e's spare bitmap to e->bg and calls fn(box, e->w, e->h, arg) to draw into it (row-major
    layer-1 indices, FENYKL_HUD_CLEAR transparent); then publishes and paints it as fenykl_hud_text.
@@ -228,13 +159,9 @@ int fenykl_hud_draw(struct fenykl_hud_elem *e,
    common resource into px, row-major, 0 = transparent; sets *w, *h. 0, or FENYKL_HUD_EGLYPH if the
    image is missing, not fmt 0x03 or larger than max pixels. */
 int fenykl_hud_image(uint16_t id, uint8_t *px, int max, int *w, int *h);
-/* Unpublishes e. E-PL3: if visible, clears its rectangle to FENYKL_HUD_CLEAR in both buffers, now
-   and at the next two fenykl_hud_tick calls. E-M10 II: the next tick shows the empty image. */
+/* Unpublishes e: the next fenykl_hud_tick shows the empty image. */
 void fenykl_hud_hide(struct fenykl_hud_elem *e) FENYKL_CPU0_ONLY("fenykl_hud_hide");
-/* Call every ~100 ms from the task. E-PL3: repaints after a race with the hook, repeats hide
-   clears, clears the boxes left on the canvas from ~0.5 s (5 calls) hidden on, and while visible
-   repaints an element whose buffers do not hold what it publishes. E-M10 II: encodes the changed
-   elements and posts one GUI event for all that show other than they should (content while
+/* Call every ~100 ms from the task: encodes the changed elements and posts one GUI event for all that show other than they should (content while
    visible, else the empty image). */
 void fenykl_hud_tick(void) FENYKL_CPU0_ONLY("fenykl_hud_tick");
 /* Width of s (its widest line) in pixels in style (enum fenykl_hud_style) with the current font,

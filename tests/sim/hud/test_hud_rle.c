@@ -1,5 +1,5 @@
 /* The HUD library's fmt 0x03 encoder (sdk/lib/hud_rle.c) in the GDB simulator, linked with
-   ../hooks/sim_start.S: images of several shapes are encoded and read back with a decoder written
+   ../hooks_em10ii/sim_start.S: images of several shapes are encoded and read back with a decoder written
    from the format (as fenykl.assets and the GUI read it: header {h-1:12, w-1:12, fmt:8}, six 10-bit
    codes colour << 2 | run-1 per little-endian u64), checking the pixels, that no run crosses a row
    end, the stock size rule and the refusal of a short buffer. plugin_main sets sim_exit_code to 0 or

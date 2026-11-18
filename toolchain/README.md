@@ -1,6 +1,6 @@
 # mn10300-elf toolchain for C plugins
 
-GCC + binutils for the E-PL3 main CPU (Panasonic MN1030/MN103S, manual 13250-040E), C only,
+GCC + binutils for the camera's MN10300 CPU (Panasonic MN1030/MN103S, manual 13250-040E), C only,
 freestanding, no libc, plus the GDB simulator for tests.
 
 | file | purpose |
@@ -11,7 +11,7 @@ freestanding, no libc, plus the GDB simulator for tests.
 | `check.sh [--isa-check] <work-dir>` | validation: compiles the corpus at three -O levels, ABI test; `--isa-check` adds the ISA check of the corpus and of all of libgcc |
 | `isacheck/check_isa.py` | checks objects/archives/ELFs for non-MN103 instructions (see below) |
 | `isacheck/MN103Forms.java` | Ghidra script: instruction-form histogram with the ghidra-mn103 decoder |
-| `isacheck/fw-forms.tsv` | that histogram for the stock v1.6 firmware (3,150,911 instructions, 230 forms) |
+| `isacheck/fw-forms.tsv` | that histogram for the stock E-PL3 v1.6 firmware (3,150,911 instructions, 230 forms) |
 | `isacheck/corpus/*.c` | C corpus exercising arithmetic, memory, control flow, ABI corners, soft float |
 | `abitest/` | C <-> firmware calling-convention bridge, run in the simulator |
 
@@ -57,16 +57,16 @@ Link: `mn10300-elf-gcc -nostdlib -T <script> ... -lgcc`, add `-Wl,--gc-sections`
 | `-mtune=` | not needed | scheduling is disabled for the base ISA anyway (`mn10300_option_override`) |
 | `-ffreestanding` | use | implies `-fno-builtin`; no hosted assumptions. GCC still emits calls to `memcpy`/`memset` for struct copies and clears, so the payload must define them (in C; the firmware's versions use the Panasonic ABI) |
 | `-nostdlib` + `-lgcc` | use | no libc/crt0; libgcc supplies 64-bit shifts/divisions, bit builtins and soft float. 32-bit multiply/divide and 64-bit multiply are inline |
-| PIC | default `-fno-pic` | the loader places the payload at the fixed address 0x6EA70000; `-fpic` is supported by the port but not needed or tested |
+| PIC | default `-fno-pic` | the loader places the payload at the fixed address `load` from `target.toml` (em10ii: 0x60DA5000); `-fpic` is supported by the port but not needed or tested |
 | float | avoid in hot code | no FPU: `float`/`double` work through libgcc soft-float (`fp-bit`), checked by the ISA check |
-| `-Os` | default | payload limit is 488 KiB; `-O0` and `-O2` pass the same checks |
+| `-Os` | default | payload limit is `max_size` from `target.toml` (em10ii: 412 KiB); `-O0` and `-O2` pass the same checks |
 | `-fno-common`, `-ffunction-sections`, `-fdata-sections` | use | duplicate-definition errors and section GC |
 | unwind tables off | use | C, no exceptions; saves `.eh_frame` |
 
 ## ISA validation (`check_isa.py`, optional)
 
 GCC's mn10300 port also targets AM33/AM33-2/AM34, supersets of the MN1030/MN103S core in the
-E-PL3. Their extra instructions are not in the CPU's manual and may not execute on the camera:
+camera. Their extra instructions are not in the CPU's manual and may not execute on the camera:
 several of their encodings are undefined (UDF) opcodes on MN103, which trap or do something else.
 The check guards against such code reaching a plugin, e.g. from `-mam33`, inline asm, a changed
 `cflags` or a different GCC/libgcc, and lists valid MN103 instruction forms the stock firmware never
@@ -82,8 +82,8 @@ For each input it checks:
 2. every instruction objdump finds in the code is re-decoded by the ghidra-mn103 SLEIGH module
    (built from 13250-040E only) with the same length and not as UDF (several AM33 encodings decode
    as UDF20-35 on MN103, so this is checked explicitly). Exception: `udf00`, `udf01`, `udfu01` in the
-   forms the firmware uses (its multiply unit, ~12,000 uses, also in CPU1 code; hand-written or
-   generated asm only, e.g. `sdk/projects/birddetect6`);
+   forms the firmware uses (its multiply unit, ~12,000 uses; hand-written or
+   generated asm only);
 3. every instruction form (mnemonic, operand kinds, length) is looked up in `fw-forms.tsv`, the
    histogram of what the stock firmware's code uses; forms the firmware never uses are listed.
 
@@ -94,10 +94,10 @@ firmware does not use**. All 145 distinct forms are in the firmware; the rarest 
 The linked ABI test image fails only on the simulator's `syscall` (`f0c0`, sim-only start-up code),
 as expected.
 
-`fw-forms.tsv` is regenerated from a Ghidra project of the v1.6 firmware with the ghidra-mn103 decoder:
+`fw-forms.tsv` is regenerated from a Ghidra project of the E-PL3 v1.6 firmware with the ghidra-mn103 decoder:
 
 ```sh
-$GHIDRA_INSTALL_DIR/support/analyzeHeadless <project-dir> epl3_v16 -process -noanalysis -readOnly \
+$GHIDRA_INSTALL_DIR/support/analyzeHeadless <project-dir> <program> -process -noanalysis -readOnly \
   -scriptPath fenykl/toolchain/isacheck -postScript MN103Forms.java fenykl/toolchain/isacheck/fw-forms.tsv
 ```
 
@@ -106,8 +106,7 @@ $GHIDRA_INSTALL_DIR/support/analyzeHeadless <project-dir> epl3_v16 -process -noa
 `pana_mock.S` contains functions written like the firmware's (no prologue, CALL-supplied frame,
 pointer args in A0/A1, stack args, sprintf-style variadic, a callback through `calls`), each
 clobbering everything its CALL saved plus MDR. `thunks.S` bridges C to them and back, `test.c`
-checks the results and that callee-saved registers survive in both directions. `run.sh` links at
-0x6EA70000 and runs it in `mn10300-elf-run`; exit status 0 = pass. Passes at `-Os`, `-O0`, `-O2`.
+checks the results and that callee-saved registers survive in both directions. `run.sh` links it and runs it in `mn10300-elf-run`; exit status 0 = pass. Passes at `-Os`, `-O0`, `-O2`.
 Negative controls (wrong CALL frame, wrong stack-arg offset, wrong register mapping, wrong
 variadic slot) fail with a crash or the expected check bit.
 

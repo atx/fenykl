@@ -9,11 +9,7 @@
 /* On the E-M10 II the first two shots of a boot also keep the raw snapshot (SHOTnnnn.LV, .L0..L2,
    .PAL, .REG), so that the colour order, palettes, alpha and layout can be checked against the PPM
    off the camera; later shots lend the block only for the PPM. */
-#if FENYKL_TARGET_EM10II
 #define ACT_SHOT_RAW_FIRST 2u
-#else
-#define ACT_SHOT_RAW_FIRST 0u
-#endif
 
 static bool act_shot_claim(void)
 {
