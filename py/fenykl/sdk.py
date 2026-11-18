@@ -23,6 +23,21 @@ def toolchain_prefix() -> Path:
 
 
 @dataclass(frozen=True)
+class TpRegion:
+    """target.toml [tp]: the exec region of test programs (sdk/docs/devmon.md)."""
+
+    base: int
+    slot_size: int
+    slots: int
+    end: int
+
+    def slot(self, n: int) -> int:
+        if not 0 <= n < self.slots:
+            raise TargetError(f"slot {n} out of range 0..{self.slots - 1}")
+        return self.base + n * self.slot_size
+
+
+@dataclass(frozen=True)
 class SdkTarget:
     """sdk/arch/<name>/: target.toml, firmware.toml, link.ld, crt0.S, fenykl_target.h, loader/."""
 
@@ -45,6 +60,8 @@ class SdkTarget:
     """The SDK's acknowledgement of its hooks and slots whose CPU1 scope is unproven."""
     capabilities: tuple[str, ...]
     """SDK features this camera supports; each becomes FENYKL_HAS_<NAME> (sdk/README.md, Layout)."""
+    tp: TpRegion | None = None
+    """The exec region of test programs, None without one."""
 
     @property
     def region_end(self) -> int:
@@ -88,6 +105,7 @@ def target(name: str) -> SdkTarget:
         sdk_slots=tuple(t.get("sdk_slots", [])),
         sdk_cpu1_unproven=tuple(t.get("sdk_cpu1_unproven", [])),
         capabilities=tuple(t["capabilities"]),
+        tp=TpRegion(**t["tp"]) if "tp" in t else None,
     )
 
 

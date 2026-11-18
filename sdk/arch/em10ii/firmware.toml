@@ -447,6 +447,50 @@ note = "sec3; ret [d2,a2,a3],24 at 0x60564C11 and 0x60564C8A, 16 CALLs [d2,a2,a3
 cores = ["cpu0"]
 cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
 
+[fileif_fseek]
+address = 0x60564AB4
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x14
+evidence = "high"
+returns = "int"
+args = ["a void *fp", "d int offset", "d unsigned whence"]
+note = "sec3; ret [d2,d3,a2,a3],0x14 at 0x60564B25 (only RET), all 26 CALLs [d2,d3,a2,a3],0x14; A0 fp, D0 offset, D1 whence; RPC cmd 0x10008 (mov 0x10008,d1 at 0x60564AF3) -> 0x605722A1, which the wrapper calls directly in FILECLBK. Whence is not the C numbering: 2 = from the start (offset >= 0, else error 0xE28; the position fp +0x134 = min(offset, size +0x10C)), 0 = from the current position (clamped to 0..size), 1 = from the end (offset <= 0). Returns 0, or the errno setter's return after errno 0x9414 (bad fp or whence). Stock 0x60549C53: fseek(fp, off, 2) then rpc_fread; 0x60E345EE: fseek(fp, 0, 1), a size read, fseek(fp, 0, 2). rpc_fread's 'r' path 0x6057200B reads from +0x134 and advances it"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[fileif_findfirst]
+address = 0x605658B2
+saves = ["d2", "a2", "a3"]
+frame = 0x20
+evidence = "high"
+returns = "int"
+args = ["a const char *pattern", "a void *info"]
+note = "sec3; ret [d2,a2,a3],0x20 at 0x605658D6 and 0x6056594E, both CALLs [d2,a2,a3],0x20 (0x6056A147 fileiftest key, 0x60E98F64 BGM scan); A0 pattern path, A1 info; RPC cmd 0x2001E -> 0x60573D29 in FILECLBK: the pattern after the last backslash (UTF-16), the directory before it resolved by 0x605735B3, which wants '<letter>:\\' and so cannot list the root (\"C:\\*\" leaves \"C:\"). Returns a handle (0x800-byte heap block) or -1 (no match or no directory; the block is then freed). Pattern match 0x6055BBD8: '*' and '?', case-insensitive, against the long name or the short name as NAME.EXT (0x605579CA: a dot only with an extension), so '*' matches every entry, '.' and '..' included. info, 0x118 bytes, written by the match callback 0x60573B44: u32 +0 FAT attribute (0x10 directory), +4 creation time/date, +8 and +0xC write time/date (both from 0x60551B9B, dirent +0x16), +0x10 size, +0x14 size high word (0 on FAT), +0x18 the name as ASCII with NUL (a non-ASCII name logs 'multibyte char file!' and is left unterminated). BGM scan: '<C>:\\BGM\\*.WAV', attribute & 0x10, size +0x10, name +0x18, memset 0x118 before each call"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[fileif_findnext]
+address = 0x60565951
+saves = ["d2", "a2", "a3"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["a void *info", "d int handle"]
+note = "sec3; ret [d2,a2,a3],0x10 at 0x605659B4 (only RET), both CALLs [d2,a2,a3],0x10 (0x6056A163, BGM scan); A0 info, D0 handle; RPC cmd 0x2001F -> 0x60573D99: the next match into info (layout at fileif_findfirst), 0 or -1 at the end. Each call rescans the directory from its start (0x60573CBA clears the seen count, the callback skips the entries already returned), so a whole listing costs entries^2 / 2 entry visits"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
+[fileif_findclose]
+address = 0x605659B7
+saves = ["d2", "a2"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int handle"]
+note = "sec3; ret [d2,a2],0xC at 0x60565A15 (only RET), all 3 CALLs [d2,a2],0xC; D0 handle; RPC cmd 0x20020 -> 0x60573DAC: frees the handle, -1 for handle 0 or -1. Call it for every handle findfirst returned"
+cores = ["cpu0"]
+cores_evidence = "verified: same core dispatch 0x6056FBDF as rpc_fopen"
+
 [fileif_get_media_status]
 address = 0x6056556D
 saves = ["d2", "a2"]
@@ -1324,3 +1368,304 @@ address = 0xA1C1A070
 type = "u32 [3]"
 evidence = "high"
 note = "display driver shadow of osd idx 0, 1, 2 = the requested buffers of GPI layers 1, 0, 2; written by the layer updates (0x602F24E8, 0x602F285C, 0x602F2D34, 0x602F3114, ...), copied to 0x9C00004C/48/44 by the commit (0x602F8367..0x602F83A2). Holds the old buffer between the gpi_draw_buf toggle and the DISPLAY-task commit (~13 % of polls in live view [camera])"
+
+# --- Picture Mode setting (setting 0x6F = composite of props 0x9481 and 0x84B1) and its menu page:
+# what a plugin swaps to add one row. Read by hand in the v1.4 listing and the image bytes. The
+# setting layer runs in the caller's task (GUI and camera-control tasks, CPU0 [inferred]).
+
+[setting_member_write]
+address = 0x6029C40B
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x18
+evidence = "high"
+returns = "void"
+args = ["a const void *row", "d unsigned id"]
+note = "sec2; ret [d2,d3,a2,a3],24 at 0x6029C43F (only RET); both CALLs (0x6029CB10, 0x6029CB7C) use [d2,d3,a2,a3],24 with A0 = row, D0 = setting id. Composite write of a kind-6 setting: the member list 0x6029CC99(id) (0x6F: entry 0x6033A434 {0x6F, 0x6F, 0x381, 0x7D0}) and one 0x6029C1C7(member, row word i) per member up to the end mark 0x7D0, each a shadow store 0x602CBAD1 plus usrset_set. Reads only the member words of the row"
+
+[callbacks.setting_setter]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a const void *row"]
+note = "custom setter of a kind-6 setting, word +0x34 of its hook-table entry: the setters 0x6029CAE5 and 0x6029CB54 enter it with `mov (a1),a1; mov a2,a0; calls (a1)` (0x6029CB27..0x6029CB2A, 0x6029CB93..0x6029CB96) when the word is non-zero and 0x602A51BD(id) == 1, A0 = the chosen row (record vals + width * index), D0 = the word itself; the result is unused and setting_member_write is skipped. Then 0x6029CF11(id), the entry's +0x18 hook and 0x6029D496(id) run as usual"
+
+[slots.pmode_setter]
+address = 0x6033B360
+callback = "setting_setter"
+expected = 0
+cpu1 = "unproven"
+cpu1_evidence = "static only: called from the setting layer's setters 0x6029CAE5 / 0x6029CB54 in the task that writes setting 0x6F (menu OK in GUI_TASK, CPU0; Myset recall and remote control not traced)"
+note = "word +0x34 of the hook-table entry 0x6033B32C of setting 0x6F (table 0x6033ACD8, 0x137 entries of 0x3C, runtime hash 0x6186304C via 0x6029CDF1); stock 0. Entry words: +0x14 0 (no record selector), +0x18 0x602A0CD6 (per-mode sync after a set), +0x30 0x602A29A6"
+
+[data.setting_rec_hash]
+address = 0x61864CDC
+type = "u32 [128]"
+evidence = "high"
+note = "bss, bucket heads of the setting-record hash (id & 0x7F), built at boot by 0x602A55BB from the 0x2F1 records of 0x14 bytes at 0x6038FF24: nodes {u32 record, u32 next} of 8 bytes from 0x61864EDC. The lookup 0x602A5612 returns the first node's record whose u16 +0 equals the id, so the nodes point at the rodata records"
+
+[data.setting_hook_hash]
+address = 0x6186304C
+type = "u32 [64]"
+evidence = "high"
+note = "bss, bucket heads of the setting hook-table hash (id & 0x3F), built by the loop before 0x6029CDF1 from 0x137 entries of 0x3C at 0x6033ACD8: nodes {u32 entry, u32 next} from 0x6186314C. Lookup 0x6029CDF1: first node whose entry's u16 +0 equals the id"
+
+[data.setting_count_slots]
+address = 0x61862990
+type = "{u8 [0x44], u16 id, u16 count, u8 [4]} [2]"
+evidence = "high"
+note = "bss, the two runtime count overrides of the list counts: 0x6029D79B searches them for the id (u16 +0x44, stride 0x4C, loop bound 2) and 0x6029CE1B then returns u16 +0x46 instead of the record count"
+
+[data.setting_rec_pmode]
+address = 0x60390208
+type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind} [1]"
+evidence = "high"
+note = "sec2 rodata, record of setting 0x6F (Picture Mode): {0x6F, 0x80, vals 0x60387F94, xlat 0x6037F7C0, 0x5C0, 0x40, 0, kind 6}. Count = bytes / width (0x602A5013). Set: API value -> xlat index (0x602A4FC9, not found -> 0) -> row vals + width * index; get: member props composed into 0x40 zeroed bytes (0x6029C442) -> memcmp (0x60023D37, full width) against rows 0..n-2, no match -> n-1 (0x602A4F21)"
+
+[data.pmode_xlat]
+address = 0x6037F7C0
+type = "u32 [23]"
+evidence = "high"
+note = "sec2 rodata, the API values of setting 0x6F in list order: 7, 0, 1, 2, 5, 3, 6, 0x14, 0x15, 8..0x13, 0x1A, 0x1B"
+
+[data.pmode_rows]
+address = 0x60387F94
+type = "u32 [23][16]"
+evidence = "high"
+note = "sec2 rodata, member rows of setting 0x6F: word 0 = prop 0x9481, word 1 = prop 0x84B1, words 2..15 zero. (0x9481, 0x84B1): 7/0, 1/0, 2/0, 3/0, 4/0, 5/1, 6/0, 8/0, 9/0, 0x64/0..0x6D/0, 0x77/0..0x7A/0"
+
+[data.pmode_hook_entry]
+address = 0x6033B32C
+type = "u32 [15]"
+evidence = "high"
+note = "sec2, hook-table entry of setting 0x6F; word 13 is slots.pmode_setter"
+
+[data.pmode_members]
+address = 0x6033A434
+type = "u16 [17]"
+evidence = "high"
+note = "sec2 rodata, composite member list of setting 0x6F: {0x6F, 0x6F, 0x381 (prop 0x84B1), 0x7D0 end, 0..}"
+
+[data.pmode_view_desc]
+address = 0x60D73B44
+type = "u32 [5]"
+evidence = "high"
+note = "sec4 rodata, view 0x30 descriptor of vparam 1 (Picture Mode page): {1, rows 0x60D717B8, count 0x17, 0x60D73220, 0x60D733B0}. The row draw 0x60A5DDE2 / 0x60A5E19D searches rows (count +8, stride 0x24) for row +0 == list value and draws the title {u16 kind, u16 lang, u32 text} at row +4 (kind 4 lang id, kind 5 inline ASCII)"
+
+[data.pmode_view_rows]
+address = 0x60D717B8
+type = "u32 [23][9]"
+evidence = "high"
+note = "sec4 rodata, the title rows of the Picture Mode page, values in the xlat order: {value, kind 4 | lang << 16, 0x60D6D86C, 0, 0, 0, 0x60D6D86C, 0, 0}"
+
+[data.pmode_config]
+address = 0x60D30DF0
+type = "u32 [9]"
+evidence = "high"
+note = "sec4 rodata, menu config 3: {3, list kind 0, list id 0x6F, 0, 0, RIGHT 0x60D2D10C, 0x15, 0, 0}"
+
+[data.tone_y_std]
+address = 0x605DF34E
+type = "u16 [256]"
+evidence = "high"
+note = "sec3 rodata, Y tone curve (0..0x3FF) the picture-mode picker of 0x604B986B returns for contrast sum 0 in modes other than 4/8 (`mov 0x605df34e,a0` at 0x604B9D18, when 0x604BDD42() != 0; else 0x605D8144 at 0x604B9D20): identity 0, 4, .. 776 up to entry 194, then a shoulder to 1023. Natural at contrast 0 and gradation Normal, Vivid at 0 and Muted at +1 use it"
+
+# ======================================================================================================
+# --- Boot facts, Wi-Fi manager, olnet sockets, CPU1 start (projects/devmon0) ---
+# Every CALL form below was counted by a byte scan of main-code-01 for call d16/d32 to the entry; the
+# RETs were read in the listing.
+
+[data.wake_index]
+address = 0xA1BF8ADA
+type = "u16"
+evidence = "high"
+note = "wake index: wake_index_get 0x6007ECCC is `movhu (0xa1bf8ada),d0; retf`; written by the boot wake decode 0x6007EAC8 (0x6007EB9C, 0x6007EBE8, 0x6007EBF5); power_on_factor_init 0x60181C84 maps it through table 0x601A8D28 (index >= 10 -> 0x1000001)"
+
+[data.off_factor]
+address = 0x616DC950
+type = "u8"
+evidence = "high"
+note = "off factor of the last power-down, a byte (movbu loads at 0x6007F3F5 and 0x6007F496, stores at 0x6007F40E and 0x6007F4AC): 0x6007F3FE (Usr1) stores backup parameter 0xA011 here (0x60076B84(0, 0xA011, 0)), then writes 10 back to the backup parameter unless the wake index is 0, 3 or 9; a stored 7 reads as 10 when the index is 9. CPU0 writes it through the cached alias: read it cached on CPU0"
+
+[data.reset_cause]
+address = 0x617FE340
+type = "u32"
+evidence = "medium"
+note = "written once by reset_cause_save 0x60021104 (0x60021111) at reset, read by usr1_wake_flags_calc 0x6018E139 (0x6018E199); its encoding is not characterised"
+
+[data.boot_pwr_word]
+address = 0x617FE394
+type = "u32"
+evidence = "high"
+note = "the power-lever level saved at boot: boot_pwr_word_set 0x600240C4 writes it, boot_pwr_word_get 0x600240CD is `mov (0x617fe394),d0; retf`; bit 31 set = lever reads OFF (Usr1 0x6018CBA5 then turns factor 12 into 0x1000001)"
+
+[data.wifi_run_cpu]
+address = 0xA1C493F0
+type = "u16"
+evidence = "high"
+note = "the debug shell's switch for where a `wifi ...` UART command runs, not the core olnet runs on: 0 runs the command inline (0x60E36FAF), 1 queues it to another task (0x60E4077D). The Wi-Fi init 0x60E36EF2 clears it (clr d0; movhu d0,(0xa1c493f0)); the only other writer is the debug command `wifi run_cpu [0|1]` (0x60E36FED), which prints it as 'run_cpu [0|1] now =' (0x60E372D9). A stock boot reads 0"
+
+[data.wlan_state]
+address = 0x616146D0
+type = "u32"
+evidence = "medium"
+note = "first word of the sec6 WLAN driver state (0x60 bytes): its open 0x610A6BF4 refuses with -7 while it is non-zero and else clears the block and opens the device; the driver loop 0x610A6B82 runs while it is non-zero. Non-zero = the stock Wi-Fi is up [inferred]. Written by the WLAN driver's core: read it uncached (0xA16146D0) as well"
+
+[wifi_mngr_start]
+address = 0x60E377D1
+saves = ["d2", "a2"]
+frame = 0xC
+evidence = "high"
+returns = "unsigned"
+args = ["a void *prm"]
+note = "sec5; ret [d2,a2],0xc at 0x60E378B0 (only RET); all 4 CALLs use [d2,a2],0xc: the debug command 'mngr start pri|one|remocon' 0x60E38451, the Wi-Fi shell start 0x60E444AA, the throughput test 0x60E37CCB and api_network_Start_In_Wlan_Communication 0x602CED29 (the camera app). A0 = the 0xCC-byte parameter block, kept by pointer (not copied) until the WIFI_MNGR task reads it: +0 SSID (strlen <= 0x20), +0x24 key (strlen < 0x40), +0x64 and +0x88 optional strings (empty: the manager keeps 'oishare' and its default), u16 +0x98 net mode, +0x9A security, +0x9C encryption, u32 +0xA0 connect mode (0 private, 1 one-time), +0xA4 app mode (1 remocon), u8 +0xA8 (0: security 0/1/other -> 0/2/3), eight callbacks +0xAC..+0xC8 (wifi_mngr_cb, the last wifi_mngr_ioreq_cb; the manager skips a NULL one with a 'NULL : ..._func' print). The debug command fills 2/3/1, connect mode 0 (pri), the callbacks except +0xBC/+0xC0, and the strings 'OLYMPUSAP', 'oimc12345', '192.168.0.10', 'DDDDCIM'. Returns 1 for a NULL block or an over-long SSID/key, else 0 after it queued {.., 1, prm} on the manager queue (id 0x6004128A, OlyQueueWrite timeout -1) and set event 1 (id 0x60041246). Also writes u16 0x100 at +0x10 of 0x605749C0(setting 0x17) when that setting is not 2/3 (stop writes 0xFFFF there). The stock app calls it from CPU0"
+
+[wifi_mngr_stop]
+address = 0x60E378B3
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "int"
+args = []
+note = "sec5; ret [],4 at 0x60E378F0; all 3 CALLs use [],4 (one is the debug command 'mngr stop' 0x60E3846D). Undoes the +0x10 write of wifi_mngr_start, sets event 2 on the manager's flag (id 0x60041246) and returns 0; the WIFI_MNGR task does the stop"
+
+[callbacks.wifi_mngr_cb]
+entry = "calls"
+evidence = "high"
+returns = "int"
+args = ["d int status"]
+note = "the first seven callbacks of the wifi_mngr_start block (+0xAC start, +0xB0 connect, +0xB4 disconnect, +0xB8 stop, +0xBC, +0xC0, +0xC4 error): the WIFI_MNGR task 0x60E38767 copies them in 0x60E393F2 and enters them with `calls (a0)` (e.g. 0x60E39021), D0 = 0 or a code (0x20, the error value). The camera app's set 0x602CE522..0x602CE5C3 posts 0x41C0001..7 with D1 = D0 and returns 0; the Wi-Fi shell's start callback starts its telnet server (0x60E44557). Runs in the manager task (CPU1 by the task map)"
+
+[callbacks.wifi_mngr_ioreq_cb]
+entry = "calls"
+evidence = "medium"
+returns = "int"
+args = ["d unsigned prm", "a const char *what"]
+note = "callback +0xC8 of the wifi_mngr_start block: the debug stub 0x60E38030 prints A0 as a string and D0 as 'prm', the camera app's 0x602CE5E2 posts 0x41C0008 with D1 = D0; both return 0. Its callers were not traced"
+
+[olnet_socket]
+address = 0x60E1CB60
+saves = ["d2", "a2"]
+frame = 0xC
+evidence = "high"
+returns = "int"
+args = ["d int domain", "d int type", "a int protocol"]
+note = "sec5 BSD socket(); ret [d2,a2],0xc at 0x60E1CBD7; all 9 CALLs use [d2,a2],0xc. D0 = 2 (AF_INET), D1 = 1 stream or 2 datagram, A0 = 0/6/0x11; the olnet test server 0x60E305BB and the Wi-Fi shell 0x60E445AE call (2, 1, 0). Returns the descriptor (< 0x14) or -1 (error code per task in 0x619B8940 + tid * 4)"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "CPU1: the stock servers run there (the Wi-Fi shell 0x60E445AE calls socket() only when (0x8050) == 1, else posts itself to CPU1; HTTPD and WIFI_RELEASE_PUSH accept on CPU1). Blocking calls wait on kernel objects of the calling core, so call the socket functions on CPU1 as they do"
+
+[olnet_bind]
+address = 0x60E1CBDA
+saves = ["d2", "a2", "a3"]
+frame = 0x10
+evidence = "high"
+returns = "int"
+args = ["d int s", "a const void *addr", "d unsigned len"]
+note = "sec5 bind(); all 10 CALLs use [d2,a2,a3],0x10. D0 = descriptor, A0 = sockaddr {u16 2, u16 port in network order, u32 address (0 = any)}, D1 = 16; the test server stores the port as movhu 0xD007 (port 2000), the Wi-Fi shell 0x1700 (23). 0 or -1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "as olnet_socket"
+
+[olnet_listen]
+address = 0x60E1CD01
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x38
+evidence = "high"
+returns = "int"
+args = ["d int s", "d int backlog"]
+note = "sec5 listen(); ret [d2,d3,a2,a3],0x38 at 0x60E1CD26 and 0x60E1CDE1; all 4 CALLs use it. D1 = backlog, clamped to 0..0x80; creates the socket's accept queue (0x60E1DD71) on the calling core. 0 or -1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "as olnet_socket"
+
+[olnet_accept]
+address = 0x60E1CDE4
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x20
+evidence = "high"
+returns = "int"
+args = ["d int s", "a void *addr", "a unsigned *len"]
+note = "sec5 accept(); ret [d2,d3,a2,a3],0x20 at 0x60E1CE86; all 4 CALLs use it. A0 = 16-byte sockaddr out, A1 = &len (in: 16). Blocks in trcv_dtq on the listen queue with the socket's timeout (+0x48); returns the new descriptor or -1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "as olnet_socket"
+
+[olnet_recv]
+address = 0x60E1D041
+saves = ["d2", "d3", "a2"]
+frame = 0x14
+evidence = "high"
+returns = "int"
+args = ["d int s", "a void *buf", "d int len", "a unsigned flags"]
+note = "sec5 recv(); ret [d2,d3,a2],0x14 at 0x60E1D079; all 8 CALLs use it. The test server passes D0 = descriptor, A0 = buffer, D1 = 16, A1 = 0. TCP: flags bit 0 = do not wait; else waits with the socket's receive timeout (+0x3C). Bytes received, 0 or -1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "as olnet_socket"
+
+[olnet_send]
+address = 0x60E1CF27
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x20
+evidence = "high"
+returns = "int"
+args = ["d int s", "a const void *buf", "d int len", "a unsigned flags"]
+note = "sec5 send(); ret [d2,d3,a2,a3],0x20 at 0x60E1CF54 and 0x60E1CF9F; all 10 CALLs use it. D0 = descriptor, A0 = buffer, D1 = length, A1 = flags (0; bit 0 queues the data as an urgent record in 0x60E261D0, not a no-wait flag). TCP: cuts the buffer into MSS pieces (0x60E1D9E7); each waits on the send ring's free-space semaphore (fixed 8 KiB ring per TCP socket, 0x60E1D3CA) with the send timeout, is copied in and kicks the output task; no Nagle hold-back, no per-segment wait for an ACK. The byte count or -1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "as olnet_socket"
+
+[olnet_close]
+address = 0x60E1D197
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x20
+evidence = "high"
+returns = "int"
+args = ["d int s"]
+note = "sec5 close(); ret [d2,d3,a2,a3],0x20 at 0x60E1D1AC; all 17 CALLs use it. Ends the connection, drains and deletes the socket's queue and frees the descriptor. 0 or -1"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "as olnet_socket"
+
+# Run code on CPU1: CPU0 posts a function with cpucall_post; CPU1's CPUCALL_CPU1 task (0x101C, priority
+# 51, entry 0x60071DA7, 0x400 stack) runs it, and it creates a CPU1 task with the kernel's acre_tsk; the
+# task ends with exd_tsk. The firmware's own Wi-Fi shell start 0x60E44557 does the same: on CPU1 it
+# calls 0x60E445AE directly, else cpucall_post(0x60E445A9, 0, 1); 0x60E445AE calls acre_tsk with
+# {TA_ACT, exinf 0, entry 0x60E44363, priority 0x37, stack 0x400, kernel heap}.
+
+[cpucall_post]
+address = 0x60071B71
+saves = ["d2", "d3", "a2", "a3"]
+frame = 0x28
+evidence = "high"
+returns = "int"
+args = ["a void *func", "a void *arg", "d unsigned core"]
+note = "boot1b; ret [d2,d3,a2,a3],0x28 at 0x60071C97 (its only RET); all 16 CALLs use [d2,d3,a2,a3],0x28. A0 func (0x60071B77), A1 arg (0x60071B79), D0 core as a byte (0x60071B71); core >= 3 prints an error. Own core: `calls (a1)` at once with A0 = arg (0x60071B9D..0x60071BA1). Else under dis_dsp the first free slot (func word 0) of the 32 of (target, source) gets {func, arg} (target 1 from CPU0: 0xA1BE74F0; 0x60071BD1..0x60071C2D), then cpucall_ring_post 0x6007179B queues {trampoline, source << 16 | slot} on the (source, target) ring and raises the IRQ. Returns -1 only when all 32 slots are in use; a full ring prints '[CREQ]Buffer Full' and the post is lost with its slot held, yet 0 is returned (0x60071C8D..0x60071C93). The target's CPUCALL task runs func (cpucall_fn) in task context, then frees the slot (CPU1: 0x60071E0E..0x60071E16). No result, no completion signal"
+
+[callbacks.cpucall_fn]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["a void *arg"]
+note = "a function posted with cpucall_post: the target core's CPUCALL task enters it with `calls (a1)` and A0 = arg (CPU1: 0x60071E0E..0x60071E13), in task context; the result is ignored"
+
+[acre_tsk]
+address = 0x600306D3
+saves = ["d2", "a2", "a3"]
+frame = 0x14
+evidence = "high"
+returns = "int"
+args = ["a const void *ctsk"]
+note = "boot1 (kernel); ret [d2,a2,a3],0x14 at 0x600307DA (its only RET); all 21 CALLs use [d2,a2,a3],0x14. A0 -> T_CTSK of 6 words: atr (byte 0..3 checked, else E_RSATR -11; 2 = TA_ACT), exinf, entry (kernel_task), priority (u16, 1..128 else E_PAR -17), stack size (>= 0x14 else E_PAR), stack base (0 = the calling core's kernel heap, `(size + 0x17) & ~3` from 0x60036C44, E_NOMEM -33 on failure, then atr bit 0x80 marks the stack for exd_tsk to free: 0x60030CDE..0x60030D07). E_CTX -25 in an ISR or with the CPU locked. With TA_ACT readies the task. Returns the new id (core in bits 12-14) or the error"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: the id, the TCB and the stack come from the executing core's KCB ((0x8FF00004)[(0x8050)]); CPU1 callers: cpuconn_scan 0x6006C3F9 in CPUCONN_CPU1 and the Wi-Fi shell start 0x60E445AE in CPUCALL_CPU1"
+
+[callbacks.kernel_task]
+entry = "calls"
+evidence = "high"
+returns = "void"
+args = ["d unsigned exinf"]
+note = "entry of a task made by acre_tsk: the kernel enters it with `calls (a2)`, D0 = exinf and SP 4 below the stack top (0x600329DD..0x600329E3). It must not return: end it with exd_tsk"
+
+[exd_tsk]
+address = 0x600319AA
+saves = []
+frame = 0x4
+evidence = "high"
+returns = "void"
+args = []
+note = "boot1 (kernel); `call 0x600318E2,[d2,d3,a2,a3],0x14; ret [],4` (RET at 0x600319AF, never reached); all 8 CALLs use [],4. Removes the running task, frees its stack when acre_tsk allocated it, clears the TCB id and dispatches. Does not return; task context only"
+cores = ["cpu0", "cpu1"]
+cores_evidence = "verified: acts on the executing core's KCB ((0x8FF00004)[(0x8050)]); CPU1 callers: the cpu_conn worker for CPU0's packets 0x6006BF5B runs on CPU1 and CPU2"

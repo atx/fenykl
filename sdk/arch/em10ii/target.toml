@@ -44,7 +44,19 @@ capabilities = [
   "wb_base",
   # shot: the screenshot (lib/shot.c), PRIM still-image pool block 0 lent for the write
   "shot",
+  # devmon: the dev monitor (lib/devmon_*.c, docs/devmon.md), opt-in: linked only into plugins
+  # whose plugin.toml has a [capabilities.devmon] table
+  "devmon",
 ]
+
+# The exec region of the dev monitor (lib/devmon_*.c) and `fenykl tp build`: a never-loaded hole of
+# the image, valid once section 5 is loaded (before the payload starts), unused by the firmware.
+# slots test program slots of slot_size bytes from base, then the monitor's job buffer, up to end.
+[tp]
+base = 0x60F8A800
+slot_size = 0x8000
+slots = 16
+end = 0x61010000
 
 # The stock firmware the loader patch (loader/patch.toml) applies to; the image goes into firmware/.
 [stock]

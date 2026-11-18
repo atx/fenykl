@@ -33,6 +33,7 @@ HUD's battery percentage (runs on the camera; no Fn override) and `hello` on the
 | E-M10 II HUD (`lib/hud.c` + `lib/hud_em10ii.c` + `lib/hud_rle.c`: elements as stock image widgets on the live-view info panel through three GUI slots, INFO-screen property, palette pick below 0x80, camera font and live-view images) | simulator (`tests/test_hud_sim.py`: text with the E-M10 II font and images, the visibility predicate, output device, palette pick, the widget backend against GUI mocks, the encoder); camera: the widget mechanism with one widget (2026-11-17: shown on every still INFO screen on LCD and EVF, gone in movie and the menu, no GUI heap leak over 28 panel builds); the overlay it replaces drew `projects/main`'s blocks (2026-10-23) |
 | E-M10 II own contrast client (`lib/afc.c` with `arch/em10ii/fenykl_body.h`) and `projects/main`'s focus meter | **works on the camera** (2026-10-26): the read-only meter in S-AF and C-AF; in MF 4 attaches, callbacks in an ISR at 31 or 64 frames/s, every stop done, S-AF locking after MF, no error, no call on another core. Not run: a half press while attached |
 | E-M10 II pre-capture (`lib/precap_em10ii.c`, `precap` capability) and `projects/main`'s option and `PRE` tag | builds; the mechanism (injected press, hold 6, commit, cancel, fail-safes) **works on the camera** in a prototype plugin (2026-10-28: 7 silent H bursts, 46 files matching the log); the library form in `projects/main` tried by hand (2026-10-28), without a log check |
+| E-M10 II dev monitor (`lib/devmon_*.c`, opt-in `devmon` capability, `projects/devmon1`, `fenykl dev`, `fenykl tp build`) | **works on the camera** (2026-11-17, relay boot): the access point, protocol v1 PING, READ (505 KiB/s with 8 KiB pieces and a 1 ms pause), WRITE and read-back, a test program, FENYKL.* put/get/del, the name refusals, the power-off sequence; KEY, the FENYKL.BIN refusal, the WRITE deny ranges, the cached WRITE, `fenykl dev screen` (OSD layers to PNG), the memory sampler (`fenykl dev sample`), the read-only photo and screenshot fetch and FLIST: simulator and host tests only (`tests/test_devmon.py`) |
 | E-M10 II hooks (`arch/em10ii/hooks.c`, CPU0 I-cache invalidate) | simulator (`tests/test_sim.py`, `hooks_em10ii`); the I-cache invalidate verified on the camera with a probe (2026-10); a hook probe installed its hooks on the camera (2026-10-19) and removed them cleanly, CPU0 only (2026-10-20) |
 
 ## Development loop
@@ -298,7 +299,8 @@ signature, evidence, the cores that may call it and, in `note`, where they were 
 - console: `fw_dbg_puts`, `fw_dbg_puts_hex`, `fw_sprintf`
 - tasks: `fw_OlyTaskSleep`, `fw_OlyTaskCreate`, `fw_OlyTaskStart`, `fw_OlyTaskStop`,
   `fw_OlySemaphoreWait`, `fw_OlySemaphoreSignal`
-- files: `fw_rpc_fopen`, `fw_rpc_fclose`, `fw_rpc_fread`, `fw_rpc_fwrite`, `fw_rpc_fremove`
+- files: `fw_rpc_fopen`, `fw_rpc_fclose`, `fw_rpc_fread`, `fw_rpc_fwrite`, `fw_rpc_fremove`; on the
+  E-M10 II also `fw_fileif_fseek` and `fw_fileif_findfirst`, `_findnext`, `_findclose`
 - memory and cache: `fw_malloc`, `fw_free`, `fw_dcache_purge_all_irqsafe`, `fw_recfile_alloc`,
   `fw_recfile_free`
 - GUI: `fw_gui_post_event`, `fw_gui_show_panel_ex`, `fw_gui_data_set`, `fw_gui_data_get`
@@ -767,7 +769,7 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | path | purpose |
 |---|---|
 | `include/fenykl.h` | SDK header, camera-independent; includes `fenykl_fw.h` and `fenykl_target.h` |
-| `include/log.h`, `include/cfg.h`, `include/event.h`, `include/key.h`, `include/hud.h`, `include/ui.h`, `include/shot.h`, `include/precap.h` | logging, configuration, event layer, key layer, HUD, settings page, screenshot and pre-capture library APIs |
+| `include/log.h`, `include/cfg.h`, `include/event.h`, `include/key.h`, `include/hud.h`, `include/ui.h`, `include/shot.h`, `include/precap.h`, `include/devmon.h` | logging, configuration, event layer, key layer, HUD, settings page, screenshot, pre-capture and dev monitor library APIs |
 | `include/body.h` | body API: camera state by capability, implemented per camera in `arch/<camera>/fenykl_body.h` (Body API) |
 | `lib/` | SDK library, linked into every plugin (`--gc-sections` drops what is unused) |
 | `lib/start.c` | clears `.bss`, skips a USB boot (`fenykl_usb_attached`, `run_on_usb`), calls `plugin_main` |
@@ -783,6 +785,8 @@ payload. Loaders older than this format reject `FNL2` files as well.
 | `lib/hud_int.h`, `lib/hud_epl3.c`, `lib/hud_em10ii.c`, `lib/hud_rle.c` | its per-camera parts: the E-PL3's copies into OSD layer 1 from the plugin's `cw_updateDisplay` hook; the E-M10 II's GUI image widgets (three slots), visibility (INFO-screen property), output device and palette pick, and the fmt 0x03 encoder of their bitmaps |
 | `lib/shot.c`, `lib/shot_pix.c`, `lib/shot_int.h` | screenshot library: the panel (live view and OSD layers) to `C:\SHOTnnnn.PPM` in strips, `shot_pix.c` the firmware-free pixel work; doc `docs/shot.md` |
 | `lib/precap_em10ii.c` | pre-capture, E-M10 II only (silent sequential H): injected full press, frames held in the Base sequence's slot wrappers, commit and cancel, slot install and restore, fail-safes; doc `docs/precap.md` |
+| `lib/devmon_em10ii.c`, `lib/devmon_cpu1_em10ii.c`, `lib/devmon_proto.c`, `lib/devmon_int.h` | dev monitor, opt-in (`[capabilities.devmon]` in plugin.toml): CPU0 monitor and test program tasks, the CPU1 server, the protocol helpers; doc `docs/devmon.md` |
+| `tp/` | test programs of the dev monitor: `tp_crt.c` (header), `tp.ld` (slot link), `examples/`, `sampler/` (the memory sampler of `fenykl dev sample`); API `include/tp.h` |
 | `lib/ui.c`, `lib/ui_int.h` | settings page library, option core: one list of the cfg options, key and dial semantics, value text, and the page lifecycle both bodies share (open and close bookkeeping, install start, stock word check, "not saved" state); doc `docs/ui.md` |
 | `lib/ui_epl3.c` | its E-PL3 page: Custom J "Fenykl" row, super state 0x0D, drawn by the stock menu list view from GUI data slot 0xF |
 | `lib/ui_em10ii.c` | its E-M10 II page: Custom K Eye-Fi row as "Fenykl" (`sdk_slots`), a screen pushed on the main menu app, drawn by the stock Custom list view from GUI data slot 0x38 |

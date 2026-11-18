@@ -351,28 +351,46 @@ def png_chunk(kind: bytes, payload: bytes) -> bytes:
     return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body))
 
 
-def encode_png(bitmap: Bitmap, palette: Palette) -> bytes:
-    """Indexed 8-bit PNG: the pixel values are the raw colour indices, `palette` gives PLTE + tRNS."""
-    if max(bitmap.pixels) >= len(palette):
-        raise AssetError(
-            f"colour index {max(bitmap.pixels)} beyond the {len(palette)}-entry palette"
-        )
-    w = bitmap.width
-    rows = b"".join(
-        b"\0" + bitmap.pixels[y * w : (y + 1) * w] for y in range(bitmap.height)
-    )
+def _png(
+    width: int, height: int, colour: int, data: bytes, extra: list[bytes]
+) -> bytes:
+    """8-bit PNG of colour type 2 (RGB) or 3 (indexed); `extra`: chunks before IDAT."""
+    stride = width * (3 if colour == 2 else 1)
+    rows = b"".join(b"\0" + data[y * stride : (y + 1) * stride] for y in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, colour, 0, 0, 0)
     return b"".join(
         [
             b"\x89PNG\r\n\x1a\n",
-            png_chunk(
-                b"IHDR", struct.pack(">IIBBBBB", w, bitmap.height, 8, 3, 0, 0, 0)
-            ),
-            png_chunk(b"PLTE", bytes(c for r, g, b, _ in palette for c in (r, g, b))),
-            png_chunk(b"tRNS", bytes(a for *_, a in palette)),
+            png_chunk(b"IHDR", ihdr),
+            *extra,
             png_chunk(b"IDAT", zlib.compress(rows)),
             png_chunk(b"IEND", b""),
         ]
     )
+
+
+def encode_png_indexed(
+    width: int, height: int, pixels: bytes, palette: Palette
+) -> bytes:
+    """Indexed PNG: the pixel values are the raw colour indices, `palette` gives PLTE + tRNS."""
+    if max(pixels) >= len(palette):
+        raise AssetError(
+            f"colour index {max(pixels)} beyond the {len(palette)}-entry palette"
+        )
+    plte = bytes(c for r, g, b, _ in palette for c in (r, g, b))
+    trns = bytes(a for *_, a in palette)
+    return _png(
+        width, height, 3, pixels, [png_chunk(b"PLTE", plte), png_chunk(b"tRNS", trns)]
+    )
+
+
+def encode_png(bitmap: Bitmap, palette: Palette) -> bytes:
+    return encode_png_indexed(bitmap.width, bitmap.height, bitmap.pixels, palette)
+
+
+def encode_png_rgb(width: int, height: int, rgb: bytes) -> bytes:
+    """RGB PNG of `rgb`, 3 bytes per pixel, row-major."""
+    return _png(width, height, 2, rgb, [])
 
 
 def dump_assets(data: bytes, out: Path) -> list[Asset]:

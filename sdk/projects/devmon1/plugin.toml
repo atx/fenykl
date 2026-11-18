@@ -1,0 +1,4 @@
+targets = ["em10ii"]
+
+# The dev monitor library (sdk/lib/devmon_*.c, opt-in). No hook and no slot.
+[capabilities.devmon]

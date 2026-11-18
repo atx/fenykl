@@ -54,7 +54,14 @@ def test_feature_libraries_follow_the_target_capabilities():
         "hud_em10ii.c",
         "key_em10ii.c",
         "precap_em10ii.c",
+        "devmon_proto.c",
+        "devmon_em10ii.c",
+        "devmon_cpu1_em10ii.c",
     }
+    devmon = {"devmon_proto.c", "devmon_em10ii.c", "devmon_cpu1_em10ii.c"}
+    assert {
+        p.name for p in plugin.lib_sources(sdk.target("em10ii"), ["devmon"])
+    } == names("em10ii") | devmon
     assert names("em10ii") == {
         "afc.c",
         "afc_sm.c",
@@ -342,7 +349,9 @@ def test_capability_tables_are_checked(tmp_path, tables, error):
 
 
 @needs_toolchain
-def test_main_links_the_focus_meter_contrast_client_precap_and_rb_swap_for_the_em10ii(tmp_path):
+def test_main_links_the_focus_meter_contrast_client_precap_and_rb_swap_for_the_em10ii(
+    tmp_path,
+):
     plugin.build(MAIN_DIR, tmp_path, sdk.target("em10ii"))
     symbols = (tmp_path / "plugin.map").read_text()
     for name in (
@@ -379,7 +388,8 @@ def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path)
     ):
         assert f" {name}\n" in symbols
     assert re.search(
-        r"\.rodata\.fenykl_key_codes\n\s+0x\w+\s+0x\w+ \S*/lib_key_em10ii\.c\.o\n", symbols
+        r"\.rodata\.fenykl_key_codes\n\s+0x\w+\s+0x\w+ \S*/lib_key_em10ii\.c\.o\n",
+        symbols,
     )
 
 

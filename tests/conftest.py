@@ -1,12 +1,14 @@
 import hashlib
+import socket
 import subprocess
+import threading
 from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
 
 import pytest
 
-from fenykl import fwapi, plugin, sdk
+from fenykl import dev, fwapi, plugin, sdk
 from fenykl.cli import read_bin
 from fenykl.firmware import TARGETS, StockMissingError
 
@@ -102,3 +104,54 @@ def assert_exit(result: subprocess.CompletedProcess, expected: int, see: str) ->
         f"exit status {result.returncode} (see {see})\n{out[-3000:]}"
         f"{result.stderr.decode('latin-1')}"
     )
+
+
+# The `fenykl dev` client against a fake camera on a local socket pair.
+class FakeCamera:
+    """Answers framed requests on one end of a socket pair: `handler(op, payload)` returns
+    (status, reply payload); every request is kept in `requests`."""
+
+    def __init__(self, sock: socket.socket, handler):
+        self.sock = sock
+        self.handler = handler
+        self.requests: list[tuple[int, bytes]] = []
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _recv(self, n: int) -> bytes | None:
+        data = b""
+        while len(data) < n:
+            try:
+                chunk = self.sock.recv(n - len(data))
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            data += chunk
+        return data
+
+    def _serve(self) -> None:
+        while True:
+            head = self._recv(dev.HEADER.size)
+            if head is None:
+                return
+            magic, op, _, rid, n = dev.HEADER.unpack(head)
+            assert magic == dev.REQ_MAGIC
+            payload = self._recv(n) if n else b""
+            self.requests.append((op, payload))
+            status, reply = self.handler(op, payload)
+            try:
+                self.sock.sendall(
+                    dev.HEADER.pack(dev.REP_MAGIC, op, status, rid, len(reply)) + reply
+                )
+            except OSError:
+                return  # the test closed its end first
+
+
+@pytest.fixture
+def pair():
+    a, b = socket.socketpair()
+    a.settimeout(2)
+    yield dev.Client(a), b
+    a.close()
+    b.close()

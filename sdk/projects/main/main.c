@@ -14,6 +14,9 @@
 #endif
 #include <body.h>
 #include <ui.h>
+#ifdef FENYKL_HAS_DEVMON
+#include <devmon.h>
+#endif
 
 #define MAIN_GUI_WAIT_TICKS (60000u / MAIN_TICK_MS)	/* for the GUI and its language font */
 #define MAIN_HUD_SEEN 8u			/* E-M10 II: values main_log_hud watches */
@@ -100,6 +103,10 @@ static void main_start_cfg(void)
 	main_log_apply(NULL, 0);
 	fenykl_log_info(&main_log, "log level %s, saver task %d", main_log_names[main_log_level],
 			fenykl_cfg_task_start());
+#ifdef FENYKL_HAS_DEVMON
+	/* a build with the dev monitor (`fenykl plugin build --with devmon`) */
+	fenykl_log_info(&main_log, "dev monitor task %d", fenykl_devmon_start());
+#endif
 }
 
 #if MAIN_HUD

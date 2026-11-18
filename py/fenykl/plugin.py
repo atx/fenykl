@@ -1,7 +1,9 @@
 """`fenykl plugin build`: C plugin directory -> plugin.elf -> optional ISA check -> FENYKL.BIN."""
 
 import os
+import re
 import subprocess
+import sys
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,7 +35,17 @@ LIB_CAPABILITIES = {
     "ui_epl3.c": "ui",
     "ui_em10ii.c": "ui",
     "precap_em10ii.c": "precap",
+    "devmon_proto.c": "devmon",
+    "devmon_em10ii.c": "devmon",
+    "devmon_cpu1_em10ii.c": "devmon",
 }
+# Capabilities whose library files are linked only into plugins that list the capability's table in
+# plugin.toml ([capabilities.<name>], sources may be empty): their options and tasks are not for
+# every plugin of the target.
+OPT_IN_CAPABILITIES = ("devmon",)
+# The dev monitor's WPA2 passphrase, from the environment at build time (sdk/docs/devmon.md).
+DEVMON_KEY_ENV = "FENYKL_DEVMON_KEY"
+DEVMON_KEY = re.compile(r"[ !#-\[\]-~]{8,63}")
 # Keys of a plugin.toml [capabilities.<name>] table.
 CAPABILITY_KEYS = ("sources", "hooks", "cpu1_unproven")
 # Keeps GCC from turning the runtime's copy/clear loops into calls to memcpy/memset themselves.
@@ -73,13 +85,16 @@ def lib_camera(path: Path) -> str | None:
     )
 
 
-def lib_sources(target: SdkTarget) -> list[Path]:
-    """The sdk/lib files built for `target`: all but those of features it lacks (LIB_CAPABILITIES)
-    and those of other cameras (lib_camera)."""
+def lib_sources(target: SdkTarget, opted_in: Sequence[str] = ()) -> list[Path]:
+    """The sdk/lib files built for `target`: all but those of features it lacks (LIB_CAPABILITIES),
+    those of other cameras (lib_camera) and those of OPT_IN_CAPABILITIES not in `opted_in`."""
+    wanted = [
+        c for c in target.capabilities if c not in OPT_IN_CAPABILITIES or c in opted_in
+    ]
     return [
         p
         for p in sorted(LIB.glob("*.c"))
-        if LIB_CAPABILITIES.get(p.name, "") in ("", *target.capabilities)
+        if LIB_CAPABILITIES.get(p.name, "") in ("", *wanted)
         and lib_camera(p) in (None, target.name)
     ]
 
@@ -144,6 +159,36 @@ def select_capabilities(
     return built, hooks, unproven
 
 
+def tp_defines(target: SdkTarget) -> list[str]:
+    """FENYKL_TP_* of the target's exec region (target.toml [tp]), none without one."""
+    if target.tp is None:
+        return []
+    return [
+        f"-DFENYKL_TP_BASE=0x{target.tp.base:X}u",
+        f"-DFENYKL_TP_SLOT_SIZE=0x{target.tp.slot_size:X}u",
+        f"-DFENYKL_TP_SLOTS={target.tp.slots}u",
+        f"-DFENYKL_TP_END=0x{target.tp.end:X}u",
+    ]
+
+
+def devmon_key_flags() -> list[str]:
+    """The passphrase define of the dev monitor: $FENYKL_DEVMON_KEY (8-63 printable ASCII, no
+    quote or backslash), or none and a warning: the public default."""
+    key = os.environ.get(DEVMON_KEY_ENV)
+    if key is None:
+        print(
+            f"warning: {DEVMON_KEY_ENV} is not set: the dev monitor's access point uses the "
+            "public default passphrase",
+            file=sys.stderr,
+        )
+        return []
+    if not DEVMON_KEY.fullmatch(key):
+        raise BuildError(
+            f"{DEVMON_KEY_ENV} must be 8 to 63 printable ASCII characters without quote or backslash"
+        )
+    return [f'-DFENYKL_DEVMON_KEY="{key}"']
+
+
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> str:
     result = subprocess.run(cmd, check=False, capture_output=True, text=True, env=env)
     if result.returncode != 0:
@@ -163,14 +208,17 @@ def link(
     slots: Sequence[str] = (),
     cpu1_sources: Sequence[Path] = (),
     run_on_usb: bool = False,
+    opted_in: Sequence[str] = (),
 ) -> Path:
     """Compile the plugin sources with the runtime, the firmware thunks, the stubs of `hooks` and of
     the target's `sdk_hooks`, the descriptors of `slots` and of the target's `sdk_slots` and link
     them. Sources in `cpu1_sources` are built with FENYKL_CPU1 (CPU1 code: CPU0-only firmware calls
     do not compile). The sdk/lib files get FENYKL_PLUGIN_CPU1 = 1 if the plugin has `cpu1_sources`, else
-    0. Every file gets FENYKL_TARGET_<NAME> and FENYKL_HAS_<CAPABILITY> (target.toml).
+    0. Every file gets FENYKL_TARGET_<NAME> and FENYKL_HAS_<CAPABILITY> (target.toml; an opt-in
+    capability only when in `opted_in`).
     `firmware` replaces the target's firmware.toml (simulator tests).
-    `run_on_usb` lets the runtime call plugin_main on a boot started by the USB cable."""
+    `run_on_usb` lets the runtime call plugin_main on a boot started by the USB cable.
+    `opted_in`: the OPT_IN_CAPABILITIES whose library files to link (lib_sources)."""
     gen = outdir / "gen"
     try:
         fwapi.generate(
@@ -197,10 +245,17 @@ def link(
         f"-DFENYKL_REGION_END=0x{target.region_end:X}u",
         f"-DFENYKL_RUN_ON_USB={1 if run_on_usb else 0}",
         f"-DFENYKL_TARGET_{target.name.upper()}=1",
-        *(f"-DFENYKL_HAS_{c.upper()}=1" for c in target.capabilities),
+        *(
+            f"-DFENYKL_HAS_{c.upper()}=1"
+            for c in target.capabilities
+            if c not in OPT_IN_CAPABILITIES or c in opted_in
+        ),
+        *tp_defines(target),
     ]
     lib_flags = [*RUNTIME_CFLAGS, f"-DFENYKL_PLUGIN_CPU1={1 if cpu1_sources else 0}"]
-    lib = lib_sources(target)
+    if "devmon" in opted_in:
+        lib_flags += devmon_key_flags()
+    lib = lib_sources(target, opted_in)
     runtime = [target.dir / "crt0.S", *sorted(target.dir.glob("*.c"))]
     objects = []
     for src in [*runtime, *lib, gen / "fw_thunks.S", gen / "fw_hooks.S", *sources]:
@@ -255,11 +310,16 @@ def check_isa(elf: Path, workdir: Path, target: SdkTarget) -> str:
 
 
 def build(
-    plugin_dir: Path, outdir: Path, target: SdkTarget, isa_check: bool = False
+    plugin_dir: Path,
+    outdir: Path,
+    target: SdkTarget,
+    isa_check: bool = False,
+    with_capabilities: Sequence[str] = (),
 ) -> Path:
     """Build the .c and .S files of `plugin_dir` for `target` into `outdir`/FENYKL.BIN (plus plugin.elf/.map,
     gen/, obj/), less those of capabilities `target` lacks (select_capabilities); `isa_check` also runs
-    the target's ISA check on plugin.elf."""
+    the target's ISA check on plugin.elf. `with_capabilities` links OPT_IN_CAPABILITIES the
+    plugin.toml does not list (a demo build)."""
     sources = sorted([*plugin_dir.glob("*.c"), *plugin_dir.glob("*.S")])
     if not sources:
         raise BuildError(f"no .c or .S files in {plugin_dir}")
@@ -283,6 +343,17 @@ def build(
         raise BuildError(
             f"plugin.toml: run_on_usb must be true or false, not {run_on_usb!r}"
         )
+    for cap in with_capabilities:
+        if cap not in OPT_IN_CAPABILITIES or cap not in target.capabilities:
+            raise BuildError(
+                f"--with {cap}: not an opt-in capability of {target.name} "
+                f"(opt-in: {', '.join(OPT_IN_CAPABILITIES)})"
+            )
+    opted_in = [
+        c
+        for c in [*config.get("capabilities", {}), *with_capabilities]
+        if c in OPT_IN_CAPABILITIES
+    ]
     image = outdir / "FENYKL.BIN"
     image.unlink(missing_ok=True)
     elf = link(
@@ -294,6 +365,7 @@ def build(
         slots=config.get("slots", []),
         cpu1_sources=cpu1_sources,
         run_on_usb=run_on_usb,
+        opted_in=opted_in,
     )
     if isa_check:
         print(check_isa(elf, outdir / "isacheck", target), end="")

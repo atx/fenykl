@@ -7,6 +7,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from . import dev, sampler, screen, tp
 from .assets import ASSET_LAYOUTS, AssetError, dump_assets
 from .firmware import (
     FIRMWARE_DIR,
@@ -24,6 +25,7 @@ from .patching import PATCHES, PatchError, apply_patches
 from .payload import PayloadError, describe, describe_shared, pack_elf
 from .plugin import BuildError, build, plugin_targets
 from .sdk import TargetError, toolchain_prefix
+from .sdk import target as sdk_target
 
 
 def read_bin(path: Path) -> bytes:
@@ -119,9 +121,30 @@ def cmd_payload_info(args: argparse.Namespace) -> None:
 def cmd_plugin_build(args: argparse.Namespace) -> None:
     outroot = args.output or args.directory / "build"
     for target in plugin_targets(args.directory, args.target):
-        image = build(args.directory, outroot / target.name, target, args.isa_check)
+        image = build(
+            args.directory,
+            outroot / target.name,
+            target,
+            args.isa_check,
+            args.with_caps,
+        )
         print(f"{image}:")
         print(describe(image.read_bytes(), (image.parent / "plugin.elf").read_bytes()))
+
+
+def cmd_tp_build(args: argparse.Namespace) -> None:
+    sources = args.sources
+    image = tp.build(
+        sources,
+        args.output or sources[0].parent / "build",
+        sdk_target(args.target),
+        args.slot,
+    )
+    h = tp.check(image.read_bytes())
+    print(
+        f"{image}: slot {args.slot} at 0x{h.base:08x}, {h.size} bytes (+{h.mem - h.size} bss), "
+        f"entry 0x{h.entry:08x}, crc 0x{h.crc:08x}"
+    )
 
 
 def cmd_toolchain_path(args: argparse.Namespace) -> None:
@@ -250,7 +273,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also run the target's ISA check on plugin.elf (epl3: needs Ghidra, toolchain/README.md)",
     )
+    plugin_build.add_argument(
+        "--with",
+        dest="with_caps",
+        action="append",
+        default=[],
+        metavar="CAP",
+        help="also link this opt-in library (devmon: the dev monitor, e.g. into main for a demo)",
+    )
     plugin_build.set_defaults(func=cmd_plugin_build)
+
+    tp_parser = commands.add_parser("tp", help="dev monitor test programs")
+    tp_commands = tp_parser.add_subparsers(required=True, metavar="COMMAND")
+    tp_build = tp_commands.add_parser(
+        "build",
+        help="link a test program at a slot of the exec region (sdk/include/tp.h)",
+    )
+    tp_build.add_argument("sources", type=Path, nargs="+", metavar="SRC")
+    tp_build.add_argument("-t", "--target", required=True, metavar="TARGET")
+    tp_build.add_argument("--slot", type=int, required=True)
+    tp_build.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        metavar="OUTDIR",
+        help="default: SRC's directory/build",
+    )
+    tp_build.set_defaults(func=cmd_tp_build)
+
+    sampler.add_parser(dev.add_parser(commands))
 
     toolchain = commands.add_parser("toolchain", help="locate the cross toolchain")
     toolchain_commands = toolchain.add_subparsers(required=True, metavar="COMMAND")
@@ -274,5 +325,7 @@ def main(argv: list[str] | None = None) -> None:
         StockMissingError,
         TargetError,
         AssetError,
+        dev.DevmonError,
+        screen.ScreenError,
     ) as error:
         sys.exit(f"error: {error}")
