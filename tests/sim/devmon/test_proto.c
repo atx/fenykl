@@ -635,6 +635,59 @@ static void t_keys(void)
 		CHECK(206, fdm_key_code(k) && fdm_key_code(k) != 0x0C && fdm_key_code(k) != 0x1901);
 }
 
+static void t_dial(void)
+{
+	struct fdm_req q;
+	uint32_t w[1] = { FDM_DIAL_SCN };
+
+	CHECK(250, t_parse(FDM_OP_DIAL, 1, w, NULL, 0, &q) == 0 && q.a[0] == FDM_DIAL_SCN);
+	w[0] = FDM_DIAL_N;
+	CHECK(251, t_parse(FDM_OP_DIAL, 1, w, NULL, 0, &q) == FDM_EARGS);
+	w[0] = FDM_DIAL_P;
+	CHECK(252, t_parse(FDM_OP_DIAL, 0, w, NULL, 0, &q) == FDM_EARGS &&
+			   t_parse(FDM_OP_DIAL, 0, w, NULL, 2, &q) == FDM_EARGS &&
+			   t_parse(FDM_OP_DIAL, 1, w, NULL, 1, &q) == FDM_EARGS);
+	/* the ladder's values: P..M 1..4, movie 0x0A, Photo Story 0x39, SCN 0x2A, ART 0x33,
+	   iAUTO 0x31 */
+	CHECK(253, fdm_dial_value(FDM_DIAL_P) == 0x01 && fdm_dial_value(FDM_DIAL_M) == 0x04 &&
+			   fdm_dial_value(FDM_DIAL_MOVIE) == 0x0A && fdm_dial_value(FDM_DIAL_STORY) == 0x39 &&
+			   fdm_dial_value(FDM_DIAL_SCN) == 0x2A && fdm_dial_value(FDM_DIAL_ART) == 0x33 &&
+			   fdm_dial_value(FDM_DIAL_IAUTO) == 0x31 && fdm_dial_value(FDM_DIAL_N) == 0);
+}
+
+static uint32_t t_inj_code, t_inj_level, t_injects, t_inj_result;
+
+static unsigned int t_get_state(unsigned int code)
+{
+	return code == FDM_DIAL_CODE ? 0x01 : 0xFFFF;
+}
+
+static unsigned int t_inject(unsigned int code, unsigned int level)
+{
+	t_injects++;
+	t_inj_code = code;
+	t_inj_level = level;
+	return t_inj_result;
+}
+
+static const struct fdm_keyops t_keyops = { .get_state = t_get_state, .inject_level = t_inject };
+
+/* DIAL injects the dial code with the position's value once, and nothing for a bad index; it runs
+   in the CPU0 task like KEY. */
+static void t_dial_set(void)
+{
+	uint8_t out[4] = { 0 };
+
+	CHECK(254, fdm_dial_set(&t_keyops, FDM_DIAL_SCN, out) == 0 && t_injects == 1 &&
+			   t_inj_code == 0x02021901u && t_inj_level == 0x2A && fdm_get32(out) == 0x01 &&
+			   fdm_dial_set(&t_keyops, FDM_DIAL_N, out) != 0 && t_injects == 1);
+	t_inj_result = 3;
+	CHECK(254, fdm_dial_set(&t_keyops, FDM_DIAL_P, out) == 3 && t_injects == 2 &&
+			   t_inj_level == 0x01);
+	CHECK(255, fdm_op_is_job(FDM_OP_DIAL) && fdm_op_is_job(FDM_OP_KEY) &&
+			   !fdm_op_is_job(FDM_OP_READ) && !fdm_op_is_job(FDM_OP_POWEROFF));
+}
+
 static void t_off(void)
 {
 	struct fdm_off o = { 0 };
@@ -988,6 +1041,8 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	t_format();
 	t_put();
 	t_keys();
+	t_dial();
+	t_dial_set();
 	t_get();
 	t_list();
 	sim_exit_code = first_fail;

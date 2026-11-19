@@ -560,6 +560,26 @@ def test_key_names_follow_the_camera_order():
     assert dev.KEYS[0] == "OK" and dev.KEYS[-1] == "FULL" and len(dev.KEYS) == 15
 
 
+def test_dial_sends_the_index_and_returns_the_previous_value(pair):
+    client, cam = pair
+    fake = FakeCamera(cam, lambda op, p: (0, struct.pack("<I", 0x01)))
+    assert client.dial("SCN") == 0x01
+    assert fake.requests == [(dev.OP_DIAL, struct.pack("<I", 6))]
+    with pytest.raises(dev.DevmonError, match="unknown position"):
+        client.dial("C1")
+    assert len(fake.requests) == 1
+
+
+def test_dial_names_a_monitor_without_it_and_refuses_a_bad_reply(pair):
+    client, cam = pair
+    replies = [(-2, b""), (0, b"\x01\x00")]
+    FakeCamera(cam, lambda op, p: replies.pop(0))
+    with pytest.raises(dev.DevmonError, match="has no DIAL"):
+        client.dial("P")
+    with pytest.raises(dev.DevmonError, match="2 bytes, not 4"):
+        client.dial("P")
+
+
 def test_key_sequences_parse_names_holds_and_pauses():
     assert dev.parse_keys("menu 300 DOWN:50  ok half:1500") == [
         ("MENU", dev.HOLD_DEFAULT),

@@ -48,11 +48,14 @@ OP_FDEL = 0x22
 OP_FLIST = 0x23
 OP_POWEROFF = 0x30
 OP_KEY = 0x31
+OP_DIAL = 0x32
 # KEY: the buttons in the camera's order (enum fdm_key); FULL is a half press plus the full press.
 KEYS = (
     "OK", "UP", "DOWN", "LEFT", "RIGHT", "INFO", "MENU", "PLAY", "DEL",
     "FN", "FN2", "FN3", "REC", "HALF", "FULL",
 )  # fmt: skip
+# DIAL: the mode-dial positions in the camera's order (enum fdm_dial).
+DIALS = ("P", "A", "S", "M", "MOVIE", "STORY", "SCN", "ART", "IAUTO")
 HOLD_DEFAULT = 100
 HOLD_MAX = 10000
 SSID = "FENYKL-DEV"
@@ -65,7 +68,7 @@ ERRORS = {
     -5: "file name not allowed for this op",
     -6: "busy (a CPU0 job or a test program is still running)",
     -7: "timeout",
-    -8: "card I/O failed",
+    -8: "card I/O or key inject refused",
     -9: "card gate closed",
     -10: "size or CRC-32 of the written file differs",
     -11: "test program header invalid",
@@ -79,6 +82,7 @@ TIMEOUT = -7
 COMMIT_TIMEOUT = 35.0
 # A listing rescans the directory for every entry: up to the camera's own wait.
 LIST_TIMEOUT = 35.0
+NO_DIAL = "this monitor build has no DIAL"
 NO_PHOTO_FETCH = (
     "this monitor build serves FENYKL.* only: load a build with photo fetch"
 )
@@ -392,6 +396,23 @@ class Client:
         if not 1 <= hold_ms <= HOLD_MAX:
             raise DevmonError(f"hold {hold_ms} ms outside 1..{HOLD_MAX}")
         self.call(OP_KEY, struct.pack("<2I", KEYS.index(name), hold_ms))
+
+    def dial(self, name: str) -> int:
+        """Set the effective mode-dial position; the dial value before it."""
+        if name not in DIALS:
+            raise DevmonError(
+                f"unknown position {name!r} (positions: {' '.join(DIALS)})"
+            )
+        try:
+            reply = self.call(OP_DIAL, struct.pack("<I", DIALS.index(name)))
+        except DevmonStatus as e:
+            if e.status != -2:
+                raise
+            raise DevmonError(f"DIAL {name}: {e}: {NO_DIAL}") from e
+        if len(reply) != 4:
+            raise DevmonError(f"DIAL {name}: reply of {len(reply)} bytes, not 4")
+        (prev,) = struct.unpack("<I", reply)
+        return prev
 
 
 def parse_keys(text: str) -> list[tuple[str, int] | int]:
@@ -718,6 +739,12 @@ def cmd_key(args: argparse.Namespace, c: Client) -> None:
     c.key(args.name.upper(), args.hold)
 
 
+def cmd_dial(args: argparse.Namespace, c: Client) -> None:
+    name = args.position.upper()
+    prev = c.dial(name)
+    print(f"mode dial 0x{prev:x} -> {name}")
+
+
 def cmd_keys(args: argparse.Namespace, c: Client) -> None:
     for step in parse_keys(args.sequence):
         if isinstance(step, int):
@@ -856,6 +883,12 @@ def add_parser(commands: argparse._SubParsersAction) -> argparse._SubParsersActi
     p = add("key", cmd_key, f"press a camera button ({' '.join(KEYS)})")
     p.add_argument("name")
     p.add_argument("--hold", type=int, default=HOLD_DEFAULT, help="ms (default 100)")
+    p = add(
+        "dial",
+        cmd_dial,
+        f"set the mode dial's position until it is turned ({' '.join(DIALS)})",
+    )
+    p.add_argument("position")
     p = add("keys", cmd_keys, 'a key sequence, e.g. "MENU 300 DOWN 200 OK HALF:1500"')
     p.add_argument("sequence")
     return sub

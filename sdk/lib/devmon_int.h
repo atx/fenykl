@@ -66,6 +66,7 @@ enum fdm_op {
 	FDM_OP_FLIST = 0x23,	/* start, path -> next, entries */
 	FDM_OP_POWEROFF = 0x30,	/* - -> - (then Wi-Fi stop and the lever Off) */
 	FDM_OP_KEY = 0x31,	/* key, hold_ms -> - (pressed, held, released) */
+	FDM_OP_DIAL = 0x32,	/* position -> previous value */
 };
 
 /* Reply status: 0 or one of these. */
@@ -76,7 +77,7 @@ enum fdm_op {
 #define FDM_ENAME (-5)		/* a name the op does not allow (docs/devmon.md 4) */
 #define FDM_EBUSY (-6)		/* a CPU0 job or a test program is still running */
 #define FDM_ETIMEOUT (-7)	/* no result in time (a test program cannot be killed) */
-#define FDM_EIO (-8)		/* card I/O failed */
+#define FDM_EIO (-8)		/* card I/O failed, or the key layer refused an inject */
 #define FDM_ECARD (-9)		/* card gate closed (no card, or a cable was seen) */
 #define FDM_ECRC (-10)		/* PUT: size or CRC-32 of the written file differs */
 #define FDM_ETP (-11)		/* test program header invalid */
@@ -366,6 +367,31 @@ enum fdm_key {
 };
 #define FDM_HOLD_MAX 10000u	/* ms */
 uint32_t fdm_key_code(uint32_t key);
+
+/* DIAL: the mode-dial positions the monitor may set (enum fdm_dial, the index on the wire) and
+   their values for ui_key_inject_level(0x02021901, value), the values the dial's ladder gives. */
+enum fdm_dial {
+	FDM_DIAL_P, FDM_DIAL_A, FDM_DIAL_S, FDM_DIAL_M, FDM_DIAL_MOVIE, FDM_DIAL_STORY,
+	FDM_DIAL_SCN, FDM_DIAL_ART, FDM_DIAL_IAUTO, FDM_DIAL_N,
+};
+uint32_t fdm_dial_value(uint32_t pos);
+
+/* The key layer for DIAL: fw_ui_key_get_state and fw_ui_key_inject_level on the camera, a
+   recording stub in the simulator. */
+struct fdm_keyops {
+	unsigned int (*get_state)(unsigned int code);
+	unsigned int (*inject_level)(unsigned int code, unsigned int level);
+};
+#define FDM_DIAL_CODE 0x02021901u
+
+/* DIAL: the previous dial value to out, then the position's value injected once, never retried
+   (a full key ring loses its records). 0 queued; else the inject's result, or 1 for a position
+   outside the table (nothing injected). */
+unsigned int fdm_dial_set(const struct fdm_keyops *k, uint32_t pos, volatile uint8_t *out);
+
+/* Ops whose payload must sit in the job buffer: the CPU0 ops and WRITE (CPU0 writes cached
+   addresses). */
+bool fdm_op_is_job(uint32_t op);
 
 /* --- devmon_cpu1_em10ii.c: the callback addresses in block order, and the cpucall_post function
    that starts the server task on CPU1 (argument: the uncached fdm_sh). --- */

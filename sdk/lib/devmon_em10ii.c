@@ -567,6 +567,27 @@ static int fdm_key(const struct fdm_req *q)
 	return r ? FDM_EIO : 0;
 }
 
+/* DIAL: the position's value pushed as the dial's ladder pushes it; UI_IN posts the dial event
+   and the app changes mode. It lasts until the next edge of the ladder's interrupt (a dial
+   movement) or the next boot. The reply is the previous value. */
+static const struct fdm_keyops fdm_fw_keys = {
+	.get_state = fw_ui_key_get_state,
+	.inject_level = fw_ui_key_inject_level,
+};
+
+static int fdm_dial(const struct fdm_req *q, uint32_t *out_len)
+{
+	unsigned int r = fdm_dial_set(&fdm_fw_keys, q->a[0], FDM_IO());
+
+	if (r) {
+		fdm_err("dial %u: inject %u", q->a[0], r);
+		return FDM_EIO;
+	}
+	fdm_say("dial %x -> %x", fdm_get32(FDM_IO()), fdm_dial_value(q->a[0]));
+	*out_len = 4;
+	return 0;
+}
+
 /* WRITE of a cached address: CPU0's cache gets the bytes and goes to DRAM. */
 static void fdm_write_cached(const struct fdm_req *q)
 {
@@ -743,6 +764,9 @@ static void fdm_jobs(void)
 		break;
 	case FDM_OP_KEY:
 		r = fdm_key(&q);
+		break;
+	case FDM_OP_DIAL:
+		r = fdm_dial(&q, &out_len);
 		break;
 	case FDM_OP_TPRUN:
 		r = fdm_tprun(&q);

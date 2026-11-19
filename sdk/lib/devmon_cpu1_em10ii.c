@@ -289,14 +289,6 @@ static bool fdm_job(volatile struct fdm_shared *s, int c, uint32_t id, const str
 	return fdm_reply(c, q->op, id, j->status, FDM_IO(), j->out_len);
 }
 
-/* Ops whose payload must sit in the job buffer: the CPU0 ops and WRITE (CPU0 writes cached
-   addresses). */
-static bool fdm_op_is_job(uint32_t op)
-{
-	return op == FDM_OP_WRITE || op == FDM_OP_KEY || op == FDM_OP_TPLOAD || op == FDM_OP_TPRUN ||
-	       op == FDM_OP_FPUT || op == FDM_OP_FGET || op == FDM_OP_FDEL || op == FDM_OP_FLIST;
-}
-
 /* One request whose payload is in pay (len bytes); false: the connection is lost. */
 static bool fdm_request(volatile struct fdm_shared *s, int c, uint32_t op, uint32_t id,
 			const volatile uint8_t *pay, uint32_t len)
@@ -341,6 +333,7 @@ static bool fdm_request(volatile struct fdm_shared *s, int c, uint32_t op, uint3
 		s->job.state = FDM_JOB_POSTED;
 		return true;
 	case FDM_OP_KEY:
+	case FDM_OP_DIAL:
 	case FDM_OP_TPLOAD:
 	case FDM_OP_TPRUN:
 	case FDM_OP_FPUT:

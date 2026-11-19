@@ -482,10 +482,22 @@ int fdm_parse(uint32_t op, const uint8_t *args, uint32_t len, struct fdm_req *re
 		if (r)
 			return r;
 		return req->a[0] < FDM_KEY_N && req->a[1] && req->a[1] <= FDM_HOLD_MAX ? 0 : FDM_EARGS;
+	case FDM_OP_DIAL:
+		r = fdm_layout(req, args, len, 1, 0, false);
+		if (r)
+			return r;
+		return req->a[0] < FDM_DIAL_N ? 0 : FDM_EARGS;
 	case FDM_OP_FDEL:
 		return fdm_layout(req, args, len, 0, FDM_NAME_FIELD, false);
 	}
 	return FDM_EOP;
+}
+
+bool fdm_op_is_job(uint32_t op)
+{
+	return op == FDM_OP_WRITE || op == FDM_OP_KEY || op == FDM_OP_DIAL || op == FDM_OP_TPLOAD ||
+	       op == FDM_OP_TPRUN || op == FDM_OP_FPUT || op == FDM_OP_FGET || op == FDM_OP_FDEL ||
+	       op == FDM_OP_FLIST;
 }
 
 static const uint16_t fdm_key_codes[FDM_KEY_N] = {
@@ -499,6 +511,25 @@ static const uint16_t fdm_key_codes[FDM_KEY_N] = {
 uint32_t fdm_key_code(uint32_t key)
 {
 	return key < FDM_KEY_N ? fdm_key_codes[key] : 0;
+}
+
+static const uint8_t fdm_dial_values[FDM_DIAL_N] = {
+	[FDM_DIAL_P] = 0x01,	 [FDM_DIAL_A] = 0x02,	 [FDM_DIAL_S] = 0x03,
+	[FDM_DIAL_M] = 0x04,	 [FDM_DIAL_MOVIE] = 0x0A, [FDM_DIAL_STORY] = 0x39,
+	[FDM_DIAL_SCN] = 0x2A,	 [FDM_DIAL_ART] = 0x33,	 [FDM_DIAL_IAUTO] = 0x31,
+};
+
+uint32_t fdm_dial_value(uint32_t pos)
+{
+	return pos < FDM_DIAL_N ? fdm_dial_values[pos] : 0;
+}
+
+unsigned int fdm_dial_set(const struct fdm_keyops *k, uint32_t pos, volatile uint8_t *out)
+{
+	if (pos >= FDM_DIAL_N)
+		return 1;
+	fdm_put32(out, k->get_state(FDM_DIAL_CODE));
+	return k->inject_level(FDM_DIAL_CODE, fdm_dial_values[pos]);
 }
 
 int fdm_put_chunk(struct fdm_put *st, const struct fdm_req *q)

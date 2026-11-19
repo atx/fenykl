@@ -118,6 +118,7 @@ either, told apart by the payload length, and `DCIM/...` names need the path):
 | 0x23 | FLIST | start, path | next, entries (section 6) | CPU0 |
 | 0x30 | POWEROFF | - | - (sent before the sequence starts) | CPU0 |
 | 0x31 | KEY | key (index, below), hold_ms (1..10000) | - (after the release) | CPU0 |
+| 0x32 | DIAL | mode-dial position (index, section 7) | u32 previous dial value | CPU0 |
 
 Errors:
 
@@ -130,7 +131,7 @@ Errors:
 | -5 | a name the op does not allow (section 4, Files) |
 | -6 | busy |
 | -7 | timeout |
-| -8 | card I/O |
+| -8 | card I/O or key inject refused |
 | -9 | card gate closed |
 | -10 | PUT size or CRC mismatch |
 | -11 | bad test program header |
@@ -157,9 +158,12 @@ CPU0 op are refused; while a test program runs, TPLOAD and TPRUN are refused.
     the lines, and CPU0's I-cache is not invalidated (code goes through TPLOAD).
 - **READ** of a cached address shows CPU1's view. Use the uncached alias for data that CPU0 changes.
 - **Settings.** No op writes camera settings, props or firmware files. But a WRITE or a test
-  program's `wr32` can change the RAM settings store, and a POWEROFF afterwards runs the stock
-  shutdown, which saves it. **After any WRITE or TPRUN, end the session by cutting power with the
-  relay (`fenykl dev power off`), not with POWEROFF**, unless the pokes are known harmless.
+  program's `wr32` can change the RAM settings store, a DIAL changes the shooting mode in it as a
+  dial turn does, and a POWEROFF afterwards runs the stock shutdown, which saves it. **After any
+  WRITE, TPRUN or DIAL, end the session by cutting power with the relay (`fenykl dev power off`),
+  not with POWEROFF**, unless the pokes are known harmless. A `dial P` brings the mode back only
+  for the rest of the session: a scene or art filter chosen in the picker, or a recalled Myset,
+  stays in the settings store.
 - **Test programs** are arbitrary CPU0 code: `wr32` writes any address, MMIO included, by design.
 - **Files:** one allow-list rule (`fdm_name_check`) for every file op:
 
@@ -305,14 +309,42 @@ injected unless a client asks.
 | 7 | PLAY | 0x0087 | | | |
 
 The codes are the key layer's (`lib/key_em10ii.c`). FULL is a half press, 300 ms, the full press
-for hold_ms, then both released. The power switch and the mode dial are not offered. Only the lever
-(0x0C) and the full press are proven by injection on the camera so far; the others are camera-seen
-key codes.
+for hold_ms, then both released. The power switch is not offered. Only the lever (0x0C) and the
+full press are proven by injection on the camera so far; the others are camera-seen key codes.
 
 ```sh
 uv run fenykl dev key MENU
 uv run fenykl dev key HALF --hold 1500
 uv run fenykl dev keys "MENU 300 DOWN 200 DOWN OK HALF:1500 FULL"   # pauses in ms, NAME:hold
+```
+
+DIAL sets the effective mode-dial position: `ui_key_inject_level(0x02021901, value)` in the CPU0
+monitor task pushes the value as the dial's own ladder does, UI_IN posts the dial event and the
+camera changes mode (mode guide, then the scene or art picker, as for a turn). The reply is the
+value `ui_key_get_state(0x02021901)` read before. The wire carries an index, never a raw value:
+
+| index | position | value | index | position | value |
+|---|---|---|---|---|---|
+| 0 | P | 0x01 | 5 | STORY (Photo Story) | 0x39 |
+| 1 | A | 0x02 | 6 | SCN | 0x2A |
+| 2 | S | 0x03 | 7 | ART | 0x33 |
+| 3 | M | 0x04 | 8 | IAUTO | 0x31 |
+| 4 | MOVIE | 0x0A | | | |
+
+- **Lifetime:** the position lasts until the next edge on the dial ladder's GPIO, which re-reads the
+  dial and pushes the real position, or the next boot. A dial movement makes such an edge, and so
+  does line noise. How often noise reverts a position is unmeasured.
+- **When:** in live view, with the menu closed and no capture or burst running.
+- **Myset:** if one of settings 0x1E6..0x1E9 holds the target mode, the camera recalls that Myset
+  (1..4). Read them before the first DIAL.
+- **End** at the physical position: the `prev` of the session's first DIAL. Then cut power with the
+  relay (section 4).
+- Run on the camera once: SCN and back to P from a probe boot. SCN showed the mode guide, then the
+  scene picker (OK keeps the stored scene); no revert in 4.4 min; P restored the previous state.
+
+```sh
+uv run fenykl dev dial SCN    # mode dial 0x1 -> SCN
+uv run fenykl dev dial P
 ```
 
 ## 8. Power
@@ -532,8 +564,8 @@ How it runs:
   - The PC therefore starts the sampler with `timeout_ms` 1. The CPU0 monitor task answers TIMEOUT
     at its next 5 ms poll, the job slot is free again, and the program keeps running in its own
     task (PING `exec_busy=1`).
-  - From then on READ, PING, LOG and uncached WRITE run on CPU1. KEY and cached WRITE run in the
-    monitor task, which still runs: TPRUN does not block the CPU0 job runner, only the request
+  - From then on READ, PING, LOG and uncached WRITE run on CPU1. KEY, DIAL and cached WRITE run in
+    the monitor task, which still runs: TPRUN does not block the CPU0 job runner, only the request
     that waits for it. TPLOAD and TPRUN answer busy until the sampler returns.
   - The monitor logs its "tp still running ... timeout reply" line on every run; this is expected.
     The program's return value is lost, so the `state` word is the result.
