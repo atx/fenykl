@@ -13,6 +13,10 @@
  *   boot. The main menu's page actuator copies the letter list's open records when the first MENU
  *   builds it, so the install belongs before that (else letter row L opens only after LEFT to the
  *   top tabs and RIGHT, which rebuilds it).
+ * - The icon: the tab column and the letter list draw tab 0x8F1's icon entry {0xE, 0x1C} as images
+ *   2043 (bright) and 2040 (dim) of the common resource, which only those two lists show. Their
+ *   image-table words are re-pointed to our own records, uncached like the stock ones, of the
+ *   images in ui_icon_em10ii.h (python3 -m fenykl.icon generates it from an index grid).
  * - Option rows: OK or RIGHT finds the row's L1 record, whose callback the stock code calls instead
  *   of creating the level-2 picker, then goes to level 2 whatever it did. The style table's only
  *   reader looks a row's style up once, when level 2 builds its option view, so the callback first
@@ -32,6 +36,7 @@
  */
 #include <body.h>
 #include "ui_int.h"
+#include "ui_icon_em10ii.h"
 
 #define FUI_SECTIONS 0x0Eu		/* section_loaded bits of sec2..sec4 */
 #define FUI_TAB 0x8F1u
@@ -51,6 +56,7 @@
 #define FUI_YIELD_WORDS 8u		/* swaps between two yields: each one flushes the D-cache twice */
 #define FUI_REC_STRIDE 24u
 #define FUI_CELL_STRIDE 12u
+#define FUI_IMG_TYPE 0x0Eu		/* 8 bpp */
 
 /* Stock words of the tables the install copies or changes */
 #define FUI_TAB_IDS 0x60D33E9Eu		/* the tab list's ids 0x846..0x850 */
@@ -70,6 +76,8 @@
 #define FUI_STYLES_N 0x50u
 #define FUI_RULES_N 0x220u
 #define FUI_RULE_SIZE 12u
+#define FUI_ICON_STOCK 0xA2E85064u	/* image 2043's record: Accessory Port, "C" */
+#define FUI_ICON_DIM_STOCK 0xA2E84758u	/* image 2040's */
 
 /* Picker fields */
 #define FUI_PK_INIT 0x2Cu		/* per-id init, run by the handler on re-init events */
@@ -436,6 +444,18 @@ static void fui_build_lists(void)
 	t->c30_ok[FUI_TABS] = fui_open_rec(FUI_TAB);
 }
 
+static struct fui_img fui_img(const uint32_t *bits, uint32_t size)
+{
+	return (struct fui_img){ FUI_IMG_TYPE, FUI_ICON_W, FUI_ICON_H, 8, 0, size,
+				 (uint32_t)FENYKL_UNCACHED(bits), 0 };
+}
+
+static void fui_build_icons(void)
+{
+	fui.t.icon = fui_img(fui_icon_bright, FUI_ICON_BRIGHT_SIZE);
+	fui.t.icon_dim = fui_img(fui_icon_dim, FUI_ICON_DIM_SIZE);
+}
+
 static void fui_add(uint32_t addr, uint32_t stock, uint32_t ours)
 {
 	fui.w[fui.nwords++] = (struct fui_word){ addr, stock, ours };
@@ -474,6 +494,9 @@ static void fui_build_words(void)
 	fui_add(FW_CUSTOM_LETTER_CFG + 0x1Cu, FUI_C30_OK, (uint32_t)t->c30_ok);
 	fui_add(FW_CUSTOM_LETTER_CFG + 0x18u, FUI_TABS, FUI_TABS + 1u);
 	fui_add(FW_CUSTOM_LETTER_CFG + 0x20u, FUI_TABS, FUI_TABS + 1u);
+	/* the icon's two images */
+	fui_add(FW_GUI_IMAGE_2043, FUI_ICON_STOCK, (uint32_t)FENYKL_UNCACHED(&t->icon));
+	fui_add(FW_GUI_IMAGE_2040, FUI_ICON_DIM_STOCK, (uint32_t)FENYKL_UNCACHED(&t->icon_dim));
 	/* the tab list last: the tab appears only with everything behind it in place */
 	fui_add(FW_CUSTOM_TAB_LIST + 4u, FUI_TAB_IDS, (uint32_t)t->tabs);
 	fui_add(FW_CUSTOM_TAB_LIST, FUI_TABS << 16, (FUI_TABS + 1u) << 16);
@@ -631,6 +654,7 @@ int fenykl_ui_install_opts(const struct fenykl_cfg_opt *begin, const struct feny
 		return FENYKL_UI_EAGAIN;
 	fui_build_rows();
 	fui_build_lists();
+	fui_build_icons();
 	fui_build_words();
 	if (!fui_check())
 		return FENYKL_UI_ESTOCK;

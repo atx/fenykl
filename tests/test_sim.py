@@ -46,7 +46,8 @@ firmware functions placed at their real firmware addresses. Every C test program
 - ui_em10ii: the E-M10 II settings tab (sdk/lib/ui.c, ui_em10ii.c) on the stock image's bytes of
   every table it checks or rewires: the option limits, the waits and stock refusals, the install
   with a consistency check at every flush, the rows, labels and styles, the pickers through the
-  words the firmware calls, cfg sets, the value-column refresh, a late install and the rollback.
+  words the firmware calls, cfg sets, the value-column refresh, a late install, the rollback and
+  the tab icon's image records.
 """
 
 from pathlib import Path
@@ -62,6 +63,7 @@ from conftest import (
 )
 
 from fenykl import fwapi, sdk
+from fenykl.assets import common_resource
 from fenykl.firmware import TARGETS, unpack_firmware
 
 pytestmark = needs_toolchain
@@ -298,19 +300,29 @@ UI_REGIONS = [
     (0x615F3FBC, 4),  # letter list object pointer (.data1)
     (0x615F4B14, 28),  # option picker handlers (.data1)
 ]
+# The image table words [2040..2043] of the common resource (uncached DRAM, outside EM10II_DRAM).
+UI_COMMON_REGIONS = [(0xA2BD8610, 16)]
 # .data1 runs at DATA1 and sits at DATA1_FILE in the main code block.
 DATA1, DATA1_FILE = 0x615DC540, 0x1AEFE0
 
 
 def _ui_image_source(workdir: Path) -> Path:
-    """sim_image[]: the stock bytes of UI_REGIONS at their run addresses."""
-    fw = unpack_firmware(stock_image("em10ii"))
+    """sim_image[]: the stock bytes of UI_REGIONS and UI_COMMON_REGIONS at their run addresses."""
+    stock = stock_image("em10ii")
+    fw = unpack_firmware(stock)
     code = fw.blocks[fw.find_block("main-code-01")].body
     base = TARGETS["em10ii"].load_addresses["main-code-01"]
-    arrays, entries = [], []
-    for i, (address, size) in enumerate(UI_REGIONS):
+    common = common_resource(stock)
+    chunks = []
+    for address, size in UI_REGIONS:
         start = address - DATA1 + DATA1_FILE if address >= DATA1 else address - base
-        chunk = code[start : start + size]
+        chunks.append((address, code[start : start + size]))
+    for address, size in UI_COMMON_REGIONS:
+        start = common.off(address)
+        chunks.append((address, common.data[start : start + size]))
+    arrays, entries = [], []
+    for i, (address, chunk) in enumerate(chunks):
+        size = len(chunk)
         arrays.append(
             f"static const uint8_t r{i}[] = {{{', '.join(map(str, chunk))}}};"
         )
@@ -322,7 +334,7 @@ def _ui_image_source(workdir: Path) -> Path:
         + "\n".join(arrays)
         + "\n\nconst struct sim_region sim_image[] = {\n"
         + "\n".join(entries)
-        + f"\n}};\nconst unsigned int sim_image_n = {len(UI_REGIONS)};\n"
+        + f"\n}};\nconst unsigned int sim_image_n = {len(chunks)};\n"
     )
     return path
 
@@ -344,9 +356,11 @@ def test_em10ii_ui_runs_in_the_simulator(tmp_path):
             SIM / "hooks_em10ii" / "sim_start.S",
             ui / "fw.S",
         ],
-        # DRAM up to the GUI and menu data with its uncached alias, the timer, the mock bodies.
+        # DRAM up to the GUI and menu data with its uncached alias, the image table words, the
+        # timer, the mock bodies.
         [
             EM10II_DRAM,
+            region("0xa2bd8600,0x100"),
             TIMER,
             region("0x6eb00000,0x10000"),
         ],

@@ -104,7 +104,8 @@ are data writes into tables the menu code reads; no code is patched.
   6. the letter list's Custom page record: 12 titles and helps (L: "Fenykl", "Fenykl plugin
      settings.");
   7. the letter list's RIGHT / OK records: 12, L opening the tab like A..K;
-  8. the Custom tab list: 12 ids, last, so that the tab appears only with everything behind it in
+  8. the image-table words of images 2043 and 2040: our icon records (see Icons);
+  9. the Custom tab list: 12 ids, last, so that the tab appears only with everything behind it in
      place.
 
   A store that finds a changed word rolls the install back. The tab stays installed for the boot;
@@ -142,8 +143,18 @@ are data writes into tables the menu code reads; no code is patched.
   screens on a body without the Accessory Port menu), or it takes index 11 of the 11-entry tab
   list and its id lookup misses. Until checked, leave the menu on another tab before a boot without
   the plugin.
-- **Icons.** The tab column shows the borrowed id's icon (an Accessory Port glyph with a small
-  "C"); there is no stock "L" image.
+- **Icons.** The tab has its own icon, a fennel bulb with fronds and an "L" on the Custom tabs'
+  plate (38 x 40, the menu's GUI palette). The stock image widgets draw it: the borrowed id's icon
+  entry {0xE, 0x1C} selects images 2043 (bright) and 2040 (dim) of the common resource, and the
+  install re-points those two image-table words (0xA2BD861C, 0xA2BD8610) from the stock records
+  (an Accessory Port glyph with a small "C") to ours, uncached like the stock ones. The tab column
+  and the letter list are those images' only users (a scan of every image-list record of the
+  menu's widgets; no code operand names them), so both show the icon and nothing else changes.
+  The pixels are an index grid (`lib/ui_icon_em10ii.txt`); `python3 -m fenykl.icon` encodes it,
+  bright and a dim remap, into the 8-bpp run-length format of the stock images
+  (`lib/ui_icon_em10ii.h`, committed; a test checks that it is up to date and that it decodes back
+  to the grid). The encoder reproduces every 8-bpp stock image byte for byte. Seen on the camera
+  (2026-11-20): bright in the open tab and its letter row, dim otherwise, index 0 transparent.
 - **Eye-Fi**: untouched, tab K is stock.
 - Status: the mechanism ran on the camera in a probe plugin (2026-11-19, installed before and after
   the first MENU): tab and letter row L, kind-5 titles and helps, two option rows (an On/Off and a

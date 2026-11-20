@@ -23,7 +23,7 @@ monitor; `main` and
 | CPU1 code (`cpu1_sources`) | does not build: no target has the `cpu1` capability (no CPU1 runtime on the E-M10 II yet) |
 | other thunks (`fw_OlyTaskCreate` from C, `fw_malloc`/`fw_free`, `fw_dcache_flush_all`, `fw_dbg_puts`) | used on the camera by the libraries and plugins; `fw_dbg_puts` output is invisible without the internal UART |
 | logging library (`lib/log*.c`) | **works on the camera** in `projects/main`: init, flushes. Not run: CPU1 records, wake from standby, the 4 MiB cap; the console tee has nothing to read on this firmware (`docs/logging.md` 7). `fw_malloc` refuses more than 0x4000 bytes |
-| E-M10 II settings tab (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); the tab mechanism (Custom tab L, native rows, patched stock pickers) ran on the camera in a probe plugin (2026-11-19); this library **works on the camera** (2026-11-20: the main plugin's tab with sets saved and kept over a reboot; 41 rows on 6 pages, ENUMs up to 26 names, the removal; `docs/ui.md` 7). `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle **work on the camera** (2026-10-23) |
+| E-M10 II settings tab (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); the tab mechanism (Custom tab L, native rows, patched stock pickers) ran on the camera in a probe plugin (2026-11-19); this library **works on the camera** (2026-11-20: the main plugin's tab with sets saved and kept over a reboot; 41 rows on 6 pages, ENUMs up to 26 names, the removal; `docs/ui.md` 7); its own tab icon **works on the camera** (2026-11-20). `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle **work on the camera** (2026-10-23) |
 | event layer (`lib/event.c`) | simulator (`tests/test_sim.py`, `fnfunc_em10ii`); a pass-through handler ran on the camera (`docs/fnfunc.md`) |
 | Button Function entries (`lib/fnfunc_em10ii.c`) | simulator (`tests/test_sim.py`, `fnfunc_em10ii`); Fn3's entry and press listener ran on the camera, Fn1/Fn2/REC/L-Fn and main's screenshot through it not yet |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | not run on the camera: once a cable was seen the gate stays closed until power-off (Cable at run time) |
@@ -650,7 +650,8 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 | `lib/devmon_em10ii.c`, `lib/devmon_cpu1_em10ii.c`, `lib/devmon_proto.c`, `lib/devmon_int.h` | dev monitor, opt-in (`[capabilities.devmon]` in plugin.toml): CPU0 monitor and test program tasks, the CPU1 server, the protocol helpers; doc `docs/devmon.md` |
 | `tp/` | test programs of the dev monitor: `tp_crt.c` (header), `tp.ld` (slot link), `examples/`, `sampler/` (the memory sampler of `fenykl dev sample`); API `include/tp.h` |
 | `lib/ui.c`, `lib/ui_int.h` | settings tab library, option core: the list of the cfg options and its limits, the values and cfg calls, install start, stock word check, "not saved" state; doc `docs/ui.md` |
-| `lib/ui_em10ii.c` | its E-M10 II tab: Custom tab "L. Fenykl" on the borrowed tab id 0x8F1, native rows, the stock option picker patched per row |
+| `lib/ui_em10ii.c` | its E-M10 II tab: Custom tab "L. Fenykl" on the borrowed tab id 0x8F1, native rows, the stock option picker patched per row, the tab's own icon |
+| `lib/ui_icon_em10ii.txt`, `lib/ui_icon_em10ii.h` | the tab's icon: the index grid and the run-length images generated from it (`python3 -m fenykl.icon`) |
 | `arch/em10ii/target.toml` | model (FENYKL.BIN header), toolchain, cflags file, ISA check, ELF machine, payload `load` and `max_size`, `sdk_hooks`, `sdk_slots`, `sdk_cpu1_unproven`, `capabilities`, `[stock]` firmware identity, `[assets]` GUI asset layout of the stock image (the image table spans two resource slots) |
 | `arch/em10ii/loader/` | the camera's boot loader patch: `loader.S`, `loader.ld`, `loader.lst`, `patch.toml` (pinned bytes) |
 | `arch/em10ii/firmware.toml` | hand-curated firmware API: functions, hooks, callbacks, slots, data addresses |
@@ -788,7 +789,8 @@ py/fenykl/
   sdk.py            SDK cameras (sdk/arch/<camera>/target.toml)
   fwapi.py          firmware.toml -> C header, MN10300 thunks, address symbols
   plugin.py         plugin build (plugin.toml, per camera)
-  assets.py         GUI font/icon/image decoder and PNG dump (assets dump)
+  assets.py         GUI font/icon/image decoder and PNG dump (assets dump), 8-bpp encoder
+  icon.py           settings tab icon generator (sdk/lib/ui_icon_em10ii.h)
 firmware/           drop-in dir for stock images (git-ignored)
 sdk/                C plugin SDK, camera parts in sdk/arch/<camera>/ (this file)
 toolchain/          mn10300-elf toolchain build and checks (toolchain/README.md)

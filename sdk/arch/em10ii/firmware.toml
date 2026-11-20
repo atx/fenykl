@@ -604,6 +604,18 @@ type = "{u16 tab, u16 bright, u16 dim, u16 mark}"
 evidence = "high"
 note = "sec4, entry 13 of the 14 tab icon entries 0x60D3C6CC (readers 0x609F8FDC icons, 0x609F913E mark; operands at 0x609F908B, 0x609F928B): {0x8F1, 0xE, 0x1C, mark 0}. The mark is the coloured bar left of each row, 0xB (green) on the Custom tabs, 0 none"
 
+[data.gui_image_2043]
+address = 0xA2BD861C
+type = "u32 -> struct gui_image"
+evidence = "high"
+note = "image table word [2043] (gui_image_table 0xA2BD6630 + 4 * 2043, common resource 0xA24E2C00 + 0x10), the bright icon of tab 0x8F1 (icon index 0xE): stock 0xA2E85064 -> {type 0x0E, 38 x 40, 8 bpp, 0, size 747, bitmap 0xA2E84D78, key 0}, the Accessory Port glyph with a C. Icon values reach the image through 0x60A58E6F(widget, icon - 1) (tab column 0x6098739B, letter list 0x60990329). Images 2040..2045 are used only by the image lists of the tab-column widgets 0x20..0x26 of panel 0xD4 and the letter-list widgets 0x88..0x8E of panel 0xD3 (a scan of every type-0x8003 record); no code operand holds 0x7F8 or 0x7FB as an image id. The resource is loaded once at boot: gui_load_language_res 0x60A76FB4 sets the common resource pointer (0x618C84A4, table word 0x615F3D14) only for d0 = 0 (0x60A770D5), from WinMain 0x60934FA2; its other caller 0x60A044C4 passes d0 = 1 (fonts and strings only, a language change)"
+
+[data.gui_image_2040]
+address = 0xA2BD8610
+type = "u32 -> struct gui_image"
+evidence = "high"
+note = "image table word [2040], the dim icon of tab 0x8F1 (icon index 0x1C): stock 0xA2E84758 -> {type 0x0E, 38 x 40, 8 bpp, 0, size 723, bitmap 0xA2E84484, key 0}. Users as gui_image_2043"
+
 [data.custom_tab_cfg_l]
 address = 0x60D3151C
 type = "config record (36 bytes)"

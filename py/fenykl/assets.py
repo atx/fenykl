@@ -184,6 +184,34 @@ def decode_bitmap(data: bytes, offset: int) -> Bitmap:
     )
 
 
+def encode_bitmap8(width: int, height: int, pixels: bytes) -> tuple[bytes, int]:
+    """Encode 8-bpp `pixels` (row-major) as fmt 0x03, runs of up to 4 within a row: the header and
+    whole u64s of codes, and the size the GUI's image records give it (header plus the bytes up to
+    the last code's)."""
+    if len(pixels) != width * height:
+        raise AssetError(f"{len(pixels)} pixels for {width}x{height}")
+    codes = []
+    for row in range(0, len(pixels), width):
+        line = pixels[row : row + width]
+        x = 0
+        while x < width:
+            run = 1
+            while run < 4 and x + run < width and line[x + run] == line[x]:
+                run += 1
+            codes.append(line[x] << 2 | (run - 1))
+            x += run
+    body = b"".join(
+        sum(code << (10 * k) for k, code in enumerate(codes[i : i + 6])).to_bytes(
+            8, "little"
+        )
+        for i in range(0, len(codes), 6)
+    )
+    tail = len(codes) % 6
+    size = 4 + 8 * (len(codes) // 6) + ((10 * tail + 7) // 8 if tail else 0)
+    head = struct.pack("<I", (height - 1) | (width - 1) << 12 | 0x03 << 24)
+    return head + body, size
+
+
 def _lang_dir(lang: bytes, layout: AssetLayout, index: int) -> bytes:
     addr, size = struct.unpack_from("<II", lang, index * 16)
     start = addr - layout.lang_flash_base

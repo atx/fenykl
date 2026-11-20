@@ -4,7 +4,17 @@ import zlib
 import pytest
 from conftest import stock_image
 
-from fenykl.assets import AssetError, Bitmap, decode_bitmap, encode_png, read_assets
+from fenykl.assets import (
+    AssetError,
+    Bitmap,
+    common_resource,
+    decode_bitmap,
+    encode_bitmap8,
+    encode_png,
+    layout_for,
+    read_assets,
+)
+from fenykl.firmware import identify
 
 
 def _header(width: int, height: int, fmt: int) -> bytes:
@@ -90,3 +100,18 @@ def test_em10ii_stock_assets():
     languages = {asset.font.split("_")[0] for asset in assets if asset.kind == "glyph"}
     assert len(languages) == 34
     assert all(max(asset.bitmap.pixels) < len(asset.palette) for asset in assets)
+
+
+def test_encode8_matches_every_stock_8bpp_image():
+    data = stock_image("em10ii")
+    common = common_resource(data)
+    layout = layout_for(identify(data))
+    table = common.u32(layout.common_addr + layout.image_table)
+    images = [a for a in read_assets(data) if a.kind == "image" and a.bitmap.fmt == 3]
+    assert len(images) == 3619
+    for a in images:
+        bm = a.bitmap
+        encoded, size = encode_bitmap8(bm.width, bm.height, bm.pixels)
+        start = common.off(a.address)
+        assert encoded[:size] == common.data[start : start + size], a.name
+        assert size == common.u32(common.u32(table + 4 * int(a.name)) + 0xC), a.name

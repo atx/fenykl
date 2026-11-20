@@ -12,7 +12,7 @@
 #define FUI_TEXT_MAX 32u		/* inline ASCII labels (kind 5) */
 #define FUI_NROWS (FENYKL_UI_OPTS_MAX + 1u)	/* the info row, then the options */
 #define FUI_TABS 11u			/* stock Custom tabs A..K */
-#define FUI_NWORDS 21u			/* the shared row style, 20 table words */
+#define FUI_NWORDS 23u			/* the shared row style, 22 table words */
 
 /* Label descriptor: kind 4 = lang id, kind 5 = inline ASCII. */
 struct fui_desc {
@@ -49,10 +49,17 @@ struct fui_rec {
 	uint32_t fn, group, target, fn2;
 };
 
+/* GUI image record: type 0x0E (8 bpp), size and bitmap of a fmt 0x03 image. */
+struct fui_img {
+	uint16_t type, w, h, bpp;
+	uint32_t zero, size, bitmap, key;
+};
+
 _Static_assert(sizeof(struct fui_cell) == 12, "cell layout");
 _Static_assert(sizeof(struct fui_row) == 36, "row record layout");
 _Static_assert(sizeof(struct fui_l1) == 12, "L1 record layout");
 _Static_assert(sizeof(struct fui_rec) == 24, "dispatch record layout");
+_Static_assert(sizeof(struct fui_img) == 24, "image record layout");
 
 struct fui_tables {
 	struct fui_row rows[FUI_NROWS];
@@ -65,6 +72,7 @@ struct fui_tables {
 	uint16_t tabs[FUI_TABS + 1];
 	struct fui_cell titles[FUI_TABS + 1], helps[FUI_TABS + 1];
 	struct fui_rec c30_right[FUI_TABS + 1], c30_ok[FUI_TABS + 1];
+	struct fui_img icon, icon_dim;		/* the tab's icon, bright and dim */
 };
 
 /* A stock word the install swaps: stock -> ours. */

@@ -8,12 +8,13 @@
  * (fw_call_* thunks). Checks the option limits, the waits and refusals, the install with a
  * consistency check at every flush and yield (no count past its table, the tab listed only with
  * everything behind it in place), the rows, the pickers and cfg sets, the value-column refresh, a
- * late install, the rollback, the shared row style, the picker reallocation, the removal and a
- * RAM-only option table. plugin_main sets sim_exit_code to 0 or the number of the first
+ * late install, the rollback, the shared row style, the picker reallocation, the tab's icon
+ * records, the removal and a RAM-only option table. plugin_main sets sim_exit_code to 0 or the number of the first
  * failed check.
  */
 #include <fenykl.h>
 #include "../../../sdk/lib/ui_int.h"
+#include "../../../sdk/lib/ui_icon_em10ii.h"
 
 #define CHECK(n, cond)					\
 	do {						\
@@ -29,7 +30,9 @@
 #define SIM_ON 0x00C60004u
 #define SIM_PK_STOCK_N 5u
 #define SIM_NOPTS 11u
-#define SIM_WORDS 21u
+#define SIM_WORDS 23u
+#define SIM_ICON_STOCK 0xA2E85064u	/* image records 2043 and 2040 */
+#define SIM_ICON_DIM_STOCK 0xA2E84758u
 #define SIM_STYLE79 (FW_CUSTOM_ROW_STYLES + 4u * 79u)
 #define SIM_HEAP 16u
 
@@ -273,7 +276,9 @@ static bool sim_consistent(void)
 	}
 	if (rd32(FW_CUSTOM_TAB_LIST) >> 16 == 12 && rd32(FW_CUSTOM_TAB_LIST + 4u) != 0x60D33E9Eu)
 		return all_ours && rd32(FW_CUSTOM_TAB_REC_L + 4u) == 5u &&
-		       rd32(SIM_STYLE79) == 0x00010000u + SIM_OPT0;
+		       rd32(SIM_STYLE79) == 0x00010000u + SIM_OPT0 &&
+		       rd32(FW_GUI_IMAGE_2043) != SIM_ICON_STOCK &&
+		       rd32(FW_GUI_IMAGE_2040) != SIM_ICON_DIM_STOCK;
 	return true;
 }
 
@@ -346,6 +351,18 @@ static bool sim_streq(const char *a, const char *b)
 static bool sim_text(uint32_t desc, const char *text, const char *want)
 {
 	return (desc & 0xFFFFu) == 5u && text && sim_streq(text, want);
+}
+
+/* Image table word w points, uncached, at an 8-bpp 38 x 40 record whose uncached bitmap holds
+   bits (bytes long, size in the record). */
+static bool sim_icon(uint32_t w, const uint32_t *bits, uint32_t size, uint32_t bytes)
+{
+	uint32_t rec = rd32(w), bmp = rd32(rec + 0x10u);
+
+	return rec >> 28 == 0xA && rd16(rec) == 0x0E && rd16(rec + 2u) == 38 &&
+	       rd16(rec + 4u) == 40 && rd16(rec + 6u) == 8 && !rd32(rec + 8u) &&
+	       rd32(rec + 0xCu) == size && !rd32(rec + 0x14u) && bmp >> 28 == 0xA &&
+	       rd32(bmp) == 0x03025027u && !memcmp((const void *)bmp, bits, bytes);
 }
 
 /* --- setup --- */
@@ -435,6 +452,11 @@ static void check_start(void)
 	CHECK(15, fenykl_ui_install() == FENYKL_UI_ESTOCK);
 	sim_stock();
 	CHECK(16, sim_is_stock() && !fui.installed);
+	/* an image record word that is not stock: refused before any store */
+	wr32(FW_GUI_IMAGE_2040, SIM_ICON_DIM_STOCK + 0x10u);
+	CHECK(17, fenykl_ui_install() == FENYKL_UI_ESTOCK && !fui.installed);
+	wr32(FW_GUI_IMAGE_2040, SIM_ICON_DIM_STOCK);
+	CHECK(18, sim_is_stock());
 }
 
 static void check_install(void)
@@ -505,6 +527,10 @@ static void check_install(void)
 		  rd32(d + 16u) == 1 &&
 		  !memcmp((const void *)rd32(FW_CUSTOM_LETTER_CFG + 0x14u), (const void *)0x60D2E2ACu,
 			  264));
+	CHECK(35, sim_icon(FW_GUI_IMAGE_2043, fui_icon_bright, FUI_ICON_BRIGHT_SIZE,
+			   sizeof(fui_icon_bright)));
+	CHECK(36, sim_icon(FW_GUI_IMAGE_2040, fui_icon_dim, FUI_ICON_DIM_SIZE,
+			   sizeof(fui_icon_dim)));
 }
 
 static void check_rows(void)
@@ -596,6 +622,8 @@ static void check_remove(void)
 	*(volatile uint8_t *)FW_GUI_SUPER = 1;
 	CHECK(71, rd32(SIM_STYLE79) != 0x00010000u + SIM_OPT0 && fenykl_ui_remove() == 0 &&
 		  !fui.installed && sim_is_stock());
+	CHECK(75, rd32(FW_GUI_IMAGE_2043) == SIM_ICON_STOCK &&
+		  rd32(FW_GUI_IMAGE_2040) == SIM_ICON_DIM_STOCK);
 	CHECK(72, fenykl_ui_remove() == FENYKL_UI_ENOTINST);
 	/* a stale page actuator's open leaves the restored entry stock */
 	fw_call_menu_row(stale, sim_sub);
