@@ -4,8 +4,8 @@
  *
  * - The tab borrows tab id 0x8F1 (Accessory Port C, whose menu page this body never shows): it has
  *   an entry in every fixed-count by-id table a tab needs. The install retitles its tab record,
- *   points it and its config 0x40 at our rows and key tables, re-keys one dead row-style entry per
- *   option row to style 1 (vertical option list), extends the letter list's title/help page record
+ *   points it and its config 0x40 at our rows and key tables, takes one dead row-style entry
+ *   (entry 79) for style 1 (vertical option list), extends the letter list's title/help page record
  *   and open records by one, and appends 0x8F1 to the Custom tab list last. An id with no ModeCheck
  *   rule and no setting-rule record is enabled, so nothing grays the tab or the fresh row ids.
  * - Every swap is a checked word store of a pointer + count pair, pointer first, so no count ever
@@ -14,10 +14,13 @@
  *   builds it, so the install belongs before that (else letter row L opens only after LEFT to the
  *   top tabs and RIGHT, which rebuilds it).
  * - Option rows: OK or RIGHT finds the row's L1 record, whose callback the stock code calls instead
- *   of creating the level-2 picker, then goes to level 2 whatever it did. The callback creates the
- *   stock option picker of the donor setting 0x115 (Warning Level, plain stock init, 5 entries),
- *   clears its wrap and dial flags, puts our init in +0x2C and our handler in +0x48, refills its
- *   arrays in place (the destructor frees them) and hands it to the sub-actuator. Our handler calls
+ *   of creating the level-2 picker, then goes to level 2 whatever it did. The style table's only
+ *   reader looks a row's style up once, when level 2 builds its option view, so the callback first
+ *   re-keys entry 79 to its own row id. It then creates the stock option picker of the donor setting
+ *   0x115 (Warning Level, plain stock init, 5 entries), clears its wrap and dial flags, puts our init
+ *   in +0x2C and our handler in +0x48, replaces its arrays by fw_malloc blocks when the option has
+ *   more than 5 values, refills them (the destructor frees them with fw_free's allocator) and hands
+ *   it to the sub-actuator. Our handler calls
  *   fenykl_cfg_set on OK and passes every other event to the stock handler, so no setting is
  *   written. A picker that does not look stock is refused (logged, counted): with the stock handler
  *   in +0x48 it gets a handler that cancels every event, so its OK never writes Warning Level.
@@ -42,6 +45,8 @@
 #define FUI_EMPTY_TEXT 0x60D38D30u	/* the empty string of the stock kind-4 descriptors */
 #define FUI_MARK_GREEN 0xBu		/* the Custom tabs' row mark */
 #define FUI_STYLE_LIST 1u
+#define FUI_STYLE_SHARED (FW_CUSTOM_ROW_STYLES + 4u * 79u)	/* a second 0x28C: entry 60 matches first */
+#define FUI_STYLE_STOCK 0x0001028Cu
 #define FUI_ROW_HANDLED 1		/* dispatch callback: handled, no controller opened */
 #define FUI_YIELD_WORDS 8u		/* swaps between two yields: each one flushes the D-cache twice */
 #define FUI_REC_STRIDE 24u
@@ -97,24 +102,9 @@ static const char fui_s_info[] = "Fenykl";
 static const char fui_s_info_value[] = "Loaded";
 static const char fui_s_info_help[] = "The Fenykl plugin is running.";
 
-/* The row-style entries no listed row can match, in the order the option rows take them:
-   entry 79 (a second 0x28C, entry 60 matches first), then those of ids in no row-id list. */
-static const struct fui_expect fui_styles[FENYKL_UI_OPTS_MAX] = {
-	{ FW_CUSTOM_ROW_STYLES + 4u * 79u, 4, 0x0001028Cu, "style 79" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 8u, 4, 0x00010256u, "style 8" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 12u, 4, 0x00010181u, "style 12" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 43u, 4, 0x000500A7u, "style 43" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 64u, 4, 0x00010242u, "style 64" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 69u, 4, 0x0001028Au, "style 69" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 70u, 4, 0x0001028Bu, "style 70" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 71u, 4, 0x00060315u, "style 71" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 72u, 4, 0x0001030Au, "style 72" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 76u, 4, 0x00010309u, "style 76" },
-	{ FW_CUSTOM_ROW_STYLES + 4u * 77u, 4, 0x00010340u, "style 77" },
-};
-
 /* Donor and neighbour words the install relies on but does not write. */
 static const struct fui_expect fui_fixed[] = {
+	{ FW_CUSTOM_ROW_STYLES + 4u * 60u, 4, 0x0004028Cu, "style 60" },
 	{ FUI_TAB_CFG_ENTRY, 4, FUI_TAB, "tab config id" },
 	{ FUI_TAB_CFG_ENTRY + 4u, 4, 0x40, "tab config" },
 	{ FUI_ROW_LIST_ENTRY, 4, 0x0001004Du, "row list" },
@@ -243,15 +233,62 @@ static unsigned int fui_cb_cancel(void *pk, unsigned int code, unsigned int para
 }
 FENYKL_CALLBACK(menu_picker, fui_cb_cancel);
 
+static uint32_t fui_style_key(unsigned int i)
+{
+	return FUI_STYLE_LIST << 16 | (FUI_ROW_OPT0 + i);
+}
+
+/* A picker that failed a check: its stock OK would write setting 0x115, so every event cancels. */
+static void fui_refuse(uint32_t pk, uint32_t h)
+{
+	fui.st.refused++;
+	if (h == FW_MENU_PICKER_STOCK_FN)
+		fenykl_wr32(pk + FUI_PK_HANDLER, FENYKL_CB(menu_picker, fui_cb_cancel));
+}
+
+/* Replaces the picker's arrays by blocks of n entries from the allocator its destructor frees
+   with: false (logged) if one is missing, the stock arrays kept. */
+static bool fui_grow(uint32_t pk, unsigned int n)
+{
+	void *dis = fw_malloc(2u * n), *vals = fw_malloc(4u * n);
+
+	if (!dis || !vals) {
+		if (dis)
+			fw_free(dis);
+		if (vals)
+			fw_free(vals);
+		fenykl_log_err(&fenykl_ui_log, "realloc n %u: no memory (%08x %08x)", n,
+			       (uint32_t)dis, (uint32_t)vals);
+		return false;
+	}
+	fw_free((void *)fenykl_rd32(pk + FUI_PK_DIS));
+	fw_free((void *)fenykl_rd32(pk + FUI_PK_VALS));
+	fenykl_wr32(pk + FUI_PK_DIS, (uint32_t)dis);
+	fenykl_wr32(pk + FUI_PK_VALS, (uint32_t)vals);
+	fui.st.reallocs++;
+	fenykl_log_info(&fenykl_ui_log, "realloc n %u: dis %08x vals %08x", n, (uint32_t)dis,
+			(uint32_t)vals);
+	return true;
+}
+
 /* The L1 callback's work for option i, sub = the tab's sub-actuator: always leaves a picker. */
 static void fui_row_open(uint32_t sub, unsigned int i)
 {
 	const struct fenykl_cfg_opt *o = fui.opts[i];
 	const uint32_t key[2] = { FUI_DONOR, 0 };
-	uint32_t pk = (uint32_t)fw_menu_picker_create(key, 0);
-	uint32_t h, id, cap;
+	uint32_t old = fenykl_rd32(FUI_STYLE_SHARED), pk, h, id, cap;
+	unsigned int n = fui_nvalues(o);
 
+	/* first: level 2 reads the style next, whatever this callback does after it; a stale page
+	   actuator after the removal must not key the restored entry (a later install checks it) */
+	if (fui.installed)
+		fenykl_wr32(FUI_STYLE_SHARED, fui_style_key(i));
 	fui_count_core();
+	fenykl_log_info(&fenykl_ui_log, "open row %u id %x: style 79 %08x -> %08x", i,
+			FUI_ROW_OPT0 + i, old, fenykl_rd32(FUI_STYLE_SHARED));
+	if (!fui.installed)
+		fenykl_log_warn(&fenykl_ui_log, "%s: opened while not installed", o->name);
+	pk = (uint32_t)fw_menu_picker_create(key, 0);
 	/* the stock code goes to level 2 after the callback: the sub-actuator always gets the picker */
 	fenykl_wr32(sub + FUI_SUB_PICKER, pk);
 	fenykl_wr32(sub + FUI_SUB_KIND, 0);
@@ -263,28 +300,29 @@ static void fui_row_open(uint32_t sub, unsigned int i)
 	h = fenykl_rd32(pk + FUI_PK_HANDLER);
 	id = fenykl_rd16(pk + FUI_PK_ID);
 	cap = fenykl_rd16(pk + FUI_PK_N);
-	if (h != FW_MENU_PICKER_STOCK_FN || id != FUI_DONOR || cap < fui_nvalues(o) ||
+	if (h != FW_MENU_PICKER_STOCK_FN || id != FUI_DONOR || !cap ||
 	    !fenykl_dram_ptr(fenykl_rd32(pk + FUI_PK_DIS), 2) ||
 	    !fenykl_dram_ptr(fenykl_rd32(pk + FUI_PK_VALS), 4)) {
-		fui.st.refused++;
 		fenykl_log_err(&fenykl_ui_log, "%s: picker %08x refused", o->name, pk);
 		fenykl_log_err(&fenykl_ui_log, "%s: handler %08x, id %x, n %u", o->name, h, id, cap);
-		/* its stock OK would write setting 0x115: every event cancels instead */
-		if (h == FW_MENU_PICKER_STOCK_FN)
-			fenykl_wr32(pk + FUI_PK_HANDLER, FENYKL_CB(menu_picker, fui_cb_cancel));
+		fui_refuse(pk, h);
+		return;
+	}
+	if (n > cap && !fui_grow(pk, n)) {
+		fui_refuse(pk, h);
 		return;
 	}
 	fui.row = i;
 	fui.pk = pk;
-	fui.cap = cap;
+	fui.cap = n > cap ? n : cap;
 	fui_list_open();
 	fenykl_wr32(pk + FUI_PK_NOWRAP, 0);
 	fenykl_wr32(pk + FUI_PK_DIAL, 0);
 	fenykl_wr32(pk + FUI_PK_INIT, FENYKL_CB(menu_row, fui_cb_init));
 	fenykl_wr32(pk + FUI_PK_HANDLER, FENYKL_CB(menu_picker, fui_cb_picker));
 	fui_picker_fill(pk);
-	fenykl_log_info(&fenykl_ui_log, "%s: picker %08x, donor n %u, cur %u", o->name, pk, cap,
-			fenykl_rd16(pk + FUI_PK_CUR));
+	fenykl_log_info(&fenykl_ui_log, "%s: picker %08x, n %u -> %u", o->name, pk, cap, n);
+	fenykl_log_info(&fenykl_ui_log, "%s: cur %u", o->name, fenykl_rd16(pk + FUI_PK_CUR));
 }
 
 /* One L1 callback per option row: the callback gets only the sub-actuator. */
@@ -296,6 +334,11 @@ static void fui_row_open(uint32_t sub, unsigned int i)
 	}							\
 	FENYKL_CALLBACK(menu_row, fui_cb_row##n)
 
+#define FUI_ROW_CB10(t)							\
+	FUI_ROW_CB(t##0); FUI_ROW_CB(t##1); FUI_ROW_CB(t##2); FUI_ROW_CB(t##3);	\
+	FUI_ROW_CB(t##4); FUI_ROW_CB(t##5); FUI_ROW_CB(t##6); FUI_ROW_CB(t##7);	\
+	FUI_ROW_CB(t##8); FUI_ROW_CB(t##9)
+
 FUI_ROW_CB(0);
 FUI_ROW_CB(1);
 FUI_ROW_CB(2);
@@ -306,19 +349,24 @@ FUI_ROW_CB(6);
 FUI_ROW_CB(7);
 FUI_ROW_CB(8);
 FUI_ROW_CB(9);
-FUI_ROW_CB(10);
+FUI_ROW_CB10(1);
+FUI_ROW_CB10(2);
+FUI_ROW_CB10(3);
+
+#define FUI_CB(n) FENYKL_CB(menu_row, fui_cb_row##n)
+#define FUI_CB10(t)								\
+	FUI_CB(t##0), FUI_CB(t##1), FUI_CB(t##2), FUI_CB(t##3), FUI_CB(t##4),	\
+	FUI_CB(t##5), FUI_CB(t##6), FUI_CB(t##7), FUI_CB(t##8), FUI_CB(t##9)
 
 static uint32_t fui_row_cb(unsigned int i)
 {
-	static const uint32_t cb[FENYKL_UI_OPTS_MAX] = {
-		FENYKL_CB(menu_row, fui_cb_row0), FENYKL_CB(menu_row, fui_cb_row1),
-		FENYKL_CB(menu_row, fui_cb_row2), FENYKL_CB(menu_row, fui_cb_row3),
-		FENYKL_CB(menu_row, fui_cb_row4), FENYKL_CB(menu_row, fui_cb_row5),
-		FENYKL_CB(menu_row, fui_cb_row6), FENYKL_CB(menu_row, fui_cb_row7),
-		FENYKL_CB(menu_row, fui_cb_row8), FENYKL_CB(menu_row, fui_cb_row9),
-		FENYKL_CB(menu_row, fui_cb_row10),
+	static const uint32_t cb[] = {
+		FUI_CB(0), FUI_CB(1), FUI_CB(2), FUI_CB(3), FUI_CB(4),
+		FUI_CB(5), FUI_CB(6), FUI_CB(7), FUI_CB(8), FUI_CB(9),
+		FUI_CB10(1), FUI_CB10(2), FUI_CB10(3),
 	};
 
+	_Static_assert(FUI_N(cb) == FENYKL_UI_OPTS_MAX, "one L1 callback per option row");
 	return cb[i];
 }
 
@@ -342,6 +390,7 @@ static void fui_build_rows(void)
 {
 	struct fui_tables *t = &fui.t;
 	uint32_t swallow = FENYKL_CB(menu_row, fui_cb_swallow);
+	struct fui_cell *cells = t->cells;
 
 	t->info = (struct fui_cell){ 0, fui_text(fui_s_info_value) };
 	t->rows[0] = (struct fui_row){
@@ -358,12 +407,13 @@ static void fui_build_rows(void)
 		unsigned int n = fui_nvalues(o), id = FUI_ROW_OPT0 + i;
 
 		for (unsigned int k = 0; k < n; k++)
-			t->opts[i][k] = (struct fui_cell){ k, fui_value_desc(o, k) };
+			cells[k] = (struct fui_cell){ k, fui_value_desc(o, k) };
 		t->vals[i] = (struct fui_cell){ 0, fui_value_desc(o, fui_value(o)) };
 		t->rows[1 + i] = (struct fui_row){
 			(uint16_t)id, 1, n, fui_text(o->label), fui_text(o->group->label),
-			(uint32_t)&t->vals[i], 0, (uint32_t)t->opts[i],
+			(uint32_t)&t->vals[i], 0, (uint32_t)cells,
 		};
+		cells += n;
 		t->l1[i] = (struct fui_l1){ 0, (uint16_t)id, 0, fui_row_cb(i) };
 		t->ids[1 + i] = (uint16_t)id;
 	}
@@ -398,9 +448,8 @@ static void fui_build_words(void)
 	uint32_t rows = fui.nopts + 1u;
 
 	fui.nwords = 0;
-	for (unsigned int i = 0; i < fui.nopts; i++)
-		fui_add(fui_styles[i].addr, fui_styles[i].value,
-			FUI_STYLE_LIST << 16 | (FUI_ROW_OPT0 + i));
+	/* keyed to the first option row; each option list re-keys it (fui_row_open) */
+	fui_add(FUI_STYLE_SHARED, FUI_STYLE_STOCK, fui_style_key(0));
 	/* config 0x40: L1 grows from 0; RIGHT and OK keep their count 2 */
 	fui_add(FW_CUSTOM_TAB_CFG_L + 0xCu, 0, (uint32_t)t->l1);
 	fui_add(FW_CUSTOM_TAB_CFG_L + 0x14u, FUI_C40_RIGHT, (uint32_t)t->right);
@@ -476,7 +525,7 @@ static bool fui_check_lists(void)
 
 static bool fui_fresh(unsigned int id)
 {
-	return id >= FUI_ROW_INFO && id <= FUI_ROW_OPT0 + fui.nopts;
+	return id >= FUI_ROW_INFO && id < FUI_ROW_OPT0 + fui.nopts;
 }
 
 /* No style entry or ModeCheck rule knows the fresh ids or the donor tab. */
@@ -533,18 +582,24 @@ static bool fui_cas(uint32_t a, uint32_t from, uint32_t to)
 	return ok;
 }
 
-/* Puts the stock words back, last swapped first; a word that no longer holds ours is left. */
-static void fui_unwind(void)
+/* Puts the stock words back, last swapped first; a word that no longer holds ours is left.
+   Returns the number of words left. */
+static unsigned int fui_unwind(void)
 {
+	unsigned int left = 0;
+
 	while (fui.done) {
 		const struct fui_word *w = &fui.w[--fui.done];
 
 		if (fui.done % FUI_YIELD_WORDS == 0)
 			fenykl_task_sleep(1);
-		if (!fui_cas(w->addr, w->ours, w->stock))
-			fenykl_log_err(&fenykl_ui_log, "unwind: %08x holds %08x, not ours: left",
-				       w->addr, fenykl_rd32(w->addr));
+		if (fui_cas(w->addr, w->ours, w->stock))
+			continue;
+		left++;
+		fenykl_log_err(&fenykl_ui_log, "unwind: %08x holds %08x, not ours: left", w->addr,
+			       fenykl_rd32(w->addr));
 	}
+	return left;
 }
 
 static int fui_swap(void)
@@ -565,10 +620,10 @@ static int fui_swap(void)
 	return 0;
 }
 
-int fenykl_ui_install(void)
+int fenykl_ui_install_opts(const struct fenykl_cfg_opt *begin, const struct fenykl_cfg_opt *end)
 {
 	uint32_t t0 = FENYKL_TIMER_NOW(), obj;
-	int r = fui_prepare();
+	int r = fui_prepare(begin, end);
 
 	if (r)
 		return r;
@@ -594,6 +649,28 @@ int fenykl_ui_install(void)
 				obj);
 	}
 	return 0;
+}
+
+int fenykl_ui_remove(void)
+{
+	struct fui_word *w = &fui.w[0];
+	uint32_t t0 = FENYKL_TIMER_NOW(), v;
+	unsigned int left;
+
+	if (!fui.installed)
+		return FENYKL_UI_ENOTINST;
+	if (fenykl_gui_menu())
+		return FENYKL_UI_EAGAIN;
+	/* the shared style holds the last opened row's key, not the install value */
+	v = fenykl_rd32(w->addr);
+	if (v >> 16 == FUI_STYLE_LIST && fui_fresh(v & 0xFFFFu))
+		w->ours = v;
+	left = fui_unwind();
+	fui.installed = false;
+	fenykl_log_info(&fenykl_ui_log, "removed in %u us: style 79 %08x -> %08x, %u words left",
+			FENYKL_TIMER_ELAPSED(t0, FENYKL_TIMER_NOW()), v,
+			fenykl_rd32(FUI_STYLE_SHARED), left);
+	return left ? FENYKL_UI_ESTOCK : 0;
 }
 
 void fenykl_ui_tick(void)

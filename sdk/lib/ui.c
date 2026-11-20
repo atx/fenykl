@@ -55,18 +55,24 @@ int fui_collect(const struct fenykl_cfg_opt *begin, const struct fenykl_cfg_opt 
 {
 	const struct fenykl_cfg_group *groups[FENYKL_UI_OPTS_MAX];
 	const struct fenykl_cfg_opt *o;
-	unsigned int n = 0, ng = 0, i;
+	unsigned int n = 0, ng = 0, cells = 0, i;
 	bool ok = true;
 
 	for (o = begin; o < end; o++) {
 		if (!o->group)
 			continue;
 		n++;
+		cells += fui_nvalues(o);
 		ok = fui_opt_ok(o) && ok;
 	}
 	if (!n || n > FENYKL_UI_OPTS_MAX) {
 		fenykl_log_err(&fenykl_ui_log, "%u options with a group, 1..%u shown", n,
 			       FENYKL_UI_OPTS_MAX);
+		return FENYKL_UI_EOPTS;
+	}
+	if (cells > FENYKL_UI_CELLS_MAX) {
+		fenykl_log_err(&fenykl_ui_log, "%u values in all, at most %u", cells,
+			       FENYKL_UI_CELLS_MAX);
 		return FENYKL_UI_EOPTS;
 	}
 	if (!ok)
@@ -94,9 +100,23 @@ int fui_collect(const struct fenykl_cfg_opt *begin, const struct fenykl_cfg_opt 
 	return 0;
 }
 
+/* An option of the caller's table (fenykl_ui_install_opts): stored, never saved. */
+static int fui_set_ram(const struct fenykl_cfg_opt *o, int32_t v)
+{
+	int32_t old = *o->value;
+
+	if (v < o->min || v > o->max)
+		return FENYKL_CFG_EINVAL;
+	*o->value = v;
+	if (old != v && o->on_change)
+		o->on_change(o, old);
+	return 0;
+}
+
 void fui_set(const struct fenykl_cfg_opt *o, int32_t v)
 {
-	int r = fenykl_cfg_set(o, v);
+	bool cfg = o >= fenykl_cfg_start && o < fenykl_cfg_end;
+	int r = cfg ? fenykl_cfg_set(o, v) : fui_set_ram(o, v);
 
 	if (r) {
 		fui.st.set_fail++;
@@ -127,11 +147,16 @@ void fui_list_open(void)
 	fui.st.opens++;
 }
 
-int fui_prepare(void)
+int fui_prepare(const struct fenykl_cfg_opt *begin, const struct fenykl_cfg_opt *end)
 {
 	if (fui.installed)
 		return FENYKL_UI_EBUSY;
-	return fui_collect(fenykl_cfg_start, fenykl_cfg_end);
+	return fui_collect(begin, end);
+}
+
+int fenykl_ui_install(void)
+{
+	return fenykl_ui_install_opts(fenykl_cfg_start, fenykl_cfg_end);
 }
 
 bool fui_check_words(const struct fui_expect *tab, unsigned int n)

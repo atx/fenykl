@@ -23,7 +23,7 @@ monitor; `main` and
 | CPU1 code (`cpu1_sources`) | does not build: no target has the `cpu1` capability (no CPU1 runtime on the E-M10 II yet) |
 | other thunks (`fw_OlyTaskCreate` from C, `fw_malloc`/`fw_free`, `fw_dcache_flush_all`, `fw_dbg_puts`) | used on the camera by the libraries and plugins; `fw_dbg_puts` output is invisible without the internal UART |
 | logging library (`lib/log*.c`) | **works on the camera** in `projects/main`: init, flushes. Not run: CPU1 records, wake from standby, the 4 MiB cap; the console tee has nothing to read on this firmware (`docs/logging.md` 7). `fw_malloc` refuses more than 0x4000 bytes |
-| E-M10 II settings tab (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); the tab mechanism (Custom tab L, native rows, patched stock pickers) ran on the camera in a probe plugin (2026-11-19); this library not yet run on the camera (`docs/ui.md` 7). `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle **work on the camera** (2026-10-23) |
+| E-M10 II settings tab (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); the tab mechanism (Custom tab L, native rows, patched stock pickers) ran on the camera in a probe plugin (2026-11-19); this library **works on the camera** (2026-11-20: the main plugin's tab with sets saved and kept over a reboot; 41 rows on 6 pages, ENUMs up to 26 names, the removal; `docs/ui.md` 7). `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle **work on the camera** (2026-10-23) |
 | event layer (`lib/event.c`) | simulator (`tests/test_sim.py`, `fnfunc_em10ii`); a pass-through handler ran on the camera (`docs/fnfunc.md`) |
 | Button Function entries (`lib/fnfunc_em10ii.c`) | simulator (`tests/test_sim.py`, `fnfunc_em10ii`); Fn3's entry and press listener ran on the camera, Fn1/Fn2/REC/L-Fn and main's screenshot through it not yet |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | not run on the camera: once a cable was seen the gate stays closed until power-off (Cable at run time) |
@@ -244,7 +244,7 @@ Persistent options: the **configuration library** (`sdk/docs/config.md`, linked 
 debounced saver task. `projects/main` uses it.
 
 Settings tab: the **ui library** (`sdk/docs/ui.md`), `#include "ui.h"`; a native Custom menu tab
-"L. Fenykl" with an info row and one stock row per grouped cfg option (BOOL or ENUM, at most 11),
+"L. Fenykl" with an info row and one stock row per grouped cfg option (BOOL or ENUM with up to 26 names, at most 40),
 drawn and edited by the camera's own menu code. `projects/main` uses it.
 
 ### Firmware API (`arch/em10ii/firmware.toml`)

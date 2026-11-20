@@ -30,6 +30,8 @@ _mock_\name:
 	CMOCK	menu_picker_create, "ret [d2,d3,a2],0x10"
 	CMOCK	ui_key_get_state, "ret [d2,d3,a2],0x18"
 	CMOCK	fileif_get_media_status, "ret [d2,a2],0xc"
+	CMOCK	malloc, "ret [],4"
+	CMOCK	free, "ret [],4"
 
 	.section .fw.picker_stock,"ax"
 	add	-4,sp

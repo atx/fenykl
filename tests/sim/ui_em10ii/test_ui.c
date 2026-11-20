@@ -8,7 +8,8 @@
  * (fw_call_* thunks). Checks the option limits, the waits and refusals, the install with a
  * consistency check at every flush and yield (no count past its table, the tab listed only with
  * everything behind it in place), the rows, the pickers and cfg sets, the value-column refresh, a
- * late install and the rollback. plugin_main sets sim_exit_code to 0 or the number of the first
+ * late install, the rollback, the shared row style, the picker reallocation, the removal and a
+ * RAM-only option table. plugin_main sets sim_exit_code to 0 or the number of the first
  * failed check.
  */
 #include <fenykl.h>
@@ -28,7 +29,9 @@
 #define SIM_ON 0x00C60004u
 #define SIM_PK_STOCK_N 5u
 #define SIM_NOPTS 11u
-#define SIM_WORDS (SIM_NOPTS + 20u)
+#define SIM_WORDS 21u
+#define SIM_STYLE79 (FW_CUSTOM_ROW_STYLES + 4u * 79u)
+#define SIM_HEAP 16u
 
 struct sim_region {
 	uint32_t addr, len;
@@ -71,6 +74,9 @@ struct sim_state {
 	unsigned int stock_calls;
 	uint32_t stock_pk, stock_code;
 	unsigned int changes;
+	uint32_t style_at_create;	/* entry 79 when the last picker was created */
+	unsigned int mallocs, frees, malloc_fail_at;	/* fail_at: the malloc call that fails, 0 never */
+	uint32_t freed[8];
 };
 
 static struct sim_state sim;
@@ -79,6 +85,7 @@ static uint16_t sim_dis[SIM_PK_STOCK_N];
 static uint32_t sim_vals[SIM_PK_STOCK_N];
 static uint32_t sim_sub[0x80 / 4];
 static uint32_t sim_obj[0x60 / 4];
+static uint32_t sim_heap[SIM_HEAP][32];
 
 volatile uint32_t mreg[4];
 uint32_t sim_exit_code = 99;
@@ -106,7 +113,8 @@ FENYKL_CFG_BOOL(m4, "m.4", "M4", &sim_many, 0);
 FENYKL_CFG_BOOL(m5, "m.5", "M5", &sim_many, 0);
 FENYKL_CFG_BOOL(m6, "m.6", "M6", &sim_many, 0);
 FENYKL_CFG_BOOL(m7, "m.7", "M7", &sim_many, 0);
-FENYKL_CFG_BOOL(m8, "m.8", "M8", &sim_many, 0);
+static const char *const sim_seven[] = { "s0", "s1", "s2", "s3", "s4", "s5", "s6" };
+FENYKL_CFG_ENUM(m8, "m.8", "M8", &sim_many, 0, sim_seven);
 FENYKL_CFG_GROUP(sim_first, "First", 1);
 FENYKL_CFG_BOOL(first, "f.0", "First row", &sim_first, 1);
 FENYKL_CFG_BOOL(hidden, "h.0", "No group", NULL, 0);
@@ -186,6 +194,7 @@ uint32_t c_menu_picker_create(void)
 	sim.key_id = key[0];
 	sim.key_kind = mreg[2];
 	sim.creates++;
+	sim.style_at_create = rd32(SIM_STYLE79);
 	memset(sim_pk, 0, sizeof(sim_pk));
 	for (unsigned int i = 0; i < SIM_PK_STOCK_N; i++) {
 		sim_vals[i] = (uint32_t)i - 2u;
@@ -201,6 +210,23 @@ uint32_t c_menu_picker_create(void)
 	sim_pk[0x6C / 4] = 4;
 	sim_pk[0x80 / 4] = 1;
 	return (uint32_t)sim_pk;
+}
+
+/* scheap: one 128-byte block per call from a small pool, NULL at the call malloc_fail_at. */
+uint32_t c_malloc(void)
+{
+	sim.mallocs++;
+	if (sim.mallocs == sim.malloc_fail_at || sim.mallocs > SIM_HEAP || mreg[2] > 128)
+		return 0;
+	return (uint32_t)sim_heap[sim.mallocs - 1u];
+}
+
+uint32_t c_free(void)
+{
+	if (sim.frees < 8)
+		sim.freed[sim.frees] = mreg[0];
+	sim.frees++;
+	return 0;
 }
 
 /* No USB cable, the card mounted: the saved state's card gate is open. */
@@ -247,7 +273,7 @@ static bool sim_consistent(void)
 	}
 	if (rd32(FW_CUSTOM_TAB_LIST) >> 16 == 12 && rd32(FW_CUSTOM_TAB_LIST + 4u) != 0x60D33E9Eu)
 		return all_ours && rd32(FW_CUSTOM_TAB_REC_L + 4u) == 5u &&
-		       rd32(FW_CUSTOM_ROW_STYLES + 4u * 77u) == 0x00010000u + SIM_OPT0 + 10u;
+		       rd32(SIM_STYLE79) == 0x00010000u + SIM_OPT0;
 	return true;
 }
 
@@ -365,6 +391,7 @@ static void check_limits(void)
 		  .type = FENYKL_CFG_BOOL },
 	};
 	struct fenykl_cfg_opt many[FENYKL_UI_OPTS_MAX + 1];
+	static const char *n26[FENYKL_UI_VALUES_MAX];
 
 	for (unsigned int i = 0; i < 3; i++)
 		CHECK(1 + i, fui_collect(&bad[i], &bad[4]) == FENYKL_UI_EOPTS);
@@ -374,6 +401,15 @@ static void check_limits(void)
 	CHECK(5, fui_collect(many, many + FENYKL_UI_OPTS_MAX + 1) == FENYKL_UI_EOPTS);
 	CHECK(6, fui_collect(many, many + FENYKL_UI_OPTS_MAX) == 0);
 	CHECK(7, fui_collect(&bad[3], &bad[3]) == FENYKL_UI_EOPTS);
+	/* 26 names each: four fit the cells, five do not */
+	for (unsigned int i = 0; i < FENYKL_UI_VALUES_MAX; i++)
+		n26[i] = "n";
+	for (unsigned int i = 0; i < 5; i++)
+		many[i] = (struct fenykl_cfg_opt){ .name = "x.n", .label = "N", .group = &g,
+						   .value = &v, .max = 25, .names = n26,
+						   .type = FENYKL_CFG_ENUM };
+	CHECK(8, fui_collect(many, many + 4) == 0 && fui.nopts == 4);
+	CHECK(9, fui_collect(many, many + 5) == FENYKL_UI_EOPTS);
 }
 
 static void check_start(void)
@@ -385,8 +421,8 @@ static void check_start(void)
 	*(volatile uint8_t *)FW_GUI_SUPER = 0x11;
 	CHECK(11, fenykl_ui_install() == FENYKL_UI_EAGAIN);
 	*(volatile uint8_t *)FW_GUI_SUPER = 1;
-	/* a style entry, a donor word, a copied list that differ: nothing written */
-	wr32(FW_CUSTOM_ROW_STYLES + 4u * 72u, 0x00010333u);
+	/* the shared style entry, a donor word, a copied list that differ: nothing written */
+	wr32(SIM_STYLE79, 0x00010333u);
 	CHECK(12, fenykl_ui_install() == FENYKL_UI_ESTOCK);
 	sim_stock();
 	wr32(FW_MENU_PICKER_HANDLERS + 0x18u, 0x609EF618u);
@@ -412,7 +448,7 @@ static void check_install(void)
 	sim.window_bad = 0;
 	CHECK(20, fenykl_ui_install() == 0 && fui.installed && fui.done == SIM_WORDS);
 	sim.watch = false;
-	CHECK(21, sim.flushes >= 2 * SIM_WORDS && sim.window_bad == 0 && sim.yields == 3);
+	CHECK(21, sim.flushes >= 2 * SIM_WORDS && sim.window_bad == 0 && sim.yields == 2);
 	CHECK(22, fenykl_ui_install() == FENYKL_UI_EBUSY && fui.st.late == 0);
 	/* tab list: A..K, then L */
 	d = rd32(FW_CUSTOM_TAB_LIST + 4u);
@@ -451,11 +487,12 @@ static void check_install(void)
 	CHECK(30, sim_text(rd32(row + 8u), (const char *)rd32(row + 12u), "Log level") &&
 		  rd32(row + 4u) == 4 && sim_text(sim_value(SIM_OPT0 + 10u, &text), text, "info") &&
 		  sim_text(sim_label(rd32(row + 0x20u), 4, 3, &text), text, "debug"));
-	/* every option row: style 1, its own L1 callback; the stock styles still match */
+	/* every option row its own L1 callback; entry 79 keyed to the first, the stock styles kept */
 	for (unsigned int i = 0; i < SIM_NOPTS; i++)
-		CHECK(31, sim_style(SIM_OPT0 + i) == 1 && sim_l1(SIM_OPT0 + i) &&
+		CHECK(31, sim_l1(SIM_OPT0 + i) &&
 			  (!i || sim_l1(SIM_OPT0 + i) != sim_l1(SIM_OPT0 + i - 1u)));
-	CHECK(32, sim_style(0x28C) == 4 && sim_style(0xA7) == 0xFFFF);
+	CHECK(32, sim_style(SIM_OPT0) == 1 && sim_style(SIM_OPT0 + 1u) == 0xFFFF &&
+		  sim_style(0x28C) == 4 && sim_style(0xA7) == 5);
 	/* letter list: title, help and open records of L */
 	d = sim_label(rd32(FW_CUSTOM_LETTER_PAGE + 4u), rd16(FW_CUSTOM_LETTER_PAGE + 2u), SIM_TAB,
 		      &text);
@@ -478,7 +515,8 @@ static void check_rows(void)
 	/* the first option: a picker with Off/On on its value On */
 	fw_call_menu_row(sim_l1(SIM_OPT0), sim_sub);
 	CHECK(40, sim.creates == 1 && sim.key_id == 0x115 && sim.key_kind == 0 &&
-		  sim_sub[0x58 / 4] == pk && sim_sub[0x50 / 4] == 0);
+		  sim_sub[0x58 / 4] == pk && sim_sub[0x50 / 4] == 0 &&
+		  sim.style_at_create == 0x00010000u + SIM_OPT0);
 	CHECK(41, sim_pk[0x48 / 4] != FW_MENU_PICKER_STOCK_FN && sim_pk[0x2C / 4] &&
 		  !sim_pk[0x64 / 4] && !sim_pk[0x80 / 4]);
 	CHECK(42, rd16(pk + 0x54) == 2 && rd16(pk + 0x56) == 1 && sim_vals[0] == 0 &&
@@ -492,7 +530,9 @@ static void check_rows(void)
 		  sim.stock_calls == 1 && sim.stock_pk == pk && sim.stock_code == 0x900E);
 	/* the ENUM: four names, cursor on info; OK on debug runs on_change in the caller */
 	fw_call_menu_row(sim_l1(SIM_OPT0 + 10u), sim_sub);
-	CHECK(45, rd16(pk + 0x54) == 4 && rd16(pk + 0x56) == 2 && sim_pk[0x6C / 4] == 3);
+	CHECK(45, rd16(pk + 0x54) == 4 && rd16(pk + 0x56) == 2 && sim_pk[0x6C / 4] == 3 &&
+		  sim.style_at_create == 0x00010000u + SIM_OPT0 + 10u &&
+		  sim_style(SIM_OPT0 + 10u) == 1 && sim_style(SIM_OPT0) == 0xFFFF && !sim.mallocs);
 	*(uint16_t *)(pk + 0x56) = 3;
 	sim.changes = 0;
 	CHECK(46, fw_call_menu_picker(sim_pk[0x48 / 4], sim_pk, 0x972B, 0) == 2 && level == 3 &&
@@ -513,14 +553,29 @@ static void check_rows(void)
 	CHECK(50, sim_pk[0x48 / 4] == 0x609E0001u && !sim_pk[0x2C / 4] && sim_pk[0x64 / 4] &&
 		  rd16(pk + 0x54) == SIM_PK_STOCK_N && sim_sub[0x58 / 4] == pk &&
 		  fui.st.refused == 3 && fui.st.opens == 2);
-	/* the stock handler with too few entries: refused, every event cancels, nothing is set */
+	/* seven names on the donor's five entries: both arrays replaced, the stock ones freed */
+	fw_call_menu_row(sim_l1(SIM_OPT0 + 9u), sim_sub);
+	CHECK(54, sim.mallocs == 2 && sim.frees == 2 && sim.freed[0] == (uint32_t)sim_dis &&
+		  sim.freed[1] == (uint32_t)sim_vals && sim_pk[0x5C / 4] == (uint32_t)sim_heap[0] &&
+		  sim_pk[0x60 / 4] == (uint32_t)sim_heap[1] && rd16(pk + 0x54) == 7 &&
+		  sim_heap[1][6] == 6 && sim_pk[0x6C / 4] == 6 && fui.st.reallocs == 1 &&
+		  sim_pk[0x48 / 4] != FW_MENU_PICKER_STOCK_FN && fui.st.opens == 3);
+	*(uint16_t *)(pk + 0x56) = 6;
+	CHECK(55, fw_call_menu_picker(sim_pk[0x48 / 4], sim_pk, 0x900C, 0) == 2 && m8 == 6 &&
+		  fui.st.sets == 3);
+	/* no memory for the second array: the first freed, the stock arrays kept, every event
+	   cancels, nothing is set */
 	sim.pk_small = true;
+	sim.malloc_fail_at = sim.mallocs + 2u;
 	fw_call_menu_row(sim_l1(SIM_OPT0 + 10u), sim_sub);
 	sim.pk_small = false;
 	CHECK(53, sim_pk[0x48 / 4] != FW_MENU_PICKER_STOCK_FN && !sim_pk[0x2C / 4] &&
-		  rd16(pk + 0x54) == 1 && fui.st.refused == 4 && fui.st.opens == 2 &&
+		  rd16(pk + 0x54) == 1 && sim_pk[0x5C / 4] == (uint32_t)sim_dis &&
+		  sim.frees == 3 && sim.freed[2] == (uint32_t)sim_heap[2] &&
+		  fui.st.refused == 4 && fui.st.opens == 3 && fui.st.reallocs == 1 &&
+		  rd32(SIM_STYLE79) == 0x00010000u + SIM_OPT0 + 10u &&
 		  fw_call_menu_picker(sim_pk[0x48 / 4], sim_pk, 0x900C, 0) == 3 && level == 3 &&
-		  fui.st.sets == 2 && sim.stock_calls == 1);
+		  fui.st.sets == 3 && sim.stock_calls == 1);
 	/* a value changed outside the lists (a late cfg load): the tick rewrites its cell */
 	m5 = 1;
 	level = 0;
@@ -529,6 +584,77 @@ static void check_rows(void)
 		  sim_text(sim_value(SIM_OPT0 + 10u, &text), text, "err"));
 	fenykl_ui_tick();
 	CHECK(52, fui.st.refreshes == 2 && fui.st.cpu1_actions == 0);
+}
+
+/* Entry 79 holds the last opened row's key: the removal still restores every stock byte. */
+static void check_remove(void)
+{
+	uint32_t stale = sim_l1(SIM_OPT0 + 1u);
+
+	*(volatile uint8_t *)FW_GUI_SUPER = 0x11;
+	CHECK(70, fenykl_ui_remove() == FENYKL_UI_EAGAIN && fui.installed);
+	*(volatile uint8_t *)FW_GUI_SUPER = 1;
+	CHECK(71, rd32(SIM_STYLE79) != 0x00010000u + SIM_OPT0 && fenykl_ui_remove() == 0 &&
+		  !fui.installed && sim_is_stock());
+	CHECK(72, fenykl_ui_remove() == FENYKL_UI_ENOTINST);
+	/* a stale page actuator's open leaves the restored entry stock */
+	fw_call_menu_row(stale, sim_sub);
+	CHECK(74, rd32(SIM_STYLE79) == 0x0001028Cu);
+	/* installed again on the same boot */
+	CHECK(73, fenykl_ui_install() == 0 && rd32(SIM_STYLE79) == 0x00010000u + SIM_OPT0);
+}
+
+/* The full tab: 40 rows with a 26-name ENUM; the last row keys entry 79 to 0xF68. */
+static void check_full(void)
+{
+	static int32_t v[FENYKL_UI_OPTS_MAX];
+	static const char *names[FENYKL_UI_VALUES_MAX];
+	static const struct fenykl_cfg_group g = { "Page", 1 };
+	static struct fenykl_cfg_opt full[FENYKL_UI_OPTS_MAX];
+	uint32_t pk = (uint32_t)sim_pk;
+	unsigned int mallocs;
+
+	for (unsigned int i = 0; i < FENYKL_UI_VALUES_MAX; i++)
+		names[i] = "n";
+	for (unsigned int i = 0; i < FENYKL_UI_OPTS_MAX; i++)
+		full[i] = (struct fenykl_cfg_opt){ .name = "f", .label = "Row", .group = &g,
+						   .value = &v[i], .max = 1,
+						   .type = FENYKL_CFG_BOOL };
+	full[23].max = FENYKL_UI_VALUES_MAX - 1;
+	full[23].names = names;
+	full[23].type = FENYKL_CFG_ENUM;
+	sim_boot();
+	CHECK(90, fenykl_ui_install_opts(full, full + FENYKL_UI_OPTS_MAX) == 0 &&
+		  rd16(FW_CUSTOM_TAB_REC_L + 2u) == FENYKL_UI_OPTS_MAX + 1u &&
+		  rd32(FW_CUSTOM_ROWS_L) >> 16 == FENYKL_UI_OPTS_MAX + 1u);
+	fw_call_menu_row(sim_l1(SIM_OPT0 + FENYKL_UI_OPTS_MAX - 1u), sim_sub);
+	CHECK(91, sim.style_at_create == 0x00010F68u && rd16(pk + 0x54) == 2);
+	mallocs = sim.mallocs;
+	fw_call_menu_row(sim_l1(SIM_OPT0 + 23u), sim_sub);
+	CHECK(92, sim.style_at_create == 0x00010F58u && sim.mallocs == mallocs + 2u &&
+		  rd16(pk + 0x54) == 26 && sim_pk[0x6C / 4] == 25 &&
+		  ((uint32_t *)sim_pk[0x60 / 4])[25] == 25 && fui.st.reallocs == 1);
+	CHECK(93, fenykl_ui_remove() == 0 && sim_is_stock());
+}
+
+/* A table outside cfg's: the set stores the value and calls on_change, cfg is not asked. */
+static void check_ram(void)
+{
+	static int32_t v;
+	static const struct fenykl_cfg_group g = { "RAM", 1 };
+	static const struct fenykl_cfg_opt ram[] = {
+		{ .name = "r.0", .label = "RAM row", .group = &g, .value = &v, .max = 1,
+		  .on_change = sim_changed, .type = FENYKL_CFG_BOOL },
+	};
+	uint32_t pk = (uint32_t)sim_pk;
+
+	sim_boot();
+	sim.changes = 0;
+	CHECK(80, fenykl_ui_install_opts(ram, ram + 1) == 0 && fui.nopts == 1);
+	fw_call_menu_row(sim_l1(SIM_OPT0), sim_sub);
+	*(uint16_t *)(pk + 0x56) = 1;
+	CHECK(81, fw_call_menu_picker(sim_pk[0x48 / 4], sim_pk, 0x900C, 0) == 2 && v == 1 &&
+		  sim.changes == 1 && fui.st.sets == 1 && fui.st.set_fail == 0);
 }
 
 static void check_late(void)
@@ -558,6 +684,9 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 	check_start();
 	check_install();
 	check_rows();
+	check_remove();
 	check_late();
+	check_ram();
+	check_full();
 	sim_exit_code = sim.first_fail;
 }

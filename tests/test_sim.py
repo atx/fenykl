@@ -361,6 +361,8 @@ def test_em10ii_ui_runs_in_the_simulator(tmp_path):
             "menu_picker_create",
             "ui_key_get_state",
             "fileif_get_media_status",
+            "malloc",
+            "free",
         ],
         ldflags=[f"-Wl,--section-start=.fw.picker_stock=0x{stock_fn:x}"],
         target=EM10II,
