@@ -46,7 +46,7 @@ fenykl is a project providing a firmware mod infrastructure for the E-M10 Mark I
     <td>Swaps the red and blue channels (useful for IR photography)</td>
   </tr>
   <tr>
-    <td><strong>Screenshot (can be mapped to Fn in the Fenykl config menu)</strong></td>
+    <td><strong>Screenshot (a Button Function: assign it to Fn1, Fn2, Fn3, REC or L-Fn)</strong></td>
     <td>Saves a PPM screenshot of the live view</td>
   </tr>
 </table>
@@ -162,4 +162,16 @@ To configure fenykl and verify that it got loaded, go into MENU > Custom menu: b
 tab **L. Fenykl**. Its first row reads **Fenykl Loaded**; every other row is one setting, edited
 like any stock Custom menu row (OK, pick a value, OK).
 
+![Custom menu tab L. Fenykl](pics/settings-tab.png)
+
 A changed setting takes effect at once and is saved two seconds later.
+
+### Screenshot on a button
+
+The screenshot is a Button Function of its own: MENU > Custom menu > B > Button Function, pick
+Fn1, Fn2, Fn3, REC or L-Fn and choose **Screenshot** (its help line starts with "(Fenykl)"). A
+press of that button saves `SHOTnnnn.PPM` to the card root. Without fenykl loaded the button does
+nothing.
+
+![Button Function list with Fn3 set to Screenshot](pics/button-function-screenshot.png)
+![Fn3 function picker on Screenshot](pics/fn-picker-screenshot.png)
