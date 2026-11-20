@@ -112,9 +112,9 @@ is not known; the plugin's own gate (main: live view or the menu) applies on top
 
 ## 5. Without the plugin
 
-The assignment is an ordinary stored setting and outlives the plugin (that it survives a
-power-off has not been checked on the camera; a Myset saved with it probably keeps it too, and
-unload cannot clean those copies). On a boot without fenykl, or with a plugin that does not
+The assignment is an ordinary stored setting and outlives the plugin (it survives a power-off:
+seen on the camera 2026-11-20 for Fn3, with and without the plugin on the next boot; a Myset saved
+with it probably keeps it too, and unload cannot clean those copies). On a boot without fenykl, or with a plugin that does not
 install the entry, a button holding 0x3BF does nothing (the dispatch treats it as Off), its row's
 value cell is empty, and its picker opens on the list's first entry because the stored value is in
 no list; choosing a stock function there clears it. Seen on the camera with the tables removed and

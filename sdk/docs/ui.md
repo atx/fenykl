@@ -137,12 +137,10 @@ are data writes into tables the menu code reads; no code is patched.
   and RIGHT into a tab.
 - **Menu left on tab L, next boot without the plugin.** The camera saves the menu position at a
   soft power-off, and the submenu restore (0x609F3235) reads the saved tab back at the next MENU.
-  Without the plugin there is no tab L. Not yet checked on the camera. Statically there are two
-  outcomes: the restore finds tab id 0x8F1 by id and opens the donor tab with its stock content
-  (header "C. Electronic Viewfinder", rows EVF Adjust and EVF Auto Switch, which lead to EVF
-  screens on a body without the Accessory Port menu), or it takes index 11 of the 11-entry tab
-  list and its id lookup misses. Until checked, leave the menu on another tab before a boot without
-  the plugin.
+  Without the plugin there is no tab L. Seen on the camera (2026-11-20, menu left inside tab L,
+  power switch off and on, a boot without tab L): MENU opens on Shooting Menu 1, cursor on the tab
+  column, with no error. The saved position is kept: the next boot with the plugin opens MENU
+  inside tab L again.
 - **Icons.** The tab has its own icon, a fennel bulb with fronds and an "L" on the Custom tabs'
   plate (38 x 40, the menu's GUI palette). The stock image widgets draw it: the borrowed id's icon
   entry {0xE, 0x1C} selects images 2043 (bright) and 2040 (dim) of the common resource, and the
