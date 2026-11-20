@@ -1,7 +1,8 @@
-/* Mock firmware for the E-M10 II key layer test (test_key.c). appevent_post sits at its real
+/* Mock firmware for the Button Function test (test_fnfunc.c). appevent_post sits at its real
    address with its real relocate span and appends {event, param, flag} to sim_posts[sim_nposts++]
-   (no bounds check: the test posts fewer than its array holds). The primitives the event layer,
-   the key layer and hooks.c call are jmp mocks with their stock RET operands. */
+   (no bounds check: the test posts fewer than its array holds). The primitives the library, the
+   event layer and hooks.c call are jmp mocks with their stock RET operands; the D-cache flush and
+   the task sleep forward to C (c_<name>), which judges the tables between two swaps. */
 
 /* appevent_post(event@D0, param@D1, flag@A0), entered with [d2,d3,a2],16. */
 	.section .fw.appevent_post,"ax"
@@ -30,6 +31,15 @@
 _mock_\name:
 	.endm
 
+/* Calls c_<name>() and returns with the stock operands. */
+	.macro	CMOCK name, ret
+	JMOCK	\name
+	add	-12,sp
+	call	_c_\name,[],0
+	add	12,sp
+	\ret
+	.endm
+
 	JMOCK	psw_get
 	mov	0x0f00,d0
 	ret	[],0
@@ -47,5 +57,5 @@ _mock_\name:
 	JMOCK	irq_unlock
 	ret	[d2],8
 
-	JMOCK	dcache_flush_all
-	ret	[d2],8
+	CMOCK	dcache_flush_all, "ret [d2],8"
+	CMOCK	OlyTaskSleep, "ret [d2],8"

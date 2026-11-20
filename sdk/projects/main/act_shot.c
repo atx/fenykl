@@ -1,7 +1,7 @@
 /*
- * main: the "screenshot" Fn action, the shot library (sdk/docs/shot.md) in live view and the menu,
- * where the live view keeps running behind it. The release of a short Fn takes the snapshot; each
- * later tick writes a strip.
+ * main: the screenshot action of the Button Function entry (main_fn.c), the shot library
+ * (sdk/docs/shot.md) in live view and the menu, where the live view keeps running behind it. The
+ * press takes the snapshot; each later tick writes a strip.
  */
 #include "main.h"
 #include <shot.h>
@@ -24,7 +24,8 @@ static int act_shot_start(uint32_t press_us)
 }
 
 const struct main_fn_act act_shot = {
-	.name = "screenshot",
+	.name = "Screenshot",
+	.help = "(Fenykl) Saves screen to card",
 	.log = &fenykl_shot_log,
 	.claim = act_shot_claim,
 	.start = act_shot_start,

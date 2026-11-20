@@ -1,195 +1,137 @@
 /*
- * main: option "Fn override". A short Fn press runs the chosen action (main_fn_acts[]) in
- * the plugin task; a press held FENYKL_KEY_LONG_US is replayed to the firmware while still held
- * (long_stock, decided by fenykl_key_tick), so the stock Fn function runs, that much late.
- * With "none" nothing is claimed, and the key layer (sdk/docs/key.md) is installed only once an
- * action is chosen; the handler claims only after the install is on the card. Presses while an
- * action is busy are ignored and logged.
+ * main: the Button Function entry (sdk/docs/fnfunc.md). The action (act_shot) appears as
+ * "Screenshot" (help "(Fenykl) ...") in the stock function pickers of Fn1, Fn2, Fn3, REC and L-Fn; a press of a
+ * button holding it runs the action in the plugin task. The press still reaches the firmware,
+ * which treats the entry like Off. Presses while the action is busy are ignored and logged.
  */
 #include "main.h"
 #include <event.h>
-#include <key.h>
+#include <fnfunc.h>
 
-#define MAIN_FN_FLUSH_TRIES 20		/* fenykl_log_flush busy: MAIN_TICK_MS apart */
+#define MAIN_FN_STOCK_TRIES 5u
+#define MAIN_FN_STOCK_TICKS (1000u / MAIN_TICK_MS)	/* between two tries after ESTOCK */
 
-/* The actions of the target's capabilities (plugin.toml). */
-enum main_fn_action {
-	MAIN_FN_NONE,
-#if FENYKL_HAS_SHOT
-	MAIN_FN_SHOT,
-#endif
-	MAIN_FN_ACTIONS,
-};
-
-static const char *const main_fn_names[] = {
-	[MAIN_FN_NONE] = "none",
-#if FENYKL_HAS_SHOT
-	[MAIN_FN_SHOT] = "screenshot",
-#endif
-};
-
-static const struct main_fn_act *const main_fn_acts[] = {
-	[MAIN_FN_NONE] = NULL,
-#if FENYKL_HAS_SHOT
-	[MAIN_FN_SHOT] = &act_shot,
-#endif
-};
-
-_Static_assert(sizeof(main_fn_names) / sizeof(main_fn_names[0]) == MAIN_FN_ACTIONS, "names");
-_Static_assert(sizeof(main_fn_acts) / sizeof(main_fn_acts[0]) == MAIN_FN_ACTIONS, "actions");
+/* The entry's one action; a body without it gets no entry (MAIN_FN). */
+#if MAIN_FN
+static const struct main_fn_act *const main_fn_act = &act_shot;
 
 struct main_fn_state {
-	volatile uint32_t req;		/* short presses, written by the key handler */
+	volatile uint32_t req;		/* presses, written by the press callback */
 	volatile uint32_t press_us;
+	volatile uint32_t refused;	/* presses outside the action's GUI states */
+	volatile uint8_t button;	/* of the last press */
 	uint32_t done;			/* presses the task has taken */
 	uint32_t ignored;		/* presses while busy */
-	const struct main_fn_act *busy;
-	bool installed, failed;
+	unsigned int stock_tries;	/* installs refused with ESTOCK */
+	unsigned int wait;		/* ticks until the next try */
+	bool busy, installed, failed;
 };
 
 static struct main_fn_state main_fn_st;
 
 static FENYKL_LOG_MODULE(main_fn_log, "fn", FENYKL_LOG_INFO);
 
-static FENYKL_CFG_GROUP(main_grp_keys, "Buttons", 5);
-FENYKL_CFG_ENUM(main_fn_action, "main.fn.action", "Fn override", &main_grp_keys, MAIN_FN_NONE,
-		main_fn_names);
-
-static const struct main_fn_act *main_fn_cur(void)
-{
-	int32_t a = main_fn_action;
-
-	return a > MAIN_FN_NONE && a < MAIN_FN_ACTIONS ? main_fn_acts[a] : NULL;
-}
-
-/* key task */
-static bool main_fn_claim(enum fenykl_key key, uint16_t gui, void *arg)
-{
-	const struct main_fn_act *act = main_fn_cur();
-
-	(void)key;
-	(void)gui;
-	(void)arg;
-	return act && act->claim();
-}
-
-static void main_fn_on_key(const struct fenykl_key_event *ev, void *arg)
-{
-	(void)arg;
-	if (ev->kind != FENYKL_KEY_SHORT)
-		return;
-	main_fn_st.press_us = ev->now_us;
-	main_fn_st.req++;
-}
-
-static struct fenykl_key_handler main_fn_key = {
-	.name = "fn", .keys = FENYKL_KEY_BIT(FENYKL_KEY_FN), .claim = main_fn_claim,
-	.on = main_fn_on_key, .long_stock = true,
+static const char *const main_fn_buttons[FENYKL_FNFUNC_BUTTONS] = {
+	[FENYKL_FNFUNC_FN1] = "Fn1", [FENYKL_FNFUNC_FN2] = "Fn2", [FENYKL_FNFUNC_FN3] = "Fn3",
+	[FENYKL_FNFUNC_REC] = "REC", [FENYKL_FNFUNC_LFN] = "L-Fn",
 };
 
-/* Puts the queued log on the card; the flusher task may be in a flush. */
-static int main_fn_flush(void)
+/* event hook context */
+static void main_fn_press(enum fenykl_fnfunc_button b, void *arg)
 {
-	int r = fenykl_log_flush();
+	struct main_fn_state *st = &main_fn_st;
 
-	for (unsigned int i = 1; r == FENYKL_LOG_EBUSY && i < MAIN_FN_FLUSH_TRIES; i++) {
-		fenykl_task_sleep(MAIN_TICK_MS);
-		r = fenykl_log_flush();
+	(void)arg;
+	if (!main_fn_act->claim()) {
+		st->refused++;
+		return;
 	}
-	return r;
+	st->press_us = FENYKL_TIMER_NOW();
+	st->button = (uint8_t)b;
+	st->req++;
 }
+
+static struct fenykl_fnfunc main_fn_func = { .press = main_fn_press };
 
 static void main_fn_install(void)
 {
 	struct main_fn_state *st = &main_fn_st;
-	int r = fenykl_key_add(&main_fn_key);
+	int r;
 
-	if (!r)
-		r = fenykl_key_install();
+	main_fn_func.name = main_fn_act->name;
+	main_fn_func.help = main_fn_act->help;
+	if (st->wait) {
+		st->wait--;
+		return;
+	}
+	r = fenykl_fnfunc_install(&main_fn_func);
+	if (r == FENYKL_FNFUNC_EAGAIN)
+		return;
+	/* the boot may still be building what the check reads */
+	if (r == FENYKL_FNFUNC_ESTOCK && ++st->stock_tries < MAIN_FN_STOCK_TRIES) {
+		fenykl_log_warn(&main_fn_log, "button function install refused, try %u of %u",
+				st->stock_tries, MAIN_FN_STOCK_TRIES);
+		st->wait = MAIN_FN_STOCK_TICKS;
+		return;
+	}
 	if (r) {
 		st->failed = true;
-		fenykl_log_err(&main_fn_log, "key install %d: Fn stays stock", r);
+		fenykl_log_err(&main_fn_log, "button function install %d: not in the pickers", r);
 		return;
 	}
 	st->installed = true;
-	st->done = st->req;
-	fenykl_log_info(&main_fn_log, "key layer installed for %s", main_fn_names[main_fn_action]);
-	r = main_fn_flush();
-	if (r)
-		fenykl_log_warn(&main_fn_log, "log flush %d before the first claim", r);
-	main_fn_key.enabled = true;
 }
 
 void main_fn_tick(void)
 {
 	struct main_fn_state *st = &main_fn_st;
-	const struct main_fn_act *act;
 	uint32_t req = st->req;
 
 	if (!st->installed) {
-		if (st->failed || !main_fn_cur())
-			return;
-		main_fn_install();
+		if (!st->failed)
+			main_fn_install();
 		return;
 	}
-	fenykl_key_tick();
+	fenykl_fnfunc_tick();
 	if (st->busy) {
 		if (req != st->done) {
 			st->ignored += req - st->done;
-			fenykl_log_info(&main_fn_log, "%u Fn presses while %s is busy: ignored",
-					req - st->done, st->busy->name);
+			fenykl_log_info(&main_fn_log, "%u presses while %s is busy: ignored",
+					req - st->done, main_fn_act->name);
 			st->done = req;
 		}
-		if (!st->busy->step())
-			st->busy = NULL;
+		st->busy = main_fn_act->step();
 		return;
 	}
 	if (req == st->done)
 		return;
 	if (req - st->done > 1)
-		fenykl_log_info(&main_fn_log, "%u Fn presses at once: one taken", req - st->done);
+		fenykl_log_info(&main_fn_log, "%u presses at once: one taken", req - st->done);
 	st->done = req;
-	act = main_fn_cur();
-	if (!act) {
-		fenykl_log_info(&main_fn_log, "Fn press after the option went to none: ignored");
-		return;
-	}
-	if (!act->start(st->press_us))
-		st->busy = act;
+	fenykl_log_info(&main_fn_log, "%s press", main_fn_buttons[st->button]);
+	st->busy = !main_fn_act->start(st->press_us);
 }
 
 void main_fn_set_level(unsigned int level)
 {
 	fenykl_log_set_level(&main_fn_log, level);
-	fenykl_log_set_level(&fenykl_key_log, level);
-	for (unsigned int i = 0; i < MAIN_FN_ACTIONS; i++)
-		if (main_fn_acts[i])
-			fenykl_log_set_level(main_fn_acts[i]->log, level);
+	fenykl_log_set_level(&fenykl_fnfunc_log, level);
+	fenykl_log_set_level(main_fn_act->log, level);
 }
 
 void main_fn_status(void)
 {
 	struct main_fn_state *st = &main_fn_st;
 	struct fenykl_event_stats es;
-	struct fenykl_key_stats ks;
 
 	if (!st->installed)
 		return;
-	fenykl_log_info(&main_fn_log, "fn %s: presses %u ignored %u, replays %u",
-			main_fn_names[main_fn_action], st->done, st->ignored,
-			main_fn_key.private.replays);
-	fenykl_log_dbg(&main_fn_log, "  shorts %u longs %u busy %u", main_fn_key.private.shorts,
-		       main_fn_key.private.longs, main_fn_key.private.busy);
-	fenykl_key_get_stats(&ks);
-	fenykl_log_dbg(&main_fn_log, "  key presses %u releases %u values %u claimed %u",
-		       ks.presses, ks.releases, ks.values, ks.claimed);
-	fenykl_log_dbg(&main_fn_log, "  key unknown %u last %08x ticks_long %u", ks.unknown,
-		       ks.last_unknown, ks.ticks_long);
+	fenykl_log_info(&main_fn_log, "%s: presses %u ignored %u refused %u", main_fn_act->name,
+			st->done, st->ignored, st->refused);
 	fenykl_event_get_stats(&es);
 	fenykl_log_dbg(&main_fn_log, "  events %u consumed %u injected %u nested %u", es.events,
 		       es.consumed, es.injected, es.nested);
 	fenykl_log_dbg(&main_fn_log, "  events bypassed %u cpu1 %u", es.bypassed, es.cpu1);
-	for (unsigned int i = 0; i < MAIN_FN_ACTIONS; i++)
-		if (main_fn_acts[i])
-			main_fn_acts[i]->status();
+	main_fn_act->status();
 }
+#endif

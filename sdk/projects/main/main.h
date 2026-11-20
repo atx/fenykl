@@ -37,12 +37,13 @@ int feat_focus_add(struct fenykl_hud_elem *e, const char *label,
 		   const struct fenykl_log_module *log);
 
 /*
- * An Fn override action (main_fn.c): claim() in the key task decides per GUI
- * state; start() runs in the plugin task at the release of a short press, 0 = busy until step()
- * returns false. step() runs once per tick while busy.
+ * The action of the Button Function entry (main_fn.c): claim() at the press, in the posting
+ * task, decides per GUI state; start() runs in the plugin task, 0 = busy until step() returns
+ * false. step() runs once per tick while busy.
  */
 struct main_fn_act {
-	const char *name;
+	const char *name;		/* the entry's name and help in the stock pickers */
+	const char *help;
 	struct fenykl_log_module *log;	/* level follows main.log.level */
 	bool (*claim)(void);
 	int (*start)(uint32_t press_us);
@@ -52,8 +53,9 @@ struct main_fn_act {
 
 extern const struct main_fn_act act_shot;
 
-/* main_fn.c, plugin task; no Fn override without the key capability */
-#if FENYKL_HAS_KEY
+/* main_fn.c, plugin task; no Button Function entry without the fnfunc and shot capabilities */
+#define MAIN_FN (FENYKL_HAS_FNFUNC && FENYKL_HAS_SHOT)
+#if MAIN_FN
 void main_fn_tick(void);
 void main_fn_set_level(unsigned int level);
 void main_fn_status(void);

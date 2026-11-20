@@ -627,7 +627,7 @@ static void t_keys(void)
 	w[1] = FDM_HOLD_MAX;
 	CHECK(204, t_parse(FDM_OP_KEY, 2, w, NULL, 0, &q) == 0 &&
 			   t_parse(FDM_OP_KEY, 1, w, NULL, 0, &q) == FDM_EARGS);
-	/* the key layer's codes; never the power switch 0x0C or the mode dial */
+	/* the buttons' event codes; never the power switch 0x0C or the mode dial */
 	CHECK(205, fdm_key_code(FDM_KEY_OK) == 0x0004 && fdm_key_code(FDM_KEY_MENU) == 0x0089 &&
 			   fdm_key_code(FDM_KEY_INFO) == 0x1205 && fdm_key_code(FDM_KEY_HALF) == 0x0100 &&
 			   fdm_key_code(FDM_KEY_FULL) == 0x0101 && fdm_key_code(FDM_KEY_N) == 0);

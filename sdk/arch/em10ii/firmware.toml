@@ -1404,6 +1404,95 @@ type = "{u8 [0x44], u16 id, u16 count, u8 [4]} [2]"
 evidence = "high"
 note = "bss, the two runtime count overrides of the list counts: 0x6029D79B searches them for the id (u16 +0x44, stride 0x4C, loop bound 2) and 0x6029CE1B then returns u16 +0x46 instead of the record count"
 
+# --- Button Function (lib/fnfunc_em10ii.c): the store records, settings map and label tables a
+# plugin swaps to add function ID 0x3BF to the pickers of Fn1, Fn2, Fn3, REC and L-Fn. Read in the
+# v1.4 image bytes: every record has the 0x80 flag word, no xlat and width 2; Fn1, REC, Fn2 and Fn3
+# list the same 28 IDs (... 0x92F 0x306 0x7D0), L-Fn 0x7D9 and then those 28.
+
+[data.setting_rec_fn1]
+address = 0x60390B7C
+type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind, u16} [1]"
+evidence = "high"
+note = "sec2 rodata, record of setting 0x2F (Fn1's function): {0x2F, 0x80, vals 0x6038EEB4, xlat 0, 0x38, 2, 0, kind 5}; the button picker init 0x609EE672 lists bytes / width values from vals (raw u16 function IDs) and grays those the button's mode rule 0x60357F54 does not allow"
+
+[data.setting_rec_rec]
+address = 0x60390B90
+type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind, u16} [1]"
+evidence = "high"
+note = "sec2 rodata, record of setting 0x30 (the REC button's function): {0x30, 0x80, vals 0x6038EEEC, 0, 0x38, 2, 0, 5}; mode rule 0x60357F68"
+
+[data.setting_rec_fn2]
+address = 0x60390BA4
+type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind, u16} [1]"
+evidence = "high"
+note = "sec2 rodata, record of setting 0x31 (Fn2's function): {0x31, 0x80, vals 0x6038EF24, 0, 0x38, 2, 0, 5}; mode rule 0x60357F7C"
+
+[data.setting_rec_lfn]
+address = 0x60390BE0
+type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind, u16} [1]"
+evidence = "high"
+note = "sec2 rodata, record of setting 0x38 (the lens L-Fn button's function): {0x38, 0x80, vals 0x6038EF80, 0, 0x3A, 2, 0, 5}; mode rule 0x60357FA4"
+
+[data.setting_rec_fn3]
+address = 0x60392B5C
+type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind, u16} [1]"
+evidence = "high"
+note = "sec2 rodata, record of setting 0x23B (Fn3's function): {0x23B, 0x80, vals 0x6038FB40, 0, 0x38, 2, 0, 5}; mode rule 0x60357F90. Its list was repointed to a 30-entry copy with 0x3BF on the camera (2026-11-19): the picker showed the new entry after Off"
+
+[data.setting_map]
+address = 0x603AA9E0
+type = "{u16 prop, u16 element} [0x404]"
+evidence = "high"
+note = "sec2 rodata, the settings getter's map for ids 0..0x403: the value is element `element` of property `prop`'s object, of width 4 / 2 / 1 for prop & 7 = 4 / 2 / other, signed with prop & 8. 0x2F {0xECC2, 0}, 0x30 {0xECC2, 1}, 0x31 {0xECC2, 2}, 0x23B {0xECC2, 4}, 0x38 {0xECE2, 0}, 0x217 {0xE1E1, 0}; these reads matched the menu on the camera"
+
+[data.func_selector_keys]
+address = 0x60D78EB4
+type = "{u16 idx, u16 n_names, u16 n_icons, u16 n_help, u32 title, u32 names, u32 icons, u32 help, u32 footer} [15]"
+evidence = "high"
+note = "sec4 rodata, the function selector's (view 0x1E) key table, found by vparam in its ctor 0x60A64B2B: idx 0, 1, 6, 7, 8, 9, 2, 0xA, 0xB, 0xC, 3, 4, 0xD, 0xE, 5; every entry has names func_names (37), icons 0x60D78BCC (21), help func_help (37) and footer 0x60D78E84, only the titles differ. The builder 0x60A64C56 looks the cursor value up in names, icons and help (lookup 0x609F69FB), clearing only the icon cell first"
+
+[data.button_picker_init]
+address = 0x60D3435C
+type = "{u32 setting, u32 init} [12]"
+evidence = "high"
+note = "sec4 rodata, the picker actuator's per-setting init table: 0x2F, 0x31, 0x30, 0x23B, 0x23C, 0x23D, 0x35, 0x33, 0x36, 0x37, 0x38 -> the button picker init 0x609EE672 (count and values from the setting's record, every value the mode rule does not allow disabled), 0x9E -> 0x609EE928"
+
+[data.func_icons]
+address = 0x60D78BCC
+type = "{u32 value, u16 kind, u16 id, u32 aux} [21]"
+evidence = "high"
+note = "sec4 rodata, the function selector's icon labels by function ID, first {0x8C7, kind 3 image, 0x6B8}, last {0x306, 3, 0x1029}; entry format as func_names. Without an entry for the cursor value the selector's icon cell stays cleared"
+
+[data.func_footer]
+address = 0x60D78E84
+type = "{u16 kind, u16 lang, u32 text} [6]"
+evidence = "high"
+note = "sec4 rodata, the function selector's footer labels, shared by the 15 key entries: kinds 0 and 4 (lang 0xC0, 0xC5), text 0x60D789A4"
+
+[data.func_names]
+address = 0x60D78A10
+type = "{u32 value, u16 kind, u16 id, u32 aux} [37]"
+evidence = "high"
+note = "sec4 rodata, the function selector's name labels by function ID, first {0x7D9, kind 4, lang 0x58D}, last {0x306, 4, 0xA5D}. Kind 4 = lang id; kind 5 = the ASCII string at aux, widened into a 33-u16 cell (0x609F6B00): at most 32 characters. 0x609F69FB writes nothing for a value missing from the table"
+
+[data.func_help]
+address = 0x60D78CC8
+type = "{u32 value, u16 kind, u16 id, u32 aux} [37]"
+evidence = "high"
+note = "sec4 rodata, the function selector's help labels (the line under the picker) by function ID, first {0x7D9, 4, 0x959}, last {0x306, 4, 0xA58}; entry format as func_names"
+
+[data.button_rows]
+address = 0x60D7243C
+type = "{u32 setting, {u16 kind, u16 lang, u32 text} title, u32 cells, u32 count, u32 [4]} [8]"
+evidence = "high"
+note = "sec4 rodata, the Custom B Button Function rows: settings 0x2F, 0x31, 0x30, 0x23B, 0x35, 0x33, 0x9E, 0x38, each with a kind-4 title (Fn1 lang 0x4C8); the row value cell (0x60A5E84A: the setting's value, then 0x609F69FB) looks the value up in cells/count: button_cells (38) for every row but 0x9E's (0x60D7033C, 3). The value is drawn right-aligned at the row's right edge"
+
+[data.button_cells]
+address = 0x60D70174
+type = "{u32 value, u16 kind, u16 id, u32 aux} [38]"
+evidence = "high"
+note = "sec4 rodata, the row value labels of the button rows by function ID, first {0x7D9, 4, 0x58D}, last {0x306, kind 3 image, 0x1029}; entry format as func_names. A value missing from it leaves the cell empty (camera, 2026-11-19)"
+
 [data.setting_rec_pmode]
 address = 0x60390208
 type = "{u16 id, u16 flags, u32 vals, u32 xlat, u16 bytes, u16 width, u8, u8 kind} [1]"

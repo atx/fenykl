@@ -10,8 +10,7 @@
 #include <fenykl.h>
 #include "log.h"
 
-/* event word = class << 16 | code; the rear dial's class 0x0203 never
-   reaches the hook on the camera (key.md 5) */
+/* event word = class << 16 | code; the dials post class 0x0203 (event.md 5) */
 #define FENYKL_EVENT_CLASS_MASK 0xFFFF0000u
 #define FENYKL_EVENT_CODE_MASK 0x0000FFFFu
 #define FENYKL_EVENT_KEY_PRESS 0x02000000u

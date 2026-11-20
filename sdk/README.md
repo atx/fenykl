@@ -8,7 +8,8 @@ The SDK is split per camera (`arch/<camera>/`, see Layout). The target is `em10i
 v1.4, three MN10300 cores): the runtime, `string`, `log`, `cfg`, the settings tab (`lib/ui.c` +
 `lib/ui_em10ii.c`), the HUD library (`lib/hud.c` + `lib/hud_em10ii.c`: GUI widgets), the body API's
 `lens`, `batt`, `afc`, `shot` and `wb_base` groups, slots (data pointer words, `lib/slots.c`), code
-hooks (`arch/em10ii/hooks.c`), the event and key layers, pre-capture and the dev monitor; `main` and
+hooks (`arch/em10ii/hooks.c`), the event layer, Button Function entries, pre-capture and the dev
+monitor; `main` and
 `hello` build for it.
 
 ## Status
@@ -23,7 +24,8 @@ hooks (`arch/em10ii/hooks.c`), the event and key layers, pre-capture and the dev
 | other thunks (`fw_OlyTaskCreate` from C, `fw_malloc`/`fw_free`, `fw_dcache_flush_all`, `fw_dbg_puts`) | used on the camera by the libraries and plugins; `fw_dbg_puts` output is invisible without the internal UART |
 | logging library (`lib/log*.c`) | **works on the camera** in `projects/main`: init, flushes. Not run: CPU1 records, wake from standby, the 4 MiB cap; the console tee has nothing to read on this firmware (`docs/logging.md` 7). `fw_malloc` refuses more than 0x4000 bytes |
 | E-M10 II settings tab (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); the tab mechanism (Custom tab L, native rows, patched stock pickers) ran on the camera in a probe plugin (2026-11-19); this library not yet run on the camera (`docs/ui.md` 7). `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle **work on the camera** (2026-10-23) |
-| event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`, `key_em10ii`); the key map's codes seen on the camera through a hook probe (`docs/key.md` 5); main's Fn override not yet run on the camera |
+| event layer (`lib/event.c`) | simulator (`tests/test_sim.py`, `fnfunc_em10ii`); a pass-through handler ran on the camera (`docs/fnfunc.md`) |
+| Button Function entries (`lib/fnfunc_em10ii.c`) | simulator (`tests/test_sim.py`, `fnfunc_em10ii`); Fn3's entry and press listener ran on the camera, Fn1/Fn2/REC/L-Fn and main's screenshot through it not yet |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | not run on the camera: once a cable was seen the gate stays closed until power-off (Cable at run time) |
 | E-M10 II HUD (`lib/hud.c` + `lib/hud_em10ii.c` + `lib/hud_rle.c`: elements as stock image widgets on the live-view info panel through three GUI slots, INFO-screen property, palette pick below 0x80, camera font and live-view images) | simulator (`tests/test_hud_sim.py`: text with the E-M10 II font and images, the visibility predicate, output device, palette pick, the widget backend against GUI mocks, the encoder); camera: the widget mechanism with one widget (2026-11-17: shown on every still INFO screen on LCD and EVF, gone in movie and the menu, no GUI heap leak over 28 panel builds); the overlay it replaces drew `projects/main`'s blocks (2026-10-23) |
 | E-M10 II own contrast client (`lib/afc.c` with `arch/em10ii/fenykl_body.h`) and `projects/main`'s focus meter | **works on the camera** (2026-10-26): the read-only meter in S-AF and C-AF; in MF 4 attaches, callbacks in an ISR at 31 or 64 frames/s, every stop done, S-AF locking after MF, no error, no call on another core. Not run: a half press while attached |
@@ -374,8 +376,8 @@ void plugin_main(uint32_t base, uint32_t size)
 `hooks` is refused at build time (binding it with `FENYKL_HOOK` anyway fails to link: duplicate
 `fenykl_hookwrap_<name>`). On the E-M10 II that is `appevent_post`, the event layer
 (`docs/event.md`): plugins register event handlers with `fenykl_event_add` and call
-`fenykl_event_install` instead of hooking it; key handlers sit on top (`docs/key.md`,
-`fenykl_key_add`, `fenykl_key_install`). A plugin that never calls the library gets no byte of
+`fenykl_event_install` instead of hooking it; the Button Function entries listen through it
+(`docs/fnfunc.md`). A plugin that never calls the library gets no byte of
 the stub (`--gc-sections`).
 
 `fenykl_hook_install` / `..._remove` mask interrupts, write the patch through the uncached alias,
@@ -629,7 +631,7 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 | path | purpose |
 |---|---|
 | `include/fenykl.h` | SDK header, camera-independent; includes `fenykl_fw.h` and `fenykl_target.h` |
-| `include/log.h`, `include/cfg.h`, `include/event.h`, `include/key.h`, `include/hud.h`, `include/ui.h`, `include/shot.h`, `include/precap.h`, `include/devmon.h` | logging, configuration, event layer, key layer, HUD, settings tab, screenshot, pre-capture and dev monitor library APIs |
+| `include/log.h`, `include/cfg.h`, `include/event.h`, `include/fnfunc.h`, `include/hud.h`, `include/ui.h`, `include/shot.h`, `include/precap.h`, `include/devmon.h` | logging, configuration, event layer, Button Function entries, HUD, settings tab, screenshot, pre-capture and dev monitor library APIs |
 | `include/body.h` | body API: camera state by capability, implemented per camera in `arch/<camera>/fenykl_body.h` (Body API) |
 | `lib/` | SDK library, linked into every plugin (`--gc-sections` drops what is unused) |
 | `lib/start.c` | clears `.bss`, skips a USB boot (`fenykl_usb_attached`), calls `plugin_main` |
@@ -640,7 +642,7 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 | `docs/logging.md` | logging library reference |
 | `lib/cfg.c` | configuration library: load, parser, save, saver task; doc `docs/config.md` |
 | `lib/event.c` | event layer: the SDK's `appevent_post` hook runs the plugin's handlers by priority; doc `docs/event.md` |
-| `lib/key.c` | key layer: named keys, claimed presses completed as SHORT/LONG or replayed to the firmware, optional tick; doc `docs/key.md` |
+| `lib/fnfunc_em10ii.c` | Button Function entries: a plugin function in the stock function pickers of Fn1, Fn2, Fn3, REC and L-Fn, with a press callback; doc `docs/fnfunc.md` |
 | `lib/hud.c` | HUD library: live-view text elements and their rendering; doc `docs/hud.md` |
 | `lib/hud_int.h`, `lib/hud_em10ii.c`, `lib/hud_rle.c` | its camera parts: the GUI image widgets (three slots), visibility (INFO-screen property), output device and palette pick, and the fmt 0x03 encoder of their bitmaps |
 | `lib/shot.c`, `lib/shot_pix.c`, `lib/shot_int.h` | screenshot library: the panel (live view and OSD layers) to `C:\SHOTnnnn.PPM` in strips, `shot_pix.c` the firmware-free pixel work; doc `docs/shot.md` |
@@ -674,11 +676,10 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 4. List the SDK features it supports in `capabilities` (`target.toml`). Each becomes
    `FENYKL_HAS_<NAME>=1` in every compile, next to `FENYKL_TARGET_<CAMERA>=1`. `cpu1` marks a
    CPU1 runtime, which no target has yet; a plugin with `cpu1_sources` does not build for a camera without it.
-   `event`, `key`, `hud`, `ui`, `afc`, `shot` and `precap` select library files (`LIB_CAPABILITIES`
-   in `py/fenykl/plugin.py`): without them `lib/event.c`, `key.c`, `hud.c` + `hud_rle.c`, `ui.c`, `afc.c` +
+   `event`, `fnfunc`, `hud`, `ui`, `afc`, `shot` and `precap` select library files (`LIB_CAPABILITIES`
+   in `py/fenykl/plugin.py`): without them `lib/event.c`, `fnfunc_em10ii.c`, `hud.c` + `hud_rle.c`, `ui.c`, `afc.c` +
    `afc_sm.c`, `shot.c` + `shot_pix.c`, `precap_em10ii.c` are not built. `ui` also needs the
-   camera's page, `lib/ui_<camera>.c`, and `key` its key map, `lib/key_<camera>.c`
-   (`docs/key.md` 5).
+   camera's page, `lib/ui_<camera>.c`.
    `afc`, `lens`, `batt`, `shot` and `wb_base` are groups of `include/body.h`: list one once
    `arch/<camera>/fenykl_body.h` implements it (the file must exist, with the GUI predicates, before
    a plugin including `body.h` builds). Plugin files under `[capabilities.<name>]` follow them.
@@ -689,7 +690,7 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 
 Tests: `tests/test_payload.py` (format, packing, loader checks), `tests/test_fwapi.py` (argument
 placement, declaration checks), `tests/test_sim.py` + `tests/sim/` (in `mn10300-elf-run`, against
-mocks at the real firmware addresses: the hook runtime, the key map, the settings tab, the
+mocks at the real firmware addresses: the hook runtime, the Button Function entries, the settings tab, the
 screenshot, the contrast client's state machine and the main plugin's pure parts),
 `tests/test_plugin_build.py` (example builds; their ISA check is skipped without Ghidra).
 

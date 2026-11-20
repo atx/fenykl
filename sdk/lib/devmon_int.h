@@ -77,7 +77,7 @@ enum fdm_op {
 #define FDM_ENAME (-5)		/* a name the op does not allow (docs/devmon.md 4) */
 #define FDM_EBUSY (-6)		/* a CPU0 job or a test program is still running */
 #define FDM_ETIMEOUT (-7)	/* no result in time (a test program cannot be killed) */
-#define FDM_EIO (-8)		/* card I/O failed, or the key layer refused an inject */
+#define FDM_EIO (-8)		/* card I/O failed, or a key inject was refused */
 #define FDM_ECARD (-9)		/* card gate closed (no card, or a cable was seen) */
 #define FDM_ECRC (-10)		/* PUT: size or CRC-32 of the written file differs */
 #define FDM_ETP (-11)		/* test program header invalid */
@@ -358,7 +358,7 @@ enum fdm_off_act fdm_off_step(struct fdm_off *o, uint32_t tick, bool wifi_up, ui
 void fdm_off_request(struct fdm_off *o);
 
 /* KEY: the buttons the monitor may press (enum fdm_key, the index on the wire), their codes
-   for ui_key_inject_level (the key layer's map, lib/key_em10ii.c). FULL is pressed as a half
+   for ui_key_inject_level (their event codes, sdk/docs/event.md 5). FULL is pressed as a half
    press, then the full press, released in reverse. */
 enum fdm_key {
 	FDM_KEY_OK, FDM_KEY_UP, FDM_KEY_DOWN, FDM_KEY_LEFT, FDM_KEY_RIGHT, FDM_KEY_INFO,
@@ -376,7 +376,7 @@ enum fdm_dial {
 };
 uint32_t fdm_dial_value(uint32_t pos);
 
-/* The key layer for DIAL: fw_ui_key_get_state and fw_ui_key_inject_level on the camera, a
+/* The key functions for DIAL: fw_ui_key_get_state and fw_ui_key_inject_level on the camera, a
    recording stub in the simulator. */
 struct fdm_keyops {
 	unsigned int (*get_state)(unsigned int code);

@@ -30,9 +30,10 @@ firmware functions placed at their real firmware addresses. Every C test program
 - hooks_em10ii: the E-M10 II hook runtime (sdk/arch/em10ii/hooks.c) on the real appevent_post and
   cw_updateDisplay spans: install, calls through stub and trampoline, remove, EBYTES and the
   bounded I-cache wait (stuck ICBUSY -> EICACHE, stock bytes back), and a one-byte code patch.
-- key_em10ii: the key layer with the E-M10 II key map over the event layer and the E-M10 II hook
-  runtime: Fn1 claimed in live view and the menu, Fn2/Fn3/REC/L-Fn/RIGHT decoded, the E-PL3's POWER
-  code and code 0 unknown, POWER refused by add and inject.
+- fnfunc_em10ii: the Button Function entries (sdk/lib/fnfunc_em10ii.c) on the stock image's tables
+  (skipped without it), over the event layer and the E-M10 II hook runtime: the stock checks and
+  the argument refusals, the install with consistent tables at every swap and its rollback, lists
+  and labels for the five buttons, the lazy event install and the press callbacks.
 - shot_em10ii: the screenshot on the E-M10 II body (sdk/lib/shot_pix.c): the EVF's 640 x 480 OSD
   scaled 1.6x by nearest pixel and the LCD's 1:1, RGB palettes with alpha 0..32 and the global
   alpha, blending, the start and abort rules, the LCD and EVF layouts in PRIM block 0.
@@ -213,21 +214,62 @@ def test_em10ii_hooks_run_in_the_simulator(tmp_path):
     assert_exit(result, 0, "tests/sim/hooks_em10ii/test_hooks.c")
 
 
-def test_em10ii_key_map_runs_in_the_simulator(tmp_path):
-    """The key layer with the E-M10 II key map, through the patched appevent_post on a recording
-    mock at its real address."""
-    key = SIM / "key_em10ii"
+# (run address, bytes) of every stock table lib/fnfunc_em10ii.c checks or copies.
+FNFUNC_REGIONS = [
+    (0x603AA9E0, 4 * 0x404),  # settings map {prop, element}
+    (0x6038EEB4, 0x6038EFBA - 0x6038EEB4),  # Fn1, REC, Fn2, arrows, L-Fn value lists
+    (0x6038FB40, 28 * 2),  # Fn3's value list
+    (0x60390B7C, 0x60390BF4 - 0x60390B7C),  # Fn1, REC, Fn2, arrows, L-Fn store records
+    (0x60392B5C, 0x14),  # Fn3's store record
+    (0x60D70174, 38 * 12),  # row value cells
+    (0x60D7243C, 8 * 0x24),  # Custom B button rows
+    (0x60D3435C, 12 * 8),  # picker init entries
+    (
+        0x60D78A10,
+        0x60D79058 - 0x60D78A10,
+    ),  # names, icons, help, footer, the 15 key entries
+]
+
+
+def _fnfunc_image(workdir: Path) -> Path:
+    """sim_image[]: the stock bytes of FNFUNC_REGIONS at their run addresses."""
+    fw = unpack_firmware(stock_image("em10ii"))
+    code = fw.blocks[fw.find_block("main-code-01")].body
+    base = TARGETS["em10ii"].load_addresses["main-code-01"]
+    arrays, entries = [], []
+    for i, (address, size) in enumerate(FNFUNC_REGIONS):
+        chunk = code[address - base : address - base + size]
+        arrays.append(
+            f"static const uint8_t r{i}[] = {{{', '.join(map(str, chunk))}}};"
+        )
+        entries.append(f"\t{{0x{address:x}u, {size}u, r{i}}},")
+    path = workdir / "image.c"
+    path.write_text(
+        "#include <stdint.h>\n\n"
+        "struct sim_region {\n\tuint32_t addr, len;\n\tconst uint8_t *bytes;\n};\n\n"
+        + "\n".join(arrays)
+        + "\n\nconst struct sim_region sim_image[] = {\n"
+        + "\n".join(entries)
+        + f"\n}};\nconst unsigned int sim_image_n = {len(FNFUNC_REGIONS)};\n"
+    )
+    return path
+
+
+def test_em10ii_fnfunc_runs_in_the_simulator(tmp_path):
+    """The Button Function entries on the stock tables, with presses through the patched
+    appevent_post on a recording mock at its real address."""
+    sim = SIM / "fnfunc_em10ii"
     result = run_in_simulator(
         tmp_path,
-        "keysim_em10ii",
-        [key / "test_key.c", SIM / "hooks_em10ii" / "sim_start.S", key / "fw.S"],
-        # DRAM up to the GUI bytes and the init byte appevent_post's span reads, with its uncached
-        # alias; the timer; the mock bodies.
+        "fnfuncsim",
         [
-            ("--memory-alias", "0x60000000,0x2000000,0xa0000000"),
-            TIMER,
-            region("0x6eb00000,0x10000"),
+            sim / "test_fnfunc.c",
+            _fnfunc_image(tmp_path),
+            SIM / "hooks_em10ii" / "sim_start.S",
+            sim / "fw.S",
         ],
+        # DRAM with its uncached alias; the timer; the mock bodies.
+        [EM10II_DRAM, TIMER, region("0x6eb00000,0x10000")],
         mocked=[
             "appevent_post",
             "psw_get",
@@ -236,10 +278,11 @@ def test_em10ii_key_map_runs_in_the_simulator(tmp_path):
             "irq_lock",
             "irq_unlock",
             "dcache_flush_all",
+            "OlyTaskSleep",
         ],
         target=EM10II,
     )
-    assert_exit(result, 0, "tests/sim/key_em10ii/test_key.c")
+    assert_exit(result, 0, "tests/sim/fnfunc_em10ii/test_fnfunc.c")
 
 
 # (run address, bytes) of every stock region the settings tab checks, copies or swaps.

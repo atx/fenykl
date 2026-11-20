@@ -59,11 +59,10 @@ def test_feature_libraries_follow_the_target_capabilities():
         "card.c",
         "cfg.c",
         "event.c",
+        "fnfunc_em10ii.c",
         "hud.c",
         "hud_em10ii.c",
         "hud_rle.c",
-        "key.c",
-        "key_em10ii.c",
         "log.c",
         "log_rec.c",
         "precap_em10ii.c",
@@ -353,18 +352,17 @@ def test_main_links_the_focus_meter_contrast_client_precap_and_rb_swap_for_the_e
 
 
 @needs_toolchain
-def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path):
-    """Focus distance, DoF and the Fn override with the E-M10 II key map and lens readings; its
-    screenshot action brings the key install and the PRIM block 0 lend."""
+def test_main_links_the_lens_features_and_the_button_function_for_the_em10ii(tmp_path):
+    """Focus distance, DoF and the Button Function entry with the E-M10 II lens readings; its
+    screenshot action brings the entry's install and the PRIM block 0 lend."""
     plugin.build(MAIN_DIR, tmp_path, EM10II)
     symbols = (tmp_path / "plugin.map").read_text()
     for name in (
         "feat_focus",
         "feat_dof",
         "main_fn_tick",
-        "fenykl_key_tick",
-        "fenykl_key_codes",
-        "fenykl_key_install",
+        "fenykl_fnfunc_install",
+        "fenykl_fnfunc_tick",
         "act_shot",
         "fenykl_shot_start",
         "fw_imgbuff_alloc",
@@ -372,15 +370,15 @@ def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path)
     ):
         assert f" {name}\n" in symbols
     assert re.search(
-        r"\.rodata\.fenykl_key_codes\n\s+0x\w+\s+0x\w+ \S*/lib_key_em10ii\.c\.o\n",
+        r"\.rodata\.ffn_buttons\n\s+0x\w+\s+0x\w+ \S*/lib_fnfunc_em10ii\.c\.o\n",
         symbols,
     )
 
 
 @needs_toolchain
 def test_main_builds_without_the_body_capabilities(tmp_path):
-    """A body with the HUD, settings tab and key layer but none of main's body capabilities builds
-    main with no feature, no Fn action and no R/B swap."""
+    """A body with the HUD, settings tab and Button Function entries but none of main's body
+    capabilities builds main with no feature, no screenshot entry and no R/B swap."""
     bare = dataclasses.replace(
         EM10II,
         capabilities=tuple(
@@ -396,6 +394,7 @@ def test_main_builds_without_the_body_capabilities(tmp_path):
         "feat_batt",
         "feat_fmeter",
         "act_shot",
+        "fenykl_fnfunc_install",
         "main_rbswap_on",
     ):
         assert f" {name}\n" not in symbols

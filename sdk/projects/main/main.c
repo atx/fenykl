@@ -1,9 +1,9 @@
 /*
  * main: the polished daily-use plugin. Starts logging, configuration, the settings tab
- * (sdk/lib/ui.c) and the HUD library, and runs every feature's tick, the Fn override
- * (main_fn.c) and the R/B swap's task side (main_rbswap*.c) from one task loop. Log: C:\FENYKL.LOG;
- * options: C:\FENYKL.CF0/CF1. A target without the hud capability gets no HUD (MAIN_HUD), one
- * without the key capability no Fn override.
+ * (sdk/lib/ui.c) and the HUD library, and runs every feature's tick, the Button Function entry
+ * (main_fn.c) and the R/B swap's task side (main_rbswap*.c) from one task loop. Log:
+ * C:\FENYKL.LOG; options: C:\FENYKL.CF0/CF1. A target without the hud capability gets no HUD
+ * (MAIN_HUD), one without the fnfunc capability no Button Function entry.
  */
 #include "main.h"
 #include "main_rbswap.h"

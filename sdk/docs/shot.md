@@ -1,7 +1,8 @@
 # Screenshot (`sdk/lib/shot.c`)
 
 Status: the pixel work and the start/abort rules (`shot_pix.c`) are simulator-tested
-(`tests/sim/shot/`, `tests/sim/shot_em10ii/`). Used by main's Fn override ("screenshot"). Built for
+(`tests/sim/shot/`, `tests/sim/shot_em10ii/`). Used by main's Button Function entry
+"Screenshot". Built for
 bodies with the `shot` capability (`include/body.h`); the PRIM block 0 lend has not yet run on the
 camera. A
 plugin that does not call `fenykl_shot_*` gets no byte of it (`--gc-sections`).
@@ -67,9 +68,8 @@ Header `sdk/include/shot.h` (the reference). Log module `shot` (`fenykl_shot_log
 
 The caller decides when to shoot and serialises: no `fenykl_shot_start` while busy. It must keep
 calling `fenykl_shot_step` until it returns `false`: the buffer is lent until then. main takes
-the press through the key layer (`docs/key.md`): a claimed short Fn in live view or the menu (the
-live view keeps running behind it), `long_stock` for the stock Fn on a long press, presses while busy
-ignored and logged.
+the press of a button that holds its Button Function entry (`docs/fnfunc.md`) in live view or the
+menu (the live view keeps running behind it); presses while busy are ignored and logged.
 
 ## 3. Resources and rules
 

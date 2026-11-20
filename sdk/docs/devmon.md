@@ -308,7 +308,7 @@ injected unless a client asks.
 | 6 | MENU | 0x0089 | 14 | FULL | 0x0101 |
 | 7 | PLAY | 0x0087 | | | |
 
-The codes are the key layer's (`lib/key_em10ii.c`). FULL is a half press, 300 ms, the full press
+The codes are the buttons' event codes (`docs/event.md` 5). FULL is a half press, 300 ms, the full press
 for hold_ms, then both released. The power switch is not offered. Only the lever (0x0C) and the
 full press are proven by injection on the camera so far; the others are camera-seen key codes.
 

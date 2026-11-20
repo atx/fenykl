@@ -63,7 +63,7 @@ Two alternating files, `C:\FENYKL.CF0` and `C:\FENYKL.CF1`:
 ```
 fenykl-cfg 1 seq=17
 main.dof.show=on
-main.fn.action=screenshot
+main.focus.show=on
 main.log.level=info
 crc=8A7B3C1D
 ```

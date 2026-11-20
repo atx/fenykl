@@ -2,8 +2,8 @@ targets = ["em10ii"]
 
 # The HUD needs no hook: its elements are GUI widgets (the library's slots).
 
-# The Fn override needs the key layer.
-[capabilities.key]
+# The Button Function entry (the screenshot in the stock function pickers).
+[capabilities.fnfunc]
 sources = ["main_fn.c"]
 
 # Features built only for targets with the body capability they read (include/body.h).
