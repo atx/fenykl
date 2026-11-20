@@ -115,10 +115,12 @@ def test_plugin_may_not_list_a_hook_the_sdk_binds(tmp_path):
 @needs_toolchain
 def test_plugin_may_not_list_a_slot_the_sdk_binds(tmp_path):
     (tmp_path / "plugin.toml").write_text(
-        'targets = ["em10ii"]\nslots = ["eyefi_ok_fn"]\ncpu1_unproven = ["eyefi_ok_fn"]\n'
+        'targets = ["em10ii"]\nslots = ["seq_take_end"]\ncpu1_unproven = ["seq_take_end"]\n'
     )
     (tmp_path / "main.c").write_text("void plugin_main(void) {}\n")
-    with pytest.raises(plugin.BuildError, match="eyefi_ok_fn: the SDK binds it itself"):
+    with pytest.raises(
+        plugin.BuildError, match="seq_take_end: the SDK binds it itself"
+    ):
         plugin.build(tmp_path, tmp_path / "out", EM10II)
 
 
@@ -377,7 +379,7 @@ def test_main_links_the_lens_features_and_the_key_layer_for_the_em10ii(tmp_path)
 
 @needs_toolchain
 def test_main_builds_without_the_body_capabilities(tmp_path):
-    """A body with the HUD, settings page and key layer but none of main's body capabilities builds
+    """A body with the HUD, settings tab and key layer but none of main's body capabilities builds
     main with no feature, no Fn action and no R/B swap."""
     bare = dataclasses.replace(
         EM10II,

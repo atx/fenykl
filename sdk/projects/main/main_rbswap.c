@@ -14,7 +14,7 @@ FENYKL_CFG_GROUP(main_grp_image, "Image", 3);
 FENYKL_CFG_BOOL(main_rbswap_on, "main.rbswap.on", "R/B swap", &main_grp_image, 0,
 		.on_change = main_rbswap_apply);
 
-/* Any task (the cfg task, the settings page): the E-M10 II's registry work waits for the tick. */
+/* Any task (the cfg task, the settings tab): the E-M10 II's registry work waits for the tick. */
 static void main_rbswap_apply(const struct fenykl_cfg_opt *o, int32_t old)
 {
 	(void)o;

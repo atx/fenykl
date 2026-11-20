@@ -27,10 +27,10 @@ Then call `fenykl_devmon_start()` (`include/devmon.h`) once from `plugin_main`, 
 `fenykl_log_init` and `fenykl_cfg_init`. `FENYKL_HAS_DEVMON` is defined only in plugins that link
 the monitor, so a plugin can start it under `#ifdef`, as `projects/main` does: a demo build of main
 with the monitor is `fenykl plugin build sdk/projects/main -t em10ii --with devmon`, without
-changing main's plugin.toml. Its options then sit on main's settings page with main's own. To get the settings page, also call `fenykl_ui_install`
+changing main's plugin.toml. Its options then sit on main's settings tab with main's own. To get the settings tab, also call `fenykl_ui_install`
 and `fenykl_ui_tick`. `projects/devmon1` is the minimal plugin.
 
-The options on the settings page (Custom menu K, the Eye-Fi row):
+The options on the settings tab (Custom menu tab L. Fenykl):
 
 | option | default | effect |
 |---|---|---|

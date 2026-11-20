@@ -1,6 +1,6 @@
 # devmon1: the dev monitor (E-M10 II)
 
-The dev monitor library (`sdk/lib/devmon_*.c`, reference `sdk/docs/devmon.md`) and the settings page
+The dev monitor library (`sdk/lib/devmon_*.c`, reference `sdk/docs/devmon.md`) and the settings tab
 that holds its options, nothing else. The camera opens the access point `FENYKL-DEV` (WPA2,
 passphrase from `FENYKL_DEVMON_KEY` at build time, else the public default `fenykl-devmon`) 15 s
 after the start and serves the framed protocol v1 on port 5555; the PC drives it with `fenykl dev`.
@@ -24,5 +24,5 @@ uv run fenykl dev poweroff      # or, after WRITE or TPRUN: uv run fenykl dev po
 main with the monitor, for a remote-controlled demo: `fenykl plugin build sdk/projects/main -t em10ii
 --with devmon`.
 
-Options (Custom menu K, Eye-Fi row): `Wi-Fi monitor` (`devmon.ap`, default on) and `Power-off test`
+Options (Custom menu tab L. Fenykl): `Wi-Fi monitor` (`devmon.ap`, default on) and `Power-off test`
 (`devmon.off`, default off: the power-off sequence at 585 s). Every step goes to `C:\FENYKL.LOG`.

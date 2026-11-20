@@ -22,7 +22,7 @@ static inline uint16_t fenykl_gui_state(void);
 static inline bool fenykl_gui_live_view(void);
 /* The GUI shows single playback. */
 static inline bool fenykl_gui_playback(void);
-/* The GUI shows the main menu (the plugin settings page included). */
+/* The GUI shows the main menu (the plugin settings tab included). */
 static inline bool fenykl_gui_menu(void);
 
 /* --- lens: lens and exposure readings; CPU0 --- */

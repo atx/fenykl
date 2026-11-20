@@ -1,4 +1,4 @@
-/* devmon1: the dev monitor library (docs/devmon.md) and the settings page that holds its options;
+/* devmon1: the dev monitor library (docs/devmon.md) and the settings tab that holds its options;
    nothing else. RAM only: no hook, no slot of its own, no setting written. */
 #include <cfg.h>
 #include <devmon.h>

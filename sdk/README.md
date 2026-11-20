@@ -5,7 +5,7 @@ Write C, run one command, copy `FENYKL.BIN` to the card root. The boot loader (f
 it. No reflashing per plugin: the firmware is flashed once.
 
 The SDK is split per camera (`arch/<camera>/`, see Layout). The target is `em10ii` (OM-D E-M10 Mark II
-v1.4, three MN10300 cores): the runtime, `string`, `log`, `cfg`, the settings page (`lib/ui.c` +
+v1.4, three MN10300 cores): the runtime, `string`, `log`, `cfg`, the settings tab (`lib/ui.c` +
 `lib/ui_em10ii.c`), the HUD library (`lib/hud.c` + `lib/hud_em10ii.c`: GUI widgets), the body API's
 `lens`, `batt`, `afc`, `shot` and `wb_base` groups, slots (data pointer words, `lib/slots.c`), code
 hooks (`arch/em10ii/hooks.c`), the event and key layers, pre-capture and the dev monitor; `main` and
@@ -18,11 +18,11 @@ hooks (`arch/em10ii/hooks.c`), the event and key layers, pre-capture and the dev
 | loader firmware (`em10ii/fenykl-loader`, FNL2 header with model check) | **works on the camera**: `main` runs |
 | broken images ignored by the loader | simulator only (`tests/test_fenykl_loader.py`) |
 | callbacks (`FENYKL_CALLBACK`) | **works on the camera** through `lib/afc.c` (`projects/main`) |
-| slots (`FENYKL_SLOT_REPLACE`) | **works on the camera** through the settings page below |
+| slots (`FENYKL_SLOT_REPLACE`) | **works on the camera** through the HUD library (`lib/hud_em10ii.c`) |
 | CPU1 code (`cpu1_sources`) | does not build: no target has the `cpu1` capability (no CPU1 runtime on the E-M10 II yet) |
 | other thunks (`fw_OlyTaskCreate` from C, `fw_malloc`/`fw_free`, `fw_dcache_flush_all`, `fw_dbg_puts`) | used on the camera by the libraries and plugins; `fw_dbg_puts` output is invisible without the internal UART |
 | logging library (`lib/log*.c`) | **works on the camera** in `projects/main`: init, flushes. Not run: CPU1 records, wake from standby, the 4 MiB cap; the console tee has nothing to read on this firmware (`docs/logging.md` 7). `fw_malloc` refuses more than 0x4000 bytes |
-| E-M10 II settings page (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); **works on the camera** in `projects/main` (2026-10-21 and 2026-10-23): "Fenykl" row, page open, RIGHT stepping the value, MENU popping the page, half press closing the menu, reopen after a half press, `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle; all on CPU0. Not run: dials, LEFT, several rows |
+| E-M10 II settings tab (`lib/ui.c` + `lib/ui_em10ii.c`) and configuration | simulator (`tests/test_sim.py`, `ui_em10ii`); the tab mechanism (Custom tab L, native rows, patched stock pickers) ran on the camera in a probe plugin (2026-11-19); this library not yet run on the camera (`docs/ui.md` 7). `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle **work on the camera** (2026-10-23) |
 | event and key layers (`lib/event.c`, `lib/key.c`) | simulator (`tests/test_sim.py`, `key_em10ii`); the key map's codes seen on the camera through a hook probe (`docs/key.md` 5); main's Fn override not yet run on the camera |
 | card gate at run time (`fenykl_usb_cable_present`, `fenykl_card_io_allowed`; the logging library holds its flushes) | not run on the camera: once a cable was seen the gate stays closed until power-off (Cable at run time) |
 | E-M10 II HUD (`lib/hud.c` + `lib/hud_em10ii.c` + `lib/hud_rle.c`: elements as stock image widgets on the live-view info panel through three GUI slots, INFO-screen property, palette pick below 0x80, camera font and live-view images) | simulator (`tests/test_hud_sim.py`: text with the E-M10 II font and images, the visibility predicate, output device, palette pick, the widget backend against GUI mocks, the encoder); camera: the widget mechanism with one widget (2026-11-17: shown on every still INFO screen on LCD and EVF, gone in movie and the menu, no GUI heap leak over 28 panel builds); the overlay it replaces drew `projects/main`'s blocks (2026-10-23) |
@@ -241,9 +241,9 @@ Persistent options: the **configuration library** (`sdk/docs/config.md`, linked 
 `#include "cfg.h"`, `FENYKL_CFG_BOOL/INT/ENUM` declarations, `C:\FENYKL.CF0`/`CF1` with CRC and sequence number, a
 debounced saver task. `projects/main` uses it.
 
-Settings page: the **ui library** (`sdk/docs/ui.md`), `#include "ui.h"`; the Eye-Fi row of Custom
-menu tab K becomes "Fenykl" and opens one scrolling list of every grouped cfg option (at most 20), drawn by the camera's
-own menu list view. `projects/main` uses it.
+Settings tab: the **ui library** (`sdk/docs/ui.md`), `#include "ui.h"`; a native Custom menu tab
+"L. Fenykl" with an info row and one stock row per grouped cfg option (BOOL or ENUM, at most 11),
+drawn and edited by the camera's own menu code. `projects/main` uses it.
 
 ### Firmware API (`arch/em10ii/firmware.toml`)
 
@@ -256,7 +256,7 @@ signature, evidence, the cores that may call it and, in `note`, where they were 
 - files: `fw_rpc_fopen`, `fw_rpc_fclose`, `fw_rpc_fread`, `fw_rpc_fwrite`, `fw_rpc_fremove`,
   `fw_fileif_fseek`, `fw_fileif_findfirst`, `_findnext`, `_findclose`, `fw_fileif_get_media_status`
 - memory and cache: `fw_malloc`, `fw_free`, `fw_dcache_flush_all`, `fw_imgbuff_alloc`, `_addr`, `_free`
-- GUI: `fw_gui_data_set`, `fw_gui_post`, `fw_gui_widget_create`, `fw_gui_image_set_handle`
+- GUI: `fw_gui_post`, `fw_gui_widget_create`, `fw_gui_image_set_handle`
 - other: `fw_ui_key_get_state`, `fw_cam_request`, `fw_lens_focal_length_now`
 
 Evidence is the confidence of the function's name and signature.
@@ -440,15 +440,14 @@ the E-M10 II:
 
 | name | kind | what |
 |---|---|---|
-| `mode_cond` / slot `mode_cond_eyefi` 0x60AFF404 | `calls`, stock 0x6071DDE0 | `unsigned cond(void)`: mode-check condition 113 of setting 0x193 (Eye-Fi); 0 = allowed |
-| `menu_row` / slots `eyefi_ok_fn` 0x60D2F5A4, `eyefi_right_fn` 0x60D2F484 | `calls`, empty | `int fn(void *actuator)`: row callback of the Eye-Fi row's OK/RIGHT dispatch records in Custom menu tab K; 4 = continue with the stock pop-up |
+| `menu_row` | `calls` | `int fn(void *actuator)`: row callback of a Custom-menu dispatch or L1 record (`lib/ui_em10ii.c`); 4 = continue with the stock controller |
+| `menu_picker` | `calls` | `unsigned fn(void *picker, unsigned code, unsigned param)`: the option picker's +0x48 handler |
 | `cam_cnt_frame_cb` | `calls` | `void cb(unsigned unk, unsigned events, void *req)`: contrast client frame callback (request +0x4C, events masked by +0x6C: 1 frame start, 2 data complete, 0x200 error; `lib/afc.c`) |
 | `cam_req_done_cb` | `calls` | `void cb(unsigned status, void *req)`: camera request done callback (request +0x38) |
 
-**SDK slots.** These three slots are the settings page's (`lib/ui_em10ii.c`): `target.toml` lists
-them in `sdk_slots`, the generator emits their descriptors for every plugin, and a `plugin.toml` that
-lists one in `slots` is refused at build time. A probe may still replace them with
-`FENYKL_SLOT_REPLACE` if it does not install the settings page. An SDK hook or slot whose CPU1 scope is
+**SDK slots.** The slots of pre-capture and the HUD (`lib/precap_em10ii.c`, `lib/hud_em10ii.c`):
+`target.toml` lists them in `sdk_slots`, the generator emits their descriptors for every plugin, and
+a `plugin.toml` that lists one in `slots` is refused at build time. An SDK hook or slot whose CPU1 scope is
 unproven needs `target.toml`'s acknowledgement, `sdk_cpu1_unproven` (the counterpart of a plugin's
 `cpu1_unproven`); the build fails without it.
 
@@ -630,7 +629,7 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 | path | purpose |
 |---|---|
 | `include/fenykl.h` | SDK header, camera-independent; includes `fenykl_fw.h` and `fenykl_target.h` |
-| `include/log.h`, `include/cfg.h`, `include/event.h`, `include/key.h`, `include/hud.h`, `include/ui.h`, `include/shot.h`, `include/precap.h`, `include/devmon.h` | logging, configuration, event layer, key layer, HUD, settings page, screenshot, pre-capture and dev monitor library APIs |
+| `include/log.h`, `include/cfg.h`, `include/event.h`, `include/key.h`, `include/hud.h`, `include/ui.h`, `include/shot.h`, `include/precap.h`, `include/devmon.h` | logging, configuration, event layer, key layer, HUD, settings tab, screenshot, pre-capture and dev monitor library APIs |
 | `include/body.h` | body API: camera state by capability, implemented per camera in `arch/<camera>/fenykl_body.h` (Body API) |
 | `lib/` | SDK library, linked into every plugin (`--gc-sections` drops what is unused) |
 | `lib/start.c` | clears `.bss`, skips a USB boot (`fenykl_usb_attached`), calls `plugin_main` |
@@ -648,8 +647,8 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 | `lib/precap_em10ii.c` | pre-capture, E-M10 II only (silent sequential H): injected full press, frames held in the Base sequence's slot wrappers, commit and cancel, slot install and restore, fail-safes; doc `docs/precap.md` |
 | `lib/devmon_em10ii.c`, `lib/devmon_cpu1_em10ii.c`, `lib/devmon_proto.c`, `lib/devmon_int.h` | dev monitor, opt-in (`[capabilities.devmon]` in plugin.toml): CPU0 monitor and test program tasks, the CPU1 server, the protocol helpers; doc `docs/devmon.md` |
 | `tp/` | test programs of the dev monitor: `tp_crt.c` (header), `tp.ld` (slot link), `examples/`, `sampler/` (the memory sampler of `fenykl dev sample`); API `include/tp.h` |
-| `lib/ui.c`, `lib/ui_int.h` | settings page library, option core: one list of the cfg options, key and dial semantics, value text, and the page lifecycle every body shares (open and close bookkeeping, install start, stock word check, "not saved" state); doc `docs/ui.md` |
-| `lib/ui_em10ii.c` | its E-M10 II page: Custom K Eye-Fi row as "Fenykl" (`sdk_slots`), a screen pushed on the main menu app, drawn by the stock Custom list view from GUI data slot 0x38 |
+| `lib/ui.c`, `lib/ui_int.h` | settings tab library, option core: the list of the cfg options and its limits, the values and cfg calls, install start, stock word check, "not saved" state; doc `docs/ui.md` |
+| `lib/ui_em10ii.c` | its E-M10 II tab: Custom tab "L. Fenykl" on the borrowed tab id 0x8F1, native rows, the stock option picker patched per row |
 | `arch/em10ii/target.toml` | model (FENYKL.BIN header), toolchain, cflags file, ISA check, ELF machine, payload `load` and `max_size`, `sdk_hooks`, `sdk_slots`, `sdk_cpu1_unproven`, `capabilities`, `[stock]` firmware identity, `[assets]` GUI asset layout of the stock image (the image table spans two resource slots) |
 | `arch/em10ii/loader/` | the camera's boot loader patch: `loader.S`, `loader.ld`, `loader.lst`, `patch.toml` (pinned bytes) |
 | `arch/em10ii/firmware.toml` | hand-curated firmware API: functions, hooks, callbacks, slots, data addresses |
@@ -690,7 +689,7 @@ applies that loader's checks in the loader's order (`payload.check_image`).
 
 Tests: `tests/test_payload.py` (format, packing, loader checks), `tests/test_fwapi.py` (argument
 placement, declaration checks), `tests/test_sim.py` + `tests/sim/` (in `mn10300-elf-run`, against
-mocks at the real firmware addresses: the hook runtime, the key map, the settings page, the
+mocks at the real firmware addresses: the hook runtime, the key map, the settings tab, the
 screenshot, the contrast client's state machine and the main plugin's pure parts),
 `tests/test_plugin_build.py` (example builds; their ISA check is skipped without Ghidra).
 

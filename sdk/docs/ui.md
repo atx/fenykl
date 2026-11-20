@@ -1,117 +1,145 @@
-# Settings page library (`sdk/lib/ui.c`)
+# Settings tab library (`sdk/lib/ui.c`)
 
-The option core (`ui.c`: list, keys, value text, cfg calls, and the page lifecycle: open and close
-bookkeeping, the start of the install, the stock word check, the "not saved" state) is shared; the
-camera patches and draws its page in `lib/ui_<camera>.c`. Sections 1 to 6 describe the core,
-section 7 the E-M10 II page (`ui_em10ii.c`). Used by `projects/main`. Linked into every plugin, like
-all of `sdk/lib/`; a plugin that does not call it gets no byte of it (`--gc-sections`).
+The option core (`ui.c`: the option list and its limits, the values, the cfg calls, the start of the
+install, the stock word check, the "not saved" state) is shared; the camera builds its tab in
+`lib/ui_<camera>.c`. Sections 1 to 6 describe the library, section 7 the E-M10 II tab
+(`ui_em10ii.c`). Used by `projects/main` and `projects/devmon1`. Linked into every plugin, like all
+of `sdk/lib/`; a plugin that does not call it gets no byte of it (`--gc-sections`).
 
 ## 1. What it does
 
-A Custom menu row becomes **Fenykl** (section 7). OK on it opens the settings page: **one scrolling
-list of all options**, looking like a stock menu list because the stock view draws it. The plugin
-draws no pixel and uses no camera asset. Options are listed by `fenykl_cfg_group` (sorted by
-`order`, equal orders in link order), each group's options in link order; options without a group
-are not shown. At most 20 options (`FENYKL_UI_OPTS_MAX`, the rows of the stock list slot); more is
-refused at install (`EOPTS`). The plugin passes nothing: the option table is the cfg library's.
+The Custom menu gets a 12th tab, **L. Fenykl**, next to A..K. It is a native tab: the camera's own
+menu code draws its rows, value column, option lists, help pop-ups and scrolling (7 rows per page),
+and edits the values. The plugin draws no pixel and uses no camera asset; labels are inline ASCII
+or stock strings.
 
-## 2. API
+- Row 1, **Fenykl** with the value **Loaded**: an info row (help "The Fenykl plugin is running.").
+  RIGHT and OK do nothing on it.
+- One row per cfg option with a group: title = the option's `label`, value column = its current
+  value, help pop-up = the group's label. Options are listed by `fenykl_cfg_group` (sorted by
+  `order`, equal orders in link order), each group's options in link order; options without a
+  group are not shown.
+
+The plugin passes nothing: the option table is the cfg library's.
+
+## 2. Limits
+
+Checked at install; any violation refuses the whole install (`EOPTS`, each reason logged):
+
+- 1 to 11 options with a group (`FENYKL_UI_OPTS_MAX`): each option row needs one row-style entry,
+  and the firmware has 11 that no stock row can use (section 7).
+- Types: BOOL and ENUM only. **INT is refused**: an option list of numbers would need more entries
+  than the borrowed picker has.
+- An ENUM has at most 5 names (`FENYKL_UI_VALUES_MAX`, the entries of the borrowed picker).
+- Labels, ENUM names and group labels have at most 32 characters (the stock inline text cells).
+  The cfg library limits labels to 15.
+
+## 3. API
 
 Header `sdk/include/ui.h` (the reference). Errors are `FENYKL_UI_E*` (negative).
 
 | Call | Context | Does |
 | --- | --- | --- |
-| `fenykl_ui_install()` | CPU0 task, after `fenykl_cfg_init` | `EBUSY` once installed; collects the list (`EOPTS`, logged); checks the stock words (`ESTOCK`, each mismatch logged) and installs; all or nothing |
-| `fenykl_ui_tick()` | CPU0 task, ~100 ms | computes the "not saved" state (logged when it starts) |
+| `fenykl_ui_install()` | CPU0 task, after `fenykl_cfg_init` | `EBUSY` once installed; collects the list (`EOPTS`, logged); `EAGAIN` until the menu code is loaded or while the menu is open; checks the stock words (`ESTOCK`, each mismatch logged) and installs; all or nothing |
+| `fenykl_ui_tick()` | CPU0 task, ~100 ms | rewrites value cells that changed outside the option lists (a late cfg load); computes the "not saved" state (logged when it starts) |
 | `fenykl_ui_get_stats(st)` | any | counters (`struct fenykl_ui_stats`) |
-| `fenykl_ui_log` | any | the log module `ui`: INFO logs install, open, entry, exit, sets, system events; DEBUG adds every key and ignored event |
+| `fenykl_ui_log` | any | the log module `ui`: INFO logs the install, option lists, sets and MENU in a list; DEBUG adds every picker event |
 
-No hook. Startup: `fenykl_log_init` -> `fenykl_cfg_init` -> `fenykl_cfg_task_start` ->
-`fenykl_ui_install` -> task loop with `fenykl_ui_tick`. A plugin only
-declares its options and calls install and tick. `projects/main` is the reference user.
+No hook, no slot. Startup: `fenykl_log_init` -> `fenykl_cfg_init` -> `fenykl_cfg_task_start` ->
+`fenykl_ui_install` (retried every 100 ms while `EAGAIN`) -> task loop with `fenykl_ui_tick`.
+**Install before the first MENU** (section 7): at boot, the plugin starts before the menu code is
+loaded, so the retry ends within ~100 ms of it, long before the user can press MENU. Do not wait
+for live view first. `projects/main` is the reference user.
 
-## 3. Keys
+## 4. Keys
 
-| key | BOOL row | ENUM row | INT row | INT in edit mode |
-| --- | --- | --- | --- | --- |
-| UP / DOWN | cursor (wraps last <-> first) | | | ignored |
-| OK | toggle | next name (wraps) | enter edit mode | leave, `cfg_set` |
-| RIGHT | toggle | next name (wraps) | enter edit mode | + `step`, clamped to min..max |
-| LEFT | toggle | previous name (wraps) | - | - `step`, clamped |
-| dials 0x9031 / 0x9032, n steps | cursor by n (wraps) | cursor | cursor | + n x 10 x `step`, clamped |
-| MENU | back to the Custom list | back | back | cancel the edit |
+All stock: the tab behaves as any Custom tab.
 
-- No pop-ups, no help text, no confirmations, no Defaults row: every value is edited in place.
-- The cursor is kept when the page is closed and opened again.
-- BOOL shows `On`/`Off`, ENUM the name from `names[]` (the file identifiers), INT the decimal, in
-  edit mode with the camera font's arrow icons U+A050 / U+A03F around it. Text longer than 14
-  characters is cut. The value is stored only by OK in edit mode, so the INT's `on_change` runs
-  once; MENU and any other way out of the page drop the edit.
-- Dial direction: the step count n is the low 16 bits of the event's param, negated by the camera
-  part (`ui_em10ii.c`); step n > 0 moves down and increases. The dials have not run on the camera,
-  so the direction is unchecked.
-- The cfg library has no string type (`config.md` 1, "no strings or lists"), so there is nothing to
-  edit or show.
+- Main menu: Custom page, letter row **L** (below K), RIGHT or OK: the tab. In a tab, DOWN from
+  K's last row also continues into L.
+- UP / DOWN: rows; the list pages by 7 rows with the stock scroll bar.
+- OK or RIGHT on an option row: its option list (BOOL: Off / On, ENUM: the names), the cursor on
+  the current value. UP / DOWN, then OK stores it (`fenykl_cfg_set`); MENU leaves the list without
+  a change.
+- RIGHT and OK on the info row: nothing. LEFT: the tab column; MENU: back.
+- BOOL shows the stock `Off` / `On`, ENUM the name from `names[]` (the file identifiers).
 
-## 4. Persistence and context
+## 5. Persistence and context
 
-Every change calls `fenykl_cfg_set` from the GUI action, in the GUI task on CPU0: the row
-shows the stored value and an error is logged at once (`set ... failed`). The settings page is the only writer while it is open; the cfg library has no locks.
-**`on_change` handlers therefore run in the GUI task**: they must be cheap and must not render. The
-cfg saver task writes 2 s after the last change; `fenykl_ui_tick` computes the "not saved" state from `fenykl_cfg_dirty()`, the card gate and the save counters.
+OK in an option list calls `fenykl_cfg_set` in the GUI task on CPU0: the row shows the stored value,
+an error is logged at once (`set ... failed`). **`on_change` handlers therefore run in the GUI
+task**: they must be cheap and must not render. The cfg saver task writes 2 s after the last change.
+A value changed elsewhere (the saver task's late load when the card mounts after the install) reaches
+the value column at the next `fenykl_ui_tick`.
 
-## 5. Counters and log
+## 6. Counters and log
 
-`struct fenykl_ui_stats`; section 7 lists what this body counts. `wrap_in`, `lends`, `returns`,
-`lang_stray`, `lang_reapply`, `lang_unstable` and `flag_missing` are not counted on this body (always
-0). `cpu1_actions` must stay 0.
-
-## 6. Limits and open points
-
-- Firmware v1.4 addresses are in the library; a firmware change needs them checked.
-- At most 20 options, labels up to 15 characters (the cfg limit), values up to 14.
-- Not proven on the camera: the arrow icons around an INT value in edit mode (main has no INT
-  option).
+`struct fenykl_ui_stats`: `opens` (option lists opened), `sets`, `set_fail`, `refused` (a picker
+left stock or not filled, an OK on a picker that is not ours), `refreshes` (value cells rewritten
+by the tick), `late` (1: installed after the first MENU), `cpu1_actions` (callbacks on another
+core, must stay 0).
 
 ## 7. E-M10 II (`ui_em10ii.c`)
 
-Status: simulator (`tests/test_sim.py`, `test_em10ii_ui_runs_in_the_simulator`). The mechanism ran
-on the camera in a probe plugin (2026-10-21): the kind-5 row title in the stock font, OK
-pushing a screen at depth 3, UP/DOWN/OK presses and releases reaching it, `gui_data_set` of slot
-0x38 returning 1, half press ending the menu (0x9000 -> default 0x9625, 0xAF00, screen deleted),
-all on CPU0. This library works on the camera in `projects/main` (2026-10-21 and 2026-10-23): the
-"Fenykl" row, page open, RIGHT stepping the value, MENU popping the page, half press closing the
-menu, reopen after a half press, `cfg` save to `C:\FENYKL.CF0` and reload after a power cycle; all
-on CPU0. Not run on the camera: dials, LEFT, several rows.
+Firmware v1.4 addresses are in `firmware.toml` (the Custom menu tab L section) and the library. All
+are data writes into tables the menu code reads; no code is patched.
 
-- Entry: the Eye-Fi row of Custom menu tab K (Utility). The slots of `target.toml` `sdk_slots`:
-  condition 113 of setting 0x193's rule answers "allowed" (the row is enabled), the OK record's
-  row callback opens the page, the RIGHT record's swallows the key. Both return 1 ("handled"), so
-  the stock On/Off pop-up, whose OK writes setting 0x193, never opens. The OK and RIGHT slots are
-  replaced before the condition; any failure restores all three (`ESTOCK`, logged). The row's
-  title descriptor (`data.custom_row_eyefi` +8) becomes {kind 5, "Fenykl"}. Everything stays
-  installed for the boot. Install needs no GUI state: no `EAGAIN`.
-- Checked before anything is written: the menu app vtable's event and pop methods, the row's
-  setting id 0x193 and its stock title words; the slots' stock values (`fenykl_slot_replace`).
-- Open: the OK callback pushes a static screen {event, delete} as entry depth + 1 of the main menu
-  app (`data.menu_app`), kind and group 0xF0, if the app's vtable, wanted == current depth (< 7)
-  and the top screen's class (`menu_screen_vt_list0` / `_list5`) are as expected; else logged and
-  refused. The list republishes its own slot 0x38 right after the callback returns, so the page
-  copies that slot and publishes its own on the screen's first event (normally the OK release).
-- Drawing: a copy of the list's slot 0x38 with 7 rows per page: title cells (+0x3E) and value
-  cells (+0x244, the stock value column; the probe showed a title text there in the value column)
-  as kind 5 text, cursor u16 +6 + 2k = 2 on the cursor row, row marks +0x22 + 2k = 0xB on filled
-  rows, the 0x94-byte cell sets at +0x44A and +0x856 cleared, scroll bar +0/+2/+4 = pages > 1,
-  pages, page. Header, tab column and help line stay the stock list's.
-- Keys: the screen gets 0x9004..0x900E and the dials 0x9031/0x9032 (param logged at DEBUG); releases are ignored; 0x971D republishes; MENU (outside an edit) calls the app's pop
-  method with reason 2, and the app deletes the screen and re-shows the list. Every other event goes
-  to `menu_app_default` (half press, mode dial: menu end) and is logged with its result.
-- Close: every way the app drops the screen calls its delete: a pending edit is dropped, the page
-  is closed (`close (n)` in the log).
-- Not shown: the "not saved" state (only logged by `fenykl_ui_tick`); the arrow icons around an
-  INT in edit mode (U+A050 / U+A03F) are not proven in kind-5 text.
-- Counters: `entries` (opened), `wrap_pass` (RIGHT swallowed), `refused`, `exits`,
-  `keys`, `backs` (MENU pops), `sys` (events to the default handler), `ignored` (releases),
-  `sets`, `set_fail`, `publishes`, `publish_fail`, `cpu1_actions` (callbacks on another core:
-  counted, nothing touched; the delete still closes the page and keeps the static screen from
-  being freed).
+- **The tab.** It borrows tab id 0x8F1, the Accessory Port menu's tab C, whose main-menu page this
+  body never shows. That id already has an entry in every fixed-count by-id table a tab needs (tab
+  record, tab -> config 0x40, icons, row-id list 0x4D). An id without a ModeCheck rule and a
+  setting-rule record is enabled, so nothing grays the tab or the rows.
+- **Install** (with a check of every stock word first, nothing written on a mismatch), one checked
+  word store per pointer or count, pointer before count, so no count ever exceeds the table behind
+  its pointer:
+  1. re-keys one row-style entry per option row to {fresh row id, style 1, the vertical option
+     list}. The 11 entries used match no row any Custom tab lists (entry 79, a second 0x28C, and the
+     entries of 0x256, 0x181, 0xA7, 0x242, 0x28A, 0x28B, 0x315, 0x30A, 0x309, 0x340);
+  2. config 0x40: our L1 table (one record per option row) and our RIGHT / OK tables (the info
+     row's record);
+  3. row-id list 0x4D: our ids;
+  4. the tab record: our rows, title "L. Fenykl";
+  5. the tab column's green row mark;
+  6. the letter list's Custom page record: 12 titles and helps (L: "Fenykl", "Fenykl plugin
+     settings.");
+  7. the letter list's RIGHT / OK records: 12, L opening the tab like A..K;
+  8. the Custom tab list: 12 ids, last, so that the tab appears only with everything behind it in
+     place.
+
+  A store that finds a changed word rolls the install back. The tab stays installed for the boot;
+  the tables live in the plugin's static RAM.
+- **Row ids** 0xF40 (info) and 0xF41.. (options): fresh, no table of the firmware holds them, and
+  the controller reads 0 for them. So each row has one value cell for 0, whose label the plugin
+  rewrites (BOOL the lang id word, ENUM the text pointer word).
+- **Option list.** The option row's L1 record has a callback, which the stock code calls instead of
+  creating the level-2 picker. The callback creates the stock option picker of Warning Level (0x115,
+  5 entries, plain stock init), checks that it looks stock, clears its wrap and dial flags,
+  installs our init (+0x2C: our values, nothing selectable grayed, the cursor on the current value)
+  and our handler (+0x48: OK calls `fenykl_cfg_set`, every other event goes to the stock handler),
+  and hands it to the tab's sub-actuator. No setting of the camera is written. A picker that does
+  not look stock is refused (logged, counted): with the stock handler in +0x48 it gets a handler
+  that cancels every event, so its OK never sets Warning Level; with another handler it is left as
+  it is.
+- **Install timing.** The main menu's page actuator copies the letter list's open records once,
+  when the first MENU of a boot builds the menu tree, and keeps them for the boot. Installed before
+  that, letter row L opens the tab with RIGHT or OK. Installed later (`late` = 1, a warning in the
+  log), letter row L is listed but RIGHT and OK on it do nothing until LEFT to the top tab column
+  and RIGHT rebuild that actuator. The submenu's tab column also keeps the tab list of its last
+  build: L shows there (and DOWN from tab K's last row reaches it) only after LEFT to the letter list
+  and RIGHT into a tab.
+- **Menu left on tab L, next boot without the plugin.** The camera saves the menu position at a
+  soft power-off, and the submenu restore (0x609F3235) reads the saved tab back at the next MENU.
+  Without the plugin there is no tab L. Not yet checked on the camera. Statically there are two
+  outcomes: the restore finds tab id 0x8F1 by id and opens the donor tab with its stock content
+  (header "C. Electronic Viewfinder", rows EVF Adjust and EVF Auto Switch, which lead to EVF
+  screens on a body without the Accessory Port menu), or it takes index 11 of the 11-entry tab
+  list and its id lookup misses. Until checked, leave the menu on another tab before a boot without
+  the plugin.
+- **Icons.** The tab column shows the borrowed id's icon (an Accessory Port glyph with a small
+  "C"); there is no stock "L" image.
+- **Eye-Fi**: untouched, tab K is stock.
+- Status: the mechanism ran on the camera in a probe plugin (2026-11-19, installed before and after
+  the first MENU): tab and letter row L, kind-5 titles and helps, two option rows (an On/Off and a
+  3-way list) with patched stock pickers, a row with RIGHT/OK records swallowed, no camera setting
+  written. Not yet run on the camera: this library itself, more than 3 rows (paging), ENUM names as
+  inline option labels and value cells, `fenykl_cfg_set` from the GUI task through the picker.
+  Simulator: `tests/test_sim.py`, `test_em10ii_ui_runs_in_the_simulator`.

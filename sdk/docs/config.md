@@ -8,7 +8,7 @@ module `cfg`).
 
 Goals: each feature module declares its options next to its code; values survive reboots and
 plugin updates; a torn SD write never loses more than the last change batch; reads from hooks cost
-one load; the declarations carry everything a settings UI (Fn panel, settings page) needs; the file on
+one load; the declarations carry everything a settings UI (Fn panel, settings tab) needs; the file on
 the card is readable on a PC.
 
 Non-goals: no UI (only its data), no strings or lists, no history or wear levelling, no crash

@@ -1,6 +1,6 @@
 /*
- * main: the polished daily-use plugin. Starts logging, configuration and the HUD library,
- * installs the settings page (sdk/lib/ui.c) and runs every feature's tick, the Fn override
+ * main: the polished daily-use plugin. Starts logging, configuration, the settings tab
+ * (sdk/lib/ui.c) and the HUD library, and runs every feature's tick, the Fn override
  * (main_fn.c) and the R/B swap's task side (main_rbswap*.c) from one task loop. Log: C:\FENYKL.LOG;
  * options: C:\FENYKL.CF0/CF1. A target without the hud capability gets no HUD (MAIN_HUD), one
  * without the key capability no Fn override.
@@ -18,6 +18,8 @@
 
 #define MAIN_GUI_WAIT_TICKS (60000u / MAIN_TICK_MS)	/* for the GUI and its language font */
 #define MAIN_HUD_SEEN 8u			/* E-M10 II: values main_log_hud watches */
+#define MAIN_UI_STOCK_TRIES 5u			/* ui install retries after a stock mismatch */
+#define MAIN_UI_STOCK_TICKS (1000u / MAIN_TICK_MS)
 #define MAIN_STATUS_FIRST (3000u / MAIN_TICK_MS)
 #define MAIN_STATUS_TICKS (30000u / MAIN_TICK_MS)
 
@@ -142,22 +144,30 @@ static bool main_start_hud(void)
 #endif
 
 
-/* Settings page from a Custom menu row (sdk/docs/ui.md); does not need the HUD. */
+/* Settings tab in the Custom menu (sdk/docs/ui.md): installed before the first MENU, so it waits
+   only for the menu code (EAGAIN), not for live view. A stock mismatch (ESTOCK) is retried a few
+   times a second apart. */
 static void main_start_ui(void)
 {
-	unsigned int i;
+	unsigned int i, tries = 0, stock = 0;
 	int r;
 
 	for (i = 0; i < MAIN_GUI_WAIT_TICKS; i++) {
 		r = fenykl_ui_install();
+		tries++;
+		if (r == FENYKL_UI_ESTOCK && stock < MAIN_UI_STOCK_TRIES) {
+			stock++;
+			for (unsigned int k = 0; k < MAIN_UI_STOCK_TICKS; k++)
+				main_sleep();
+			continue;
+		}
 		if (r != FENYKL_UI_EAGAIN)
 			break;
 		main_sleep();
 	}
+	fenykl_log_info(&main_log, "ui install %d after %u tries", r, tries);
 	if (r)
-		fenykl_log_err(&main_log, "ui install %d after %u tries: no settings page", r, i);
-	else
-		fenykl_log_info(&main_log, "ui install 0 after %u tries", i);
+		fenykl_log_err(&main_log, "no settings tab");
 }
 
 #if MAIN_HUD
@@ -243,9 +253,9 @@ static void main_status(const struct fenykl_hud_stats *hs)
 	(void)hs;
 	fenykl_log_info(&main_log, "status t %u", main_st.ticks);
 #endif
-	fenykl_log_info(&main_log, "  ui entry %u exit %u set %u fail %u", us.entries, us.exits,
-			us.sets, us.set_fail);
-	fenykl_log_info(&main_log, "  ui refused %u stray %u cpu1 %u", us.refused, us.lang_stray,
+	fenykl_log_info(&main_log, "  ui opens %u set %u fail %u refresh %u", us.opens, us.sets,
+			us.set_fail, us.refreshes);
+	fenykl_log_info(&main_log, "  ui refused %u late %u cpu1 %u", us.refused, us.late,
 			us.cpu1_actions);
 	for (unsigned int i = 0; main_feats[i]; i++)
 		if (main_st.started[i])
@@ -266,12 +276,12 @@ void plugin_main(uint32_t load_base, uint32_t image_size)
 #if FENYKL_HAS_WB_BASE
 	main_rbswap_start();
 #endif
+	main_start_ui();
 #if MAIN_HUD
 	main_st.drawing = main_start_hud();
 	if (main_st.drawing)
 		main_start_feats();
 #endif
-	main_start_ui();
 
 	for (;;) {
 #if MAIN_HUD

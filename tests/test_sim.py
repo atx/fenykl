@@ -42,9 +42,10 @@ firmware functions placed at their real firmware addresses. Every C test program
   0, movie, playback), a whole shot with the raw pieces while a still takes block 1, and aborts
   during the PPM (block 0 back first, the partial PPM removed) and during the raw pieces (the PPM
   kept).
-- ui_em10ii: the E-M10 II settings page (sdk/lib/ui_em10ii.c) entered through its slot words and
-  screen methods: install all or nothing, the push onto a fake menu app, the slot 0x38 image,
-  keys, an edit, MENU through the app's pop method, the delete, the default handler.
+- ui_em10ii: the E-M10 II settings tab (sdk/lib/ui.c, ui_em10ii.c) on the stock image's bytes of
+  every table it checks or rewires: the option limits, the waits and stock refusals, the install
+  with a consistency check at every flush, the rows, labels and styles, the pickers through the
+  words the firmware calls, cfg sets, the value-column refresh, a late install and the rollback.
 """
 
 from pathlib import Path
@@ -56,9 +57,11 @@ from conftest import (
     needs_toolchain,
     region,
     run_in_simulator,
+    stock_image,
 )
 
 from fenykl import fwapi, sdk
+from fenykl.firmware import TARGETS, unpack_firmware
 
 pytestmark = needs_toolchain
 
@@ -239,15 +242,65 @@ def test_em10ii_key_map_runs_in_the_simulator(tmp_path):
     assert_exit(result, 0, "tests/sim/key_em10ii/test_key.c")
 
 
+# (run address, bytes) of every stock region the settings tab checks, copies or swaps.
+UI_REGIONS = [
+    (0x60D2E2AC, 0x60D2E4BC - 0x60D2E2AC),  # letter list RIGHT and OK records
+    (0x60D2E81C, 0x60),  # config 0x40's RIGHT and OK records
+    (0x60D31468, 0x60D31540 - 0x60D31468),  # configs 0x30 .. 0x40
+    (0x60D33E9E, 0x60D34020 - 0x60D33E9E),  # tab ids, tab list, row-id lists
+    (0x60D36A5C, 14 * 8),  # tab -> config
+    (0x60D3C5B4, 0x60D3C8B4 - 0x60D3C5B4),  # tab records, icons, row styles
+    (0x60D4F020, 0x60D4F9C4 - 0x60D4F020),  # letter titles, helps, page records
+    (0x60B003FC, 0x220 * 12),  # ModeCheck rules
+    (0x615F3FBC, 4),  # letter list object pointer (.data1)
+    (0x615F4B14, 28),  # option picker handlers (.data1)
+]
+# .data1 runs at DATA1 and sits at DATA1_FILE in the main code block.
+DATA1, DATA1_FILE = 0x615DC540, 0x1AEFE0
+
+
+def _ui_image_source(workdir: Path) -> Path:
+    """sim_image[]: the stock bytes of UI_REGIONS at their run addresses."""
+    fw = unpack_firmware(stock_image("em10ii"))
+    code = fw.blocks[fw.find_block("main-code-01")].body
+    base = TARGETS["em10ii"].load_addresses["main-code-01"]
+    arrays, entries = [], []
+    for i, (address, size) in enumerate(UI_REGIONS):
+        start = address - DATA1 + DATA1_FILE if address >= DATA1 else address - base
+        chunk = code[start : start + size]
+        arrays.append(
+            f"static const uint8_t r{i}[] = {{{', '.join(map(str, chunk))}}};"
+        )
+        entries.append(f"\t{{0x{address:x}u, {size}u, r{i}}},")
+    path = workdir / "image.c"
+    path.write_text(
+        "#include <stdint.h>\n\n"
+        "struct sim_region {\n\tuint32_t addr, len;\n\tconst uint8_t *bytes;\n};\n\n"
+        + "\n".join(arrays)
+        + "\n\nconst struct sim_region sim_image[] = {\n"
+        + "\n".join(entries)
+        + f"\n}};\nconst unsigned int sim_image_n = {len(UI_REGIONS)};\n"
+    )
+    return path
+
+
 def test_em10ii_ui_runs_in_the_simulator(tmp_path):
-    """E-M10 II settings page against mocks of the GUI data store, the menu app's default handler
-    and its pop method (at its real address), with the real cfg and log libraries."""
-    pop = fwapi.load(EM10II.dir / "firmware.toml").data["menu_app_pop_fn"].address
+    """E-M10 II settings tab on the stock bytes of its tables, against mocks of the picker factory,
+    the picker's stock handler (at its real address) and the card gate's USB and media reads, with
+    the real cfg and log libraries."""
+    stock_fn = (
+        fwapi.load(EM10II.dir / "firmware.toml").data["menu_picker_stock_fn"].address
+    )
     ui = SIM / "ui_em10ii"
     result = run_in_simulator(
         tmp_path,
         "uisim_em10ii",
-        [ui / "test_ui.c", SIM / "hooks_em10ii" / "sim_start.S", ui / "fw.S"],
+        [
+            ui / "test_ui.c",
+            _ui_image_source(tmp_path),
+            SIM / "hooks_em10ii" / "sim_start.S",
+            ui / "fw.S",
+        ],
         # DRAM up to the GUI and menu data with its uncached alias, the timer, the mock bodies.
         [
             EM10II_DRAM,
@@ -261,10 +314,12 @@ def test_em10ii_ui_runs_in_the_simulator(tmp_path):
             "irq_lock",
             "irq_unlock",
             "dcache_flush_all",
-            "gui_data_set",
-            "menu_app_default",
+            "OlyTaskSleep",
+            "menu_picker_create",
+            "ui_key_get_state",
+            "fileif_get_media_status",
         ],
-        ldflags=[f"-Wl,--section-start=.fw.app_pop=0x{pop:x}"],
+        ldflags=[f"-Wl,--section-start=.fw.picker_stock=0x{stock_fn:x}"],
         target=EM10II,
     )
     assert_exit(result, 0, "tests/sim/ui_em10ii/test_ui.c")

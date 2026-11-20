@@ -1,6 +1,6 @@
 /* Dev monitor (E-M10 II, docs/devmon.md): a headless Wi-Fi access point and a TCP monitor on CPU1
    that a PC drives with `fenykl dev`. Opt-in: a plugin links it by listing [capabilities.devmon]
-   in plugin.toml. Its options (devmon.ap, devmon.off) are on the settings page. */
+   in plugin.toml. Its options (devmon.ap, devmon.off) are on the settings tab. */
 #ifndef FENYKL_DEVMON_H
 #define FENYKL_DEVMON_H
 

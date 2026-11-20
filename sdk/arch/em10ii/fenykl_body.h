@@ -5,7 +5,7 @@
 
 #define FENYKL_GUI_SS_LV 0x01u		/* super state of the live-view screens */
 #define FENYKL_GUI_ST_LV 0x08u		/* its state while live view is shown */
-#define FENYKL_GUI_SS_MENU 0x11u	/* main menu (SsMenu), the plugin settings page included */
+#define FENYKL_GUI_SS_MENU 0x11u	/* main menu (SsMenu), the plugin settings tab included */
 #define FENYKL_GUI_SS_PLAY 0x06u	/* playback: camera-seen as 0x06xx */
 
 /* The registry word holding a property's object: the entry the lookup 0x60076078 reads, the

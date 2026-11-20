@@ -156,13 +156,10 @@ exactly once; when it is missing or broken (bad header or checksum) the loader r
 instead, and the next boot runs `FENYKL.BIN` again. With a cable in, a power-switch boot runs only
 `FENYKL.BIN` and leaves `FENYKL.TST` alone.
 
-## Settings page
+## Settings
 
-To configure fenykl and verify that it got loaded, 
-go into MENU > Custom menu, tab **K** > row **Fenykl**, then OK on it to get into the custom config screen.
-
-![Basic info screen with the main plugin](pics/settings-screen.png)
+To configure fenykl and verify that it got loaded, go into MENU > Custom menu: below K there is a
+tab **L. Fenykl**. Its first row reads **Fenykl Loaded**; every other row is one setting, edited
+like any stock Custom menu row (OK, pick a value, OK).
 
 A changed setting takes effect at once and is saved two seconds later.
-
-Note that this overwrote the Eye-fi configuration option, meaning Eye-fi can no longer be configured with this mod.

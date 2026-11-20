@@ -528,45 +528,111 @@ type = "u16"
 evidence = "high"
 note = "fat_mounted[0] (u16 per drive, uncached alias): 0x60551D86 reads movhu (0xA1C46D10 + 2*drive) and reports 0x100 when it is 1; cleared by the file-system init 0x60551DD4. Drive 0 = SD"
 
-# --- user settings, mode check, Custom menu tab K (sec4 data, writable RAM after Usr4 loaded it) ---
-
-[callbacks.mode_cond]
-entry = "calls"
-evidence = "high"
-returns = "unsigned"
-args = []
-note = "mode-check condition: mode_check 0x6071CA34 enters the condition table 0x60AFF240[n] with `calls (a0)` at 0x6071CA9E, no arguments (the condition reads the arguments mode_check stored at 0x618B22A0); D0 as u16 (exthu at 0x6071CAB2), 0 = allowed, else blocked; the first non-zero result ends the rule. Also entered from 0x6071CB78 (evaluator 0x6071CB3D, called only by conditions) and 0x6071DE7F (condition 114). Conditions entered with calls end with ret or retf (e.g. 0x6071DE10, 0x6071D390)"
+# --- Custom menu tab L (lib/ui_em10ii.c): the tab, row, key and option-picker tables of the Custom
+# menu that a native settings tab rewires. sec4 rodata and .data1, writable RAM once Usr4 loaded sec4.
+# Read by hand in the v1.4 listing and bytes. The tab borrows tab id 0x8F1 (Accessory Port tab C, whose
+# main-menu page this body never shows): it already has an entry in every fixed-count by-id table a tab
+# needs, each searched linearly over 14 entries: its tab record (custom_tab_rec_l), tab -> config entry
+# 13 at 0x60D36A5C ({0x8F1, 0x40}, read by 0x609F3198 / 0x609F3235), icon entry 13 (custom_tab_icon_l)
+# and row-list entry 13 at 0x60D33FB0 ({1, 0x4D} -> custom_rows_l). Every table that must grow is a
+# pointer + count pair in RAM. Config records {u32 id, u32 kind, u32 list, L1*, u32 n, RIGHT*, u32 n,
+# OK*, u32 n}: an actuator copies the key tables at construction (0x609E805C, restore 0x609E7FA8 /
+# 0x609E9649), so a swap reaches only actuators built after it.
 
 [callbacks.menu_row]
 entry = "calls"
 evidence = "high"
 returns = "int"
 args = ["a void *actuator"]
-note = "row callback of a Custom-menu dispatch record {u32 level, u16 row, u16 sub, u32 fn, u32 group, u32 target, u32 fn2}: ctl_row_dispatch 0x609E9236 stores fn at actuator+0x78 (0x609E92C0) and enters it with `calls (a1)` at 0x609E92C5, A0 = the tab's sub-actuator. D0 == 4: the dispatcher opens the record's controller (fn2(...) if set, else 0x609E43C0(group, target), 0x609E92CD..0x609E92FD) and returns 4, exactly as for fn == 0 (0x609E9304..0x609E933A); any other value is returned at once (0x609E92C9). The stock row callback 0x609E94AA returns 4"
+note = "row callback of a Custom-menu dispatch record {u32 level, u16 row, u16 sub, u32 fn, u32 group, u32 target, u32 fn2}: ctl_row_dispatch 0x609E9236 stores fn at actuator+0x78 (0x609E92C0) and enters it with `calls (a1)` at 0x609E92C5, A0 = the tab's sub-actuator. D0 == 4: the dispatcher opens the record's controller (fn2(...) if set, else 0x609E43C0(group, target), 0x609E92CD..0x609E92FD) and returns 4, exactly as for fn == 0 (0x609E9304..0x609E933A); any other value is returned at once (0x609E92C9). The stock row callback 0x609E94AA returns 4. Also the fn of an L1 record {u32 kind, u16 row, u16 0, u32 fn} (config +0xC/+0x10): OK or RIGHT at level 1 with no dispatch match stores it at actuator+0x78 and enters it with calls, A0 = the sub-actuator (0x609E89E4..0x609E89F3), result ignored, instead of creating the level-2 picker (menu_picker_create at 0x609E8A09); the level is incremented either way (0x609E8A13..0x609E8A18). Also the picker's per-id init at picker +0x2C (callbacks.menu_picker), A0 = picker"
 
-[slots.mode_cond_eyefi]
-address = 0x60AFF404
-callback = "mode_cond"
-expected = 0x6071DDE0
-cpu1 = "unproven"
-cpu1_evidence = "static only: the condition table is read by mode_check (callers mode_enabled 0x6071AF54 via ModeCheck vtable[0] 0x606B3786, about 110 GUI-code callers of the getter 0x606B3717, app boot, debug shell) and two evaluators reached only from conditions; all CPU0 task code, GUI_TASK (priority 54) for the menu; no CPU1/CPU2 or interrupt path found"
-note = "condition 113 = 0x60AFF240 + 4 * 113, used by no rule but 0x193 (Eye-Fi). Stock 0x6071DDE0: blocked (1) when 0x6071E488(0) == 0x2001 or the Eye-Fi status 0x60678A45(*0x615E090C) is 0, 5 or 6 (no card: 0). The Custom tab K row list (builder 0x609EDCBA) grays row 0x193 while it blocks; the flags are computed when the tab list is built"
+[callbacks.menu_picker]
+entry = "calls"
+evidence = "high"
+returns = "unsigned"
+args = ["a void *picker", "d unsigned code", "d unsigned param"]
+note = "the option picker's handler word +0x48 (OK, MENU and re-init events): its class slot 0x609EF43C is `add -4,sp; mov (0x48,a0),a1; calls (a1); ret [],4`, A0 = picker, D0 = GUI event, D1 = param passed through (A1 = the handler, not an argument). Stock handler data.menu_picker_stock_fn"
 
-[slots.eyefi_ok_fn]
-address = 0x60D2F5A4
-callback = "menu_row"
-expected = 0
-cpu1 = "unproven"
-cpu1_evidence = "static only: ctl_row_dispatch 0x609E9236 is called from the tab K sub-actuator's key handlers 0x609E83BB, 0x609E85A6, 0x609E86BA, 0x609E8989, menu-app code in GUI_TASK (CPU0)"
-note = "fn of the OK dispatch record 0x60D2F59C of the Eye-Fi row ({1, 0x193, 0, fn 0, group 8, target 0x50, 0}) in tab K's OK table 0x60D2F53C (9 records; referenced only by the config record 0x60D316A8 +0x1C). OK 0x900C reaches it through the K handler 0x609E8970 (installed at sub-actuator +0x44 by 0x609E80C7). Stock (group 8, 0x50) = actuator 5 param 0x193: the On/Off pop-up of setting 0x193, which writes the setting only on OK (0x609EF652..0x609EF66A)"
+[menu_picker_create]
+address = 0x609E4429
+saves = ["d2", "d3", "a2"]
+frame = 0x10
+evidence = "high"
+returns = "void *"
+args = ["a const void *key", "d unsigned kind"]
+note = "sec4; ret [d2,d3,a2],0x10 at 0x609E4463 (first RET); the Custom tab sub-actuator's L1 path calls it with [d2,d3,a2],0x10 at 0x609E8A09: A0 = a key whose u16 +0 is the setting id (u16 +2 zero), D0 = the level-2 kind; the result A0 goes to sub-actuator +0x58 (kind to +0x50 at 0x609E8A04). Zeroes 0x615F3FB0/0x615F3FB4, then calls the factory of kind D0 from the 11 {kind, fn} records at 0x60D29E60 (kind 0 = 0x609EE26D, the option picker) with A0 = key, and clears +0x1C, +0x20, +0x22 of the result (an unknown kind would store to address 0x1C). The option picker's constructor 0x609EE32D copies the 7 handlers of data.menu_picker_handlers to +0x30..+0x48, sets +0x2C = the per-id init of 0x60D3435C or 0 and runs it or the stock init 0x609EE410, which allocates u16 disabled[] at +0x5C and u32 values[] at +0x60 (count u16 +0x54, cursor u16 +0x56, first and last selectable +0x68/+0x6C). The destructor 0x609EF35B frees +0x5C and +0x60 with 0x6090A6DC. GUI task"
 
-[slots.eyefi_right_fn]
-address = 0x60D2F484
-callback = "menu_row"
-expected = 0
-cpu1 = "unproven"
-cpu1_evidence = "static only: as eyefi_ok_fn (same dispatcher, GUI_TASK)"
-note = "fn of the RIGHT dispatch record 0x60D2F47C of the Eye-Fi row (same content as 0x60D2F59C) in table 0x60D2F434 (11 records; referenced only by 0x60D316A8 +0x14). RIGHT 0x900A: base handler 0x609E44EB -> class vtable 0x60D31C8C +0x38 -> instance +0x38 = 0x609E83AF (copied from .data 0x615F3FDC by 0x609E7F05), which dispatches over +0x64"
+[data.menu_picker_handlers]
+address = 0x615F4B14
+type = "u32 [7] -> code"
+evidence = "high"
+note = ".data1, the option picker's handlers copied by its constructor to +0x30..+0x48: 0x609EF447, 0x609EF4AE, 0x609EF527, 0x609EF52C, 0x609EF530, 0x609EF5B3, 0x609EF613 (+0x18 -> picker +0x48, data.menu_picker_stock_fn). The cursor handlers only move +0x56"
+
+[data.menu_picker_stock_fn]
+address = 0x609EF613
+type = "code"
+evidence = "high"
+note = "sec4, the option picker's stock +0x48 handler (callbacks.menu_picker), movm [d2,d3,a2,a3] prologue, ret [d2,d3,a2,a3],0x28 at 0x609EF778. 0x900C / 0x972B: ctl[0](values[+0x56], setting +0x50) (0x609EF652..0x609EF66A), returns 2; 0x900E returns 3; 0x971D with param 0x214 runs the init (+0x2C if set, else 0x609EE410) without restoring the cursor, other 0x971D restores +0x56 around it (0x609EF691..0x609EF6AD); 0xF804 and 0x9309 re-run the init and search the old value. Its only setting write is the 0x900C/0x972B one"
+
+[data.custom_tab_list]
+address = 0x60D33EE0
+type = "{u16 key, u16 n, u32 ids*}"
+evidence = "high"
+note = "sec4, the Custom tab list's variant (list 0x3D; its entry {1, 0x3D} at 0x60D33F10 points here): stock {0, 11, 0x60D33E9E} = tab ids 0x846..0x850 (A..K). The letter list (config 0x30) and the submenu's tab column copy the ids into the heap at each build (0x609EDB77, memcpy at 0x609EDBB3) and at each 0x971D (0x609EE177); a tab is grayed only by ModeCheck (data.mode_rules), enabled for an id without a rule"
+
+[data.custom_letter_cfg]
+address = 0x60D31468
+type = "config record (36 bytes)"
+evidence = "high"
+note = "sec4, config 0x30 (the main menu's Custom letter list): {0x30, 4, list 0x3D, L1 0, 0, RIGHT 0x60D2E2AC, 11, OK 0x60D2E3B4, 11}; record i of both tables = {1, 0x846 + i, 0, fn 0, group 0xF, target 1, 0}, which opens the Custom submenu on that tab. The main menu's page actuator copies them once, when the main menu builds it"
+
+[data.custom_letter_page]
+address = 0x60D4F9B8
+type = "{u16 page, u16 n, u32 titles*, u32 helps*}"
+evidence = "high"
+note = "sec4, the Custom page's record (page 3) of the main menu's 6 page records 0x60D4F964 (stride 0x1C; model pointer set by 0x60A0DDD9 from 0x60D4FAFC): stock {3, 11, 0x60D4F020, 0x60D4F230}, 12-byte cells {u32 tab id, u16 kind, u16 lang, u32 text}. 0x60A0E624 matches the letter row's title by id over n (0x609F69FB, which writes nothing on no match), the help builder 0x60A0EA11 the help with the same n"
+
+[data.custom_tab_rec_l]
+address = 0x60D3C5DC
+type = "tab record (20 bytes)"
+evidence = "high"
+note = "sec4, record 2 of the 14 tab records 0x60D3C5B4 (count set by the view constructor 0x609F8DDC, readers 0x609F8F16 header, 0x609F913E rows, 0x609F9558 option view, 0x609F97CB help): {u16 0x8F1, u16 rows 2, title {u16 kind 4, u16 lang 0x3FF, u32 0x60D38D30}, u32 rows* 0x60D3B528, u32 0x60D3C554}. Row records are 36 bytes: {u16 id, u16 value cells, u32 options, title, help (12-byte descriptors {u16 kind, u16 lang, u32 text}), u32 value cells*, u32 two-setting record (0x3A only), u32 options*}; cells are {u32 value, descriptor}, matched by value. Kind 4 = lang id, kind 5 = inline ASCII of at most 32 characters (0x609F69FB, 0x609F6AA1). Stock tabs hold up to 23 row records (tab D) and 22 listed rows, 7 per page (0x609F96AE)"
+
+[data.custom_tab_icon_l]
+address = 0x60D3C734
+type = "{u16 tab, u16 bright, u16 dim, u16 mark}"
+evidence = "high"
+note = "sec4, entry 13 of the 14 tab icon entries 0x60D3C6CC (readers 0x609F8FDC icons, 0x609F913E mark; operands at 0x609F908B, 0x609F928B): {0x8F1, 0xE, 0x1C, mark 0}. The mark is the coloured bar left of each row, 0xB (green) on the Custom tabs, 0 none"
+
+[data.custom_tab_cfg_l]
+address = 0x60D3151C
+type = "config record (36 bytes)"
+evidence = "high"
+note = "sec4, config 0x40 (tab 0x8F1's submenu): {0x40, 4, list 0x4D, L1 0, 0, RIGHT 0x60D2E81C, 2, OK 0x60D2E84C, 2}; both tables hold {1, 0x3A, 0, 0, 8, 0x64, 0}, {1, 0x1C0, 0, 0, 8, 0x87, 0} (EVF Adjust, EVF Auto Switch). Found by id in the 0x59 configs 0x60D30DCC (0x609E805C)"
+
+[data.custom_rows_l]
+address = 0x60D33F50
+type = "{u16 key, u16 n, u32 ids*}"
+evidence = "high"
+note = "sec4, row-id list 0x4D's variant (entry {1, 0x4D} at 0x60D34018): stock {0, 2, 0x60D33F3A} = 0x3A, 0x1C0. Built into the submenu's row list by 0x609EDCBA with the same ModeCheck test as the tabs"
+
+[data.custom_row_styles]
+address = 0x60D3C774
+type = "{u16 row id, u16 style} [0x50]"
+evidence = "high"
+note = "sec4, row styles, first match over 0x50 entries (0x609F96BE..0x609F96DB in 0x609F9558, the only operand of the table): the option sub-view of an in-list option row; style 1 = the vertical list (ISO, Eye-Fi). A row without an entry leaves the style word uninitialised. 11 entries can never match a listed row on this body: entry 79 (0x60D3C8B0, a second 0x28C; entry 60 matches first) and the entries of ids in none of the 14 row-id lists: 8 (0x256), 12 (0x181), 43 (0xA7), 64 (0x242), 69 (0x28A), 70 (0x28B), 71 (0x315), 72 (0x30A), 76 (0x309), 77 (0x340)"
+
+[data.mode_rules]
+address = 0x60B003FC
+type = "12-byte records {u16 id, ...} [0x220]"
+evidence = "high"
+note = "sec4, ModeCheck rules, searched by id over 0x220 records of 12 bytes (0x6071CB17..0x6071CB38, mode_check 0x6071CA34). An id without a rule and without a setting-rule record is enabled. No rule, settings record (0x6038FF24), hook entry (0x6033ACD8) or menu table (0x60D28000..0x60D50000) holds a u16 in 0xF40..0xF4B, and usrset_get maps none of them (its id ranges 0..0x403, 0x5DC..0x5EE, 0xBB8..0xBCE, 0xFA0..0xFB5, ... at 0x602CB72C..0x602CB8DE)"
+
+[data.custom_tab_obj]
+address = 0x615F3FBC
+type = "u32 -> list object"
+evidence = "high"
+note = ".data1, the main menu's letter list object, 0 until the first MENU builds it (only store 0x609E4A7C, getter 0x609E4A85; never cleared). Non-zero means a page actuator exists that holds copies of data.custom_letter_cfg's key tables from before any later change; it is kept over menu ends and rebuilt when the main menu's top tab column gets RIGHT or OK (0x60A0D610)"
 
 # --- GUI state and OSD (read-only for plugins; GUI_TASK, priority 54, CPU0, writes them) ---
 
@@ -642,12 +708,6 @@ type = "u8"
 evidence = "high"
 note = "buffer of the one-layer override: 0x60930EF9 (= draw_buf), 0x60930F21, 0x60930F50 (xor 1)"
 
-[data.gui_data_slot38]
-address = 0x618CDCD4
-type = "u8 [0xC6E]"
-evidence = "high"
-note = "storage of GUI data slot 0x38 (Custom list model): record 0x615E78B4 = {get 0, set 0, data 0x618CDCD4, size 0xC6E} in the slot table 0x615E7534 (0xCA records); gui_data_set copies into it with memcpy between optional lock hooks (see gui_data_set), unused here, so a reader in another task can see a half-written copy. No code references the address but through the table"
-
 # --- HUD: layer-1 OSD path from the GUI request to the display controller, output device, palette ---
 
 [data.disp_device]
@@ -710,97 +770,6 @@ address = 0xA1BE81F4
 type = "{u16 id, u16 size, u32 object} [4096]"
 evidence = "high"
 note = "property registry (settings and camera-state values): the lookup 0x60076078 (10 CALLs, all [d2],0x10, from the typed getters 0x60076AA2..0x60076F84) returns A0 = &entry[(u16 id) >> 4] (0x6007609B..0x600760A1), the override entry first while data.prop_override_valid != 0, or 0 when the entry's object +4 is 0. The getter 0x60076FD9 maps the object to the calling core's view (0x600750FD) and reads element D1 of it with the width of id & 7 (4 u32, 2 u16, else u8; bit 8 = signed). Filled by the registry init 0x60075F2A..0x60075FCD. Property 0x8321 (s8) = the live-view INFO screen: 11 basic info, 12 image only, 1 histogram, 0 level gauge [camera: it alone changed on every INFO press, the same on the LCD and in the EVF]"
-
-# --- Main-menu screen stack (SsMenu menu app): what a plugin settings page needs to push its own
-# screen over the Custom list and give the screen back. All entries read by hand in the v1.4 listing.
-
-[data.menu_app]
-address = 0x615F5E94
-type = "u32 -> menu app (0x90 bytes)"
-evidence = "high"
-note = "the main menu's screen stack. Written only in SsMenu code: created by 0x60A4FF7B / 0x60A4FF83 and stored at 0x60A35E07 (state 1 entry 0x60A35D7C) and 0x60A35EA8, cleared at 0x60A35DE6 and at 0x60A35F89 after its destructor ran; no other absolute operand. Non-NULL does not mean the menu is open: when action 3 0x60A35EDE ends the menu on 0x9000 or 0x9052 it keeps the app (0x60A35F55 -> 0x60A6EE78 sets the resume flag 0x615F648C). Layout: +0 vtable (data.menu_app_vtable), u16 +4 = wanted depth, u16 +6 = depth, +8 = default event handler object (vtable 0x60D683C0), u32 +0xC = re-show reason, +0x10 + 0x10 * i = entry i {u32 kind, u32 screen, u32 group, u16 id} for i = 1..depth (0x80 bytes cleared by 0x60A51A22, so depth <= 7). A screen is an object whose vtable[0] is the event handler (callbacks.menu_screen) and vtable[1] the delete (callbacks.menu_screen_delete). Leading entries of group 0xF survive a menu end (menu_app_vtable [1]): a plugin screen must use another group. GUI task only"
-
-[data.menu_app_vtable]
-address = 0x60D68518
-type = "u32 [4] -> code"
-evidence = "high"
-note = "menu app class vtable (4 words; 0x60D68528.. is the vtable of another class: 0x40 bytes, constructor 0x60A51E61 via 0x60A51BDE, destructor 0x60A51C0C), stored by the constructors 0x60A517C6 / 0x60A518B3 and the destructor 0x60A5137B only. [0] 0x60A51375 = destructor (deletes every screen). [1] 0x60A513DC = event: calls top->vtable[0] (0x60A51424); +4 == 0 makes the result 0x9625. On 0x9625, since 0x615F5F2C is set to 1 by both constructors (0x60A51A3A, 0x60A518BC) and never cleared, +4 = the number of leading entries of group 0xF (0x60A51458..0x60A51471) and 0x60A51B27 sends 0xAF00 to every screen. On event 0xF806 the param is looked up in 0x60D684F8 ({u32 param, u32 group, u16 id} x 2), +4 is rewound to the matching entry and the new top gets 0x971D (0x60A51479..0x60A5150D). Then, while +6 != +4, it deletes the top screen (vtable[1], 0x60A51537) and clears its entry; unless the result is 0x9625, the new top gets 0x971D with D1 = +0xC (0x60A5159B) and +0xC is cleared. [2] 0x60A515AC = push(D0 kind, D1 group, A1 id): reuses a matching entry or creates the screen with the factory table 0x60D6881C. [3] 0x60A51799 = pop: +4 -= 1 and +0xC = D0 (callbacks.menu_app_pop)"
-
-[data.menu_app_event_fn]
-address = 0x60A513DC
-type = "code"
-evidence = "high"
-note = "sec4; stock menu_app_vtable[1] (word 0x60D6851C), the app's event method: movm [d2,d3,a2,a3] prologue; enters the top screen's handler with calls (a2) at 0x60A51424 and deletes the screens above the wanted depth +4 afterwards (menu_app_vtable). The settings page checks the word before it pushes a screen"
-
-[data.menu_app_pop_fn]
-address = 0x60A51799
-type = "code"
-evidence = "high"
-note = "sec4; stock menu_app_vtable[3] (word 0x60D68524), the app's pop method (callbacks.menu_app_pop): add -4,sp; u16 +4 -= 1 if > 0 (0x60A5179C..0x60A517A6), then, if entry +4 has a screen ((0x14 + 0x10 * depth, app)), 0x60A50010 sets the re-show reason +0xC = D0; ret [],4 at 0x60A517BC (only RET)"
-
-[data.menu_screen_vt_list0]
-address = 0x60D68B64
-type = "u32 [2] -> code"
-evidence = "high"
-note = "sec4 rodata, class of the kind-0 menu-app screens (menu_app_vtable push, factory table 0x60D6881C): {event 0x60A53CB8 (movm [d2,d3,a2,a3] prologue), delete 0x60A53F42 (movm [a2,a3] prologue)}, stored into the new 8-byte screen by its constructor at 0x60A53FA6. The settings page pushes its screen only over a screen of this class or menu_screen_vt_list5"
-
-[data.menu_screen_vt_list5]
-address = 0x60D688D0
-type = "u32 [2] -> code"
-evidence = "high"
-note = "sec4 rodata, class of the kind-5 menu-app screens: {event 0x60A52E8B (movm [d2,d3,a2,a3] prologue), delete 0x60A52F28 (movm [a2,a3] prologue)}, stored by its constructor at 0x60A52F65 (factory kind 5 0x60A52E69 allocates 8 bytes)"
-
-[gui_data_set]
-address = 0x609367B5
-saves = ["d2", "a2"]
-frame = 0x10
-evidence = "high"
-returns = "int"
-args = ["a const void *buf", "d unsigned id", "d unsigned size", "a unsigned notify"]
-note = "sec4; ret [d2,a2],16 at 0x609367D0; all 1015 CALLs use [d2,a2],0x10, e.g. the Custom list view 0x609F8E9F (buf = model + 0x1380, D0 = 0x38, D1 = 0xC6E). Manager 0x615E81F0 (returns 0 if NULL). The worker 0x60936927 returns 0 for an id beyond the table or buf NULL, then calls the optional lock hook (0x615E6DA8)(-1) and returns 0 if that returns 0; a slot with a set function gets that call instead of the copy, else min(size, slot size) bytes are memcpy'd into the slot storage (0x609369A2) and it returns 1; then the slot's listeners (0x60936F44), the optional hook (0x615E6DAC)() (0x6093694A..0x609369E0) and, with notify (u16 of A1) != 0, the GUI notification (0x609369EB). GUI task only"
-
-[menu_app_default]
-address = 0x60A4FFC1
-saves = []
-frame = 4
-evidence = "high"
-returns = "unsigned"
-args = ["a void *app", "d unsigned code", "d unsigned param"]
-note = "sec4; `mov (8,a0),a0; mov (a0),a1; mov (a1),a1; calls (a1); ret [],4`, both CALLs use [],4 (e.g. 0x60A52CDA, where every stock screen hands an event its controller did not take). D0/D1 reach the default handler 0x60A5120E unchanged: 0x9000, 0x9002, 0x9030, 0x9052, 0x9625 -> returns 0x9625 (the app then ends the menu); 0x9601 re-lays out the display; 0x9B01 and 0x9404 post 0x971D; else 0. GUI task only"
-
-[callbacks.menu_screen]
-entry = "calls"
-evidence = "high"
-returns = "unsigned"
-args = ["a void *screen", "d unsigned code", "d unsigned param", "a void *app"]
-note = "screen event handler, vtable[0] of a menu-app screen: menu app vtable[1] 0x60A513DC enters the top screen's handler with calls (a2) at 0x60A51424, A0 = screen, A1 = app, D0 = GUI event code, D1 = param (SsMenu action 3 passes the event's param2); the re-show at 0x60A5159B sends 0x971D with D1 = the pop reason. Returns 0, or 0x9625 to end the menu. Every SsMenu state-2 event but 0x971D/0x9404 and a MENU taken by 0x60A35F10 reaches it. Stock handlers: 0x60A52E8B, 0x60A53CB8. GUI task (CPU0) [inferred core]"
-
-[callbacks.menu_screen_delete]
-entry = "calls"
-evidence = "high"
-returns = "void *"
-args = ["a void *screen"]
-note = "screen vtable[1], called when the app drops the screen (pop 0x60A51537, destructors 0x60A51375 / 0x60A51C0C, constructor 0x60A51825): A0 = screen; the A0 it returns is called next with calls and A0 = screen (callbacks.menu_screen_free), or 0x6090A6D2 frees the screen when it returns 0 (0x60A51539..0x60A51544). The stock 0x60A52F28 tears the screen down and returns 0"
-
-[callbacks.menu_screen_free]
-entry = "calls"
-evidence = "high"
-returns = "void"
-args = ["a void *screen"]
-note = "the function a menu_screen_delete returns: entered with calls (a1) at 0x60A5153F (also 0x60A5182D and the destructors), A0 = screen; result unused"
-
-[callbacks.menu_app_pop]
-entry = "calls"
-evidence = "high"
-returns = "void"
-args = ["a void *app", "d unsigned reason"]
-note = "menu app vtable[3] 0x60A51799 (add -4,sp .. ret [],4): if u16 +4 > 0, +4 -= 1 and, when the entry below has a screen, +0xC = D0 (0x60A50010); the app deletes the screens above +4 after the handler returns. Stock screens enter it with calls (a1) at 0x60A52F02 / 0x60A53D75 with D0 = 1 (closed) or 2 (cancelled), the controller's mapping of actuator results 2 and 3; the reason reaches the screen below as the param of 0x971D"
-
-[data.custom_row_eyefi]
-address = 0x60D3C4C4
-type = "36-byte Custom-list row record"
-evidence = "high"
-note = "sec4 rodata, row 7 of the tab K row table 0x60D3C3EC (rows* of custom_tabs record 13): u16 +0 row id 0x193, +8 title {u16 kind 4, u16 lang 0x5FA 'Eye-Fi', u32 0x60D38D30}, +0x10 help {4, 0x1DF, 0x60D38D30}, +0x18 value table 0x60D39E68 ({u32 value, title} x 2: 0 -> lang 0x5AE, 1 -> lang 0xC6), +0x1C value function 0. The model copies a title with 0x609F6AA1: kind 4 -> lang id at cell +4; kinds 1/2/5/6 -> the ASCII string at the u32 widened into cell +8 (0x609F6B00, unbounded: at most 32 characters). The view (0x60A59995, jump table 0x60D69F54) draws kind 5 as that string verbatim (0x60A59A23); stock value tables use kind 5 (e.g. ISO 0x60D39370)"
 
 # ======================================================================================================
 # --- Lens: the body.h lens group (fenykl_body.h) ---
@@ -915,7 +884,7 @@ callback = "gui_panel_create"
 expected = 0x609B4503
 cpu1 = "unproven"
 cpu1_evidence = "static only: the slot is read by container create 0x6093A3A2, reached from panel vt+0x94 in the app's show-panel method 0x60961118, which the GUI loop 0x60934F05 (GUI_TASK, CPU0) runs for event 0x1100; no CPU1/CPU2 path found"
-note = "word +0x1A8 of the live-view info panel vtable 0x60C9801C (panel id 10, the only id built from type 0x600A); the only pointer to 0x609B4503 in main-code-01, which has no CALL caller. sec4 rodata, written in DRAM like the eyefi slots"
+note = "word +0x1A8 of the live-view info panel vtable 0x60C9801C (panel id 10, the only id built from type 0x600A); the only pointer to 0x609B4503 in main-code-01, which has no CALL caller. sec4 rodata, written in DRAM like the Custom menu tables"
 
 [slots.info_panel_destroy]
 address = 0x60C980B4
