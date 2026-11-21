@@ -17,7 +17,8 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register facts and boot parameters |
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics` |
 | `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace |
-| `commands.py` | the CPU setups of the commands as jobs (cmd 0xF) |
+| `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs |
+| `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields` |
 
 Bit k of a word is bit (k % 8) of byte k // 8 of its 40 bytes. A word decodes from any 320-bit
@@ -109,7 +110,7 @@ out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), 
 A `Job` is a program plus the bytes its command's CPU setup writes to local memory
 (`commands.copy` for cmd 0xF: src, dst and len at 0x9D000000..08). State persists across the jobs
 of a `Boot`: local memory, the buffer between load and store (position-addressed, reaching below
-index 0), the register file and the DRAM view. `back_firmware(boot, image)` maps the main code
+index 0), the resampler's held line pairs, the register file and the DRAM view. `back_firmware(boot, image)` maps the main code
 of a stock `.BIN` for loads from firmware text. A byte is known or UNKNOWN, and its source says
 where it came from or why it is unknown; the emulator never guesses a byte.
 
@@ -126,6 +127,33 @@ fields that differ from the nearest class, and for a role at a register without 
 semantics, and for a transfer whose route nibbles differ from the stock transfers' values.
 `Emulator(boot, model, strict=False)` runs such a word as its nearest class, ignores the fields
 and taints every byte the job loads or stores "hypothesis".
+
+### The resampler
+
+```python
+from fenykl.dsp.program import Program
+from fenykl.dsp.resample import Resample13Model
+
+model = Resample13Model.from_image(image)
+boot.put(src, planes, "src")  # three planes of 64 x H bytes at stride 64 (format 0x306)
+boot.put(table, entries, "table")  # H x {s32 a, u32 b}: source line and step in 16.16
+program = Program(model.program.words, taps)  # 32 tap words (stock: model.program)
+job = commands.resample(program, src, dst, table, 64, w, h)
+result = Emulator(boot, model).run(job)
+```
+
+`commands.resample` writes what cmd 0xC's setup writes: the program's constant block (the 32 tap
+words the setup copies from DRAM 0xA324BC00, the item's constants) to local words 0x00..0x1F
+and the request to 0x742..0x747; the table stays in DRAM. Own taps are a program with other
+constants. No word of program 13 is decoded: its classes are the idle word and the stock words
+matched by value, and the law (`resample.py`'s docstring) applies to the stock program as it
+is. An edited program raises `UnknownSemantics` (strict) or runs as the stock law tainted
+"hypothesis". Every byte the law computes is at most inferred, a law measured from outside;
+hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, the held lines after a job
+that is not an H 16 identity. Bytes the law does not give (the bottom and right edges, plane 0
+at b != 1 where the vertical pass is not exact, a fractional a with b != 1, W < 64 with b != 1,
+an odd H above 1) are UNKNOWN with a source that says why. The curated camera vectors are in
+`tests/data/dsp/resample/` (jobs with their taps, table and source image; dst segments).
 
 ### Adding a semantic
 

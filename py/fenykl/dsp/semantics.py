@@ -11,7 +11,7 @@ ignored and the job is tainted "hypothesis".
 hypothesis confidence run and taint what they touch.
 
 The classes and tables of one program are held by its model (`memcpy.Copy16Model` for program
-16), which the emulator takes.
+16, `resample.Resample13Model` for program 13), which the emulator takes.
 """
 
 from collections import Counter

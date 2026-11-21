@@ -8,6 +8,7 @@ of the semantics that produced or moved it. An UNKNOWN byte carries the source t
 The spaces of one boot, all persistent across its jobs:
 - `local`: DSP local memory at 0x9D000000, where the CPU setup of a command writes its request;
 - `buffer`: the internal buffer between the load and the store, position-addressed;
+- `lines`: the resampler's held line pair per plane and column (its partial column blocks);
 - `dram`: a sparse view of DRAM, unknown except where written or backed by an image;
 - the register file; when a job starts, `REGISTER_FACTS` set the registers they cover from the
   job's request and the boot's parameters (unknown where a fact has no value for the job).

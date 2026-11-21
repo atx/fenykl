@@ -1,0 +1,36 @@
+{
+ "name": "height-1",
+ "fact": "H 1 writes plane 0 as a line pair, then planes 1 and 2",
+ "jobs": [
+  {
+   "w": 64,
+   "h": 1,
+   "fill": 231,
+   "taps": {
+    "kind": "firmware",
+    "address": 2737093632
+   },
+   "table": [
+    [
+     0,
+     65536
+    ]
+   ],
+   "src": {
+    "ctx": 48,
+    "data": "uCti4N9lRr4CWQD4Z7J6UthsHzPhsHTe4QSz9rjoLD87122rtvmbd8lurdG7jGUEULg4uaESAt5t9jf5fMmOJbqHOK9IXDdXOekIf8yxa4LM3Udk3IUfmd2F3Pp3ZBhhgWzfTHUt38h1mpC15Mr700bw3k1m4EMxry42hXMgyuEiBzIZ/02eUqARxqS5QdP235GPeIEgCRM2Fg9JPt1Y6HftlYmr5pkKeO8jzGpz0WhdGQey1Jn25ZcnFeTwusMF"
+   },
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 256,
+      "kind": "bytes",
+      "data": "uCti4N9lRr4CWQD4Z7J6UthsHzPhsHTe4QSz9rjoLD87122rtvmbd8lurdG7jGUEULg4uaESAt5t9jf5fMmOJbgrYuDfZUa+AlkA+GeyelLYbB8z4bB03uEEs/a46Cw/O9dtq7b5m3fJbq3Ru4xlBFC4OLmhEgLebfY3+XzJjiW6hzivSFw3VznpCH/MsWuCzN1HZNyFH5ndhdz6d2QYYYFs30x1Ld/IdZqQteTK+9NG8N5NZuBDMa8uNoVzIMrhIgcyGf9NnlKgEcakuUHT9t+Rj3iBIAkTNhYPST7dWOh37ZWJq+aZCnjvI8xqc9FoXRkHstSZ9uWXJxXk8LrDBQ=="
+     }
+    ]
+   }
+  }
+ ]
+}
