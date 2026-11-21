@@ -547,7 +547,7 @@ class Sequencer:
         for channel, roles in CHANNELS.items():
             have = {role.word for role, _, _ in by_channel[channel]}
             if self.mode == self.POINTER:
-                have = set(r.word for r in roles[: len(by_channel[channel])])
+                have = {r.word for r in roles[: len(by_channel[channel])]}
             missing = [
                 f"{channel} slot {k} ({role.name}, stock word {role.word})"
                 for k, role in enumerate(roles)

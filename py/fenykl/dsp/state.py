@@ -32,7 +32,7 @@ class Source:
 class Bytes:
     """A run of tri-state bytes: value, known flag, taint and provenance per byte."""
 
-    __slots__ = ("data", "known", "taint", "src", "off")
+    __slots__ = ("data", "known", "off", "src", "taint")
 
     def __init__(self, n: int = 0) -> None:
         self.data = bytearray(n)

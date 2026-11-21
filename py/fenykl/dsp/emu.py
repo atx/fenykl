@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..firmware import unpack_firmware
+from . import memcpy
 from .fields import Confidence, lookup
 from .program import Program
 from .semantics import (
@@ -38,7 +39,6 @@ from .state import (
     Space,
     SparseSpace,
 )
-from . import memcpy
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
