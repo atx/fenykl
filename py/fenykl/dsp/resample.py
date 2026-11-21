@@ -36,10 +36,12 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
 Column blocks: the job runs in 32-pixel column blocks with a held line pair per block. A partial
 block (W not a multiple of 32) is not computed: its pixels are the held pair, line i getting
 held line i % 2, which a job fills from its source lines H - 2 and H - 1 [verified at H 16
-after identity jobs, which cannot tell source from output lines: after other jobs and at
-other heights a hypothesis]. Pixels W..63 are not written. On a fresh boot the pair is
-unknown. H 1: plane 0 is written as a line pair (line 0 twice), then planes 1 and 2, 64 bytes
-past 3 x 64 x H [verified: one run]; an odd H above 1 never ran, so its dst is unknown.
+after identity jobs with the stock taps, which cannot tell source from output lines: after
+other jobs and at other heights a hypothesis]. Pixels W..63 are not written. On a fresh boot
+the pair is unknown. H 1: plane 0 is written as a line pair (line 0 twice, or line 0 and a
+read of table entry 1: the run cannot tell, so line 1 is a hypothesis), then planes 1 and 2,
+64 bytes past 3 x 64 x H [verified: one run]; an odd H above 1 never ran, so its dst is
+unknown.
 """
 
 import struct
@@ -266,7 +268,8 @@ class Resample13Model:
         why = {k: boot.source("resampler unknown", v) for k, v in _WHY.items()}
         base_taint = min(cap, taps_taint, table_taint)
         full = w // BLOCK * BLOCK
-        # H 1: plane 0 is a line pair (line 0 twice), the chroma planes follow it.
+        # H 1: plane 0 is a line pair, the chroma planes follow it. Line 1 as a copy of line 0
+        # and as a read of table entry 1 gave the same bytes: a hypothesis.
         lines0 = max(h, 2)
         for c in range(PLANES):
             plane = 0 if c == 0 else STRIDE * (lines0 + (c - 1) * h)
@@ -282,13 +285,15 @@ class Resample13Model:
                         line.src[x] = why[m.why]
                         continue
                     line.data[x], line.known[x] = v, 1
+                    if i >= h:
+                        t = H
                     line.taint[x], line.src[x] = min(base_taint, t), law
                     line.off[x] = plane + STRIDE * i + x
                 if full < w:
                     held = boot.lines.read((2 * c + i % 2) * STRIDE + full, w - full)
                     line = line[:full] + held
                 boot.dram.write(dram_alias(req.dst + plane + STRIDE * i), line)
-        self._hold(boot, req, entries, px, full)
+        self._hold(boot, req, entries, taps, px, full)
         return result
 
     def _pixel(
@@ -360,10 +365,14 @@ class Resample13Model:
         boot: Boot,
         req: Request,
         entries: list[tuple[int, int] | None],
+        taps: list[tuple[int, ...]] | None,
         px: _Pixels,
         full: int,
     ) -> None:
-        """The held line pairs after the job: source lines H - 2 and H - 1 of the full blocks."""
+        """The held line pairs after the job: source lines H - 2 and H - 1 of the full blocks.
+
+        Inferred only where source and output lines are the same (an H 16 identity table with
+        a unit phase-0 kernel), since the camera has not told them apart."""
         h = req.height
         if h < 2:
             boot.lines.forget(
@@ -372,9 +381,10 @@ class Resample13Model:
                 )
             )
             return
-        identity = all(e == (i << 16, ONE) for i, e in enumerate(entries))
-        taint = I if h == HELD and identity else H
+        identity = h == HELD and all(e == (i << 16, ONE) for i, e in enumerate(entries))
         for c in range(PLANES):
+            unit = c != 0 or (taps is not None and taps[0] == chroma(0))
+            taint = I if identity and unit else H
             for r in range(2):
                 y = h - 2 + r
                 o = (c * h + y) * STRIDE

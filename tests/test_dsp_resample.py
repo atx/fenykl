@@ -22,17 +22,15 @@ CTX = 0x400
 CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
 # Per job: the weakest taint of the dst bytes the job wrote, then the result's taint. The law is
-# at most inferred; u0 held into [-16, 16) at b 2 is a hypothesis.
+# at most inferred; u0 held into [-16, 16) at b 2 and plane 0's line 1 at H 1 are hypotheses.
 TAINTS = {
-    "height-1": "II",
+    "height-1": "HI",
     "own-gains": "II II",
     "own-phases": "II",
     "own-scale-2d": "II",
     "own-scale-flat": "II",
     "own-ties": "II",
-    "stock-half-line": "II",
     "stock-identity": "II",
-    "stock-phases": "II",
     "stock-scale": "HI II II",
     "width-leak": "II II II",
 }
