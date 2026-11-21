@@ -65,8 +65,8 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     src = dsp_commands.add_parser(
         "source",
         help="print a stock program as DSL source",
-        description="Print a stock program as DSL source. It reproduces stock microcode: "
-        "for local work only, never commit it.",
+        description="Print a stock program as DSL source. The output reproduces stock "
+        "microcode from your firmware image: for local work only, never commit it.",
     )
     _program_args(src)
     src.set_defaults(func=cmd_source)

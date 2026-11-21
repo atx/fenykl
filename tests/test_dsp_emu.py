@@ -1,18 +1,18 @@
 import base64
 import json
 import struct
-import warnings
 from functools import cache
 from pathlib import Path
 
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp import commands, memcpy
+from fenykl.dsp import commands
 from fenykl.dsp.emu import Boot, Emulator, Status, back_firmware
 from fenykl.dsp.fields import Confidence
-from fenykl.dsp.program import HypothesisFieldWarning, Program
-from fenykl.dsp.semantics import STOCK_TRANSFERS, Sequencer, UnknownSemantics
+from fenykl.dsp.memcpy import Copy16Model
+from fenykl.dsp.program import Program
+from fenykl.dsp.semantics import Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
 from fenykl.dsp.units import C2, CtlLo
 from fenykl.dsp.word import IDLE, Word
@@ -44,10 +44,12 @@ def pattern(kind: str, seed: int, src: int, n: int) -> bytes:
 
 
 @cache
+def model() -> Copy16Model:
+    return Copy16Model.from_image(stock_image("em10ii"))
+
+
 def stock() -> Program:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", HypothesisFieldWarning)
-        return memcpy.program()
+    return model().program
 
 
 def edited(edits: list[dict]) -> Program:
@@ -75,13 +77,13 @@ def needs_firmware(vector: dict) -> bool:
     return False
 
 
-def run_vector(vector: dict, mode: str = Sequencer.POINTER) -> list[str]:
+def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
     """Replays the vector's jobs; returns its mismatches, empty when every check holds."""
     boot = boot_of(vector["boot"])
     firmware = (
         back_firmware(boot, stock_image("em10ii")) if needs_firmware(vector) else None
     )
-    emu = Emulator(boot, sequencer=Sequencer(mode))
+    emu = Emulator(boot, model(), sequencer=Sequencer(mode))
     bad = []
     for k, job in enumerate(vector["jobs"]):
         p = job["pattern"]
@@ -124,9 +126,9 @@ def run_vector(vector: dict, mode: str = Sequencer.POINTER) -> list[str]:
     return bad
 
 
-@pytest.mark.parametrize("mode", [Sequencer.POINTER, Sequencer.POSITION])
+@pytest.mark.parametrize("mode", list(Mode), ids=lambda m: m.value)
 @pytest.mark.parametrize("path", sorted(VECTORS.glob("*.json")), ids=lambda p: p.stem)
-def test_camera_vector(path: Path, mode: str):
+def test_camera_vector(path: Path, mode: Mode):
     vector = json.loads(path.read_text())
     assert run_vector(vector, mode) == [], vector["fact"]
 
@@ -137,7 +139,9 @@ SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 def copy(boot: Boot, program: Program, data: bytes, strict: bool = True):
     boot.put(SRC, data, "src")
     boot.put(DST, b"\xa5" * LEN, "prefill")
-    result = Emulator(boot, strict=strict).run(commands.copy(program, SRC, DST, LEN))
+    result = Emulator(boot, model(), strict=strict).run(
+        commands.copy(program, SRC, DST, LEN)
+    )
     return result, boot.read(DST, LEN)
 
 
@@ -146,7 +150,8 @@ def with_reg(word: int, reg: int) -> Program:
 
 
 def test_the_transfer_class_holds_exactly_the_register_transfer_words():
-    assert STOCK_TRANSFERS == (
+    words = stock().words
+    assert tuple(i for i, w in enumerate(words) if model().transfer.matches(w)) == (
         42,
         43,
         44,

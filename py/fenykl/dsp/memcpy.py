@@ -1,737 +1,592 @@
-"""Program 16, the stock copy (command 0xF), rebuilt from slot objects.
+"""Program 16, the stock copy (command 0xF): its model, built from the stock program at runtime.
 
-The driver passes src, dst and len in DSP local memory words 0..2. The comments give each word's
-role, read from camera runs that replaced it by the idle word ("idled") or swept its register
-field; what a run showed is stated as such, the rest is inferred from it. `program()` equals the
-stock item's program word for word.
+The driver passes src, dst and len in DSP local memory words 0..2. No word of the program is
+decoded; what is known comes from camera runs that replaced a word by the idle word ("idled") or
+swept its register field 115..119, and is stated here by word index:
 
-The register values the camera showed through the register-transfer words are data in
-`state.REGISTER_FACTS`; what each word does, or does without, is in `semantics`.
+- `_PARTS`: what the job does without each undecoded stock word;
+- `_CHANNELS`: the register-transfer words, grouped by their register context, and the role of
+  each slot (load address, offsets, count, store format, ...);
+- `_FORMATS`: word 47's store formats by register.
+
+`Copy16Model` takes the stock program (from the user's firmware, `from_image`) and derives the
+word classes from it: each undecoded stock word is a class matched by its value, the register
+transfers one class matched by their signature, with the register contexts and the register
+group B and route values of the stock transfers as the reference. No stock word is part of this
+code. The model resolves a job's trace into its one load and one store (`resolve`).
 
 Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the job with status
 -5; these register values lost the link too: word 44 at 0, 1, 4, 8, 10; word 47 at 16, 18, 19,
 20, 24, 26, 27, 28; word 70 at 26; word 71 at 0.
 """
 
-from fenykl.dsp.fields import FIELDS, STAIRCASE, Kind
-from fenykl.dsp.program import Program, assemble
-from fenykl.dsp.units import C2, SLOTS, CtlHi, CtlLo, RegsA, RegsB, Slot
-from fenykl.dsp.word import IDLE, Word
+from dataclasses import dataclass, field
+
+from .fields import FIELDS, STAIRCASE, Confidence, lookup
+from .program import Program, stock_programs
+from .semantics import (
+    IDLE_CLASS,
+    Channel,
+    OpaqueClass,
+    Outcome,
+    Part,
+    Role,
+    Sequencer,
+    Trace,
+    Transfer,
+    UnknownSemantics,
+    Use,
+    WordClass,
+)
+from .state import JobView, RegisterFile
+from .units import UNITS
+from .word import IDLE, Word
+
+H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
+
+ITEM = 16
+MAX_COUNT = 0x40000
+"""A count above this is an address or junk: the store never ends (hypothesis)."""
+
+# -- the undecoded stock words
+
+_STORE_PATH = "idled, dst is not written (prefill intact)"
+_COMPLETION = "idled, the job times out"
+_NONE = "no effect seen when idled, also with len, dst and src changing between jobs"
 
 
-def route(index: int) -> dict[str, Slot]:
-    """The grid slots of word `index`: the nibbles the staircase has switched to 0 by then."""
-    on: dict[str, dict[str, int]] = {}
-    for f in FIELDS:
-        if f.kind is Kind.ROUTE and index >= STAIRCASE.get(f.lo, index + 1):
-            on.setdefault(f.unit, {})[f.id] = 0
-    return {unit: SLOTS[unit](**values) for unit, values in on.items()}
+def _store_path(token: str = "store path") -> Part:
+    return Part(token, Outcome.NO_STORE, _STORE_PATH)
 
 
-def xfer(
-    index: int, context: tuple[RegsA, RegsB], xreg: int, f308_309: int = 0
-) -> Word:
-    """A register-transfer word: its register context with `xreg`; the role is its position."""
-    regs_a, regs_b = context
-    values = {f.id: v for f, v in regs_a.items()}
-    return Word(
-        regs_a=RegsA(**values, xreg=xreg),
-        regs_b=regs_b,
-        ctl_hi=CtlHi(f308_309=f308_309),
-        **route(index),
+_PARTS: dict[int, Part] = {
+    0: _store_path("prologue store path"),
+    5: Part("prologue completion", Outcome.TIMEOUT, _COMPLETION),
+    15: Part(
+        "store count and data",
+        Outcome.ZERO_FILL,
+        "idled, the job writes 0x4000 zero bytes from dst at 1 and 4 KiB, whatever the length",
+    ),
+    27: Part(
+        "load address (hypothesis)",
+        Outcome.DATA_UNKNOWN,
+        "idled, dst gets foreign data",
+    ),
+    28: Part("completion", Outcome.TIMEOUT, _COMPLETION),
+    31: Part(
+        "store-side buffer address (hypothesis)",
+        Outcome.DATA_UNKNOWN,
+        "idled, dst gets data of an older job, 16 bytes off",
+    ),
+    45: Part(
+        "completion",
+        Outcome.TIMEOUT,
+        f"{_COMPLETION}; its register field is don't-care (copies at all 31 values)",
+        operand={r: Outcome.OK for r in range(31)},
+    ),
+    58: Part(
+        "fixed-content load address",
+        Outcome.DATA_UNKNOWN,
+        "idled, dst gets a fixed 1 KiB",
+    ),
+    60: Part("stream completion", Outcome.TIMEOUT, _COMPLETION),
+    61: Part(
+        "src loader",
+        Outcome.DATA_UNKNOWN,
+        "idled, the job emits data held from an older 4 KiB job, then 0x5A",
+    ),
+    62: Part("link keeper", Outcome.HAZARD, "idled, the camera lost its link"),
+    63: Part("stream completion", Outcome.TIMEOUT, _COMPLETION),
+    64: Part("wedge guard", Outcome.HAZARD, "idled, the job wedged (status -5)"),
+    65: Part("stream completion", Outcome.TIMEOUT, _COMPLETION),
+    69: Part(
+        "store side",
+        Outcome.NO_STORE,
+        f"{_STORE_PATH}; its register: dst not written at r0 and r4, a copy at the others",
+        operand={r: Outcome.NO_STORE if r in (0, 4) else Outcome.OK for r in range(31)},
+    ),
+    79: Part("stream end", Outcome.TIMEOUT, _COMPLETION),
+    **{i: _store_path() for i in (12, 13, 14, 16, 17, 21, 22, 23, 24, *range(32, 42))},
+    **{
+        i: Part("no effect seen", Outcome.OK, _NONE)
+        for i in (1, 2, 10, 11, 18, 19, 20, 25, 26, 29, 30, 50, 51, 52, 53, 56, 59, 80)
+    },
+    **{i: Part("drain", Outcome.OK, _NONE) for i in (81, 82, 83)},
+}
+
+# -- the register transfers
+
+ROUTES = tuple(f.id for f in FIELDS if f.lo in STAIRCASE)
+CONTEXT = ("f100_104", "f105_109", "f110_114", "f123_127", "f128_132")
+"""The register group A fields besides xreg: they select the transfer's channel."""
+REGS_B = tuple(f.id for f in UNITS["regs_b"].fields if f.kind == "reg")
+TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_309"})
+
+T_SET = (7, 9, 16, 18, 19, 20, 24, 27, 28, 30)
+Z_SET = (4, 5, 10, 12, 13)
+
+
+def _table(default: Outcome | None, **sets: tuple[int, ...]) -> dict[int, Outcome]:
+    """Outcome by register 0..30: the named sets, `default` for the rest (None: none)."""
+    out = {r: default for r in range(31)} if default else {}
+    for name, regs in sets.items():
+        for r in regs:
+            out[r] = Outcome[name.upper()]
+    return out
+
+
+def _except(table: dict[int, Outcome], *regs: int) -> dict[int, Outcome]:
+    return {r: o for r, o in table.items() if r not in regs}
+
+
+DONT_CARE = _table(Outcome.OK)
+
+_CHANNELS: tuple[Channel, ...] = (
+    Channel(
+        "completion A",
+        42,
+        (
+            Role(
+                "store enable",
+                42,
+                "copies at r0, r4, r8, r27; dst not written at the rest",
+                _table(Outcome.NO_STORE, ok=(0, 4, 8, 27)),
+            ),
+            Role("completion", 43, "don't-care: copies at all 31 values", DONT_CARE),
+            Role(
+                "completion (hazard)",
+                44,
+                "dst not written at r3, r5, r7, timeout at r6; the camera lost its link at r0, "
+                "r1, r4, r8, r10 (not registered)",
+                _table(None, ok=(9,), no_store=(3, 5, 7), timeout=(6,)),
+            ),
+        ),
+    ),
+    Channel(
+        "completion B",
+        46,
+        (
+            Role("completion", 46, "don't-care: copies at all 31 values", DONT_CARE),
+            Role(
+                "store format",
+                47,
+                "the store's element format, applied by the store, not the load: bytes at r6, "
+                "u8 -> u32 zero-extended at r14 and r29, a 10-bit pack or zeros at r21 (by "
+                "boot), zeros at the others; timeout at r9; the camera lost its link at r16, "
+                "r18, r19, r20, r24, r26, r27, r28 (not registered)",
+                _table(None, timeout=(9,)),
+                use=Use.FORMAT,
+            ),
+            Role("completion", 48, "don't-care: copies at all 31 values", DONT_CARE),
+            Role(
+                "completion",
+                49,
+                "copies at 16 values, dst not written at r10, r12, r13, timeout at 12",
+                _table(
+                    Outcome.OK,
+                    no_store=(10, 12, 13),
+                    timeout=(3, 14, 15, 17, 19, 21, 22, 23, 24, 25, 26, 29),
+                ),
+            ),
+        ),
+    ),
+    Channel(
+        "spare A",
+        54,
+        (
+            Role("unused", 54, "no effect seen when idled", DONT_CARE),
+            Role("unused", 55, "no effect seen when idled", DONT_CARE),
+        ),
+        needed=False,
+    ),
+    Channel(
+        "stream",
+        66,
+        (
+            Role(
+                "load enable",
+                66,
+                "a load at r1, r3, r4, r5, r10, r12, r13, r17; no load (the held buffer is "
+                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8",
+                _table(
+                    None,
+                    ok=(1, 3, 4, 5, 10, 12, 13, 17),
+                    no_load=(0, 2, 6, 11, 14, 15, 21, 22, 23, 25, 29),
+                    timeout=(*T_SET, 26),
+                    data_unknown=(8,),
+                ),
+                load=True,
+            ),
+            Role(
+                "load address",
+                67,
+                "an absolute address at r3 (src), r21 and r29 (firmware text); low registers "
+                "read a fixed memory at value / 16; dst not written at r2 and r15",
+                _table(None, no_store=(2, 15)),
+                use=Use.ADDRESS,
+                load=True,
+            ),
+            Role(
+                "load offset",
+                68,
+                "the buffer index of the load: buffer[i + o] = S[i], o = value / 32 truncated "
+                "to 32 bytes (towards zero, hypothesis for negative values)",
+                use=Use.LOAD_OFFSET,
+                load=True,
+            ),
+            Role(
+                "stream setup",
+                70,
+                "copies at r3, r8; timeout at the T set; dst not written at the rest",
+                _except(_table(Outcome.NO_STORE, ok=(3, 8), timeout=T_SET), 26),
+            ),
+            Role(
+                "stream",
+                71,
+                "copies at most values; dst not written at the Z set; r0 lost the link",
+                _except(_table(Outcome.OK, no_store=Z_SET), 0),
+            ),
+            Role(
+                "stream",
+                72,
+                "only its stock r8 copies; timeout or dst not written elsewhere; -5 at r1",
+                _except(
+                    _table(
+                        Outcome.NO_STORE,
+                        ok=(8,),
+                        timeout=(3, 6, 7, 9, 11, 15, 16, 18, 19, 20, 24, 27, 28, 30),
+                    ),
+                    1,
+                ),
+            ),
+            Role(
+                "store count",
+                73,
+                "the store's count in output bytes: dst[n, len) is not written; it does not "
+                "limit the load; timeout at registers holding addresses or unknown values",
+                _table(None, timeout=(2, 6, 8, 11, 14, *range(15, 31))),
+                use=Use.COUNT,
+            ),
+            Role(
+                "stream",
+                75,
+                "copies at r6 and r11; timeout at the T set, r3, r8, r15; dst not written "
+                "elsewhere",
+                _table(Outcome.NO_STORE, ok=(6, 11), timeout=(*T_SET, 3, 8, 15)),
+            ),
+            Role(
+                "store offset",
+                76,
+                "the buffer index of the store: dst[i] = buffer[i + o], o = value / 32 rounded "
+                "down to 32 bytes (hypothesis for negative values)",
+                use=Use.STORE_OFFSET,
+            ),
+            Role(
+                "stream",
+                77,
+                "only its stock r2 copies; dst not written at every other value",
+                _table(Outcome.NO_STORE, ok=(2,)),
+            ),
+        ),
+    ),
+)
+"""Channels cmd 0xF does not need (`needed=False`): idling their transfers has no effect, with
+len, dst and src changing between jobs. Word 57 is a holding transfer (bit 308 set) of its own
+register context and takes no slot."""
+
+# Word 47's formats by register; r21's is a boot parameter.
+_FORMATS: dict[int, str] = {
+    6: "bytes",
+    14: "u32",
+    29: "u32",
+    **{r: "zero" for r in (0, 1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 15, 17, 22, 23, 25)},
+}
+
+
+def context(word: Word) -> tuple[int, ...]:
+    return tuple(word[k] for k in CONTEXT)
+
+
+@dataclass(frozen=True)
+class Reference:
+    """The register group B and route values of the stock transfers of one register context."""
+
+    regs_b: dict[str, frozenset[int]]
+    routes: dict[str, frozenset[int]]
+
+
+@dataclass(frozen=True, eq=False)
+class TransferClass(WordClass):
+    """The register transfers: they hand the register named in 115..119 to the sequencer."""
+
+    channel_of: dict[tuple[int, ...], str] = field(default_factory=dict)
+    reference: dict[tuple[int, ...], Reference] = field(default_factory=dict)
+
+    def matches(self, word: Word) -> bool:
+        return super().matches(word) and word["f308_309"] in (0, 1)
+
+    def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
+        ctx = context(word)
+        ref = self.reference.get(ctx)
+        if ref is None:
+            raise UnknownSemantics(
+                index,
+                self.name,
+                [(lookup(k), word[k]) for k in CONTEXT],
+                "no stock transfer has this register context",
+            )
+        if word["f308_309"] == 1:
+            # 74 and 78 differ from 73 and 77 only here and copy at every register (hypothesis:
+            # a transfer that does not take a slot).
+            trace.notes.append(f"word {index}: a holding transfer, no slot")
+            return
+        channel = self.channel_of.get(ctx)
+        if channel is None:
+            raise UnknownSemantics(
+                index,
+                self.name,
+                [(lookup(k), word[k]) for k in CONTEXT],
+                "no channel has this register context",
+            )
+        off = [k for k in REGS_B if word[k] not in ref.regs_b[k]]
+        # Single-bit flips of 206..215 in words 67 and 68 left the copy unchanged [verified];
+        # other values elsewhere are assumed ignored too, and taint.
+        taint = H if off else V
+        trace.channels.setdefault(channel, []).append(
+            Transfer(index, word["xreg"], taint)
+        )
+
+
+def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
+    """The transfer class, with the contexts and reference values of the stock transfers."""
+    cls = TransferClass(
+        "transfer",
+        "register transfer: hands the register named in 115..119 to the stream "
+        "configuration; its role (address, offset, count, enable, format) is set by its "
+        "position [inferred, strong]",
+        {f.id: f.idle for f in FIELDS if f.id not in TRANSFER_OPERANDS},
+        TRANSFER_OPERANDS,
+    )
+    stock = [w for w in words if cls.matches(w)]
+    reference: dict[tuple[int, ...], Reference] = {}
+    for ctx in dict.fromkeys(context(w) for w in stock):
+        mine = [w for w in stock if context(w) == ctx]
+        reference[ctx] = Reference(
+            {k: frozenset(w[k] for w in mine) for k in REGS_B},
+            {k: frozenset(w[k] for w in mine) for k in ROUTES},
+        )
+    channel_of = {context(words[c.anchor]): c.name for c in _CHANNELS}
+    for c in _CHANNELS:
+        for role in c.roles:
+            w = words[role.word]
+            if (
+                not cls.matches(w)
+                or w["f308_309"] != 0
+                or context(w) != context(words[c.anchor])
+            ):
+                raise ValueError(
+                    f"stock word {role.word} is no counted transfer of {c.name}"
+                )
+    roles = {r.word for c in _CHANNELS for r in c.roles}
+    for i, w in enumerate(words):
+        if cls.matches(w) and w["f308_309"] == 0 and i not in roles:
+            raise ValueError(f"stock transfer {i} has no role")
+    return TransferClass(
+        cls.name,
+        cls.fact,
+        cls.match,
+        cls.operands,
+        channel_of=channel_of,
+        reference=reference,
     )
 
 
-# The register contexts of the register-transfer words, named after their first word.
-CTX42 = (
-    RegsA(f100_104=5, f105_109=4, f110_114=0, f123_127=2, f128_132=3),
-    RegsB(f206_210=4, f211_215=13, f216_220=11, f224_228=4),
-)
-CTX46 = (
-    RegsA(f100_104=5, f105_109=4, f110_114=0, f123_127=5, f128_132=3),
-    RegsB(f206_210=4, f211_215=13, f216_220=11, f224_228=4),
-)
-CTX54 = (
-    RegsA(f100_104=1, f105_109=2, f110_114=0, f123_127=2, f128_132=3),
-    RegsB(f206_210=1, f211_215=3, f216_220=11, f224_228=6),
-)
-CTX57 = (
-    RegsA(f100_104=1, f105_109=2, f110_114=0, f123_127=4, f128_132=3),
-    RegsB(f206_210=1, f211_215=2, f216_220=11, f224_228=4),
-)
-CTX66 = (
-    RegsA(f100_104=1, f105_109=1, f110_114=0, f123_127=2, f128_132=2),
-    RegsB(f206_210=1, f211_215=8, f216_220=6, f224_228=2),
-)
-CTX70 = (
-    RegsA(f100_104=1, f105_109=1, f110_114=0, f123_127=2, f128_132=2),
-    RegsB(f206_210=1, f211_215=3, f216_220=6, f224_228=2),
-)
+def _opaque_classes(
+    words: tuple[Word, ...], transfer: TransferClass
+) -> list[OpaqueClass]:
+    """One class per distinct undecoded stock word, matched by its full value."""
+    positions: dict[int, list[int]] = {}
+    for index, word in enumerate(words):
+        if word == IDLE or transfer.matches(word):
+            continue
+        if index not in _PARTS:
+            raise ValueError(f"stock word {index} has no part")
+        positions.setdefault(word.value, []).append(index)
+    classes = []
+    for at in positions.values():
+        part = _PARTS[at[0]]
+        if any(_PARTS[i] != part for i in at):
+            raise ValueError(f"stock words {at} are equal but have different parts")
+        operands = frozenset({"f115_119"}) if part.operand else frozenset()
+        word = words[at[0]]
+        match = {f.id: f.get(word.value) for f in FIELDS if f.id not in operands}
+        classes.append(
+            OpaqueClass(
+                part.token,
+                part.fact,
+                match,
+                operands,
+                part=part,
+                positions=frozenset(at),
+            )
+        )
+    extra = set(_PARTS) - {i for at in positions.values() for i in at}
+    if extra:
+        raise ValueError(f"parts without a stock word: {sorted(extra)}")
+    return classes
 
 
-WORDS = [
-    # 0: prologue; idled, nothing is stored
-    Word(
-        ctl_lo=CtlLo(f7_8=0x1, f15_18=0xA),
-        regs_a=RegsA(f105_109=16, xreg=0, f120_122=0x4, f128_132=0),
-        regs_b=RegsB(f224_228=31),
-        c2=C2(f229=0x0, f265_268=0x0),
-        ctl_hi=CtlHi(f302_307=0x13, f308_309=0x0, f310_312=0x5, f313_319=0x3),
-    ),
-    # 1: prologue
-    Word(
-        ctl_lo=CtlLo(f15_18=0x5),
-        regs_a=RegsA(f120_122=0x0, f128_132=0),
-        regs_b=RegsB(f224_228=1),
-        c2=C2(f272_273=0x1),
-        ctl_hi=CtlHi(f313_319=0xB),
-    ),
-    # 2: prologue
-    Word(
-        regs_a=RegsA(f120_122=0x1, f128_132=0),
-        c2=C2(f272_273=0x1),
-        ctl_hi=CtlHi(f313_319=0xB),
-    ),
-    # 3: no-op
-    IDLE,
-    # 4: no-op
-    IDLE,
-    # 5: prologue; idled, the job never completes
-    Word(ctl_hi=CtlHi(f313_319=0x7)),
-    # 6: no-op
-    IDLE,
-    # 7: no-op
-    IDLE,
-    # 8: no-op
-    IDLE,
-    # 9: no-op
-    IDLE,
-    # 10: no effect seen when idled
-    Word(
-        regs_a=RegsA(f105_109=0, f128_132=0),
-        regs_b=RegsB(f206_210=1, f211_215=31, f224_228=2),
-        c2=C2(f265_268=0xC, f272_273=0x1),
-        ctl_hi=CtlHi(f302_307=0x15, f313_319=0x9),
-    ),
-    # 11: no effect seen when idled; control signature
-    Word(
-        ctl_lo=CtlLo(f15_18=0xC),
-        regs_a=RegsA(f100_104=1, f105_109=0, f120_122=0x0, f123_127=2, f128_132=0),
-        regs_b=RegsB(f211_215=31),
-        c2=C2(f265_268=0xC, f272_273=0x1),
-        ctl_hi=CtlHi(f302_307=0x2, f313_319=0x1E),
-    ),
-    # 12: store path
-    Word(
-        ctl_lo=CtlLo(f19_22=0x6),
-        regs_a=RegsA(
-            f100_104=1, f105_109=0, xreg=0, f120_122=0x0, f123_127=2, f128_132=0
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=13, f216_220=10, f224_228=5),
-        c2=C2(f265_268=0x4, f269=0x0, f272_273=0x0),
-        ctl_hi=CtlHi(f302_307=0x14, f310_312=0x4, f313_319=0xB),
-    ),
-    # 13: store path
-    Word(
-        ctl_lo=CtlLo(f2_6=0x10, f7_8=0x1, f15_18=0x1),
-        regs_a=RegsA(f100_104=1, f105_109=0, xreg=0, f123_127=5, f128_132=0),
-        regs_b=RegsB(f206_210=4, f211_215=8, f216_220=9, f224_228=5),
-        c2=C2(f265_268=0x3, f269=0x0),
-        ctl_hi=CtlHi(f302_307=0x14, f308_309=0x0, f310_312=0x5, f313_319=0x1A),
-    ),
-    # 14: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0x1),
-        regs_a=RegsA(
-            f100_104=1, f105_109=8, xreg=0, f120_122=0x0, f123_127=5, f128_132=0
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=4, f216_220=7, f224_228=2),
-        c2=C2(f265_268=0x6, f269=0x0, f272_273=0x0),
-        ctl_hi=CtlHi(f302_307=0x14, f308_309=0x0, f310_312=0x5, f313_319=0xB),
-    ),
-    # 15: store count and data: idled, the job stores 0x4000 zero bytes
-    Word(
-        ctl_lo=CtlLo(f2_6=0x8, f15_18=0x2),
-        regs_a=RegsA(f100_104=1, f105_109=0, xreg=4, f123_127=5, f128_132=0),
-        regs_b=RegsB(f206_210=1, f211_215=5, f216_220=6, f224_228=2),
-        c2=C2(f265_268=0x3, f269=0x0),
-        ctl_hi=CtlHi(f302_307=0x14, f310_312=0x4, f313_319=0x1A),
-    ),
-    # 16: store path
-    Word(
-        regs_a=RegsA(f100_104=1, f105_109=0, f123_127=5, f128_132=0),
-        regs_b=RegsB(f206_210=2, f211_215=5, f216_220=6, f224_228=3),
-        c2=C2(f265_268=0xE, f272_273=0x1),
-    ),
-    # 17: a buffer address, load or store side (hypothesis)
-    Word(
-        ctl_lo=CtlLo(f1=0x1, f2_6=0x7, f15_18=0xF),
-        regs_a=RegsA(f100_104=2, f105_109=0, f120_122=0x0, f123_127=3, f128_132=0),
-        regs_b=RegsB(f206_210=2, f211_215=5, f216_220=6, f224_228=4),
-        c2=C2(f265_268=0xE, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x3, f313_319=0x38),
-    ),
-    # 18: no effect seen when idled
-    Word(
-        regs_a=RegsA(f100_104=2, f105_109=2, f123_127=3, f128_132=0),
-        regs_b=RegsB(f206_210=5, f211_215=5, f216_220=6, f224_228=3),
-        c2=C2(f265_268=0xE, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0xF),
-    ),
-    # 19: no effect seen when idled
-    Word(
-        ctl_lo=CtlLo(f15_18=0xF),
-        regs_a=RegsA(f100_104=2, f105_109=2, f120_122=0x0, f123_127=3, f128_132=0),
-        regs_b=RegsB(f206_210=3, f211_215=5, f216_220=6, f224_228=3),
-        c2=C2(f259_260=0x1, f265_268=0xE),
-        ctl_hi=CtlHi(f313_319=0x38),
-        **route(19),
-    ),
-    # 20: no effect seen when idled
-    Word(
-        regs_a=RegsA(f100_104=2, f105_109=2, f123_127=3, f128_132=0),
-        regs_b=RegsB(f206_210=2, f211_215=5, f216_220=6, f224_228=3),
-        c2=C2(f265_268=0xC, f274_276=0x1, f285_287=0x4, f288_291=0xA),
-        **route(20),
-    ),
-    # 21: store path
-    Word(
-        regs_a=RegsA(f100_104=5, f105_109=2, f123_127=3, f128_132=0),
-        regs_b=RegsB(f206_210=2, f211_215=5, f216_220=6, f224_228=3),
-        c2=C2(f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x10),
-        **route(21),
-    ),
-    # 22: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0x4),
-        regs_a=RegsA(f100_104=5, f105_109=2, f123_127=3, f128_132=0),
-        regs_b=RegsB(f206_210=2, f211_215=1, f216_220=6, f224_228=3),
-        c2=C2(f265_268=0x7, f272_273=0x1),
-        ctl_hi=CtlHi(f313_319=0x3F),
-        **route(22),
-    ),
-    # 23: store path
-    Word(
-        regs_a=RegsA(f100_104=5, f105_109=2, f123_127=3, f128_132=3),
-        regs_b=RegsB(f206_210=2, f211_215=1, f216_220=6, f224_228=3),
-        c2=C2(f265_268=0xE),
-        ctl_hi=CtlHi(f313_319=0x9),
-        **route(23),
-    ),
-    # 24: store path
-    Word(
-        ctl_lo=CtlLo(f1=0x1, f2_6=0x1F),
-        regs_a=RegsA(f100_104=2, f105_109=15, f123_127=5, f128_132=0),
-        regs_b=RegsB(f206_210=2, f211_215=1, f216_220=6, f224_228=5),
-        c2=C2(f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x3, f313_319=0x1A),
-        **route(24),
-    ),
-    # 25: no effect seen when idled
-    Word(
-        ctl_lo=CtlLo(f15_18=0xA),
-        regs_a=RegsA(f100_104=2, f105_109=2, f123_127=5, f128_132=3),
-        regs_b=RegsB(f206_210=2, f211_215=2, f216_220=6, f224_228=5),
-        c2=C2(f265_268=0x6),
-        ctl_hi=CtlHi(f313_319=0x3F),
-        **route(25),
-    ),
-    # 26: no effect seen when idled
-    Word(
-        regs_a=RegsA(f100_104=4, f105_109=2, f123_127=5, f128_132=3),
-        regs_b=RegsB(f206_210=2, f211_215=2, f216_220=6, f224_228=7),
-        c2=C2(f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0xB),
-        **route(26),
-    ),
-    # 27: a load address (hypothesis)
-    Word(
-        ctl_lo=CtlLo(f15_18=0xF, f19_22=0x4),
-        regs_a=RegsA(f100_104=4, f105_109=2, f120_122=0x4, f123_127=7, f128_132=0),
-        regs_b=RegsB(f206_210=4, f211_215=2, f216_220=6, f224_228=5),
-        c2=C2(f229=0x0, f265_268=0xE, f272_273=0x1),
-        ctl_hi=CtlHi(f313_319=0x1),
-        **route(27),
-    ),
-    # 28: needed for completion
-    Word(
-        ctl_lo=CtlLo(f15_18=0xF),
-        regs_a=RegsA(
-            f100_104=4,
-            f105_109=2,
-            f110_114=4,
-            xreg=2,
-            f120_122=0x0,
-            f123_127=5,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=5, f211_215=2, f216_220=6, f224_228=5),
-        c2=C2(f265_268=0xE, f272_273=0x0),
-        ctl_hi=CtlHi(f310_312=0x2, f313_319=0x38),
-        **route(28),
-    ),
-    # 29: no effect seen when idled
-    Word(
-        regs_a=RegsA(
-            f100_104=5, f105_109=3, f110_114=4, xreg=2, f123_127=5, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=5, f211_215=2, f216_220=6, f224_228=6),
-        c2=C2(f261_262=0x0, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x11),
-        **route(29),
-    ),
-    # 30: no effect seen when idled
-    Word(
-        ctl_lo=CtlLo(f19_22=0x1),
-        regs_a=RegsA(
-            f100_104=5,
-            f105_109=3,
-            f110_114=4,
-            xreg=2,
-            f120_122=0x0,
-            f123_127=6,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=3, f211_215=2, f216_220=6, f224_228=8),
-        c2=C2(f265_268=0xE, f272_273=0x2, f274_276=0x2, f292_295=0xE),
-        ctl_hi=CtlHi(f313_319=0x38),
-        **route(30),
-    ),
-    # 31: store-side buffer address, paired with 17 (hypothesis)
-    Word(
-        regs_a=RegsA(
-            f100_104=4, f105_109=3, f110_114=4, xreg=2, f123_127=6, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=3, f211_215=2, f216_220=6, f224_228=6),
-        c2=C2(f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x11),
-        **route(31),
-    ),
-    # 32: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0xF),
-        regs_a=RegsA(
-            f100_104=4,
-            f105_109=0,
-            f110_114=0,
-            xreg=9,
-            f120_122=0x0,
-            f123_127=8,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=3, f211_215=2, f216_220=12, f224_228=7),
-        c2=C2(f265_268=0xE, f269=0x0, f272_273=0x1),
-        ctl_hi=CtlHi(f302_307=0x14, f308_309=0x0, f313_319=0x38),
-        **route(32),
-    ),
-    # 33: store path; control signature
-    Word(
-        ctl_lo=CtlLo(f2_6=0x3, f15_18=0xF),
-        regs_a=RegsA(
-            f100_104=4,
-            f105_109=1,
-            f110_114=0,
-            xreg=8,
-            f120_122=0x2,
-            f123_127=7,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=5, f211_215=2, f216_220=11, f224_228=8),
-        c2=C2(f265_268=0xE, f269=0x0, f272_273=0x1),
-        ctl_hi=CtlHi(f302_307=0x14, f308_309=0x0, f313_319=0x1F),
-        **route(33),
-    ),
-    # 34: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0xF, f19_22=0x1),
-        regs_a=RegsA(
-            f100_104=4, f105_109=3, f110_114=0, xreg=10, f123_127=8, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=5, f211_215=2, f216_220=11, f224_228=8),
-        c2=C2(f272_273=0x1),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x3E),
-        **route(34),
-    ),
-    # 35: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0xC, f19_22=0x1),
-        regs_a=RegsA(
-            f100_104=4, f105_109=3, f110_114=0, xreg=9, f123_127=8, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=2, f216_220=11, f224_228=8),
-        c2=C2(f265_268=0xE),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x3F),
-        **route(35),
-    ),
-    # 36: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0x8),
-        regs_a=RegsA(
-            f100_104=4, f105_109=3, f110_114=0, xreg=7, f123_127=7, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=2, f216_220=11, f224_228=7),
-        c2=C2(f272_273=0x1),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x40),
-        **route(36),
-    ),
-    # 37: store path
-    Word(
-        ctl_lo=CtlLo(f19_22=0x1),
-        regs_a=RegsA(
-            f100_104=5,
-            f105_109=4,
-            f110_114=0,
-            xreg=10,
-            f120_122=0x0,
-            f123_127=7,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=2, f216_220=11, f224_228=7),
-        c2=C2(f265_268=0x7, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x11, f308_309=0x0, f313_319=0x37),
-        **route(37),
-    ),
-    # 38: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0x4),
-        regs_a=RegsA(
-            f100_104=5, f105_109=4, f110_114=0, xreg=2, f123_127=7, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=2, f216_220=11, f224_228=7),
-        c2=C2(f265_268=0x7),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x3E),
-        **route(38),
-    ),
-    # 39: store path
-    Word(
-        ctl_lo=CtlLo(f19_22=0xF),
-        regs_a=RegsA(f100_104=5, f105_109=4, f110_114=0, xreg=2, f123_127=6),
-        regs_b=RegsB(f206_210=4, f211_215=3, f216_220=11, f224_228=6),
-        c2=C2(f265_268=0x7, f272_273=0x1),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x38),
-        **route(39),
-    ),
-    # 40: store path
-    Word(
-        ctl_lo=CtlLo(f19_22=0xF),
-        regs_a=RegsA(f100_104=5, f105_109=4, f110_114=0, xreg=4, f123_127=4),
-        regs_b=RegsB(f206_210=4, f211_215=2, f216_220=11, f224_228=4),
-        c2=C2(f265_268=0x7, f272_273=0x1),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x38),
-        **route(40),
-    ),
-    # 41: store path
-    Word(
-        ctl_lo=CtlLo(f15_18=0x6),
-        regs_a=RegsA(
-            f100_104=5, f105_109=4, f110_114=0, xreg=13, f123_127=2, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=13, f216_220=11, f224_228=4),
-        c2=C2(f265_268=0x7),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x40),
-        **route(41),
-    ),
-    # 42: completion; its register enables the store
-    xfer(42, CTX42, xreg=8),
-    # 43: completion
-    xfer(43, CTX42, xreg=10),
-    # 44: completion
-    xfer(44, CTX42, xreg=9),
-    # 45: completion
-    Word(
-        ctl_lo=CtlLo(f15_18=0xA, f19_22=0x3),
-        regs_a=RegsA(
-            f100_104=5,
-            f105_109=4,
-            f110_114=0,
-            xreg=7,
-            f120_122=0x4,
-            f123_127=5,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=4, f211_215=13, f216_220=11, f224_228=4),
-        c2=C2(f229=0x0),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x1),
-        **route(45),
-    ),
-    # 46: completion
-    xfer(46, CTX46, xreg=10),
-    # 47: completion; the store's element format
-    xfer(47, CTX46, xreg=6),
-    # 48: completion
-    xfer(48, CTX46, xreg=5),
-    # 49: completion
-    xfer(49, CTX46, xreg=4),
-    # 50: no effect seen when idled
-    Word(
-        ctl_lo=CtlLo(f1=0x1),
-        regs_a=RegsA(
-            f100_104=1,
-            f105_109=0,
-            f110_114=0,
-            xreg=12,
-            f120_122=0x0,
-            f123_127=3,
-            f128_132=4,
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=1, f216_220=11, f224_228=3),
-        c2=C2(f265_268=0x4, f272_273=0x1),
-        ctl_hi=CtlHi(f302_307=0x3, f308_309=0x0, f313_319=0x1E),
-        **route(50),
-    ),
-    # 51: no effect seen when idled
-    Word(
-        regs_a=RegsA(
-            f100_104=1, f105_109=2, f110_114=0, xreg=3, f123_127=3, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=1, f216_220=11, f224_228=2),
-        c2=C2(f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0xB, f308_309=0x0),
-        **route(51),
-    ),
-    # 52: no effect seen when idled
-    Word(
-        regs_a=RegsA(
-            f100_104=1,
-            f105_109=2,
-            f110_114=0,
-            xreg=13,
-            f120_122=0x2,
-            f123_127=6,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=3, f216_220=11, f224_228=6),
-        c2=C2(f265_268=0x7, f272_273=0x1),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x1F),
-        **route(52),
-    ),
-    # 53: no effect seen when idled
-    Word(
-        ctl_lo=CtlLo(f15_18=0x2, f19_22=0x3),
-        regs_a=RegsA(
-            f100_104=1,
-            f105_109=2,
-            f110_114=0,
-            xreg=13,
-            f120_122=0x4,
-            f123_127=2,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=3, f216_220=11, f224_228=6),
-        c2=C2(f229=0x0),
-        ctl_hi=CtlHi(f308_309=0x1, f313_319=0x2),
-        **route(53),
-    ),
-    # 54: no effect seen when idled
-    xfer(54, CTX54, xreg=11),
-    # 55: no effect seen when idled
-    xfer(55, CTX54, xreg=13),
-    # 56: no effect seen when idled
-    Word(
-        regs_a=RegsA(
-            f100_104=1,
-            f105_109=2,
-            f110_114=0,
-            xreg=2,
-            f120_122=0x2,
-            f123_127=4,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=2, f216_220=11, f224_228=4),
-        c2=C2(f265_268=0x7, f272_273=0x1),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x1F),
-        **route(56),
-    ),
-    # 57: no effect seen when idled
-    xfer(57, CTX57, xreg=2, f308_309=1),
-    # 58: a load address with fixed content
-    Word(
-        ctl_lo=CtlLo(f7_8=0x1, f9_14=0x8, f15_18=0x4),
-        regs_a=RegsA(
-            f100_104=1, f105_109=0, f110_114=0, xreg=24, f123_127=3, f128_132=3
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=4, f216_220=5, f224_228=4),
-        c2=C2(f265_268=0x2, f269=0x0),
-        ctl_hi=CtlHi(f302_307=0x14, f310_312=0x4, f313_319=0x40),
-        **route(58),
-    ),
-    # 59: no effect seen when idled
-    Word(
-        ctl_lo=CtlLo(f15_18=0x1, f19_22=0x2),
-        regs_a=RegsA(
-            f100_104=3,
-            f105_109=1,
-            f110_114=0,
-            xreg=4,
-            f120_122=0x1,
-            f123_127=3,
-            f128_132=16,
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=7, f216_220=5, f224_228=2),
-        c2=C2(f252_255=0x7, f265_268=0x7, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x11, f308_309=0x0, f313_319=0xB),
-        **route(59),
-    ),
-    # 60: stream or completion
-    Word(
-        regs_a=RegsA(
-            f100_104=3, f105_109=1, f110_114=0, xreg=0, f123_127=3, f128_132=2
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=6, f216_220=5, f224_228=2),
-        c2=C2(f265_268=0x4, f272_273=0x0, f274_276=0x0, f278_280=0x2, f281_284=0xA),
-        ctl_hi=CtlHi(f308_309=0x0, f310_312=0x5, f313_319=0x9),
-        **route(60),
-    ),
-    # 61: source load: without it the job loads no new source
-    Word(
-        ctl_lo=CtlLo(f1=0x1, f2_6=0xF, f15_18=0x6),
-        regs_a=RegsA(
-            f100_104=1, f105_109=0, f110_114=0, xreg=1, f123_127=2, f128_132=2
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=4, f216_220=5, f224_228=2),
-        c2=C2(f265_268=0x5, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x3, f308_309=0x1, f310_312=0x5, f313_319=0x40),
-        **route(61),
-    ),
-    # 62: must not be idled
-    Word(
-        ctl_lo=CtlLo(f2_6=0x3, f7_8=0x3, f9_14=0x3, f15_18=0x5),
-        regs_a=RegsA(
-            f100_104=1, f105_109=1, f110_114=6, xreg=0, f123_127=2, f128_132=2
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=8, f216_220=6, f224_228=2),
-        c2=C2(f265_268=0x7, f269=0x0, f272_273=0x0),
-        ctl_hi=CtlHi(f302_307=0x14, f310_312=0x0, f313_319=0x3F),
-        **route(62),
-    ),
-    # 63: stream or completion
-    Word(
-        ctl_lo=CtlLo(f1=0x1, f15_18=0x4),
-        regs_a=RegsA(
-            f100_104=1, f105_109=0, f110_114=0, xreg=8, f123_127=2, f128_132=2
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=8, f216_220=6, f224_228=2),
-        c2=C2(f265_268=0x7, f272_273=0x2),
-        ctl_hi=CtlHi(f302_307=0x3, f308_309=0x0, f313_319=0x3F),
-        **route(63),
-    ),
-    # 64: must not be idled
-    Word(
-        ctl_lo=CtlLo(f15_18=0x1),
-        regs_a=RegsA(
-            f100_104=1, f105_109=1, f110_114=0, xreg=7, f123_127=2, f128_132=2
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=7, f216_220=6, f224_228=2),
-        c2=C2(f265_268=0x7),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0x3F),
-        **route(64),
-    ),
-    # 65: stream or completion
-    Word(
-        ctl_lo=CtlLo(f15_18=0x1, f19_22=0x6),
-        regs_a=RegsA(
-            f100_104=1,
-            f105_109=1,
-            f110_114=0,
-            xreg=8,
-            f120_122=0x1,
-            f123_127=2,
-            f128_132=16,
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=8, f216_220=6, f224_228=2),
-        c2=C2(f265_268=0x7),
-        ctl_hi=CtlHi(f308_309=0x0, f313_319=0xB),
-        **route(65),
-    ),
-    # 66: load enable: its register decides whether the load runs
-    xfer(66, CTX66, xreg=5),
-    # 67: load address: r3 = the job's src
-    xfer(67, CTX66, xreg=3),
-    # 68: load-side buffer offset
-    xfer(68, CTX66, xreg=4),
-    # 69: store side
-    Word(
-        ctl_lo=CtlLo(f7_8=0x1, f9_14=0x18),
-        regs_a=RegsA(
-            f100_104=1, f105_109=1, f110_114=0, xreg=24, f123_127=2, f128_132=2
-        ),
-        regs_b=RegsB(f206_210=1, f211_215=3, f216_220=6, f224_228=2),
-        c2=C2(f265_268=0x3),
-        ctl_hi=CtlHi(f310_312=0x4),
-        **route(69),
-    ),
-    # 70: stream setup
-    xfer(70, CTX70, xreg=3),
-    # 71: stream
-    xfer(71, CTX70, xreg=7),
-    # 72: must not be idled
-    xfer(72, CTX70, xreg=8),
-    # 73: store count: r1 = len
-    xfer(73, CTX70, xreg=1),
-    # 74: no effect seen when idled
-    xfer(74, CTX70, xreg=1, f308_309=1),
-    # 75: stream
-    xfer(75, CTX70, xreg=6),
-    # 76: store-side buffer offset, the pair of 68
-    xfer(76, CTX70, xreg=4),
-    # 77: needs its register r2
-    xfer(77, CTX70, xreg=2),
-    # 78: no effect seen when idled
-    xfer(78, CTX70, xreg=2, f308_309=1),
-    # 79: stream end
-    Word(
-        regs_a=RegsA(
-            f100_104=0, f105_109=0, f110_114=0, xreg=2, f123_127=2, f128_132=1
-        ),
-        regs_b=RegsB(f211_215=3, f216_220=6, f224_228=2),
-        c2=C2(f229=0x0, f265_268=0xC),
-        ctl_hi=CtlHi(f302_307=0x3, f313_319=0x4),
-        **route(79),
-    ),
-    # 80: control signature
-    Word(
-        ctl_lo=CtlLo(f15_18=0xC),
-        regs_a=RegsA(
-            f100_104=0,
-            f105_109=1,
-            f110_114=0,
-            xreg=2,
-            f120_122=0x0,
-            f123_127=0,
-            f128_132=0,
-        ),
-        regs_b=RegsB(f211_215=3, f216_220=6),
-        c2=C2(f272_273=0x1),
-        ctl_hi=CtlHi(f313_319=0x1F),
-        **route(80),
-    ),
-    # 81: drain
-    Word(
-        regs_a=RegsA(
-            f100_104=0, f105_109=1, f110_114=0, xreg=2, f123_127=0, f128_132=1
-        ),
-        regs_b=RegsB(f211_215=3, f216_220=6),
-        **route(81),
-    ),
-    # 82: drain
-    Word(
-        regs_a=RegsA(
-            f100_104=0, f105_109=1, f110_114=0, xreg=2, f123_127=0, f128_132=1
-        ),
-        regs_b=RegsB(f211_215=3, f216_220=6),
-        **route(82),
-    ),
-    # 83: drain
-    Word(
-        regs_a=RegsA(
-            f100_104=0, f105_109=1, f110_114=0, xreg=2, f123_127=0, f128_132=1
-        ),
-        regs_b=RegsB(f211_215=3, f216_220=6),
-        **route(83),
-    ),
-]
+# -- resolution
 
 
-def program() -> Program:
-    return assemble(WORDS)
+@dataclass
+class Plan:
+    """The resolved job: outcomes, and the parameters of the load and the store."""
+
+    outcomes: list[tuple[Outcome, str]] = field(default_factory=list)
+    load_taint: Confidence = V
+    store_taint: Confidence = V
+    address: int | None = None
+    address_why: str = ""
+    """Set with address None: the load reads data the model does not know."""
+    o68: int | None = 0
+    o76: int | None = 0
+    count: int | None = None
+    format: str | None = "bytes"
+
+    def has(self, o: Outcome) -> bool:
+        return any(x is o for x, _ in self.outcomes)
+
+
+def _trunc32(v: int) -> int:
+    """v / 32 truncated towards zero, to a multiple of 32."""
+    q = abs(v) // 32 & ~0x1F
+    return q if v >= 0 else -q
+
+
+def _floor32(v: int) -> int:
+    """v / 32 rounded down, to a multiple of 32."""
+    return v // 32 & ~0x1F
+
+
+class Copy16Model:
+    """The model of program 16, built from the stock program (`from_image` reads it from a
+    stock E-M10 II `.BIN`)."""
+
+    def __init__(self, program: Program) -> None:
+        self.program = program
+        words = program.words
+        self.transfer = _transfer_class(words)
+        self.opaque = _opaque_classes(words, self.transfer)
+        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *self.opaque, self.transfer)
+        self.channels = _CHANNELS
+        self.formats = _FORMATS
+
+    @classmethod
+    def from_image(cls, image: bytes) -> "Copy16Model":
+        return cls(stock_programs(image)[ITEM])
+
+    def resolve(
+        self, trace: Trace, regs: RegisterFile, view: JobView, sequencer: Sequencer
+    ) -> Plan:
+        # The stock transfers at their own slots leave these defaults: they are what every
+        # stock copy shows (load at src, offsets 0, count len, bytes).
+        plan = Plan(count=view.length)
+        for c in self.opaque:
+            part = c.part
+            assert part is not None
+            if trace.parts[c] < len(c.positions):
+                at = ", ".join(str(i) for i in sorted(c.positions))
+                plan.outcomes.append(
+                    (
+                        part.missing,
+                        f"{part.token} (stock word {at}) missing: {part.fact}",
+                    )
+                )
+            elif part.operand is not None:
+                reg = trace.operands[c]
+                o = part.operand.get(reg)
+                if o is None:
+                    raise UnknownSemantics(
+                        min(c.positions), c.name, [(lookup("xreg"), reg)]
+                    )
+                if o is not Outcome.OK:
+                    plan.outcomes.append((o, f"{part.token} at r{reg}: {o.value}"))
+        filled, unset = sequencer.assign(self.channels, trace.channels)
+        for slot in unset:
+            plan.outcomes.append(
+                (Outcome.TIMEOUT, f"unset {slot}: the stream never completes")
+            )
+            plan.store_taint = H
+        for role, t, taint in filled:
+            stock = self.program.words[role.word]["xreg"] == t.reg and taint is V
+            taint = min(taint, t.taint)
+            if not stock:
+                taint = min(taint, self._role(plan, role, t.reg, t.index, regs, view))
+            if role.load:
+                plan.load_taint = min(plan.load_taint, taint)
+            else:
+                plan.store_taint = min(plan.store_taint, taint)
+        plan.store_taint = min(plan.store_taint, trace.taint)
+        return plan
+
+    def _role(
+        self,
+        plan: Plan,
+        role: Role,
+        reg: int,
+        index: int,
+        regs: RegisterFile,
+        view: JobView,
+    ) -> Confidence:
+        """Apply `role` at register `reg`; returns the confidence of what it did."""
+        o = role.table.get(reg)
+        if o is not None and o is not Outcome.OK:
+            plan.outcomes.append(
+                (o, f"word {index} ({role.name}) at r{reg}: {o.value}")
+            )
+            return V
+        if role.use is Use.NONE:
+            if o is None:
+                raise UnknownSemantics(
+                    index, role.name, [(lookup("xreg"), reg)], role.fact
+                )
+            return V
+        value = regs[reg]
+        taint = V if value is None else value.taint
+        match role.use:
+            case Use.ADDRESS:
+                plan.address = None
+                if value is None:
+                    plan.address_why = (
+                        f"word {index} at r{reg}: the register's value is not known"
+                    )
+                elif value.lo >= 0x20000000 and value.exact is not None:
+                    plan.address = value.exact
+                elif value.hi < 0x10000:
+                    plan.address_why = f"word {index} at r{reg}: a fixed memory at value / 16, not modelled"
+                else:
+                    plan.address_why = f"word {index} at r{reg}: not an exact address"
+            case Use.LOAD_OFFSET:
+                plan.o68 = None if value is None else value.image(_trunc32)
+            case Use.STORE_OFFSET:
+                plan.o76 = None if value is None else value.image(_floor32)
+                if view.length != 0x400:
+                    taint = H  # off-stock values of word 76 ran only at 1 KiB
+            case Use.COUNT:
+                n = None if value is None else value.exact
+                if n is not None and n > MAX_COUNT:
+                    plan.outcomes.append(
+                        (Outcome.TIMEOUT, f"word {index} at r{reg}: a count of {n:#x}")
+                    )
+                    return H
+                plan.count = n
+            case Use.FORMAT:
+                fmt = view.boot.r21_format if reg == 21 else self.formats.get(reg)
+                if fmt is None and reg != 21:
+                    raise UnknownSemantics(
+                        index, role.name, [(lookup("xreg"), reg)], role.fact
+                    )
+                plan.format = fmt
+                taint = V if reg != 21 else H
+        return taint

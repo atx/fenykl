@@ -3,7 +3,7 @@ from collections import Counter
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp.fields import FIELDS, WORD_BITS
+from fenykl.dsp.fields import FIELDS, STAIRCASE, WORD_BITS
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
 from fenykl.dsp.word import IDLE, Word
 
@@ -53,3 +53,14 @@ def test_idle_word_is_the_copy_programs_no_op(items):
 def test_slots_rebuild_the_word(items):
     for word in decode_item(items[13], STOCK[13]).words:
         assert Word(**word.slots()) == word
+
+
+def test_program_16_route_staircase(items):
+    # Each staircase nibble is 0 from its word to the end of program 16, and not just before.
+    words = decode_item(items[16], STOCK[16]).words
+    for f in FIELDS:
+        if f.lo not in STAIRCASE:
+            continue
+        start = STAIRCASE[f.lo]
+        assert words[start - 1][f.id] != 0, f.id
+        assert {w[f.id] for w in words[start:]} == {0}, f.id

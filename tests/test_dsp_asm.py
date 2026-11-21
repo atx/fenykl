@@ -3,17 +3,18 @@ import warnings
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp import memcpy
 from fenykl.dsp.disasm import listing, source
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_programs
 from fenykl.dsp.units import CtlHi, RegsA
 from fenykl.dsp.word import IDLE, Word
 
 
-def test_memcpy_rebuilds_program_16():
-    with pytest.warns(HypothesisFieldWarning):
-        built = memcpy.program()
+def test_slots_rebuild_program_16():
+    # The DSL rebuilds the copy from slots read off the firmware's program: no stock word is
+    # restated in the code.
     stock = stock_programs(stock_image("em10ii"))[16]
+    with pytest.warns(HypothesisFieldWarning):
+        built = assemble(Word(**w.slots()) for w in stock.words)
     assert len(built) == len(stock)
     for index, (a, b) in enumerate(zip(built.words, stock.words)):
         assert a == b, f"word {index}: {a.changed(b)}"

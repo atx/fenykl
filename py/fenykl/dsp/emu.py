@@ -2,8 +2,9 @@
 
 The words run in order; each gets the semantics of its class (`semantics.classify`), which
 record what it contributes: an undecoded stock word its part of the job, a register transfer
-its register for the sequencer. At the end the sequencer gives the transfers their roles, and
-the job resolves into an outcome and the one load and one store that program 16 makes:
+its register for the sequencer. At the end the model (`memcpy.Copy16Model`) has the sequencer
+give the transfers their roles and resolves the job into an outcome and the one load and one
+store that program 16 makes:
 
     load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
     store:  dst[i] = format(buffer)[i + o76] for i in [0, n73); dst[n73, len) not written
@@ -17,19 +18,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..firmware import unpack_firmware
-from . import memcpy
-from .fields import Confidence, lookup
+from .fields import Confidence
+from .memcpy import Copy16Model, Plan
 from .program import Program
-from .semantics import (
-    FORMATS,
-    PART_OF,
-    Outcome,
-    Role,
-    Sequencer,
-    Trace,
-    UnknownSemantics,
-    classify,
-)
+from .semantics import Outcome, Sequencer, Trace, classify
 from .state import (
     BootParams,
     Bytes,
@@ -47,10 +39,7 @@ LOCAL_SIZE = 0x2000
 """Local memory reaches at least 0x9D001D1C (the resampler's setup writes there)."""
 BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
 """The modelled buffer indices: it holds at least 16 KiB and reaches below index 0."""
-MAX_COUNT = 0x40000
-"""A count above this is an address or junk: the store never ends (hypothesis)."""
 ZERO_FILL = 0x4000
-LOAD_ROLES = ("load enable", "load address", "load offset")
 
 
 def dram_alias(addr: int) -> int:
@@ -119,43 +108,18 @@ class Boot:
         return int.from_bytes(b.data, "little") if all(b.known) else None
 
 
-@dataclass
-class _Plan:
-    """The resolved job: outcomes, and the parameters of the load and the store."""
-
-    outcomes: list[tuple[Outcome, str]] = field(default_factory=list)
-    load_taint: Confidence = V
-    store_taint: Confidence = V
-    address: int | None = None
-    address_why: str = ""
-    """Set with address None: the load reads data the model does not know."""
-    o68: int | None = 0
-    o76: int | None = 0
-    count: int | None = None
-    format: str | None = "bytes"
-
-    def has(self, o: Outcome) -> bool:
-        return any(x is o for x, _ in self.outcomes)
-
-
-def _trunc32(v: int) -> int:
-    """v / 32 truncated towards zero, to a multiple of 32."""
-    q = abs(v) // 32 & ~0x1F
-    return q if v >= 0 else -q
-
-
-def _floor32(v: int) -> int:
-    """v / 32 rounded down, to a multiple of 32."""
-    return v // 32 & ~0x1F
-
-
 class Emulator:
-    """Runs jobs on `boot`. strict=False ignores fields without semantics (and taints)."""
+    """Runs jobs of `model`'s program on `boot`. strict=False ignores fields without semantics
+    (and taints)."""
 
     def __init__(
-        self, boot: Boot, strict: bool = True, sequencer: Sequencer | None = None
+        self,
+        boot: Boot,
+        model: Copy16Model,
+        strict: bool = True,
+        sequencer: Sequencer | None = None,
     ) -> None:
-        self.boot, self.strict = boot, strict
+        self.boot, self.model, self.strict = boot, model, strict
         self.sequencer = sequencer or Sequencer()
 
     def run(self, job: Job) -> JobResult:
@@ -168,110 +132,16 @@ class Emulator:
             raise ValueError("local memory holds no dst and len (no command setup ran)")
         regs = RegisterFile.at_job(view)
         trace = Trace()
+        classes = self.model.classes
         for index, word in enumerate(job.program.words):
-            classify(word, index, trace, self.strict).act(trace, word, index)
-        plan = self._resolve(trace, regs, view)
+            c = classify(classes, word, index, trace, self.strict)
+            c.act(trace, word, index, self.strict)
+        plan = self.model.resolve(trace, regs, view, self.sequencer)
         return self._apply(plan, trace, view)
-
-    # -- resolution
-
-    def _resolve(self, trace: Trace, regs: RegisterFile, view: JobView) -> _Plan:
-        # The stock transfers at their own slots leave these defaults: they are what every
-        # stock copy shows (load at src, offsets 0, count len, bytes).
-        plan = _Plan(count=view.length)
-        present = set(trace.parts)
-        for name, part in PART_OF.items():
-            if name not in present:
-                plan.outcomes.append((part.missing, f"{name} missing: {part.fact}"))
-            elif part.operand is not None:
-                reg = trace.operands[name]
-                o = part.operand.get(reg)
-                if o is None:
-                    raise UnknownSemantics(int(name[4:]), name, [(lookup("xreg"), reg)])
-                if o is not Outcome.OK:
-                    plan.outcomes.append((o, f"{name} at r{reg}: {o.value}"))
-        filled, unset = self.sequencer.assign(trace.channels)
-        for slot in unset:
-            plan.outcomes.append(
-                (Outcome.TIMEOUT, f"unset {slot}: the stream never completes")
-            )
-            plan.store_taint = H
-        for role, t, taint in filled:
-            stock = memcpy.WORDS[role.word]["xreg"] == t.reg and taint is V
-            taint = min(taint, t.taint)
-            if not stock:
-                taint = min(taint, self._role(plan, role, t.reg, t.index, regs, view))
-            if role.name in LOAD_ROLES:
-                plan.load_taint = min(plan.load_taint, taint)
-            else:
-                plan.store_taint = min(plan.store_taint, taint)
-        plan.store_taint = min(plan.store_taint, trace.taint)
-        return plan
-
-    def _role(
-        self,
-        plan: _Plan,
-        role: Role,
-        reg: int,
-        index: int,
-        regs: RegisterFile,
-        view: JobView,
-    ) -> Confidence:
-        """Apply `role` at register `reg`; returns the confidence of what it did."""
-        o = role.table.get(reg)
-        if o is not None and o is not Outcome.OK:
-            plan.outcomes.append(
-                (o, f"word {index} ({role.name}) at r{reg}: {o.value}")
-            )
-            return V
-        if not role.value:
-            if o is None:
-                raise UnknownSemantics(
-                    index, role.name, [(lookup("xreg"), reg)], role.fact
-                )
-            return V
-        value = regs[reg]
-        taint = V if value is None else value.taint
-        match role.value:
-            case "address":
-                plan.address = None
-                if value is None:
-                    plan.address_why = (
-                        f"word {index} at r{reg}: the register's value is not known"
-                    )
-                elif value.lo >= 0x20000000 and value.exact is not None:
-                    plan.address = value.exact
-                elif value.hi < 0x10000:
-                    plan.address_why = f"word {index} at r{reg}: a fixed memory at value / 16, not modelled"
-                else:
-                    plan.address_why = f"word {index} at r{reg}: not an exact address"
-            case "offset68":
-                plan.o68 = None if value is None else value.image(_trunc32)
-            case "offset76":
-                plan.o76 = None if value is None else value.image(_floor32)
-                if view.length != 0x400:
-                    taint = H  # off-stock values of word 76 ran only at 1 KiB
-            case "count":
-                n = None if value is None else value.exact
-                if n is not None and n > MAX_COUNT:
-                    plan.outcomes.append(
-                        (Outcome.TIMEOUT, f"word {index} at r{reg}: a count of {n:#x}")
-                    )
-                    return H
-                plan.count = n
-            case "format":
-                fmt = self.boot.params.r21_format if reg == 21 else FORMATS.get(reg)
-                if fmt is None and reg != 21:
-                    raise UnknownSemantics(
-                        index, role.name, [(lookup("xreg"), reg)], role.fact
-                    )
-                plan.format = fmt
-                taint = V if reg != 21 else H
-        return taint
 
     # -- application
 
-    def _apply(self, plan: _Plan, trace: Trace, view: JobView) -> JobResult:
+    def _apply(self, plan: Plan, trace: Trace, view: JobView) -> JobResult:
         boot = self.boot
         if plan.has(Outcome.HAZARD):
             status = Status.HAZARD
@@ -319,7 +189,7 @@ class Emulator:
         result.stored = (dst, dst + n)
         return result
 
-    def _load(self, plan: _Plan, view: JobView, certain: bool) -> None:
+    def _load(self, plan: Plan, view: JobView, certain: bool) -> None:
         """The load into the buffer; UNKNOWN where it may or may not have run, or with unknown data."""
         boot = self.boot
         length = view.length
