@@ -11,8 +11,9 @@ dst stride, width, height) in local words 0x742..0x747. The table lives in DRAM:
 
 The image is format 0x306 as the job sees it: three planes of W x H bytes at stride 64, each
 resampled from its own lines [verified: line maps of identity and constant-line tables]. The
-law, per plane c, output line i with entry (a, b), output pixel x [inferred: model fit, every
-byte of the camera runs the README's replay covers, unless tagged]:
+law, per plane c, output line i with entry (a, b), output pixel x [inferred: a model fit that
+reproduces every byte it gives of 626 camera jobs (stock and own taps, b 0.5, 1, 1 + 1/16, 2,
+W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behind it]:
 
 - the kernel: plane 0 uses the job's taps, phase p = taps (p, 0..3), s16 with 256 = 1.0, word
   2p = tap 0 | tap 1 << 16, word 2p + 1 = tap 2 | tap 3 << 16; planes 1 and 2 ignore the taps
