@@ -4,6 +4,16 @@ The driver passes src, dst and len in DSP local memory words 0..2. The comments 
 role, read from camera runs that replaced it by the idle word ("idled") or swept its register
 field; what a run showed is stated as such, the rest is inferred from it. `program()` equals the
 stock item's program word for word.
+
+Register values the camera showed through this program's register-transfer words, at job length
+L (0.5..4 KiB): r1 = L and r7 = L/2 (word 73's count; word 68 offsets by r/32 rounded down to
+32 bytes), r9 = 0x200, r0 <= 0x10, r6 a fixed +0x20 and r14 a fixed -0xE0 in word 68; r3 = src,
+r21 = 0x606CC000 and r29 = 0x60E58B00 as word 67's load address, the same on every boot, set
+before the job by something else.
+
+Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the job with status
+-5; these register values lost the link too: word 44 at 0, 1, 4, 8, 10; word 47 at 16, 18, 19,
+20, 24, 26, 27, 28; word 70 at 26; word 71 at 0.
 """
 
 from fenykl.dsp.fields import FIELDS, STAIRCASE, Kind

@@ -52,10 +52,12 @@ def listing(program: Program, title: str = "") -> str:
         head = f"{index:>9}  "
         if word == IDLE:
             lines.append(head + ("idle" if count == 1 else f"idle x{count}"))
+            prev = IDLE
             continue
         line = head + (f"x{count} " if count > 1 else "")
         parts = word_parts(word)
-        if prev != IDLE and len(word.changed(prev)) <= DELTA:
+        delta = len(word.changed(prev))
+        if prev != IDLE and delta <= DELTA and delta < len(word.changed()):
             parts = ["^", *word_parts(word, prev)]
         prev = word
         for part in parts:

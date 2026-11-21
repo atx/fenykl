@@ -39,13 +39,14 @@ def test_assemble_rejects_a_cleared_constant():
 def test_listing_collapses_idle_runs_repeats_and_deltas():
     a = Word(regs_a=RegsA(xreg=3, f123_127=2))
     b = Word(regs_a=RegsA(xreg=7, f123_127=2))
-    text = listing(Program((IDLE, IDLE, a, a, a, b, IDLE)))
+    text = listing(Program((IDLE, IDLE, a, a, a, b, IDLE, b)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
         "0..1  idle x2",
         "2..4  x3 regs_a: xreg=r3~ f123_127=r2",
         "5  ^  regs_a: xreg=r7~",
         "6  idle",
+        "7  regs_a: xreg=r7~ f123_127=r2",
     ]
 
 

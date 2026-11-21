@@ -80,9 +80,14 @@ class Slot:
         raise AttributeError(f"{type(self).__name__} is immutable")
 
     def __getattr__(self, key: str) -> int | None:
+        """The value of field `key` (id or name), None while unset."""
         if key.startswith("_"):
             raise AttributeError(key)
-        return self._values.get(self.field(key).id)
+        try:
+            f = self.field(key)
+        except KeyError as e:
+            raise AttributeError(str(e)) from None
+        return self._values.get(f.id)
 
     def items(self) -> Iterator[tuple[Field, int]]:
         """(field, value) in bit order."""

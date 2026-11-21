@@ -112,17 +112,21 @@ def _const(lo: int, hi: int, unit: str) -> Field:
     )
 
 
-def _ctl(lo: int, hi: int, unit: str, idle: int, fact: str = "") -> Field:
+SEGMENTED = "boundary from a value-entropy segmentation of the stock programs"
+
+
+def _ctl(
+    lo: int, hi: int, unit: str, idle: int, fact: str = "", basis: str = SEGMENTED
+) -> Field:
     kind = Kind.FLAG if lo == hi else Kind.RAW
-    base = (
-        "control bits; boundary from a value-entropy segmentation of the stock programs"
-    )
+    base = f"control bits; {basis}"
     return Field(lo, hi, kind, unit, idle, H, f"{base}. {fact}" if fact else base)
 
 
 GRID_FACT = (
-    "grid nibble, a source or path select (0xF = none); value 0 in the compute sections; "
-    "boundaries from segmentation and the lag-110 repeat of grid A in grid B"
+    "grid field, a source or path select (all-ones = none); 0 is its most common value in "
+    "the compute sections; boundaries from segmentation and the lag-110 repeat of grid A "
+    "in grid B"
 )
 # Program 16 sets these grid nibbles to 0 in a staircase and holds them to its end.
 STAIRCASE = {194: 19, 84: 20, 198: 29, 88: 30, 182: 59, 76: 60}
@@ -148,6 +152,10 @@ def _grid(lo: int, hi: int, unit: str) -> Field:
     )
 
 
+# The register groups that differ between program 0x10's words 308..458 and 802..952.
+KERNEL_REMAPPED = (110, 115, 123, 128, 211, 216, 224)
+
+
 def _reg(
     lo: int,
     unit: str,
@@ -157,9 +165,14 @@ def _reg(
     confidence: Confidence = H,
 ) -> Field:
     base = (
-        "5-bit register specifier: small integers falling from the low to the high bit; "
-        "remapped between the two copies of program 0x10's kernel"
+        "5-bit register specifier: its bit probabilities fall from the low to the high bit, "
+        "the signature of small integers"
     )
+    if lo in KERNEL_REMAPPED:
+        base += (
+            "; remapped between the two copies of program 0x10's kernel, which are "
+            "otherwise identical"
+        )
     fact = f"{base}. {fact}" if fact else base
     return Field(lo, lo + 4, Kind.REG, unit, idle, confidence, fact, name=name)
 
@@ -205,6 +218,9 @@ SIGNATURE = (
     "part of the control signature: a word that differs from the three identical words after it "
     "only in bits 128, 273, 318, 319 (clear) and 17, 18 (set); it ends programs 6, 0xC and 0xF "
     "and recurs mid-program (a control operation with three drain words, hypothesis)"
+)
+XFER_BASIS = (
+    "cut from 308..312 (the segmentation's field) at the register-transfer signature"
 )
 XFER = (
     "0 in the register-transfer words; their role (load address, offset, count, enable, store "
@@ -323,7 +339,7 @@ FIELDS: tuple[Field, ...] = (
     Field(221, 223, Kind.RAW, "regs_b", 7, H, "3 bits between the register specifiers"),
     _reg(224, "regs_b", 0),
     # c2: bit 229, the 230..232 constant, then the control block C2 233..301.
-    _ctl(229, 229, "c2", 1),
+    _ctl(229, 229, "c2", 1, basis="the bit between register group B and a constant"),
     _const(230, 232, "c2"),
     _op(
         233,
@@ -341,8 +357,9 @@ FIELDS: tuple[Field, ...] = (
         "ctl_hi",
         0x3,
         f"{XFER}; in program 16 words 58..79, bit 308 clear marks the words that stall the job when idled",
+        basis=XFER_BASIS,
     ),
-    _ctl(310, 312, "ctl_hi", 0x7),
+    _ctl(310, 312, "ctl_hi", 0x7, basis=XFER_BASIS),
     _ctl(313, 319, "ctl_hi", 0x7F, f"bits 318, 319: {SIGNATURE}"),
 )
 
