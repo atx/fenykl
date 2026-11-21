@@ -11,8 +11,9 @@ from fenykl.dsp import commands
 from fenykl.dsp.emu import Boot, Emulator, Status
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import STOCK, Program, stock_items
-from fenykl.dsp.resample import Resample13Model
+from fenykl.dsp.resample import Resample13Model, footprint, predict
 from fenykl.dsp.semantics import UnknownSemantics
+from fenykl.dsp.taps import Taps
 from fenykl.dsp.word import IDLE
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp" / "resample"
@@ -41,16 +42,12 @@ def model() -> Resample13Model:
     return Resample13Model.from_image(stock_image("em10ii"))
 
 
-def taps_of(entry: dict) -> bytes:
+def taps_of(entry: dict) -> Taps:
     if entry["kind"] == "firmware":
         spec = STOCK[13]
         assert entry["address"] == spec.dram + spec.const_offset
-        return model().program.constants
-    return struct.pack("<64h", *(t for p in entry["phases"] for t in p))
-
-
-def footprint(h: int) -> int:
-    return 3 * 64 * h + (64 if h % 2 else 0)
+        return Taps.unpack(model().program.constants)
+    return Taps.of(entry["phases"])
 
 
 def run_job(emu: Emulator, job: dict, k: int):
@@ -65,9 +62,8 @@ def run_job(emu: Emulator, job: dict, k: int):
     prefill = boot.put(
         DST, bytes([job["fill"]]) * footprint(job["h"]), f"job {k} prefill"
     )
-    program = Program(model().program.words, taps_of(job["taps"]))
     result = emu.run(
-        commands.resample(program, SRC, DST, TABLE, 64, job["w"], job["h"])
+        model().job(taps_of(job["taps"]), SRC, DST, TABLE, job["w"], job["h"])
     )
     return result, prefill
 
@@ -139,7 +135,7 @@ def test_the_vectors_hold_no_firmware_bytes():
                 base64.b64decode(s["data"]) for s in job["expect"]["dst"] if "data" in s
             ]
             if job["taps"]["kind"] == "phases":
-                blobs.append(taps_of(job["taps"]))
+                blobs.append(taps_of(job["taps"]).pack())
             for blob in blobs:
                 assert not any(
                     blob[o : o + 16] in windows for o in range(len(blob) - 15)
@@ -184,3 +180,63 @@ def test_an_odd_height_above_1_is_unknown():
     result, _ = run_job(emu, identity_job(h=3), 0)
     assert result.status is Status.OK and result.stored == (DST, DST + footprint(3))
     assert not any(emu.boot.read(DST, footprint(3)).known)
+
+
+# Per own-tap vector, the reasons the prediction gives for its unknown bytes.
+REASONS = {
+    "own-gains": set(),
+    "own-phases": {"resampler bottom"},
+    "own-scale-2d": {"resampler 2d", "resampler bottom", "resampler right"},
+    "own-scale-flat": {"resampler bottom", "resampler right"},
+    "own-ties": set(),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REASONS))
+def test_the_prediction_meets_the_own_tap_vectors(name: str):
+    vector = json.loads((VECTORS / f"{name}.json").read_text())
+    for k, job in enumerate(vector["jobs"]):
+        got = predict(
+            model(),
+            taps_of(job["taps"]),
+            base64.b64decode(job["src"]["data"]),
+            [tuple(e) for e in job["table"]],
+            job["w"],
+        )
+        masks = got.unknown()
+        assert set(masks) == REASONS[name], k
+        confidence = got.confidence()
+        for i in range(len(got.dst)):
+            assert (confidence[i] is None) == any(m[i] for m in masks.values())
+        for seg in job["expect"]["dst"]:
+            a, z = seg["at"], seg["end"]
+            if seg["kind"] == "unknown":
+                assert confidence[a:z] == [None] * (z - a), (k, a)
+                continue
+            assert None not in confidence[a:z], (k, a)
+            assert bytes(got.dst.data[a:z]) == base64.b64decode(seg["data"]), (k, a)
+
+
+def test_taps_beyond_the_gains_that_ran_are_a_hypothesis():
+    # b 1: lines 1, 3, ... at phase 1 (gain 16), the others at phase 0 (unit).
+    phases = [(0, 256, 0, 0)] * 16
+    phases[1] = (0, 4096, 0, 0)
+    image = bytes(range(64)) * 3 * 16
+    table = [(i << 16 | i % 2 << 12, 0x10000) for i in range(16)]
+    conf = predict(model(), Taps.of(phases), image, table).confidence()
+    assert {conf[64 * i + x] for i in (1, 3) for x in range(64)} == {
+        Confidence.HYPOTHESIS
+    }
+    assert {conf[64 * i + x] for i in (0, 2) for x in range(64)} == {
+        Confidence.INFERRED
+    }
+    assert Confidence.HYPOTHESIS not in conf[1024:]
+    # b != 1: plane 0's vertical pass at phase 0 reaches every pixel; a gain of 16 on values
+    # below 16 keeps it exact.
+    phases = [(0, 256, 0, 0)] * 16
+    phases[0] = (0, 4096, 0, 0)
+    image = bytes(x % 16 for x in range(64)) * 3 * 16
+    table = [(i << 16, 0x11000) for i in range(16)]
+    conf = predict(model(), Taps.of(phases), image, table).confidence()
+    assert set(conf[:1024]) == {Confidence.HYPOTHESIS, None}
+    assert Confidence.HYPOTHESIS not in conf[1024:]

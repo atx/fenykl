@@ -17,7 +17,8 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register facts and boot parameters |
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics` |
 | `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace |
-| `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs |
+| `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
+| `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields` |
 
@@ -131,29 +132,38 @@ and taints every byte the job loads or stores "hypothesis".
 ### The resampler
 
 ```python
-from fenykl.dsp.program import Program
 from fenykl.dsp.resample import Resample13Model
+from fenykl.dsp.taps import Rounding, Taps
 
 model = Resample13Model.from_image(image)
+taps = Taps.of([(-8, 264, 0, 0)] * 16)  # phase p = taps 0..3, s16, 256 = 1.0
+taps = Taps.from_floats([(-0.03, 1.03, 0, 0)] * 16, Rounding.HALF_EVEN)  # each tap rounded
 boot.put(src, planes, "src")  # three planes of 64 x H bytes at stride 64 (format 0x306)
 boot.put(table, entries, "table")  # H x {s32 a, u32 b}: source line and step in 16.16
-program = Program(model.program.words, taps)  # 32 tap words (stock: model.program)
-job = commands.resample(program, src, dst, table, 64, w, h)
+job = model.job(taps, src, dst, table, w, h)  # the stock words, these tap words
 result = Emulator(boot, model).run(job)
 ```
 
+`predict(model, taps, image, [(a, b), ...], w)` runs that job on a fresh boot and returns a
+`Prediction`: `dst` (the footprint as `Bytes`), `confidence()` per byte (None if unknown) and
+`unknown()`, a mask per reason (the source's name: `resampler 2d`, `resampler bottom`,
+`resampler right`, `not written`, ...; the source's fact says why).
+
 `commands.resample` writes what cmd 0xC's setup writes: the program's constant block (the 32 tap
-words the setup copies from DRAM 0xA324BC00, the item's constants) to local words 0x00..0x1F
-and the request to 0x742..0x747; the table stays in DRAM. Own taps are a program with other
-constants. No word of program 13 is decoded: its classes are the idle word and the stock words
-matched by value, and the law (`resample.py`'s docstring) applies to the stock program as it
-is. An edited program raises `UnknownSemantics` (strict) or runs as the stock law tainted
+words the setup copies from DRAM 0xA324BC00, the item's constants) to local words 0x00..0x1F and
+the request to 0x742..0x747; the table stays in DRAM. Own taps are a program with other constants
+(`model.job` builds it from the stock words). Word 2p of the tap words is phase p's tap 0 | tap 1
+<< 16, word 2p + 1 tap 2 | tap 3 << 16. `Taps.from_floats` rounds each tap on its own and does not
+renormalise a phase to 256. No word of program 13 is decoded: its classes are the idle word and the
+stock words matched by value, and the law (`resample.py`'s docstring) applies to the stock program
+as it is. An edited program raises `UnknownSemantics` (strict) or runs as the stock law tainted
 "hypothesis". Every byte the law computes is at most inferred, a law measured from outside;
-hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, the held lines after a job
-that is not an H 16 identity. Bytes the law does not give (the bottom and right edges, plane 0
-at b != 1 where the vertical pass is not exact, a fractional a with b != 1, W < 64 with b != 1,
-an odd H above 1) are UNKNOWN with a source that says why. The curated camera vectors are in
-`tests/data/dsp/resample/` (jobs with their taps, table and source image; dst segments).
+hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, a tap beyond +-2048 (gains up to
+8.0 ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
+Bytes the law does not give (the bottom and right edges, plane 0 at b != 1 where the vertical pass
+is not exact, a fractional a with b != 1, W < 64 with b != 1, an odd H above 1) are UNKNOWN with a
+source that says why. The curated camera vectors are in `tests/data/dsp/resample/` (jobs with their
+taps, table and source image; dst segments).
 
 ### Adding a semantic
 

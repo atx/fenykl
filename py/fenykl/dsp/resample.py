@@ -17,7 +17,8 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
 
 - the kernel: plane 0 uses the job's taps, phase p = taps (p, 0..3), s16 with 256 = 1.0, word
   2p = tap 0 | tap 1 << 16, word 2p + 1 = tap 2 | tap 3 << 16; planes 1 and 2 ignore the taps
-  and use the fixed (0, 256 - 16p, 16p, 0) [verified: tap patches reach plane 0 only];
+  and use the fixed (0, 256 - 16p, 16p, 0) [verified: tap patches reach plane 0 only]; taps
+  beyond +-2048 (gains past 8.0) never ran, so the bytes they reach are a hypothesis;
 - b = 1: the kernel acts down the lines, phase p = frac(a) x 16, tap k on source line
   floor(a) - 1 + k, line -1 read as line 0 [verified: impulse responses];
 - b != 1 (integer a only): the kernel acts along the line at u(x) = u0 + b x, u0 = 31.5 (1 - b)
@@ -49,6 +50,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from math import floor
 
+from . import commands
 from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
 from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
 from .fields import FIELDS, Confidence
@@ -62,7 +64,8 @@ from .semantics import (
     UnknownSemantics,
     WordClass,
 )
-from .state import Bytes
+from .state import Bytes, Source
+from .taps import Taps
 from .word import IDLE
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -78,6 +81,8 @@ B_RANGE = (0x4000, 0x20000)
 """The steps that ran lie in this range (0.25 .. 2)."""
 HELD = H_MAX
 """The height at which the held line pairs were seen."""
+GAIN_RAN = 2048
+"""The largest |tap| that ran on plane 0: gains up to 8.0."""
 
 
 def chroma(p: int) -> tuple[int, int, int, int]:
@@ -95,10 +100,13 @@ def out_of(s: int) -> int:
     return max(0, min(255, rhe(rhe(s, 4), 64)))
 
 
-def taps_phases(data: bytes) -> list[tuple[int, ...]]:
-    """16 phases of 4 s16 taps from the 32 tap words."""
-    v = struct.unpack("<64h", data)
-    return [v[4 * p : 4 * p + 4] for p in range(16)]
+def footprint(h: int) -> int:
+    """The dst bytes a job of height h writes (pixels W..63 of each line included)."""
+    return PLANES * STRIDE * h + (STRIDE if h % 2 else 0)
+
+
+def _gain_taint(kernel: tuple[int, ...]) -> Confidence:
+    return H if any(abs(t) > GAIN_RAN for t in kernel) else V
 
 
 def u0(b: int) -> tuple[Fraction, bool]:
@@ -213,6 +221,13 @@ class Resample13Model:
     def from_image(cls, image: bytes) -> "Resample13Model":
         return cls(stock_programs(image)[ITEM])
 
+    def job(
+        self, taps: Taps, src: int, dst: int, table: int, width: int, height: int
+    ) -> Job:
+        """The cmd 0xC job of the stock program with `taps` as its tap words, at stride 64."""
+        program = Program(self.program.words, taps.pack())
+        return commands.resample(program, src, dst, table, STRIDE, width, height)
+
     def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
         boot = emu.boot
         cap = min(I, trace.taint)
@@ -245,15 +260,15 @@ class Resample13Model:
         h, w = req.height, req.width
         result = JobResult(Status.OK, ignored=trace.ignored, notes=trace.notes)
         result.taint = cap
-        footprint = PLANES * STRIDE * h + (STRIDE if h % 2 else 0)
-        result.stored = (req.dst, req.dst + footprint)
+        n = footprint(h)
+        result.stored = (req.dst, req.dst + n)
         if h % 2 and h > 1:
             why = boot.source("resampler odd H", "an odd H above 1 never ran")
-            boot.dram.write(dram_alias(req.dst), Bytes.unknown(footprint, why))
+            boot.dram.write(dram_alias(req.dst), Bytes.unknown(n, why))
             boot.lines.forget(why)
             return result
         taps_b = boot.local.read(LOCAL_BASE + RESAMPLE_TAPS, 4 * TAP_WORDS)
-        taps = taps_phases(bytes(taps_b.data)) if all(taps_b.known) else None
+        taps = Taps.unpack(bytes(taps_b.data)).phases if all(taps_b.known) else None
         taps_taint = min(taps_b.taint) if taps is not None else V
         table_b = boot.read(req.table, 8 * h)
         entries = [
@@ -265,7 +280,7 @@ class Resample13Model:
         table_taint = min(table_b.taint) if all(table_b.known) else V
         px = _Pixels(boot.read(req.src, PLANES * STRIDE * h), h)
         law = boot.source("resampler", "program 13's measured law")
-        why = {k: boot.source("resampler unknown", v) for k, v in _WHY.items()}
+        why = {k: boot.source(f"resampler {k}", v) for k, v in _WHY.items()}
         base_taint = min(cap, taps_taint, table_taint)
         full = w // BLOCK * BLOCK
         # H 1: plane 0 is a line pair, the chroma planes follow it. Line 1 as a copy of line 0
@@ -299,7 +314,7 @@ class Resample13Model:
     def _pixel(
         self,
         px: _Pixels,
-        taps: list[tuple[int, ...]] | None,
+        taps: tuple[tuple[int, ...], ...] | None,
         c: int,
         entry: tuple[int, int],
         x: int,
@@ -331,7 +346,7 @@ class Resample13Model:
             p = (a & 0xFFFF) >> 12
             kernel = taps[p] if c == 0 else chroma(p)
             s = sum(t * get(base - 1 + k, x) for k, t in enumerate(kernel) if t)
-            return out_of(s), Confidence(taint)
+            return out_of(s), min(Confidence(taint), _gain_taint(kernel))
         if a & 0xFFFF:
             raise _Miss("frac")
         if w != STRIDE:
@@ -345,6 +360,9 @@ class Resample13Model:
         if fu - 1 < 0:
             fu += 32
         kernel = taps[q] if c == 0 else chroma(q)
+        if c == 0:
+            assert taps is not None
+            taint = min(taint, _gain_taint(kernel), _gain_taint(taps[0]))
         s = 0
         for k, t in enumerate(kernel):
             if not t:
@@ -365,7 +383,7 @@ class Resample13Model:
         boot: Boot,
         req: Request,
         entries: list[tuple[int, int] | None],
-        taps: list[tuple[int, ...]] | None,
+        taps: tuple[tuple[int, ...], ...] | None,
         px: _Pixels,
         full: int,
     ) -> None:
@@ -391,3 +409,59 @@ class Resample13Model:
                 boot.lines.write(
                     (2 * c + r) * STRIDE, px.data[o : o + full].capped(taint)
                 )
+
+
+@dataclass(frozen=True)
+class Prediction:
+    """A job's dst footprint as the model predicts it on a fresh boot."""
+
+    dst: Bytes
+    """Value, known flag and taint per byte."""
+    sources: list[Source]
+    """The boot's sources: `dst.src` indexes them."""
+
+    def confidence(self) -> list[Confidence | None]:
+        """Per byte its confidence, None where it is unknown."""
+        return [
+            Confidence(t) if k else None for t, k in zip(self.dst.taint, self.dst.known)
+        ]
+
+    def unknown(self) -> dict[str, bytes]:
+        """Per reason (its source's name, e.g. "resampler 2d"; the source's fact says why) the
+        mask of the unknown bytes it explains."""
+        masks: dict[str, bytearray] = {}
+        for i, (k, s) in enumerate(zip(self.dst.known, self.dst.src)):
+            if not k:
+                masks.setdefault(self.sources[s].name, bytearray(len(self.dst)))[i] = 1
+        return {name: bytes(m) for name, m in masks.items()}
+
+
+_SRC, _DST, _TABLE = 0x10000000, 0x10100000, 0x10200000
+"""Where `predict` places its buffers; the law does not depend on them."""
+
+
+def predict(
+    model: Resample13Model,
+    taps: Taps,
+    src: bytes,
+    table: list[tuple[int, int]],
+    width: int = STRIDE,
+) -> Prediction:
+    """The dst of the stock program run with `taps` on image `src` (three planes of 64 x H at
+    stride 64) and the line table (one entry (a, b) per output line, H = len(table)).
+
+    Bytes the job does not write are unknown ("not written"), as are the bytes the law does not
+    give; a partial column block is unknown since a fresh boot holds no line pairs."""
+    h = len(table)
+    if len(src) != PLANES * STRIDE * h:
+        raise ValueError(
+            f"{len(src)} src bytes for H {h}: expected {PLANES * STRIDE * h}"
+        )
+    boot = Boot()
+    boot.put(_SRC, src, "src")
+    boot.put(_TABLE, b"".join(struct.pack("<iI", a, b) for a, b in table), "table")
+    n = footprint(h)
+    unwritten = boot.source("not written", "the job does not write it")
+    boot.dram.write(dram_alias(_DST), Bytes.unknown(n, unwritten))
+    Emulator(boot, model).run(model.job(taps, _SRC, _DST, _TABLE, width, h))
+    return Prediction(boot.read(_DST, n), boot.sources)
