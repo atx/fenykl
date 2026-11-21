@@ -160,6 +160,7 @@ as it is. An edited program raises `UnknownSemantics` (strict) or runs as the st
 "hypothesis". Every byte the law computes is at most inferred, a law measured from outside;
 hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, a tap outside -637..2048 (the taps
 that ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
+A partial column block is unknown unless the job is an H 16 identity with a unit phase-0 kernel.
 Bytes the law does not give (the bottom and right edges, plane 0 at b != 1 where the vertical pass
 is not exact, a fractional a with b != 1, W < 64 with b != 1, an odd H above 1) are UNKNOWN with a
 source that says why. The curated camera vectors are in `tests/data/dsp/resample/` (jobs with their

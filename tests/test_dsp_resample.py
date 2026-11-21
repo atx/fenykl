@@ -175,6 +175,18 @@ def test_a_partial_block_on_a_fresh_boot_is_unknown():
     assert bytes(line.data[48:]) == b"\xe7" * 16
 
 
+def test_a_partial_block_of_a_job_that_is_no_identity_is_unknown():
+    # The held lines are known after the first job; the second reads source lines 2i.
+    emu = Emulator(Boot(), model())
+    run_job(emu, identity_job(), 0)
+    job = identity_job(w=48)
+    job["table"] = [[min(2 * i, 15) << 16, 0x10000] for i in range(16)]
+    run_job(emu, job, 1)
+    line = emu.boot.read(DST, 64)
+    assert all(line.known[:32]) and not any(line.known[32:48])
+    assert {emu.boot.sources[s].name for s in line.src[32:48]} == {"resampler partial"}
+
+
 def test_an_odd_height_above_1_is_unknown():
     emu = Emulator(Boot(), model())
     result, _ = run_job(emu, identity_job(h=3), 0)

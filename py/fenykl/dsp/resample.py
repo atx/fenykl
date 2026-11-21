@@ -34,11 +34,13 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
   plane, or other lines) or on a pixel past 63 (the right edge reads stale content at b != 1),
   a fractional a with b != 1 and W < 64 with b != 1 (never ran).
 
-Column blocks: the job runs in 32-pixel column blocks with a held line pair per block. A partial
-block (W not a multiple of 32) is not computed: its pixels are the held pair, line i getting
-held line i % 2, which a job fills from its source lines H - 2 and H - 1 [verified at H 16
-after identity jobs with the stock taps, which cannot tell source from output lines: after
-other jobs and at other heights a hypothesis]. Pixels W..63 are not written. On a fresh boot
+Column blocks: the job runs in 32-pixel column blocks with a held line pair per block. In a
+partial block (W not a multiple of 32) of an H 16 identity job with a unit phase-0 kernel
+(the stock one) line i gets held line i % 2, which a job fills from its source lines H - 2 and
+H - 1 [verified at H 16 after identity jobs with the stock taps, which cannot tell source from
+output lines: after other jobs a hypothesis]. In other jobs the partial block holds other
+content (at W 48 with a one-tap kernel per line, lines that read the same held line differ), so
+it is unknown. Pixels W..63 are not written. On a fresh boot
 the pair is unknown. H 1: plane 0 is written as a line pair (line 0 twice, or line 0 and a
 read of table entry 1: the run cannot tell, so line 1 is a hypothesis), then planes 1 and 2,
 64 bytes past 3 x 64 x H [verified: one run]; an odd H above 1 never ran, so its dst is
@@ -103,6 +105,10 @@ def out_of(s: int) -> int:
 def footprint(h: int) -> int:
     """The dst bytes a job of height h writes (pixels W..63 of each line included)."""
     return PLANES * STRIDE * h + (STRIDE if h % 2 else 0)
+
+
+def _unit(kernel: tuple[int, ...]) -> bool:
+    return tuple(kernel) == chroma(0)
 
 
 def _gain_taint(kernel: tuple[int, ...]) -> Confidence:
@@ -185,6 +191,8 @@ _WHY = {
     "narrow": "W < 64 with b != 1 never ran",
     "range": "a table entry outside the range that ran",
     "input": "the job reads unknown bytes (src, table or taps)",
+    "partial": "a partial column block of a job that is not an H 16 identity with a unit phase-0 "
+    "kernel: it holds other content than the held lines",
 }
 
 
@@ -284,6 +292,8 @@ class Resample13Model:
         why = {k: boot.source(f"resampler {k}", v) for k, v in _WHY.items()}
         base_taint = min(cap, taps_taint, table_taint)
         full = w // BLOCK * BLOCK
+        identity = h == HELD and all(e == (i << 16, ONE) for i, e in enumerate(entries))
+        partial = why["partial"]
         # H 1: plane 0 is a line pair, the chroma planes follow it. Line 1 as a copy of line 0
         # and as a read of table entry 1 gave the same bytes: a hypothesis.
         lines0 = max(h, 2)
@@ -305,9 +315,11 @@ class Resample13Model:
                         t = H
                     line.taint[x], line.src[x] = min(base_taint, t), law
                     line.off[x] = plane + STRIDE * i + x
-                if full < w:
+                if full < w and identity and (c != 0 or taps and _unit(taps[0])):
                     held = boot.lines.read((2 * c + i % 2) * STRIDE + full, w - full)
                     line = line[:full] + held
+                elif full < w:
+                    line = line[:full] + Bytes.unknown(w - full, partial)
                 boot.dram.write(dram_alias(req.dst + plane + STRIDE * i), line)
         self._hold(boot, req, entries, taps, px, full)
         return result
@@ -402,7 +414,7 @@ class Resample13Model:
             return
         identity = h == HELD and all(e == (i << 16, ONE) for i, e in enumerate(entries))
         for c in range(PLANES):
-            unit = c != 0 or (taps is not None and taps[0] == chroma(0))
+            unit = c != 0 or (taps is not None and _unit(taps[0]))
             taint = I if identity and unit else H
             for r in range(2):
                 y = h - 2 + r
