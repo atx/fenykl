@@ -1,8 +1,8 @@
 """The field table of the 320-bit DSP word: the single source of truth for encoding.
 
 Bit k of a word is bit (k % 8) of byte k // 8 of its 40 bytes. Every bit belongs to exactly one
-field. A field has a permanent positional id derived from its bits (`f115_119`, `f229`, grid
-nibbles `g37`), an optional semantic name that may be renamed at will, a kind, its value in the
+field. A field has a permanent positional id that names both ends of its bits (`f115_119`, `f229`),
+an optional semantic name that may be renamed at will, a kind, its value in the
 idle word, a confidence and a one-line fact.
 
 Confidence qualifies the field itself: that these bits form one field of this kind. Facts about
@@ -53,7 +53,6 @@ class Field:
     confidence: Confidence
     fact: str
     name: str = ""
-    prefix: str = "f"
     values: Mapping[int, str] = field(default_factory=dict)
     """Known values and their meaning (documentation, not a restriction)."""
     allowed: tuple[int, ...] | None = None
@@ -61,9 +60,9 @@ class Field:
 
     @property
     def id(self) -> str:
-        if self.prefix == "g" or self.lo == self.hi:
-            return f"{self.prefix}{self.lo}"
-        return f"{self.prefix}{self.lo}_{self.hi}"
+        if self.lo == self.hi:
+            return f"f{self.lo}"
+        return f"f{self.lo}_{self.hi}"
 
     @property
     def label(self) -> str:
@@ -147,7 +146,6 @@ def _grid(lo: int, hi: int, unit: str) -> Field:
         (1 << (hi - lo + 1)) - 1,
         H,
         fact,
-        prefix="g",
         values={0xF: "none"} if hi - lo == 3 else {},
     )
 

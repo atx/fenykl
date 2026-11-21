@@ -32,16 +32,15 @@ Word(regs_a=RegsA(xreg=3, f123_127=2), ctl_hi=CtlHi(f308_309=0))
 
 ## Fields
 
-Each field has a permanent positional id from its bits (`f115_119`, `f229`; grid nibbles `g37`)
+Each field has a permanent positional id from its bits (`f115_119`, `f229`)
 and optionally a semantic name (`xreg`). Ids never change for the same bits; names are renamed
 freely, without aliases. Slots, `Word[...]` and `Word.from_fields` accept either.
 
 To add or refine a field, edit `FIELDS`: split or merge entries so that the bits stay covered
 exactly once (the import raises otherwise), and give the new entries their idle value, kind,
-confidence and a one-line fact. An `f` id names both ends, so splitting or widening such a field
-changes its id and DSL source naming the old one fails loudly. A grid id names only the low bit:
-widening `g37` keeps the id and silently changes what `g37=0` writes, so check its users. Moving a
-field to another unit is an edit of its `unit`.
+confidence and a one-line fact. An id names both ends of the field, so it changes exactly when the
+bits change: DSL source naming the old id fails loudly. Moving a field to another unit is an edit
+of its `unit`.
 
 Kinds: `reg` (register specifier r0..r31), `opcode`, `route` (source or path select), `flag`
 (one control bit), `const` (the same value in every stock word), `raw` (not decoded).
