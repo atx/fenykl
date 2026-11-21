@@ -9,9 +9,11 @@ Confidence qualifies the field itself: that these bits form one field of this ki
 single values or words carry their own tags in `fact` and `values`. The emulator does not use
 it: it propagates the confidence of the semantics a result depends on (see `semantics`).
 
-Some values span fields. In a control word (f229 clear) bits 15..22 and 128..132 hold the target
-T, which `TARGET` composes from the positional fields f15_18, f19_22 and f128_132; those fields
-stay as they are in every word, so the table is one partition of the bits for all words.
+Bits 313..319 are one op field in every word (`OPS` names its values). In a control word, op
+0..4, bits 15..22 and 128..132 hold the target T, which `TARGET` composes from the positional
+fields f15_22 and f128_132; those fields stay as they are in every word, so the table is one
+partition of the bits for all words. The sequencer rule that spans words, four delay slots after
+every control op, is `DELAY_SLOTS`.
 """
 
 from collections.abc import Mapping
@@ -28,6 +30,7 @@ class Kind(StrEnum):
     ROUTE = "route"  # a source or path select
     FLAG = "flag"  # a single control bit
     CONST = "const"  # always the same value in every stock word
+    IMM = "imm"  # an immediate operand
     RAW = "raw"  # bits not decoded yet
 
 
@@ -116,7 +119,7 @@ def _const(lo: int, hi: int, unit: str) -> Field:
     )
 
 
-END_OP = 4
+IDLE_OP = 0x7F
 SEGMENTED = "boundary from a value-entropy segmentation of the stock programs"
 
 
@@ -233,32 +236,46 @@ WORD504_NONE = (
     "program 13 word 504 has bits of this subfield clear; idling 237, 239 or 254 alone changed "
     "no byte (verified on the camera, an x-varying source at b = 1)"
 )
-SIGNATURE = (
-    "part of the control signature: a word that differs from the three identical words after it "
-    "only in bits 128, 273, 318, 319 (clear) and 17, 18 (set); it ends programs 6, 0xC and 0xF "
-    "and recurs mid-program (a control operation with three drain words, hypothesis)"
-)
 RARE = (
     "rarely used: all-ones in every word of the five stock programs, clear in 1..12 words of "
     "some programs across later firmware versions of the same family"
 )
 CONTROL_FACT = (
-    "clear in the control words, set in all others: a control word holds its target T in bits "
-    "15..22 and 128..132, or with bits 313..319 = 4 it is the end op (verified in the bytes "
-    "of 44 programs of this program family, across later firmware versions of the same family "
-    "too); what a control word does (a jump, a loop end, a call) is a hypothesis"
+    "clear exactly in the words whose op (f313_319) is 0..4, the control ops, set in all others "
+    "(verified in the bytes of the five stock programs and across later firmware versions of the "
+    "same family); a control op 0..3 holds its target T in bits 15..22 and 128..132"
 )
-T_LOW = (
-    "in a control word bits 15..22 are one 8-bit field, the low byte of the target T (verified "
-    "in the bytes); the 15..18 / 19..22 cut holds in the other words"
+IMM_FACT = (
+    "the 8-bit immediate of the op in f313_319: 0 in every word whose op is idle (verified in the "
+    "bytes of the five stock programs and across later firmware versions of the same family); in "
+    "a control op 0..3 it is the low byte of the target T (verified in the bytes); in data words "
+    "mostly a small value"
 )
-T_HIGH = "in a control word bits 8..12 of the target T, not a register (verified in the bytes)"
-END_FACT = (
-    "in a control word, 4 marks the end op, whose bits 15..22 and 128..132 are no target: "
-    "those control words have a zero T low byte, some of them a T past their program's end, "
-    "while every other control word's T lies inside its program, across later firmware "
-    "versions of the same family too (verified in the bytes); it ends program 16 and the "
-    "sections of program 7, an end or stop op (inferred)"
+T_HIGH = (
+    "in a control op 0..3 bits 8..12 of the target T, not a register (verified in the bytes); in a "
+    "return mostly 1 (in every return of the five stock programs but three, which hold 2, 3 and "
+    "7), meaning open; it may extend the immediate of some data ops to 13 bits, as in program 13 "
+    "words 682, 689 and 696 (hypothesis)"
+)
+FLAGS_FACT = (
+    "3 bits between the register specifiers; bits 120..121 are 0 in every op 0..3 word and bit 122 "
+    "is a flag in them, set in some words of each control op and mostly constant within a routine "
+    "(verified in the bytes across later firmware versions of the same family), its meaning open; "
+    "in data words all eight values occur"
+)
+SELECTOR = (
+    "the loop-end selector pair f270_271 / f272_273: in every op 0 word of the five stock programs exactly "
+    "one of f270_271 and f272_273 is 1, and in 386 of 395 across later firmware versions of the "
+    "same family; ops 1..3 mostly hold 3 in both; a loop counter select (hypothesis)"
+)
+OP_FACT = (
+    "the op, one 7-bit field in every word (verified in the bytes of the five stock programs and "
+    "across later firmware versions of the same family): 0..4 the control ops with f229 clear, 7 "
+    "halt, 8..73 data ops, 127 idle; 5, 6 and 74..126 never occur. Bits 17, 18 set with 128, "
+    "273, 318 and 319 clear, once read as a control signature, is a coincidence of fields that "
+    "several ops share; the word it marks at the end of programs 6, 0xC and 0xF is data op 0x1f "
+    "in a return's delay slot, its 13-bit immediate (f15_22 | f128_132 << 8) a multiple of 4 in all "
+    "300 such words across later firmware versions of the same family (inferred)"
 )
 XFER_BASIS = (
     "cut from 308..312 (the segmentation's field) at the register-transfer signature"
@@ -266,6 +283,92 @@ XFER_BASIS = (
 XFER = (
     "0 in the register-transfer words; their role (load address, offset, count, enable, store "
     "format) is set by their position, not by an opcode (inferred, strong)"
+)
+
+
+@dataclass(frozen=True)
+class Op:
+    """A meaning of a value of the op field f313_319."""
+
+    name: str
+    confidence: Confidence
+    fact: str
+
+
+OPS: dict[int, Op] = {
+    0: Op(
+        "loop",
+        I,
+        "loop end: back to T, at or before the word in the five stock programs (some short "
+        "bodies across later firmware versions of the same family have T up to 3 words after "
+        "it); loop ends nest and never cross; a counted loop's back-edge (inferred, strong)",
+    ),
+    1: Op(
+        "brf",
+        I,
+        "forward conditional branch, T always after it; the guard of a loop, at the loop's T - 5 "
+        "with its own T at the loop's exit (inferred); the condition is not in the word",
+    ),
+    2: Op(
+        "br",
+        I,
+        "conditional branch either way, the back-edge of most guarded loops (inferred); the "
+        "condition is not in the word",
+    ),
+    3: Op(
+        "call",
+        I,
+        "call: when a return lies between the word and T, the word at i + 5 is almost never a "
+        "branch target (11 of 950 across later firmware versions of the same family), so a "
+        "return reaches it (inferred, strong); program 16's word 0 calls its job routine at 10; "
+        "the op 3 words with no return before T are open, a jump or a call",
+    ),
+    4: Op(
+        "ret",
+        I,
+        "return to the word after the call's delay slots (inferred, strong); it has no target",
+    ),
+    7: Op(
+        "halt",
+        I,
+        "ends the job: word 5 of every program and no other word, where the call at word 0 "
+        "returns (inferred)",
+    ),
+    IDLE_OP: Op(
+        "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
+    ),
+}
+CONTROL_OPS = range(5)
+"""The control ops, the words with f229 clear."""
+DATA_OPS = range(8, 74)
+DATA_OP_CONFIDENCE = I
+DATA_OP_FACT = (
+    "a data op: it leaves f229 set and uses the immediate; what it does is open "
+    "(inferred)"
+)
+UNSEEN_OP_FACT = (
+    "never occurs in the stock programs nor across later firmware versions of the "
+    "same family"
+)
+
+
+def op(value: int) -> Op:
+    """The meaning of op value `value`; data ops and unseen values are named op<hex>."""
+    if value in OPS:
+        return OPS[value]
+    if value in DATA_OPS:
+        return Op(f"op{value:02x}", DATA_OP_CONFIDENCE, DATA_OP_FACT)
+    return Op(f"op{value:02x}", H, UNSEEN_OP_FACT)
+
+
+DELAY_SLOTS = 4
+DELAY_FACT = (
+    "the four words after a control op are its delay slots: in the five stock programs none of "
+    "them is a target or a control word (verified in the bytes), and across later firmware "
+    "versions of the same family only short loop ends break it; idling program 16's slots "
+    "46..49 of the branch 45 (taken in a copy) times the job out, while idling 50..57, "
+    "which it skips, has no effect (verified on the camera). Reading: the slots always run and "
+    "the transfer takes effect after them, so a call returns to i + 5 (inferred, strong)"
 )
 
 
@@ -311,8 +414,8 @@ def _c2() -> list[Field]:
             fact += f"; {WORD504}"
         if lo in (236, 252):
             fact += f"; {WORD504_NONE}"
-        if lo == 272:
-            fact += f"; bit 273: {SIGNATURE}"
+        if lo in (270, 272):
+            fact += f"; {SELECTOR}"
         out.append(_op(lo, hi, idle, fact))
         if hi == 276:
             out.append(_const(277, 277, "c2"))
@@ -337,8 +440,7 @@ FIELDS: tuple[Field, ...] = (
     _ctl(2, 6, "ctl_lo", 0),
     _ctl(7, 8, "ctl_lo", 0),
     _ctl(9, 14, "ctl_lo", 0, "program 16 never sets bits 11 and 14"),
-    _ctl(15, 18, "ctl_lo", 0, f"{T_LOW}; bits 17, 18: {SIGNATURE}"),
-    _ctl(19, 22, "ctl_lo", 0, T_LOW),
+    Field(15, 22, Kind.IMM, "ctl_lo", 0, V, IMM_FACT, name="imm"),
     # grid_a: bits 23..99.
     *(_grid(lo, hi, "grid_a") for lo, hi in GRID_A),
     # regs_a: bits 100..132 and the 133..140 constant.
@@ -356,9 +458,9 @@ FIELDS: tuple[Field, ...] = (
         name="xreg",
         confidence=I,
     ),
-    Field(120, 122, Kind.RAW, "regs_a", 7, H, "3 bits between the register specifiers"),
+    Field(120, 122, Kind.RAW, "regs_a", 7, H, FLAGS_FACT),
     _reg(123, "regs_a", 31),
-    _reg(128, "regs_a", 31, f"{T_HIGH}; bit 128: {SIGNATURE}"),
+    _reg(128, "regs_a", 31, T_HIGH),
     _const(133, 140, "regs_a"),
     # grid_b: grid A + 110.
     *(_grid(lo, hi, "grid_b") for lo, hi in GRID_B),
@@ -414,12 +516,13 @@ FIELDS: tuple[Field, ...] = (
     Field(
         313,
         319,
-        Kind.RAW,
+        Kind.OPCODE,
         "ctl_hi",
-        0x7F,
-        H,
-        f"control bits; {SEGMENTED}. {END_FACT}; bits 318, 319: {SIGNATURE}",
-        values={END_OP: "the end op, in a control word"},
+        IDLE_OP,
+        V,
+        OP_FACT,
+        name="op",
+        values={value: meaning.name for value, meaning in OPS.items()},
     ),
 )
 
@@ -469,32 +572,29 @@ class Composite:
 
 
 CONTROL_FLAG = BY_KEY["f229"]
-"""Clear in a control word."""
-END_FIELD = BY_KEY["f313_319"]
-"""END_OP here marks a control word as the end op, which has no target."""
+"""Clear exactly in the words whose op is a control op."""
+OP_FIELD = BY_KEY["op"]
+TARGET_OPS = range(4)
+"""The control ops that name a target T; a return has none."""
 
 TARGET = Composite(
     "target",
-    (BY_KEY["f15_18"], BY_KEY["f19_22"], BY_KEY["f128_132"]),
+    (BY_KEY["imm"], BY_KEY["f128_132"]),
     V,
-    "a control word's target: an absolute word index into its program, bits 15..22 | bits "
-    "128..132 << 8 (verified in the bytes: it follows its target word wherever code moved "
+    "the target of a control op 0..3: an absolute word index into its program, bits 15..22 | "
+    "bits 128..132 << 8 (verified in the bytes: it follows its target word wherever code moved "
     "across later firmware versions of the same family, and lies inside its program in every "
-    "control word but the end op); whether a jump, loop end or call goes there is a hypothesis",
+    "op 0..3 word); what goes there is the op's meaning",
 )
 
 
 def is_control(word: int) -> bool:
-    return CONTROL_FLAG.get(word) == 0
-
-
-def is_end(word: int) -> bool:
-    return is_control(word) and END_FIELD.get(word) == END_OP
+    return OP_FIELD.get(word) in CONTROL_OPS
 
 
 def target(word: int) -> int | None:
-    """The target of a control word other than the end op; None for other words."""
-    if not is_control(word) or is_end(word):
+    """The target of a control op 0..3; None for other words."""
+    if OP_FIELD.get(word) not in TARGET_OPS:
         return None
     return TARGET.get(word)
 

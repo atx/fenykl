@@ -9,11 +9,11 @@ from collections.abc import Mapping
 from .fields import (
     FIELDS,
     IDLE_VALUE,
+    OP_FIELD,
     WORD_BITS,
     WORD_BYTES,
     Field,
     is_control,
-    is_end,
     lookup,
     target,
 )
@@ -80,18 +80,18 @@ class Word:
         return lookup(key).get(self.value)
 
     @property
+    def op(self) -> int:
+        """The op, f313_319; `fields.op` gives its meaning."""
+        return OP_FIELD.get(self.value)
+
+    @property
     def control(self) -> bool:
-        """A control word: f229 clear."""
+        """A control word: its op is one of `fields.CONTROL_OPS`."""
         return is_control(self.value)
 
     @property
-    def end(self) -> bool:
-        """The end op: a control word with f313_319 = 4, which has no target."""
-        return is_end(self.value)
-
-    @property
     def target(self) -> int | None:
-        """The word index a control word names; None for the end op and other words."""
+        """The word index a control op 0..3 names; None for other words."""
         return target(self.value)
 
     def fields(self) -> dict[str, int]:

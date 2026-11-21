@@ -4,13 +4,14 @@ A listing shows per word the fields that differ from the idle word, grouped by u
 semantic names or ids; a mark after the value gives the field's confidence (`!` verified,
 `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
-A control word starts with `-> T`, its target word index, in place of f229 and T's fields; the end
-op starts with `end t=...`, T's bits as a raw value, in place of f229, T's fields and f313_319.
+Every word but the idle word starts with its op's name (`fields.op`) in place of f313_319; a
+control op 0..3 follows it with `-> T`, its target word index, in place of f229 and T's fields, and
+a return drops f229. A `|` after the index marks the delay slots of a control word.
 """
 
 from collections.abc import Iterator
 
-from .fields import CONTROL_FLAG, END_FIELD, TARGET, Field, Kind
+from .fields import CONTROL_FLAG, IDLE_OP, OP_FIELD, TARGET, Field, Kind, op
 from .program import Program
 from .units import UNITS
 from .word import IDLE, Word
@@ -24,32 +25,39 @@ def _value(f: Field, value: int) -> str:
     return f"{f.label}={text}{f.confidence.mark}"
 
 
-def _control(word: Word) -> tuple[list[str], set[str]]:
-    """A control word's leading part and the ids of the fields it shows."""
-    if not word.control:
-        return [], set()
-    shown = {CONTROL_FLAG.id, *(f.id for f in TARGET.parts)}
-    if word.end:
-        return [f"end t={TARGET.get(word.value):x}"], shown | {END_FIELD.id}
-    return [f"-> {word.target}{TARGET.confidence.mark}"], shown
+def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
+    """The op and target part of `word` and the ids of the fields it stands for."""
+    meaning = op(word.op)
+    head = meaning.name + (meaning.confidence.mark if marks else "")
+    shown = {OP_FIELD.id}
+    if word.control and CONTROL_FLAG.get(word.value) == 0:
+        shown.add(CONTROL_FLAG.id)
+    if word.target is not None:
+        head += f" -> {word.target}" + (TARGET.confidence.mark if marks else "")
+        shown.update(f.id for f in TARGET.parts)
+    return head, shown
 
 
 def word_parts(word: Word, base: Word = IDLE) -> list[str]:
-    """The fields that differ from `base` as "unit: field=value ..." groups in bit order,
-    after a control word's target or end mark."""
-    head, shown = _control(word)
+    """The op, a control op's target, then the fields that differ from `base` as
+    "unit: field=value ..." groups in bit order."""
+    head, shown = _head(word)
     by_unit: dict[str, list[str]] = {}
     for f, v in word.changed(base):
         if f.id not in shown:
             by_unit.setdefault(f.unit, []).append(_value(f, v))
-    return head + [f"{unit}: {' '.join(items)}" for unit, items in by_unit.items()]
+    return [head] + [f"{unit}: {' '.join(items)}" for unit, items in by_unit.items()]
 
 
-def _runs(words: tuple[Word, ...]) -> Iterator[tuple[int, int]]:
-    """(start, count) of runs of identical words."""
+def _runs(words: tuple[Word, ...], slots: set[int]) -> Iterator[tuple[int, int]]:
+    """(start, count) of runs of identical words, all in delay slots or none."""
     start = 0
     for i in range(1, len(words) + 1):
-        if i == len(words) or words[i] != words[start]:
+        if (
+            i == len(words)
+            or words[i] != words[start]
+            or (i in slots) != (start in slots)
+        ):
             yield start, i - start
             start = i
 
@@ -60,12 +68,16 @@ def listing(program: Program, title: str = "") -> str:
     lines.append(
         "; marks: ! verified, ~ inferred, none a hypothesis; ^ = the word before, changed"
     )
-    lines.append("; -> T: a control word and its target word index; end: the end op")
+    lines.append(
+        "; ops: loop brf br call ret halt, opNN a data op (hex), idle; -> T: the target word "
+        "index; | a delay slot"
+    )
+    slots = program.delay_slots()
     prev = IDLE
-    for start, count in _runs(program.words):
+    for start, count in _runs(program.words, slots):
         word = program.words[start]
         index = f"{start}" if count == 1 else f"{start}..{start + count - 1}"
-        head = f"{index:>9}  "
+        head = f"{index:>9} {'|' if start in slots else ' '} "
         if word == IDLE:
             lines.append(head + ("idle" if count == 1 else f"idle x{count}"))
             prev = IDLE
@@ -74,7 +86,8 @@ def listing(program: Program, title: str = "") -> str:
         parts = word_parts(word)
         delta = len(word.changed(prev))
         if prev != IDLE and delta <= DELTA and delta < len(word.changed()):
-            parts = ["^", *word_parts(word, prev)]
+            name, *changed = word_parts(word, prev)
+            parts = [name, "^", *changed]
         prev = word
         for part in parts:
             if len(line) + len(part) > WIDTH and line.strip():
@@ -103,9 +116,7 @@ def source(program: Program, name: str = "PROGRAM") -> str:
         f"{name} = [",
     ]
     for index, word in enumerate(program.words):
-        note = (
-            " end" if word.end else "" if word.target is None else f" -> {word.target}"
-        )
+        note = "" if word.op == IDLE_OP else f" {_head(word, marks=False)[0]}"
         lines.append(f"    {word_source(word)},  # {index}{note}")
     lines.append("]")
     return "\n".join(lines) + "\n"

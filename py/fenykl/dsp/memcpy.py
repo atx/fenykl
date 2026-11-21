@@ -122,7 +122,7 @@ _PARTS: dict[int, Part] = {
         i: Part("no effect seen", Outcome.OK, _NONE)
         for i in (1, 2, 10, 11, 18, 19, 20, 25, 26, 29, 30, 50, 51, 52, 53, 56, 59, 80)
     },
-    **{i: Part("drain", Outcome.OK, _NONE) for i in (81, 82, 83)},
+    **{i: Part("return delay slot", Outcome.OK, _NONE) for i in (81, 82, 83)},
 }
 
 # -- the register transfers

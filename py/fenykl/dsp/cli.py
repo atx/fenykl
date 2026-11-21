@@ -6,7 +6,18 @@ from pathlib import Path
 
 from ..firmware import TARGETS
 from .disasm import listing, source
-from .fields import CONTROL_FLAG, END_FIELD, END_OP, FIELDS, TARGET
+from .fields import (
+    DATA_OP_CONFIDENCE,
+    DATA_OP_FACT,
+    DATA_OPS,
+    DELAY_FACT,
+    DELAY_SLOTS,
+    FIELDS,
+    OP_FIELD,
+    OPS,
+    TARGET,
+    TARGET_OPS,
+)
 from .program import STOCK, Program, stock_programs
 
 
@@ -41,9 +52,17 @@ def cmd_fields(args: argparse.Namespace) -> None:
         parts.append(f.id if shift == 0 else f"{f.id} << {shift}")
         shift += f.width
     print(
-        f"{TARGET.name}: {' | '.join(parts)} in control words ({CONTROL_FLAG.id} = 0, "
-        f"{END_FIELD.id} != {END_OP}), {TARGET.confidence.name.lower()}: {TARGET.fact}"
+        f"{TARGET.name}: {' | '.join(parts)} for {OP_FIELD.id} {TARGET_OPS.start}.."
+        f"{TARGET_OPS.stop - 1}, {TARGET.confidence.name.lower()}: {TARGET.fact}"
     )
+    data = f"{DATA_OPS.start}..{DATA_OPS.stop - 1}"
+    rows = [(v, str(v), o.name, o.confidence, o.fact) for v, o in OPS.items()]
+    rows.append((DATA_OPS.start, data, "opNN", DATA_OP_CONFIDENCE, DATA_OP_FACT))
+    for _, value, name, confidence, fact in sorted(rows):
+        print(
+            f"{OP_FIELD.label} {value:<6} {name:<5} {confidence.name.lower():<10} {fact}"
+        )
+    print(f"delay slots: {DELAY_SLOTS}; {DELAY_FACT}")
     kinds = Counter(str(f.kind) for f in FIELDS)
     confidence = Counter(f.confidence.name.lower() for f in FIELDS)
     print(f"{len(FIELDS)} fields; {dict(kinds)}; {dict(confidence)}")

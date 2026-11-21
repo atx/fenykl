@@ -43,23 +43,33 @@ def test_fields_constant_only_in_the_stock_programs_take_other_values(field):
     Word.from_fields({field: 0}).check()
 
 
-def test_listing_shows_a_control_words_target_and_the_end_op():
-    # T = 0x5A3: low nibble in f15_18, high nibble in f19_22, bits 8..12 in f128_132.
-    control = Word(
-        ctl_lo=CtlLo(f15_18=0x3, f19_22=0xA, f1=1),
+def test_listing_names_ops_targets_and_delay_slots():
+    # T = 0x5A3: its low byte in imm, bits 8..12 in f128_132. The idle run after the call splits
+    # where its delay slots end; a return shows f128_132, which is no target there.
+    call = Word(
+        ctl_lo=CtlLo(imm=0xA3, f1=1),
         regs_a=RegsA(f128_132=0x5),
         c2=C2(ctl_n=0),
+        ctl_hi=CtlHi(op=3),
     )
-    end = Word(regs_a=RegsA(f128_132=1), c2=C2(ctl_n=0), ctl_hi=CtlHi(f313_319=4))
-    assert (control.target, control.end, end.target, end.end) == (
+    ret = Word(regs_a=RegsA(f128_132=1), c2=C2(ctl_n=0), ctl_hi=CtlHi(op=4))
+    data = Word(ctl_lo=CtlLo(imm=0xC), ctl_hi=CtlHi(op=0x1F))
+    assert (call.target, call.control, ret.target, ret.control, data.control) == (
         0x5A3,
-        False,
+        True,
         None,
         True,
+        False,
     )
-    text = listing(Program((control, end)))
+    text = listing(Program((call, *[IDLE] * 6, ret, data)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
-    assert body == ["0  -> 1443!  ctl_lo: f1=1", "1  end t=100"]
+    assert body == [
+        "0   call~ -> 1443!  ctl_lo: f1=1",
+        "1..4 | idle x4",
+        "5..6   idle x2",
+        "7   ret~  regs_a: f128_132=r1",
+        "8 | op1f~  ctl_lo: imm=c!",
+    ]
 
 
 def test_listing_collapses_idle_runs_repeats_and_deltas():
@@ -68,11 +78,11 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
     text = listing(Program((IDLE, IDLE, a, a, a, b, IDLE, b)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0..1  idle x2",
-        "2..4  x3 regs_a: xreg=r3~ f123_127=r2",
-        "5  ^  regs_a: xreg=r7~",
-        "6  idle",
-        "7  regs_a: xreg=r7~ f123_127=r2",
+        "0..1   idle x2",
+        "2..4   x3 idle~  regs_a: xreg=r3~ f123_127=r2",
+        "5   idle~  ^  regs_a: xreg=r7~",
+        "6   idle",
+        "7   idle~  regs_a: xreg=r7~ f123_127=r2",
     ]
 
 

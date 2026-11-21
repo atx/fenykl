@@ -3,7 +3,16 @@ from collections import Counter
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp.fields import FIELDS, STAIRCASE, WORD_BITS
+from fenykl.dsp.fields import (
+    CONTROL_FLAG,
+    CONTROL_OPS,
+    DATA_OPS,
+    FIELDS,
+    IDLE_OP,
+    STAIRCASE,
+    WORD_BITS,
+    op,
+)
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
 from fenykl.dsp.word import IDLE, Word
 
@@ -67,20 +76,56 @@ def test_program_16_route_staircase(items):
 
 
 def test_control_word_targets_lie_inside_their_program(items):
-    # (control words, end ops) per program; every other control word names a word of its program.
+    # (control words, returns) per program; every op 0..3 word names a word of its program.
     counts = {}
     for item, data in items.items():
         words = decode_item(data, STOCK[item]).words
         control = [w for w in words if w.control]
-        counts[item] = (len(control), sum(w.end for w in control))
+        counts[item] = (len(control), sum(w.op == 4 for w in control))
         for index, word in enumerate(words):
             if word.target is not None:
                 assert word.target < len(words), (item, index)
     assert counts == {7: (72, 9), 13: (24, 2), 15: (15, 2), 16: (5, 1), 17: (36, 4)}
 
 
-def test_program_16_targets(items):
+def test_the_op_field_decodes_every_stock_word(items):
+    # f229 is clear exactly in the control ops, the immediate is 0 whenever the op is idle, halt
+    # is word 5 alone, and every other op is a data op.
+    for item, data in items.items():
+        words = decode_item(data, STOCK[item]).words
+        for index, w in enumerate(words):
+            flag_clear = CONTROL_FLAG.get(w.value) == 0
+            assert flag_clear == (w.op in CONTROL_OPS), (item, index)
+            if w.op == IDLE_OP:
+                assert w["imm"] == 0, (item, index)
+        assert [i for i, w in enumerate(words) if w.op == 7] == [5], item
+        others = {w.op for w in words} - set(CONTROL_OPS) - {7, IDLE_OP}
+        assert others <= set(DATA_OPS), item
+
+
+def test_no_delay_slot_is_a_target_or_a_control_word(items):
+    for item, data in items.items():
+        program = decode_item(data, STOCK[item])
+        targets = {w.target for w in program.words if w.target is not None}
+        control = {i for i, w in enumerate(program.words) if w.control}
+        assert not program.delay_slots() & (targets | control), item
+
+
+def test_program_16_control_flow(items):
+    # Call the job routine at 10, halt at 5 on its return at 79; 27 may exit early to the
+    # return; 45 guards the loop 50..57: it sits at the loop's T - 5 and branches to its exit.
     words = decode_item(items[16], STOCK[16]).words
-    targets = {i: w.target for i, w in enumerate(words) if w.target is not None}
-    assert targets == {0: 10, 27: 79, 45: 58, 53: 50}
-    assert [i for i, w in enumerate(words) if w.end] == [79]
+    flow = {
+        i: (op(w.op).name, w.target)
+        for i, w in enumerate(words)
+        if w.control or w.op == 7
+    }
+    assert flow == {
+        0: ("call", 10),
+        5: ("halt", None),
+        27: ("brf", 79),
+        45: ("brf", 58),
+        53: ("br", 50),
+        79: ("ret", None),
+    }
+    assert (45 + 5, 53 + 5) == (words[53].target, words[45].target)

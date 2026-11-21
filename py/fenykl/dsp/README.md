@@ -8,7 +8,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 
 | module | contents |
 |---|---|
-| `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the control word's target `TARGET` |
+| `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the op meanings `OPS`, the target `TARGET`, the delay slots `DELAY_SLOTS` |
 | `units.py` | units (contiguous groups of fields) and their slot classes, derived from the table |
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
@@ -50,24 +50,47 @@ bits change: DSL source naming the old id fails loudly. Moving a field to anothe
 of its `unit`.
 
 Kinds: `reg` (register specifier r0..r31), `opcode`, `route` (source or path select), `flag`
-(one control bit), `const` (the same value in every stock word), `raw` (not decoded).
+(one control bit), `const` (the same value in every stock word), `imm` (an immediate operand),
+`raw` (not decoded).
 
-### Control words
+### The op and control words
 
-A word with f229 (`ctl_n`) clear is a control word. Unless f313_319 is 4, which marks the end op,
-it names a target T = bits 15..22 | bits 128..132 << 8, an absolute word index into its program:
-`word.target`, None for the end op and for other words. The structure is verified in the bytes:
-across later firmware versions of the same family T follows its target word wherever code moved,
-and every control word but the end op has its T inside its program. What a control word does
-there (a jump, a loop end, a call) is a hypothesis. In a control word f15_18 and f19_22 are one
-8-bit field, T's low byte, and f128_132 holds T's high bits, not a register; elsewhere they keep
-their reading.
+Bits 313..319 are one 7-bit op field, `op`, in every word, and f15_22 (`imm`) is that op's 8-bit
+immediate, 0 whenever the op is idle (both verified in the bytes of the five stock programs and
+across later firmware versions of the same family). `OPS` in the table gives each value its name,
+confidence and fact; `fields.op(value)` is total:
+
+| op | name | meaning | confidence |
+|---|---|---|---|
+| 0 | `loop` | loop end, back to T | inferred, strong |
+| 1 | `brf` | forward conditional branch, the guard of a loop | inferred |
+| 2 | `br` | conditional branch either way | inferred |
+| 3 | `call` | call (when a return lies before T; the other op 3 words are open) | inferred, strong |
+| 4 | `ret` | return to the word after the call's delay slots | inferred, strong |
+| 7 | `halt` | ends the job; word 5 of every program, where the call at word 0 returns | inferred |
+| 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
+| 127 | `idle` | no op | inferred |
+
+5, 6 and 74..126 never occur. Ops 0..4 are the control ops (`CONTROL_OPS`, `word.control`), and
+f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 | bits 128..132 <<
+8, an absolute word index into the program (`word.target`, None for other words): T follows its
+target word wherever code moved across later firmware versions of the same family, and lies inside
+its program in every op 0..3 word (verified in the bytes). In those words `imm` is T's low byte and
+f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` are not in the word.
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
-exact; `TARGET` in the table composes T from f15_18, f19_22 and f128_132, and the selector is
-data next to it (`CONTROL_FLAG`, `END_FIELD`, `END_OP`). Listings show a control word as
-`-> T` and the end op as `end t=...` (T's bits, raw), in place of the fields they consist of;
-`fenykl dsp fields` prints T's definition after the table.
+exact; `TARGET` in the table composes T from `imm` and f128_132.
+
+Every control op has four delay slots (`DELAY_SLOTS`, `Program.delay_slots()`): in the five stock
+programs words i+1..i+4 of a control word at i are never a target or a control word (verified in
+the bytes; across later firmware versions of the same family only short loop ends break it). The
+reading, inferred strong, is that the slots always run and the transfer takes effect after them,
+so a call returns to i+5. A program is "call 10, halt at 5": word 0 calls the job routine, whose
+return comes back to word 5.
+
+Listings start every non-idle word with its op name and confidence mark, follow a control op 0..3
+with `-> T`, and mark delay slots with `|` after the index; `fenykl dsp fields` prints T's
+definition, the op meanings and the delay-slot rule after the table.
 
 ## Confidence
 

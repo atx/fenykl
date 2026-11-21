@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..firmware import HEAD_TAIL_SIZE, identify, unpack_firmware
-from .fields import FIELDS, WORD_BYTES, Confidence
+from .fields import DELAY_SLOTS, FIELDS, WORD_BYTES, Confidence
 from .word import IDLE, Word
 
 SLOT_BYTES = 64
@@ -93,6 +93,15 @@ class Program:
 
     def __len__(self) -> int:
         return len(self.words)
+
+    def delay_slots(self) -> set[int]:
+        """The indices of the words in the delay slots of a control word (`DELAY_SLOTS`)."""
+        return {
+            j
+            for i, w in enumerate(self.words)
+            if w.control
+            for j in range(i + 1, min(i + DELAY_SLOTS + 1, len(self.words)))
+        }
 
 
 def decode_item(data: bytes, spec: StockProgram) -> Program:
