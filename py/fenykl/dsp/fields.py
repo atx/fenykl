@@ -36,7 +36,8 @@ class Confidence(IntEnum):
 
     @property
     def mark(self) -> str:
-        return {0: "?", 1: "~", 2: ""}[self.value]
+        """Listing mark; hypothesis, the common case, stays unmarked."""
+        return {0: "", 1: "~", 2: "!"}[self.value]
 
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
