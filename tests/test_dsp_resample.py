@@ -12,6 +12,7 @@ from fenykl.dsp.emu import Boot, Emulator, Status
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.resample import Resample13Model, footprint, predict
+from fenykl.dsp.resample_edits import C2_ONLY, GRID_C2, GRID_ONLY, Idle, bit
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.taps import Taps
 from fenykl.dsp.word import IDLE
@@ -25,6 +26,8 @@ CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPO
 # Per job: the weakest taint of the dst bytes the job wrote, then the result's taint. The law is
 # at most inferred; u0 held into [-16, 16) at b 2 and plane 0's line 1 at H 1 are hypotheses.
 TAINTS = {
+    "edit-flat": "II",
+    "edit-phase": "II",
     "height-1": "HI",
     "own-gains": "II II",
     "own-phases": "II",
@@ -50,6 +53,12 @@ def taps_of(entry: dict) -> Taps:
     return Taps.of(entry["phases"])
 
 
+def edit_of(entry: dict) -> Idle:
+    kinds = {k.name: k for k in (GRID_C2, GRID_ONLY, C2_ONLY)}
+    name = entry["kind"]
+    return kinds.get(name) or bit(int(name.split()[1]))
+
+
 def run_job(emu: Emulator, job: dict, k: int):
     boot = emu.boot
     ctx = bytes([job["src"]["ctx"]]) * CTX
@@ -62,9 +71,10 @@ def run_job(emu: Emulator, job: dict, k: int):
     prefill = boot.put(
         DST, bytes([job["fill"]]) * footprint(job["h"]), f"job {k} prefill"
     )
-    result = emu.run(
-        model().job(taps_of(job["taps"]), SRC, DST, TABLE, job["w"], job["h"])
-    )
+    edits = [(job["edit"]["word"], edit_of(job["edit"]))] if "edit" in job else []
+    rjob = model().job(taps_of(job["taps"]), SRC, DST, TABLE, job["w"], job["h"], edits)
+    result = emu.run(rjob)
+    assert [c for _, c in result.edits] == [Confidence.VERIFIED] * len(edits)
     return result, prefill
 
 
@@ -249,3 +259,51 @@ def test_taps_outside_those_that_ran_are_a_hypothesis():
     conf = predict(model(), Taps.of(phases), image, table).confidence()
     assert set(conf[:1024]) == {Confidence.HYPOTHESIS, None}
     assert Confidence.HYPOTHESIS not in conf[1024:]
+
+
+# A flat source (every line constant along x) with lines 7 i + 3, at b 1: line i at phase i.
+FLAT = bytes((7 * (k // 64) + 3) & 0xFF for k in range(3 * 64 * 16))
+PHASES = [(-8, 264, 0, 0)] * 16
+PHASES[3] = (0, 0, 0, 256)
+TABLE13 = [(i << 16 | (i % 16) << 12, 0x10000) for i in range(15)] + [
+    (15 << 16, 0x10000)
+]
+
+
+def names(p, a: int, z: int) -> set[str]:
+    return {p.sources[s].name for s in p.dst.src[a:z]}
+
+
+def test_a_measured_edit_runs_its_law_on_the_class_it_ran_on():
+    taps = Taps.of(PHASES)
+    got = predict(model(), taps, FLAT, TABLE13, edits=[(439, GRID_C2)])
+    drop = predict(model(), Taps.of([(0, *p[1:]) for p in PHASES]), FLAT, TABLE13)
+    stock = predict(model(), taps, FLAT, TABLE13)
+    assert [c for _, c in got.result.edits] == [Confidence.VERIFIED]
+    assert got.dst.known[:1024] == drop.dst.known[:1024]
+    assert got.dst.data[:1024] == drop.dst.data[:1024] != stock.dst.data[:1024]
+    assert not any(got.dst.known[1024:2048]) and names(got, 1024, 2048) == {
+        "resampler edit"
+    }
+    assert got.dst.data[2048:] == stock.dst.data[2048:]
+    # Word 437: line 3 has tap 3 only, which reads tap 0's line, a - 1.
+    got = predict(model(), taps, FLAT, TABLE13, edits=[(437, GRID_C2)])
+    assert set(got.dst.data[3 * 64 : 4 * 64]) == {FLAT[2 * 64]}
+    assert got.result.taint is Confidence.INFERRED
+
+
+def test_a_measured_edit_outside_its_classes_gives_no_prediction():
+    # Word 439's edit never ran at b 0.5 on a flat source.
+    table = [(i << 16, 0x8000) for i in range(16)]
+    got = predict(model(), Taps.of(PHASES), FLAT, table, edits=[(439, GRID_C2)])
+    assert not any(got.dst.known) and names(got, 0, len(got.dst)) == {"resampler edit"}
+    assert "ran only on" in got.result.notes[-1] and got.result.edits == []
+    got = predict(
+        model(), Taps.of(PHASES), FLAT, table, edits=[(439, GRID_C2)], strict=False
+    )
+    assert set(got.confidence()) - {None} == {Confidence.HYPOTHESIS}
+    # Two measured edits never ran together.
+    got = predict(
+        model(), Taps.of(PHASES), FLAT, TABLE13, edits=[(439, GRID_C2), (490, GRID_C2)]
+    )
+    assert not any(got.dst.known)

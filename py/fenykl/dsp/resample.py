@@ -45,9 +45,13 @@ the pair is unknown. H 1: plane 0 is written as a line pair (line 0 twice, or li
 read of table entry 1: the run cannot tell, so line 1 is a hypothesis), then planes 1 and 2,
 64 bytes past 3 x 64 x H [verified: one run]; an odd H above 1 never ran, so its dst is
 unknown.
+
+Edits: an edited program runs only as one of the edits measured on the camera
+(`resample_edits`), on the job classes it ran on; see `Resample13Model._effects`.
 """
 
 import struct
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import floor
@@ -57,6 +61,20 @@ from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
 from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
 from .fields import FIELDS, Confidence
 from .program import Program, stock_programs
+from .resample_edits import (
+    FACTS,
+    STOCK,
+    Changed,
+    Effect,
+    Fact,
+    Idle,
+    Operand,
+    Operands,
+    Phase,
+    Planes,
+    Probe,
+    Stock,
+)
 from .semantics import (
     IDLE_CLASS,
     OpaqueClass,
@@ -191,6 +209,7 @@ _WHY = {
     "narrow": "W < 64 with b != 1 never ran",
     "range": "a table entry outside the range that ran",
     "input": "the job reads unknown bytes (src, table or taps)",
+    "operand": "an edit's operand that is not known reaches this byte",
     "partial": "a partial column block of a job that is not an H 16 identity with a unit phase-0 "
     "kernel: it holds other content than the held lines",
 }
@@ -198,8 +217,9 @@ _WHY = {
 
 class Resample13Model:
     """The model of program 13, built from the stock program (`from_image` reads it from a
-    stock E-M10 II `.BIN`). Its classes are the idle word and one class per distinct stock word,
-    matched by value; the law applies to the stock program run as it is."""
+    stock E-M10 II `.BIN`). Its classes are the idle word, one class per distinct stock word and
+    one per measured edited word, matched by value; the law applies to the stock program run as
+    it is, and to the measured edits on the job classes they ran on."""
 
     def __init__(self, program: Program) -> None:
         self.program = program
@@ -224,58 +244,52 @@ class Resample13Model:
             )
             for at in positions.values()
         ]
-        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *self.opaque)
+        self.edits = _measured_edits(program)
+        edited = [
+            OpaqueClass(
+                f"word {i}, {e.kind.name}",
+                "an edited stock word of the resampler, measured on the camera",
+                {f.id: f.get(value) for f in FIELDS},
+                frozenset(),
+                confidence=I,
+                part=part,
+                positions=frozenset({i}),
+            )
+            for (i, value), e in self.edits.items()
+        ]
+        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *edited, *self.opaque)
 
     @classmethod
     def from_image(cls, image: bytes) -> "Resample13Model":
         return cls(stock_programs(image)[ITEM])
 
     def job(
-        self, taps: Taps, src: int, dst: int, table: int, width: int, height: int
+        self,
+        taps: Taps,
+        src: int,
+        dst: int,
+        table: int,
+        width: int,
+        height: int,
+        edits: Sequence[tuple[int, Idle]] = (),
     ) -> Job:
-        """The cmd 0xC job of the stock program with `taps` as its tap words, at stride 64."""
-        program = Program(self.program.words, taps.pack())
+        """The cmd 0xC job of the stock program with `taps` as its tap words, at stride 64, and
+        each (index, kind) of `edits` applied to its stock word."""
+        words = list(self.program.words)
+        for i, kind in edits:
+            words[i] = kind.apply(words[i])
+        program = Program(tuple(words), taps.pack())
         return commands.resample(program, src, dst, table, STRIDE, width, height)
 
     def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
         boot = emu.boot
-        cap = min(I, trace.taint)
-        stock = self.program.words
-        edited = [
-            i
-            for i in range(max(len(stock), len(job.program.words)))
-            if i >= len(stock)
-            or i >= len(job.program.words)
-            or job.program.words[i] != stock[i]
-        ]
-        if edited:
-            at = edited[0]
-            if emu.strict:
-                fields = (
-                    job.program.words[at].changed(stock[at])
-                    if at < min(len(stock), len(job.program.words))
-                    else []
-                )
-                raise UnknownSemantics(
-                    at,
-                    f"stock word {at}",
-                    fields,
-                    "no word of program 13 is decoded: an edited program has no semantics",
-                )
-            trace.notes.append(f"words {edited} differ from the stock program")
-            cap = H
         req = Request.read(boot)
         req.check()
         h, w = req.height, req.width
         result = JobResult(Status.OK, ignored=trace.ignored, notes=trace.notes)
-        result.taint = cap
         n = footprint(h)
         result.stored = (req.dst, req.dst + n)
-        if h % 2 and h > 1:
-            why = boot.source("resampler odd H", "an odd H above 1 never ran")
-            boot.dram.write(dram_alias(req.dst), Bytes.unknown(n, why))
-            boot.lines.forget(why)
-            return result
+        edited = self._edited(emu, job)
         taps_b = boot.local.read(LOCAL_BASE + RESAMPLE_TAPS, 4 * TAP_WORDS)
         taps = Taps.unpack(bytes(taps_b.data)).phases if all(taps_b.known) else None
         taps_taint = min(taps_b.taint) if taps is not None else V
@@ -288,6 +302,18 @@ class Resample13Model:
         ]
         table_taint = min(table_b.taint) if all(table_b.known) else V
         px = _Pixels(boot.read(req.src, PLANES * STRIDE * h), h)
+        effects = (
+            self._effects(emu, job, edited, _probe(px, entries, w), result)
+            if edited
+            else STOCK_PLANES
+        )
+        cap = result.taint = H if effects is None else min(I, trace.taint)
+        effects = effects or STOCK_PLANES
+        if h % 2 and h > 1:
+            why = boot.source("resampler odd H", "an odd H above 1 never ran")
+            boot.dram.write(dram_alias(req.dst), Bytes.unknown(n, why))
+            boot.lines.forget(why)
+            return result
         law = boot.source("resampler", "program 13's measured law")
         why = {k: boot.source(f"resampler {k}", v) for k, v in _WHY.items()}
         base_taint = min(cap, taps_taint, table_taint)
@@ -299,14 +325,20 @@ class Resample13Model:
         lines0 = max(h, 2)
         for c in range(PLANES):
             plane = 0 if c == 0 else STRIDE * (lines0 + (c - 1) * h)
+            effect = effects[c]
             for i in range(lines0 if c == 0 else h):
+                if isinstance(effect, Changed):
+                    changed = boot.source("resampler edit", effect.why)
+                    line = Bytes.unknown(w, changed)
+                    boot.dram.write(dram_alias(req.dst + plane + STRIDE * i), line)
+                    continue
                 entry = entries[min(i, h - 1)]
                 line = Bytes(w)
                 for x in range(full):
                     try:
                         if entry is None or (c == 0 and taps is None):
                             raise _Miss("input")
-                        v, t = self._pixel(px, taps, c, entry, x, w)
+                        v, t = self._pixel(px, taps, c, entry, x, w, effect)
                     except _Miss as m:
                         line.src[x] = why[m.why]
                         continue
@@ -315,14 +347,75 @@ class Resample13Model:
                         t = H
                     line.taint[x], line.src[x] = min(base_taint, t), law
                     line.off[x] = plane + STRIDE * i + x
-                if full < w and identity and (c != 0 or taps and _unit(taps[0])):
+                unit = c != 0 or taps is not None and _unit(taps[0])
+                if full < w and identity and unit and not edited:
                     held = boot.lines.read((2 * c + i % 2) * STRIDE + full, w - full)
                     line = line[:full] + held
                 elif full < w:
                     line = line[:full] + Bytes.unknown(w - full, partial)
                 boot.dram.write(dram_alias(req.dst + plane + STRIDE * i), line)
-        self._hold(boot, req, entries, taps, px, full)
+        if edited:
+            boot.lines.forget(
+                boot.source(
+                    "resampler held lines", "what an edited job holds is not known"
+                )
+            )
+        else:
+            self._hold(boot, req, entries, taps, px, full)
         return result
+
+    def _edited(self, emu: Emulator, job: Job) -> list[int]:
+        """The indices of the words that differ from the stock program. In strict mode a word
+        that is no measured edit raises UnknownSemantics."""
+        stock, words = self.program.words, job.program.words
+        both = min(len(stock), len(words))
+        edited = [
+            i
+            for i in range(max(len(stock), len(words)))
+            if i >= both or words[i] != stock[i]
+        ]
+        for at in edited:
+            if not emu.strict or at < both and (at, words[at].value) in self.edits:
+                continue
+            raise UnknownSemantics(
+                at,
+                f"stock word {at}",
+                words[at].changed(stock[at]) if at < both else [],
+                "no word of program 13 is decoded and no measured edit gives this word",
+            )
+        return edited
+
+    def _effects(
+        self,
+        emu: Emulator,
+        job: Job,
+        edited: list[int],
+        probe: Probe | None,
+        result: JobResult,
+    ) -> Planes | None:
+        """What each plane does in a job with these edited words: one measured edit on a class
+        it ran on gives its planes [verified]; anything else is unknown in strict mode and None
+        in lenient mode (the stock law, as a hypothesis)."""
+        words = job.program.words
+        edits = [
+            self.edits.get((i, words[i].value)) if i < len(words) else None
+            for i in edited
+        ]
+        e = edits[0]
+        if len(edited) > 1:
+            why = "edits of two or more words never ran together"
+        elif e is None:
+            why = "no measured edit gives this word"
+        elif probe not in e.planes:
+            ran = "; ".join(str(p) for p in e.planes)
+            why = f"word {edited[0]} with its {e.kind.name} ran only on: {ran}"
+        else:
+            result.edits.append(
+                (f"word {edited[0]}, {e.kind.name}, on {probe}: {e.fact}", V)
+            )
+            return e.planes[probe]
+        result.notes.append(why)
+        return (Changed(why),) * PLANES if emu.strict else None
 
     def _pixel(
         self,
@@ -332,8 +425,10 @@ class Resample13Model:
         entry: tuple[int, int],
         x: int,
         w: int,
+        effect: Effect,
     ) -> tuple[int, Confidence]:
-        """The output byte at pixel x of plane c for table entry (a, b), and its taint."""
+        """The output byte at pixel x of plane c for table entry (a, b) under an edit's
+        `effect` on the plane, and its taint."""
         a, b = entry
         h = px.h
         if not 0 <= a <= (h - 1) << 16 or not B_RANGE[0] <= b <= B_RANGE[1]:
@@ -358,8 +453,14 @@ class Resample13Model:
                 taint = H  # a phase between the 16 never ran
             p = (a & 0xFFFF) >> 12
             kernel = taps[p] if c == 0 else chroma(p)
+            taint = min(Confidence(taint), _gain_taint(kernel))
+            if isinstance(effect, Phase):
+                return _phase(get, base, kernel, x, effect.q), taint
+            if isinstance(effect, Operands):
+                return _operands(effect, kernel, lambda j: get(base - 1 + j, x)), taint
             s = sum(t * get(base - 1 + k, x) for k, t in enumerate(kernel) if t)
-            return out_of(s), min(Confidence(taint), _gain_taint(kernel))
+            return out_of(s), taint
+        assert isinstance(effect, Stock), "edit laws hold at b = 1 only"
         if a & 0xFFFF:
             raise _Miss("frac")
         if w != STRIDE:
@@ -424,6 +525,79 @@ class Resample13Model:
                 )
 
 
+STOCK_PLANES: Planes = (STOCK, STOCK, STOCK)
+
+
+def _measured_edits(program: Program) -> dict[tuple[int, int], Fact]:
+    """The measured edits by (index, edited word value); the facts of one edited word merge."""
+    out: dict[tuple[int, int], Fact] = {}
+    for fact in FACTS:
+        for i in fact.words:
+            stock = program.words[i]
+            word = fact.kind.apply(stock)
+            if word == stock:
+                raise ValueError(f"word {i}: {fact.kind.name} leaves it unchanged")
+            old = out.get((i, word.value))
+            if old is None:
+                out[i, word.value] = fact
+                continue
+            if any(old.planes.get(p, v) != v for p, v in fact.planes.items()):
+                raise ValueError(f"word {i}: facts of one edited word disagree")
+            facts = "; ".join(f for f in (old.fact, fact.fact) if f)
+            out[i, word.value] = Fact(
+                old.kind, (i,), {**old.planes, **fact.planes}, facts
+            )
+    return out
+
+
+def _probe(px: _Pixels, entries: list[tuple[int, int] | None], w: int) -> Probe | None:
+    """The job's class: None if the source is unknown, the height is not 16 or b varies."""
+    data = px.data
+    if px.h != HELD or None in entries or not all(data.known):
+        return None
+    steps = {e[1] for e in entries if e is not None}
+    if len(steps) != 1:
+        return None
+    flat = all(
+        len(set(data.data[o : o + STRIDE])) == 1 for o in range(0, len(data), STRIDE)
+    )
+    return Probe(flat, steps.pop(), w)
+
+
+def _operands(
+    effect: Operands, kernel: tuple[int, ...], line: Callable[[int], int]
+) -> int:
+    """The output byte of a kernel whose tap k multiplies effect.ops[k]; `line(j)` reads tap j's
+    source line."""
+    taps = [(k, t) for k, t in enumerate(kernel) if t]
+    if any(isinstance(effect.ops[k], Operand) for k, _ in taps):
+        if len(taps) == 1:
+            ((k, t),) = taps
+            if effect.ops[k] is Operand.LOW and 0 < t <= 256:
+                return 0
+        raise _Miss("operand")
+    s = 0
+    for k, t in taps:
+        j = effect.ops[k]
+        if j is not None:
+            assert isinstance(j, int)
+            s += t * line(j)
+    return out_of(s)
+
+
+def _phase(
+    get: Callable[[int, int], int], base: int, kernel: tuple[int, ...], x: int, q: int
+) -> int:
+    """A chroma byte sampled along the line at phase q / 16 (see `Phase`)."""
+    s = 0
+    for k, t in enumerate(chroma(q)):
+        if t:
+            xx = x - 1 + k
+            v = sum(tv * get(base - 1 + j, xx) for j, tv in enumerate(kernel) if tv)
+            s += t * rhe(v, 4)
+    return max(0, min(255, rhe(s, 1 << 14)))
+
+
 @dataclass(frozen=True)
 class Prediction:
     """A job's dst footprint as the model predicts it on a fresh boot."""
@@ -432,6 +606,7 @@ class Prediction:
     """Value, known flag and taint per byte."""
     sources: list[Source]
     """The boot's sources: `dst.src` indexes them."""
+    result: JobResult
 
     def confidence(self) -> list[Confidence | None]:
         """Per byte its confidence, None where it is unknown."""
@@ -459,9 +634,12 @@ def predict(
     src: bytes,
     table: list[tuple[int, int]],
     width: int = STRIDE,
+    edits: Sequence[tuple[int, Idle]] = (),
+    strict: bool = True,
 ) -> Prediction:
-    """The dst of the stock program run with `taps` on image `src` (three planes of 64 x H at
-    stride 64) and the line table (one entry (a, b) per output line, H = len(table)).
+    """The dst of the stock program, with `edits` applied (see `model.job`), run with `taps` on
+    image `src` (three planes of 64 x H at stride 64) and the line table (one entry (a, b) per
+    output line, H = len(table)).
 
     Bytes the job does not write are unknown ("not written"), as are the bytes the law does not
     give; a partial column block is unknown since a fresh boot holds no line pairs."""
@@ -476,5 +654,6 @@ def predict(
     n = footprint(h)
     unwritten = boot.source("not written", "the job does not write it")
     boot.dram.write(dram_alias(_DST), Bytes.unknown(n, unwritten))
-    Emulator(boot, model).run(model.job(taps, _SRC, _DST, _TABLE, width, h))
-    return Prediction(boot.read(_DST, n), boot.sources)
+    job = model.job(taps, _SRC, _DST, _TABLE, width, h, edits)
+    result = Emulator(boot, model, strict).run(job)
+    return Prediction(boot.read(_DST, n), boot.sources, result)

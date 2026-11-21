@@ -61,6 +61,9 @@ class JobResult:
     stored bytes can be weaker still through the buffer they come from."""
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    edits: list[tuple[str, Confidence]] = field(default_factory=list)
+    """The measured edits of the stock program the job ran, each with the confidence of its
+    outcome on this job."""
 
 
 class Boot:

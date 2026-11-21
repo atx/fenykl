@@ -211,7 +211,15 @@ P16_C2_BITS = (
     290,
     292,
 )
-WORD504 = "program 13 word 504 has bits of this subfield clear; idling them moves its last plane's horizontal sample to x + 14/16 (verified on the camera)"
+WORD504 = (
+    "program 13 word 504 has bits of this subfield clear; idling any one of 296, 297, 299, 300 "
+    "moves its last plane's horizontal sample to x + 14/16 at b = 1, as idling all of C2's "
+    "free bits does (verified on the camera)"
+)
+WORD504_NONE = (
+    "program 13 word 504 has bits of this subfield clear; idling 237, 239 or 254 alone changed "
+    "no byte (verified on the camera, an x-varying source at b = 1)"
+)
 SIGNATURE = (
     "part of the control signature: a word that differs from the three identical words after it "
     "only in bits 128, 273, 318, 319 (clear) and 17, 18 (set); it ends programs 6, 0xC and 0xF "
@@ -264,8 +272,10 @@ def _c2() -> list[Field]:
     out = []
     for lo, hi, idle in _C2:
         fact = _c2_fact(lo, hi)
-        if lo in (236, 252, 296, 298):
+        if lo in (296, 298):
             fact += f"; {WORD504}"
+        if lo in (236, 252):
+            fact += f"; {WORD504_NONE}"
         if lo == 272:
             fact += f"; bit 273: {SIGNATURE}"
         out.append(_op(lo, hi, idle, fact))

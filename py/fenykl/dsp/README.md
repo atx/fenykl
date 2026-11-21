@@ -18,6 +18,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics` |
 | `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
+| `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields` |
@@ -156,15 +157,32 @@ the request to 0x742..0x747; the table stays in DRAM. Own taps are a program wit
 << 16, word 2p + 1 tap 2 | tap 3 << 16. `Taps.from_floats` rounds each tap on its own and does not
 renormalise a phase to 256. No word of program 13 is decoded: its classes are the idle word and the
 stock words matched by value, and the law (`resample.py`'s docstring) applies to the stock program
-as it is. An edited program raises `UnknownSemantics` (strict) or runs as the stock law tainted
-"hypothesis". Every byte the law computes is at most inferred, a law measured from outside;
+as it is. Every byte the law computes is at most inferred, a law measured from outside;
 hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, a tap outside -637..2048 (the taps
 that ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
 A partial column block is unknown unless the job is an H 16 identity with a unit phase-0 kernel.
 Bytes the law does not give (the bottom and right edges, plane 0 at b != 1 where the vertical pass
 is not exact, a fractional a with b != 1, W < 64 with b != 1, an odd H above 1) are UNKNOWN with a
 source that says why. The curated camera vectors are in `tests/data/dsp/resample/` (jobs with their
-taps, table and source image; dst segments).
+taps, table and source image, an edit as {word, kind}; dst segments).
+
+#### Edits
+
+`resample_edits.FACTS` holds the edits measured on the camera: a stock word with some bits set to
+the idle word's (`Idle`: the grid and C2's free bits, the grid, C2's free bits, one bit), and per
+job class (`Probe`: a flat source or not, the step b, W; H 16) what each plane does: the stock law
+(`Stock`), unknown (`Changed`), or a law (`Operands`: plane 0 with each tap multiplying another
+tap's line, nothing or a bounded value; `Phase`: a chroma plane sampled at another horizontal
+phase). The model matches an edited word by its value, so the classes hold the measured edited
+words too. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them.
+
+- one measured edit on a class it ran on: its planes; `JobResult.edits` names it, verified (the
+  bytes stay at most inferred, through the law);
+- the same edit on another class, or two edits together: dst unknown ("resampler edit") in strict
+  mode, the stock law as a hypothesis in lenient mode;
+- any other edited word: `UnknownSemantics` (strict), the stock law as a hypothesis (lenient).
+
+An edited job forgets the held lines, and its partial column block is unknown.
 
 ### Adding a semantic
 
