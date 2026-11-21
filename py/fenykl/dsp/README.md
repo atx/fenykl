@@ -108,8 +108,9 @@ immediates are two's complement (inferred: their 0x1fxx values read as small neg
 The A ops are the immediate forms of the A' ops at op + 1. The strongest meaning is 0x1a, a read
 of the local word at its immediate (inferred, strong): program 16's three 0x1a words name the
 local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
-destination (inferred: the op names the same ra again with another immediate in 94 % of the
-cases across later firmware versions of the same family). `word.operands` decodes a data op's operands (`Operands`), and
+destination (inferred: across later firmware versions of the same family, in 59 % of its words
+the next naming of that register is this op again, with another immediate in 95 % of those
+pairs, which as writes would be dead). `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
 

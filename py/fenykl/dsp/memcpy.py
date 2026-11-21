@@ -798,7 +798,8 @@ class Copy16Model:
 
 
 SEEN_LENGTHS = range(0x200, 0x4001, 0x10)
-"""The copy lengths of the camera runs, 0.5..16 KiB in whole 16-byte lines."""
+"""The lengths within the range and alignment of the copies run on the camera: 0.5..16 KiB in
+whole 16-byte lines."""
 
 
 def copy_branches(length: int) -> Given:

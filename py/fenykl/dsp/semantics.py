@@ -395,8 +395,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         I,
         "reads local word ra + imm, ra a base register it does not write (inferred: program "
         "16's three 0x1a words name local words 0, 1 and 2 (src, dst, len) with one ra, and "
-        "across later firmware versions of the same family the same op names the same ra again "
-        "with another immediate in 94 % of the cases); where the datum goes is open, so the "
+        "across later firmware versions of the same family, in 59 % of its words the next "
+        "naming of that register is this op again, with another immediate in 95 % of those "
+        "pairs, which as writes would be dead); where the datum goes is open, so the "
         "core records the read only; covered at f120_122 = 7, the value of those three words",
         _local_read,
     ),

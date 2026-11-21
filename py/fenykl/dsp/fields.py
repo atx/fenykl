@@ -771,8 +771,9 @@ MEANINGS = {
     "name local words 0, 1 and 2 (src, dst, len), all with ra = 5; idling the one at 2 on the "
     "camera stores 16 KiB of zeros whatever len is, idling the other two leaves dst unwritten; ra "
     "a base register it reads, not a destination (inferred: across later firmware versions of "
-    "the same family the op names the same ra again with another immediate in 94 % of the "
-    "cases, which as writes would be dead), so the word is ra + imm",
+    "the same family, in 59 % of its words the next naming of that register is this op again, "
+    "with another immediate in 95 % of those pairs; as writes they would be dead), so the word "
+    "is ra + imm",
     0x1E: "at a routine's entry + 1 in 67 routines: adds or subtracts a small immediate, a frame or "
     "pointer adjust (hypothesis)",
     0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: adds or subtracts a "
