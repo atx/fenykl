@@ -88,12 +88,12 @@ SEGMENT_KEYS = {
 CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
 # Per job: the weakest taint of the known checked dst bytes ("-" none known or no dst checked,
-# "." job not checked),
-# then the result's taint, by the README's rule: a copy is at most inferred; r6, r11, r14 and
-# r21's format are hypotheses, and so is what they placed or formatted, also when a later job
-# stores it again; regs_b off the stock values and an unset slot (idled 66) are hypotheses;
-# what an idled word or a role's register decides alone at 1 KiB is verified (dst keeps the
-# verified prefill), and at most inferred at other lengths or with a second edit.
+# "." job not checked), then the result's taint, by the README's rule: a copy is at most
+# inferred; r6, r11, r14 and r21's format are hypotheses, and so is what they placed or
+# formatted, also when a later job stores it again; regs_b off the stock values and an unset
+# slot (idled 66) are hypotheses; an idled word or a role's register that alone stops the store
+# at 1 KiB is verified (dst keeps the verified prefill), at most inferred at other lengths or
+# with a second edit; a job that stores is at most inferred, whatever decided it.
 TAINTS = {
     "abort-idle66-b": "II -H II",
     "abort-idle66": "II II -H II HH HH HH HH II",
@@ -104,12 +104,12 @@ TAINTS = {
     "firmware-r21": "II II II II II II",
     "format47-2k": "II II II HH II II II",
     "format47-pack": "II II II II HH II II II II II",
-    "format47-store-side": "II II HH IV II IV",
+    "format47-store-side": "II II HH II II II",
     "format47-zero-boot": "II II HH HH II II II II",
     "format47-zero-cells": "II II II II II II II",
     "idle-no-store": "VV VV VV VV VV VV VV VV VV II",
-    "idle15-zero-fill": ".I IV",
-    "idle61": "II II II -V",
+    "idle15-zero-fill": ".I II",
+    "idle61": "II II II -I",
     "offset68-2k": "II II HH II II HH",
     "offset68-512": "II II HH II II HH",
     "place-1k": "II II HH II HH II HH II HH",
@@ -118,7 +118,7 @@ TAINTS = {
     "r14-exact": "II II HH HH .I HH HH HH HH HH II",
     "regs-b-flips": "II II HH HH HH HH",
     "replay-4k": "II II",
-    "replay-after-count": "II II II IV II II IV II HH HV",
+    "replay-after-count": "II II II II II II II II HH HI",
     "stock-copy": "II",
 }
 

@@ -69,7 +69,8 @@ class JobResult:
     stored: tuple[int, int] | None = None
     """The dst range the store wrote, None when it wrote nothing."""
     taint: Confidence = V
-    """The confidence of the status and of whether and what the job stored."""
+    """The confidence of what this job did: its status, whether it stored and the store itself;
+    stored bytes can be weaker still through the buffer they come from."""
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -163,7 +164,6 @@ class Emulator:
         result = JobResult(
             status,
             [why for _, why, _ in plan.outcomes],
-            taint=plan.result_taint(),
             ignored=trace.ignored,
             notes=trace.notes,
         )
@@ -171,6 +171,7 @@ class Emulator:
         assert length is not None and view.dst is not None
         loads = not plan.has(Outcome.NO_LOAD)
         stores = status is Status.OK and not plan.has(Outcome.NO_STORE)
+        result.taint = plan.result_taint(stores)
         unknown_data = plan.has(Outcome.DATA_UNKNOWN)
 
         if loads:

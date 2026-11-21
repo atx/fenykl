@@ -72,10 +72,12 @@ is weaker:
   hypothesis: an undecoded stock word runs as its class, inferred at its stock indices and a
   hypothesis elsewhere; a transfer whose role the sequencer assigns away from the role's stock
   word is a hypothesis; the idle word is verified anywhere.
-- **Roles.** A role's outcome table and a role's use at a register other than its stock one
-  are verified at the lengths they ran at on the camera (`seen`, 1 KiB unless stated) and
-  inferred at others (word 76's use: a hypothesis); a use is never stronger than its register's
-  fact.
+- **Outcome tables.** What a role's table (or a part's swept register, or an idled part) gives
+  is verified at the job lengths it ran at on the camera (`seen`, 1 KiB unless stated) and
+  inferred at others.
+- **Uses.** A role's use of its register's value (address, offset, count, format) is inferred,
+  at its stock register too, and never stronger than the register's fact; word 76's use at
+  another register is a hypothesis beyond the lengths it ran at.
 - **Combinations.** A job that differs from the stock program in two or more words is at most
   inferred: no combination of edits is registered as seen together.
 - **Lenient mode.** An ignored field, or a route nibble off the stock transfers' values, makes
@@ -85,9 +87,10 @@ Per output byte the emulator takes the minimum: the loaded bytes get the weakest
 that ran, the parts' outcomes, the caps above and the load's roles (66, 67, 68); the stored bytes
 the weakest of the buffer bytes they come from and the same with the store's roles. Since no word
 of program 16 is decoded, every byte it copies is at most inferred, the stock copy's too.
-`JobResult.taint` qualifies the status and whether and what the job stored: the weakest of the
-outcomes that decided it (an idled word, a role's register) under the caps, else the load's
-and the store's.
+`JobResult.taint` qualifies what this job did: the weakest of the outcomes that decided its
+status and whether it stored (an idled word, a role's register) under the caps, and of the store
+when it stored; with no deciding outcome, the load's and the store's. Stored bytes can be weaker
+still through the buffer they come from (a held buffer of an older job).
 
 ## The emulator
 

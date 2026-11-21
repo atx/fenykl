@@ -26,6 +26,7 @@ from .fields import FIELDS, STAIRCASE, Confidence, lookup
 from .program import Program, stock_programs
 from .semantics import (
     IDLE_CLASS,
+    KIB,
     Channel,
     OpaqueClass,
     Outcome,
@@ -66,6 +67,7 @@ _PARTS: dict[int, Part] = {
         "store count and data",
         Outcome.ZERO_FILL,
         "idled, the job writes 0x4000 zero bytes from dst at 1 and 4 KiB, whatever the length",
+        seen=(KIB, 4 * KIB),
     ),
     27: Part(
         "load address (hypothesis)",
@@ -486,13 +488,16 @@ class Plan:
     def deciding(self) -> list[tuple[Outcome, str, Confidence]]:
         return [x for x in self.outcomes if x[0] is not Outcome.OK]
 
-    def result_taint(self) -> Confidence:
-        """The confidence of the job's status and of whether and what it stored: that of the
-        outcomes that decided it, else that of the load and the store."""
-        deciding = self.deciding()
-        if deciding:
-            return min(self.cap, *(c for _, _, c in deciding))
-        return min(self.load_taint, self.store_taint)
+    def result_taint(self, stores: bool) -> Confidence:
+        """The confidence of what this job did: its status and whether it stored, from the
+        outcomes that decided them; when it stored, also the store (and the load, when nothing
+        decided). Stored bytes can still be weaker through the buffer they come from."""
+        deciding = [c for _, _, c in self.deciding()]
+        if not deciding:
+            return min(self.load_taint, self.store_taint)
+        if stores:
+            deciding.append(self.store_taint)
+        return min(self.cap, *deciding)
 
 
 def _trunc32(v: int) -> int:
@@ -553,9 +558,10 @@ class Copy16Model:
                 o = part.operand.get(reg)
                 if o is None:
                     raise UnknownSemantics(index, c.name, [(lookup("xreg"), reg)])
-                stock = reg == self.program.words[min(c.positions)]["xreg"]
-                conf = V if stock else part.at(length)
-                plan.outcomes.append((o, f"{part.token} at r{reg}: {o.value}", conf))
+                if reg == self.program.words[min(c.positions)]["xreg"]:
+                    continue
+                why = f"{part.token} at r{reg}: {o.value}"
+                plan.outcomes.append((o, why, part.at(length)))
         filled, unset = sequencer.assign(self.channels, trace.channels)
         for slot in unset:
             plan.outcomes.append(
