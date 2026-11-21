@@ -2,14 +2,15 @@
 plane of the output does.
 
 An edit kind sets some bits of one stock word to the idle word's (`Idle`): the grid and C2's
-free bits, the grid alone, C2's free bits alone, the op bits, or one bit; or sets one field of
-the field table to a value (`FieldValue`, such as a register specifier renamed). Every edit
-below ran on the camera, one per job, at H 16 with stride 64, and each plane of its output was
-compared byte for byte with the stock program's output of the same job on the same boot. The
-outcomes hold on the job classes (`Probe`) they ran on, whatever the source's values and the
-taps: a plane is `STOCK` only if no byte changed in any run of that class (bytes the stock law
-leaves unknown, such as the right edge, aside), and gets a law only where the law gives every
-changed byte exactly. Outside its classes an edit gives no prediction.
+free bits, the grid alone, grid A or grid B alone, C2's free bits alone, the op bits, or one
+bit; or sets one field of the field table to a value (`FieldValue`, such as a register
+specifier renamed). Every edit below ran on the camera, one per job, at H 16 with stride 64,
+and each plane of its output was compared byte for byte with the stock program's output of the
+same job on the same boot. The outcomes hold on the job classes (`Probe`) they ran on,
+whatever the source's values and the taps: a plane is `STOCK` only if no byte changed in any
+run of that class (bytes the stock law leaves unknown, such as the right edge, aside), and
+gets a law only where the law gives every changed byte exactly. Outside its classes an edit
+gives no prediction.
 
 The classes that ran: sources whose lines are constant along x ("flat") or not, at b = 1, 1 +
 1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48."""
@@ -35,11 +36,15 @@ class Idle:
         return Word.from_int(stock.value & ~self.mask | IDLE.value & self.mask)
 
 
-GRID = sum(
-    f.mask << f.lo
-    for f in FIELDS
-    if f.unit in ("grid_a", "grid_b") and f.kind is Kind.ROUTE
-)
+def _grid(unit: str) -> int:
+    return sum(
+        f.mask << f.lo for f in FIELDS if f.unit == unit and f.kind is Kind.ROUTE
+    )
+
+
+GRID_A = _grid("grid_a")
+GRID_B = _grid("grid_b")
+GRID = GRID_A | GRID_B
 C2_FREE = sum(
     1 << b for b in range(233, 302) if b not in P16_C2_BITS and not 274 <= b <= 295
 )
@@ -56,6 +61,9 @@ word."""
 
 GRID_C2 = Idle("grid and C2 free bits idle", GRID | C2_FREE)
 GRID_ONLY = Idle("grid idle", GRID)
+# The grid A / grid B halves of GRID_ONLY; no measured facts yet.
+GRID_A_ONLY = Idle("grid A idle", GRID_A)
+GRID_B_ONLY = Idle("grid B idle", GRID_B)
 C2_ONLY = Idle("C2 free bits idle", C2_FREE)
 OP_IDLE = Idle("op bits idle", OP)
 

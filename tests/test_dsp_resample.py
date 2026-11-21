@@ -14,6 +14,8 @@ from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.resample import Resample13Model, footprint, predict
 from fenykl.dsp.resample_edits import (
     C2_ONLY,
+    GRID_A_ONLY,
+    GRID_B_ONLY,
     GRID_C2,
     GRID_ONLY,
     OP_IDLE,
@@ -328,6 +330,10 @@ def test_the_edit_kinds_are_the_bench_harness_encoding():
     assert OP_IDLE.mask == op
     for w in model().program.words:
         assert OP_IDLE.apply(w).value == w.value | op
+    # Grid A is 23..34 and 37..99; grid B repeats A's 31..95 at +110; together the grid.
+    assert GRID_A_ONLY.mask == bits((23, 34), (37, 99))
+    assert GRID_B_ONLY.mask == bits((141, 144), (147, 205))
+    assert GRID_A_ONLY.mask | GRID_B_ONLY.mask == GRID_ONLY.mask
     # It sets register groups 115..119 and 211..215 whole, each one field of the table.
     w = model().program.words[437]
     for lo, v in ((115, 6), (211, 4)):
