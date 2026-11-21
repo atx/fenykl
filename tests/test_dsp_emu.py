@@ -224,3 +224,12 @@ def test_an_unset_slot_times_out_and_stores_nothing():
         result, dst = copy(Boot(), program, bytes(range(256)) * 4)
         assert result.status is Status.TIMEOUT, word
         assert bytes(dst.data) == b"\xa5" * LEN
+
+
+def test_the_spare_channel_is_not_needed():
+    for word in (54, 55):
+        result, dst = copy(
+            Boot(), edited([{"at": word, "idle": True}]), bytes(range(256)) * 4
+        )
+        assert result.status is Status.OK, word
+        assert bytes(dst.data) == bytes(range(256)) * 4

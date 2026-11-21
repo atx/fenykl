@@ -470,6 +470,10 @@ CHANNELS: dict[str, tuple[Role, ...]] = {
     ),
 }
 
+UNUSED = frozenset({"spare A", "spare B"})
+"""Channels cmd 0xF does not need: idling their transfers has no effect, with len, dst and src
+changing between jobs."""
+
 STOCK_ROLE: dict[int, tuple[str, int]] = {
     role.word: (channel, k)
     for channel, roles in CHANNELS.items()
@@ -553,6 +557,8 @@ class Sequencer:
                 for k, role in enumerate(roles)
                 if role.word not in have
             ]
+            if channel in UNUSED:
+                missing = []
             unset += missing
             if not missing:
                 filled += by_channel[channel]
