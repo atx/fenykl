@@ -52,5 +52,5 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
 def test_dsl_source_rebuilds_every_stock_program():
     for item, program in stock_programs(stock_image("em10ii")).items():
         namespace: dict = {}
-        exec(source(program, "P"), namespace)
+        exec(source(program, "P"), namespace)  # noqa: S102 (our own generated source)
         assert namespace["P"] == list(program.words), item
