@@ -12,14 +12,20 @@ hypothesis confidence run and taint what they touch.
 
 The classes and tables of one program are held by its model (`memcpy.Copy16Model` for program
 16, `resample.Resample13Model` for program 13), which the emulator takes.
+
+The stepping core (`emu.Core`) takes the op semantics `OP_SEMANTICS` (what a data op does,
+each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
+decisions (the default, none: no condition is known) or `RaTest`.
 """
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Protocol
 
-from .fields import FIELDS, Confidence, Field, lookup
+from .fields import FIELDS, IDLE_OP, Confidence, Field, lookup
+from .state import Reg, RegisterFile, Space
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -336,3 +342,183 @@ def _ran(trace: Trace, c: WordClass, index: int) -> None:
     if conf < c.confidence:
         trace.taint = H
         trace.notes.append(f"word {index}: {c.name} off its stock position")
+
+
+# -- the stepping core (`emu.Core`): op semantics and the branch hypotheses
+
+
+@dataclass(frozen=True)
+class Effect:
+    """What a data op did: register writes in the op slot's file (None = unknown after it) and
+    a note for the trace."""
+
+    writes: tuple[tuple[int, Reg | None], ...] = ()
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class OpSemantics:
+    """What a data op does. `run(word, slot, local)` returns its effect, or None where the word
+    lies outside what the semantics covers (then it is an op without semantics)."""
+
+    confidence: Confidence
+    fact: str
+    run: Callable[[Word, RegisterFile, Space], Effect | None]
+
+
+def _local_read(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    args = word.operands
+    assert args is not None and args.imm is not None
+    if word["f120_122"] != 7:
+        return None
+    base = slot[args.ra]
+    where = f"local word r{args.ra} + {args.imm:#x}"
+    if base is None or base.exact is None:
+        return Effect(note=f"reads {where}, r{args.ra} unknown")
+    k = base.exact + args.imm
+    addr = local.base + 4 * k
+    if not local.contains(addr, 4):
+        return Effect(note=f"reads {where} = {k:#x}, outside the modelled local memory")
+    b = local.read(addr, 4)
+    value = f"{int.from_bytes(b.data, 'little'):#x}" if all(b.known) else "unknown"
+    return Effect(note=f"reads local word {k:#x}: {value}")
+
+
+OP_SEMANTICS: dict[int, OpSemantics] = {
+    IDLE_OP: OpSemantics(
+        I,
+        "no op in the slot; the word's other units (the register transfers) are outside the "
+        "core",
+        lambda word, slot, local: Effect(),
+    ),
+    0x1A: OpSemantics(
+        I,
+        "reads local word ra + imm, ra a base register it does not write (inferred: program "
+        "16's three 0x1a words name local words 0, 1 and 2 (src, dst, len) with one ra, and "
+        "across later firmware versions of the same family the same op names the same ra again "
+        "with another immediate in 94 % of the cases); where the datum goes is open, so the "
+        "core records the read only; covered at f120_122 = 7, the value of those three words",
+        _local_read,
+    ),
+}
+"""The data ops the core runs; every other op has no semantics (`Core`'s strict switch)."""
+
+
+@dataclass(frozen=True)
+class Branch:
+    """A control op's decision: taken (None = undecided), why, and its confidence."""
+
+    taken: bool | None
+    why: str
+    confidence: Confidence
+
+
+class Branching(Protocol):
+    """Decides the conditional control ops 0..2 (loop end, brf, br) at their `visit`-th run
+    (from 0), from the op slot's registers `slot` or the transfer registers `transfer`."""
+
+    def decide(
+        self,
+        index: int,
+        visit: int,
+        word: Word,
+        slot: RegisterFile,
+        transfer: RegisterFile,
+    ) -> Branch: ...
+
+
+@dataclass(frozen=True)
+class Given:
+    """Decisions supplied by the caller, by word index: one for every visit, or one per visit;
+    every other decision is undecided. The default of the core: no condition of ops 0..2 is
+    known."""
+
+    decisions: Mapping[int, bool | Sequence[bool]] = field(default_factory=dict)
+    confidence: Confidence = H
+    fact: str = "given by the caller"
+
+    def decide(
+        self,
+        index: int,
+        visit: int,
+        word: Word,
+        slot: RegisterFile,
+        transfer: RegisterFile,
+    ) -> Branch:
+        d = self.decisions.get(index)
+        if isinstance(d, Sequence):
+            d = d[visit] if visit < len(d) else None
+        if d is None:
+            return Branch(None, f"no decision given for visit {visit}", self.confidence)
+        return Branch(d, self.fact, self.confidence)
+
+
+class Test(Enum):
+    ZERO = "ra == 0"
+    NONZERO = "ra != 0"
+
+    def holds(self, reg: Reg | None) -> bool | None:
+        """Whether the test holds for `reg`; None when its interval does not decide it."""
+        if reg is None:
+            return None
+        if reg.lo == reg.hi == 0:
+            zero = True
+        elif reg.lo > 0 or reg.hi < 0:
+            zero = False
+        else:
+            return None
+        return zero if self is Test.ZERO else not zero
+
+
+class Regs(Enum):
+    SLOT = "the op slot's registers"
+    TRANSFER = "the transfer registers (xreg)"
+
+
+class Count(Enum):
+    TEST = "the loop end tests ra as it is"
+    DECREMENT = "the loop end decrements ra, then tests it"
+
+
+@dataclass(frozen=True)
+class RaTest:
+    """A condition on the register ra of the control word [hypothesis]: brf taken when `brf`
+    holds, br when `br` holds, a loop end goes back to T when `loop` holds (after `count`).
+
+    No reading is supported: in program 16 the transfer registers' job-start values fit both
+    branches seen on the camera (27 names r7 = len / 2, not taken; 45 names r5, about 0, taken),
+    but nothing shows the op slot's ra and xreg to name one file, and 27 tests r7 before any
+    word of the slot names it. A guard and its loop end name the same register in about half
+    the guarded loops, so the register is a shared loop operand of open meaning."""
+
+    brf: Test = Test.ZERO
+    br: Test = Test.NONZERO
+    loop: Test = Test.NONZERO
+    count: Count = Count.TEST
+    reads: Regs = Regs.SLOT
+
+    def decide(
+        self,
+        index: int,
+        visit: int,
+        word: Word,
+        slot: RegisterFile,
+        transfer: RegisterFile,
+    ) -> Branch:
+        regs = slot if self.reads is Regs.SLOT else transfer
+        ra = word["ra"]
+        reg = regs[ra]
+        test = (self.loop, self.brf, self.br)[word.op]
+        if word.op == 0 and self.count is Count.DECREMENT and reg is not None:
+            reg = Reg(reg.lo - 1, reg.hi - 1, reg.taint, f"{reg.fact}, decremented")
+            regs[ra] = reg
+        taken = test.holds(reg)
+        value = "unknown" if reg is None else _interval(reg)
+        taint = H if reg is None else min(H, reg.taint)
+        return Branch(
+            taken, f"{test.value} in {self.reads.value}: r{ra} = {value}", taint
+        )
+
+
+def _interval(reg: Reg) -> str:
+    return f"{reg.lo:#x}" if reg.exact is not None else f"{reg.lo:#x}..{reg.hi:#x}"

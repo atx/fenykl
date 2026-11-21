@@ -10,8 +10,11 @@ The spaces of one boot, all persistent across its jobs:
 - `buffer`: the internal buffer between the load and the store, position-addressed;
 - `lines`: the resampler's held line pair per plane and column (its partial column blocks);
 - `dram`: a sparse view of DRAM, unknown except where written or backed by an image;
-- the register file; when a job starts, `REGISTER_FACTS` set the registers they cover from the
-  job's request and the boot's parameters (unknown where a fact has no value for the job).
+- the op slot's registers (ra, rb), kept apart from the transfer registers: nothing shows the
+  two to be one file;
+- the transfer registers (xreg); when a job starts, `REGISTER_FACTS` set the registers they
+  cover from the job's request and the boot's parameters (unknown where a fact has no value for
+  the job).
 """
 
 from array import array
@@ -391,3 +394,6 @@ class RegisterFile:
 
     def __getitem__(self, r: int) -> Reg | None:
         return self.regs[r]
+
+    def __setitem__(self, r: int, value: Reg | None) -> None:
+        self.regs[r] = value

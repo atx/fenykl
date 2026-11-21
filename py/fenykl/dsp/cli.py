@@ -1,4 +1,4 @@
-"""`fenykl dsp`: listings, DSL source and the field table."""
+"""`fenykl dsp`: listings, DSL source, the field table and the copy's control flow."""
 
 import argparse
 from collections import Counter
@@ -24,6 +24,7 @@ from .fields import (
     TARGET_OPS,
 )
 from .program import STOCK, Program, stock_programs
+from .semantics import Given
 
 
 def _program(args: argparse.Namespace) -> Program:
@@ -42,6 +43,32 @@ def cmd_disasm(args: argparse.Namespace) -> None:
 
 def cmd_source(args: argparse.Namespace) -> None:
     print(source(_program(args), f"ITEM{args.item}"), end="")
+
+
+def cmd_flow(args: argparse.Namespace) -> None:
+    from . import commands
+    from .emu import Boot, Core, start_copy
+    from .memcpy import ITEM, copy_branches
+
+    args.item = ITEM
+    job = commands.copy(_program(args), args.src, args.dst, args.len)
+    branching = copy_branches(args.len)
+    if args.branch:
+        given = dict(branching.decisions)
+        for text in args.branch:
+            index, _, taken = text.partition("=")
+            given[int(index, 0)] = taken == "1"
+        branching = Given(given, fact="the copy runs' decisions and the command line's")
+    flow = Core(Boot(), branching, strict=False).run(job, start_copy)
+    print(flow.runs())
+    for step in flow.steps:
+        if step.op != 0x7F:
+            print(step)
+    unknown = sum(s.unknown for s in flow.steps)
+    print(
+        f"{len(flow.steps)} steps, {unknown} data ops without semantics; stop: "
+        f"{flow.stop.value}{': ' + flow.why if flow.why else ''}"
+    )
 
 
 def cmd_fields(args: argparse.Namespace) -> None:
@@ -115,5 +142,26 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     )
     _program_args(src)
     src.set_defaults(func=cmd_source)
+    flow = dsp_commands.add_parser(
+        "flow",
+        help="step the stock copy (item 16) and print the words it executes in order",
+    )
+    flow.add_argument("--len", type=lambda v: int(v, 0), default=0x400)
+    flow.add_argument("--src", type=lambda v: int(v, 0), default=0xA0FCA800)
+    flow.add_argument("--dst", type=lambda v: int(v, 0), default=0xA1113600)
+    flow.add_argument(
+        "--branch",
+        action="append",
+        metavar="INDEX=0|1",
+        help="decide the conditional control op at INDEX (every visit); repeatable",
+    )
+    flow.add_argument(
+        "file",
+        nargs="?",
+        type=Path,
+        metavar="FILE.BIN",
+        help="stock E-M10 II firmware (default: its image in firmware/)",
+    )
+    flow.set_defaults(func=cmd_flow)
     fields = dsp_commands.add_parser("fields", help="print the field table")
     fields.set_defaults(func=cmd_fields)

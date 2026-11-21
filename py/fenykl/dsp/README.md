@@ -14,14 +14,14 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
 | `disasm.py` | listings and DSL source of a program |
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store and their application |
-| `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register facts and boot parameters |
-| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics` |
-| `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace |
+| `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
+| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the core's op semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
+| `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace; `Core`: steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
-| `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields` |
+| `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields`, `fenykl dsp flow` |
 
 Bit k of a word is bit (k % 8) of byte k // 8 of its 40 bytes. A word decodes from any 320-bit
 value, so bytes -> Word -> bytes is exact whatever the table says; the tests check that the table
@@ -107,7 +107,9 @@ rb is f128_132; imm13 is `imm` | f128_132 << 8 and imm16 adds f120_122 << 13. 0x
 immediates are two's complement (inferred: their 0x1fxx values read as small negative numbers).
 The A ops are the immediate forms of the A' ops at op + 1. The strongest meaning is 0x1a, a read
 of the local word at its immediate (inferred, strong): program 16's three 0x1a words name the
-local words of src, dst and len. `word.operands` decodes a data op's operands (`Operands`), and
+local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
+destination (inferred: the op names the same ra again with another immediate in 94 % of the
+cases across later firmware versions of the same family). `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
 
@@ -208,7 +210,9 @@ from fenykl.dsp.taps import Rounding, Taps
 
 model = Resample13Model.from_image(image)
 taps = Taps.of([(-8, 264, 0, 0)] * 16)  # phase p = taps 0..3, s16, 256 = 1.0
-taps = Taps.from_floats([(-0.03, 1.03, 0, 0)] * 16, Rounding.HALF_EVEN)  # each tap rounded
+taps = Taps.from_floats(
+    [(-0.03, 1.03, 0, 0)] * 16, Rounding.HALF_EVEN
+)  # each tap rounded
 boot.put(src, planes, "src")  # three planes of 64 x H bytes at stride 64 (format 0x306)
 boot.put(table, entries, "table")  # H x {s32 a, u32 b}: source line and step in 16.16
 job = model.job(taps, src, dst, table, w, h)  # the stock words, these tap words
@@ -255,6 +259,45 @@ words too. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)
 - any other edited word: `UnknownSemantics` (strict), the stock law as a hypothesis (lenient).
 
 An edited job forgets the held lines, and its partial column block is unknown.
+
+### The stepping core
+
+```python
+from fenykl.dsp.emu import Boot, Core, start_copy
+from fenykl.dsp.memcpy import copy_branches
+
+job = commands.copy(model.program, src, dst, length)
+# start_copy: the copy's register facts in the transfer registers, after the job's setup
+flow = Core(Boot(), copy_branches(length), strict=False).run(job, start_copy)
+print(flow.runs())  # 0, |1..4, 10..27, |28..31, 32..45, |46..49, 58..79, |80..83, 5
+```
+
+`Core` follows the program counter from word 0: a call at i goes to T and returns to i + 5, a
+return goes back there, brf, br and a loop end go to T when taken, op 7 halts; the four delay
+slots of every control op run before its transfer (`DELAY_SLOTS`). Each executed word is a
+`Step` (index, op, operands, delay slot, decision or effect, confidence); `Flow` holds them in
+order, with how the run stopped: halt, an undecided branch, or the step limit.
+
+- **Branches** (`semantics.Branching`): no condition of ops 0..2 is known, so the default
+  `Given()` decides none. `Given({index: taken or [per visit]})` takes the caller's decisions;
+  `memcpy.copy_branches(len)` gives the copy's two forward branches as the camera runs show them
+  (27 not taken, 45 taken). `RaTest` is the alternative to test: brf, br and the loop end on
+  ra == 0 or ra != 0, in the op slot's registers or the transfer registers, the loop end
+  testing ra as it is or after decrementing it (all hypotheses). On the copy's transfer
+  registers at job start it reproduces the camera's path, but nothing shows those to be the
+  registers the control ops name.
+- **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): 0x1a reads local word ra +
+  imm (inferred; it records the read, where the datum goes is open) and the idle op does
+  nothing in the slot. Every other op has no semantics: strict mode raises `UnknownSemantics`,
+  lenient mode records it in its step and makes its ra unknown. An undecided branch raises in
+  strict mode and stops the run in lenient mode; a loop end into its own delay slots, a control
+  op in a delay slot and a return without a call raise in both.
+- **Registers**: the op slot's (`Boot.slot`) and the transfer registers (`Boot.regs`) are kept
+  apart; whether ra / rb and xreg name one file is open.
+
+The core models neither the register transfers nor the datapath, so it says which words run in
+which order, not what they move. `fenykl dsp flow [--len N] [--branch I=0|1]` prints the copy's
+flow.
 
 ### Adding a semantic
 

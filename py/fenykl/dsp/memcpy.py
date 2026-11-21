@@ -29,13 +29,14 @@ Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the jo
 
 from dataclasses import dataclass, field
 
-from .emu import Boot, Emulator, Job, JobResult, Status, dram_alias
+from .emu import Boot, Emulator, Job, JobResult, Status, dram_alias, start_copy
 from .fields import FIELDS, STAIRCASE, Confidence, lookup
 from .program import Program, stock_programs
 from .semantics import (
     IDLE_CLASS,
     KIB,
     Channel,
+    Given,
     OpaqueClass,
     Outcome,
     Part,
@@ -540,10 +541,7 @@ class Copy16Model:
     def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
         """Resolve the job and apply its one load and one store to the boot."""
         boot = emu.boot
-        view = JobView(boot.u32(0), boot.u32(4), boot.u32(8), boot.params)
-        if view.dst is None or view.length is None:
-            raise ValueError("local memory holds no dst and len (no command setup ran)")
-        boot.regs.start_job(view)
+        view = start_copy(boot)
         stock = self.program.words
         words = job.program.words
         edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
@@ -797,3 +795,22 @@ class Copy16Model:
                     out.src[i] = chunk.src[lo] if ins else zero
                     out.off[i] = chunk.off[lo] if ins else 0
         return out
+
+
+SEEN_LENGTHS = range(0x200, 0x4001, 0x10)
+"""The copy lengths of the camera runs, 0.5..16 KiB in whole 16-byte lines."""
+
+
+def copy_branches(length: int) -> Given:
+    """The decisions of the copy's two forward branches as the camera runs show them, for the
+    stepping core: 27 (to the return 79) not taken (inferred: the store words after it act) and
+    45 (over the loop 50..57) taken (inferred, strong: idling its delay slots 46..49 times the
+    job out, idling 50..57 has no effect). The loop's back-edge 53 is never reached; inferred
+    at the lengths the runs had, a hypothesis at others."""
+    seen = length in SEEN_LENGTHS
+    return Given(
+        {27: False, 45: True},
+        Confidence.INFERRED if seen else Confidence.HYPOTHESIS,
+        "as in the copies run on the camera"
+        + ("" if seen else ", at other lengths than this one"),
+    )
