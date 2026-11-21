@@ -26,6 +26,8 @@ LOCAL_SIZE = 0x2000
 """Local memory reaches at least 0x9D001D1C (the resampler's setup writes there)."""
 BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
 """The modelled buffer indices: it holds at least 16 KiB and reaches below index 0."""
+LINE_PAIRS = 3 * 2 * 64
+"""The resampler's held line pairs: plane c, line parity r, pixel x at (2 c + r) x 64 + x."""
 
 
 def dram_alias(addr: int) -> int:
@@ -72,6 +74,7 @@ class Boot:
         never = self.source("unwritten", "no job on this boot wrote it")
         self.local = Space("local", LOCAL_BASE, LOCAL_SIZE, never)
         self.buffer = Space("buffer", BUFFER_LO, BUFFER_HI - BUFFER_LO, never)
+        self.lines = Space("line pairs", 0, LINE_PAIRS, never)
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
 
     def source(self, name: str, fact: str = "") -> int:
