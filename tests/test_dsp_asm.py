@@ -61,7 +61,9 @@ def test_listing_names_ops_targets_and_delay_slots():
         True,
         False,
     )
-    text = listing(Program((call, *[IDLE] * 6, ret, data)))
+    # A control op with f229 set shows the flag, which equals idle.
+    flagged = Word(ctl_lo=CtlLo(imm=10), regs_a=RegsA(f128_132=0), ctl_hi=CtlHi(op=3))
+    text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
         "0   call~ -> 1443!  ctl_lo: f1=1",
@@ -69,6 +71,7 @@ def test_listing_names_ops_targets_and_delay_slots():
         "5..6   idle x2",
         "7   ret~  regs_a: f128_132=r1",
         "8 | op1f~  ctl_lo: imm=c!",
+        "9 | call~ -> 10! ctl_n=1!",
     ]
 
 

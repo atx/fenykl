@@ -5,8 +5,9 @@ semantic names or ids; a mark after the value gives the field's confidence (`!` 
 `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
 Every word but the idle word starts with its op's name (`fields.op`) in place of f313_319; a
-control op 0..3 follows it with `-> T`, its target word index, in place of f229 and T's fields, and
-a return drops f229. A `|` after the index marks the delay slots of a control word.
+control op 0..3 follows it with `-> T`, its target word index, in place of T's fields. A control
+op drops f229 while it is clear, as in every stock control word. A `|` after the index marks the
+delay slots of a control word.
 """
 
 from collections.abc import Iterator
@@ -30,11 +31,15 @@ def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
     meaning = op(word.op)
     head = meaning.name + (meaning.confidence.mark if marks else "")
     shown = {OP_FIELD.id}
-    if word.control and CONTROL_FLAG.get(word.value) == 0:
-        shown.add(CONTROL_FLAG.id)
     if word.target is not None:
         head += f" -> {word.target}" + (TARGET.confidence.mark if marks else "")
         shown.update(f.id for f in TARGET.parts)
+    if word.control:
+        # f229 is clear in every stock control word; a set one would equal idle and go unseen.
+        shown.add(CONTROL_FLAG.id)
+        flag = CONTROL_FLAG.get(word.value)
+        if flag:
+            head += f" {_value(CONTROL_FLAG, flag)}"
     return head, shown
 
 
