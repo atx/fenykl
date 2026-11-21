@@ -13,7 +13,14 @@ swept its register field 115..119, and is stated here by word index:
 word classes from it: each undecoded stock word is a class matched by its value, the register
 transfers one class matched by their signature, with the register contexts and the register
 group B and route values of the stock transfers as the reference. No stock word is part of this
-code. The model resolves a job's trace into its one load and one store (`resolve`).
+code. The model resolves a job's trace into its one load and one store (`resolve`) and applies
+them to the boot (`apply`):
+
+    load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
+    store:  dst[i] = format(buffer)[i + o76] for i in [0, n73); dst[n73, len) not written
+
+A job that does not complete stores nothing. A placement out of range, a register of unknown
+value or a load that may or may not have run makes its bytes UNKNOWN.
 
 Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the job with status
 -5; these register values lost the link too: word 44 at 0, 1, 4, 8, 10; word 47 at 16, 18, 19,
@@ -22,6 +29,7 @@ Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the jo
 
 from dataclasses import dataclass, field
 
+from .emu import Boot, Emulator, Job, JobResult, Status, dram_alias
 from .fields import FIELDS, STAIRCASE, Confidence, lookup
 from .program import Program, stock_programs
 from .semantics import (
@@ -39,7 +47,7 @@ from .semantics import (
     Use,
     WordClass,
 )
-from .state import JobView, RegisterFile
+from .state import Bytes, JobView, RegisterFile
 from .units import UNITS
 from .word import IDLE, Word
 
@@ -48,6 +56,7 @@ H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 ITEM = 16
 MAX_COUNT = 0x40000
 """A count above this is an address or junk: the store never ends (hypothesis)."""
+ZERO_FILL = 0x4000
 
 # -- the undecoded stock words
 
@@ -528,6 +537,19 @@ class Copy16Model:
     def from_image(cls, image: bytes) -> "Copy16Model":
         return cls(stock_programs(image)[ITEM])
 
+    def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
+        """Resolve the job and apply its one load and one store to the boot."""
+        boot = emu.boot
+        view = JobView(boot.u32(0), boot.u32(4), boot.u32(8), boot.params)
+        if view.dst is None or view.length is None:
+            raise ValueError("local memory holds no dst and len (no command setup ran)")
+        boot.regs.start_job(view)
+        stock = self.program.words
+        words = job.program.words
+        edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
+        plan = self.resolve(trace, boot.regs, view, emu.sequencer, edits)
+        return self._apply(boot, plan, trace, view)
+
     def resolve(
         self,
         trace: Trace,
@@ -646,3 +668,132 @@ class Copy16Model:
                         index, role.name, [(lookup("xreg"), reg)], role.fact
                     )
         return conf
+
+    def _apply(self, boot: Boot, plan: Plan, trace: Trace, view: JobView) -> JobResult:
+        if plan.has(Outcome.HAZARD):
+            status = Status.HAZARD
+        elif plan.has(Outcome.TIMEOUT):
+            status = Status.TIMEOUT
+        else:
+            status = Status.OK
+        result = JobResult(
+            status,
+            [why for _, why, _ in plan.outcomes],
+            ignored=trace.ignored,
+            notes=trace.notes,
+        )
+        length = view.length
+        assert length is not None and view.dst is not None
+        loads = not plan.has(Outcome.NO_LOAD)
+        stores = status is Status.OK and not plan.has(Outcome.NO_STORE)
+        result.taint = plan.result_taint(stores)
+        unknown_data = plan.has(Outcome.DATA_UNKNOWN)
+
+        if loads:
+            self._load(boot, plan, view, certain=stores and not unknown_data)
+        if not stores:
+            return result
+        dst = view.dst
+        if plan.has(Outcome.ZERO_FILL):
+            zero = boot.source("zero fill", "word 15 missing: the store writes zeros")
+            data = Bytes.of(bytes(ZERO_FILL), zero, plan.store_taint)
+            boot.dram.write(dram_alias(dst), data)
+            result.stored = (dst, dst + ZERO_FILL)
+            return result
+        n = plan.count
+        if unknown_data or n is None or plan.o76 is None or (plan.format is None):
+            why = "; ".join(
+                w for o, w, _ in plan.outcomes if o is Outcome.DATA_UNKNOWN
+            ) or ("the store's count, offset or format is not known")
+            n = length if n is None else n
+            boot.dram.write(
+                dram_alias(dst),
+                Bytes.unknown(n, boot.source("store not modelled", why)),
+            )
+            result.stored = (dst, dst + n)
+            return result
+        data = self._format(boot, plan.format, plan.o76, n)
+        boot.dram.write(dram_alias(dst), data.capped(plan.store_taint))
+        result.stored = (dst, dst + n)
+        return result
+
+    def _load(self, boot: Boot, plan: Plan, view: JobView, certain: bool) -> None:
+        """The load into the buffer; UNKNOWN where it may or may not have run, or with unknown data."""
+        length = view.length
+        assert length is not None
+        o = plan.o68
+        if o is None or not boot.buffer.contains(o, length):
+            boot.buffer.forget(
+                boot.source("load placement", "a load to an unknown buffer index")
+            )
+            return
+        if not certain:
+            why = "the job did not store: whether its load ran is not known"
+            if plan.has(Outcome.DATA_UNKNOWN):
+                why = "the load read data the model does not know"
+            boot.buffer.write(
+                o, Bytes.unknown(length, boot.source("load not modelled", why))
+            )
+            return
+        if plan.address is None and plan.address_why:
+            data = Bytes.unknown(
+                length, boot.source("load not modelled", plan.address_why)
+            )
+        else:
+            address = view.src if plan.address is None else plan.address
+            if address is None:
+                data = Bytes.unknown(
+                    length, boot.source("load not modelled", "no src in local memory")
+                )
+            else:
+                data = boot.read(address, length)
+        boot.buffer.write(o, data.capped(plan.load_taint))
+
+    def _format(self, boot: Boot, fmt: str, o76: int, n: int) -> Bytes:
+        """n store bytes from the buffer at index o76, in format `fmt`."""
+        if fmt == "bytes":
+            return self._buffer(boot, o76, n)
+        if fmt == "zero":
+            return Bytes.of(
+                bytes(n), boot.source("format zero", "word 47's zero format"), V
+            )
+        zero = boot.source("format zero bits", "zero bits of a widening format")
+        if fmt == "u32":
+            src = self._buffer(boot, o76, n // 4)
+            out = Bytes.of(bytes(4 * len(src)), zero, V)
+            for name in Bytes.__slots__:
+                getattr(out, name)[0::4] = getattr(src, name)
+            return out
+        if fmt == "pack10":
+            return self._pack10(boot, o76, n, zero)
+        raise ValueError(f"no store format {fmt!r}")
+
+    def _buffer(self, boot: Boot, o: int, n: int) -> Bytes:
+        if not boot.buffer.contains(o, n):
+            return Bytes.unknown(
+                n, boot.source("store not modelled", "outside the modelled buffer")
+            )
+        return boot.buffer.read(o, n)
+
+    def _pack10(self, boot: Boot, o76: int, n: int, zero: int) -> Bytes:
+        """16 output bytes per 12 buffer bytes: each zero-extended to 10 bits, LSB first, top
+        8 bits 0. An output byte is known when every input byte it draws on is known."""
+        lines = n // 16
+        src = self._buffer(boot, o76, lines * 12)
+        derived = boot.source("format pack10", "word 47's 10-bit pack of buffer bytes")
+        out = Bytes.unknown(lines * 16, derived)
+        for j in range(lines):
+            chunk = src[12 * j : 12 * j + 12]
+            acc = sum(b << (10 * k) for k, b in enumerate(chunk.data))
+            line = acc.to_bytes(16, "little")
+            for k in range(16):
+                lo, hi = (8 * k) // 10, min(11, (8 * k + 7) // 10)
+                ins = range(lo, hi + 1) if lo < 12 else range(0)
+                i = 16 * j + k
+                out.data[i] = line[k]
+                if all(chunk.known[x] for x in ins):
+                    out.known[i] = 1
+                    out.taint[i] = min((chunk.taint[x] for x in ins), default=V)
+                    out.src[i] = chunk.src[lo] if ins else zero
+                    out.off[i] = chunk.off[lo] if ins else 0
+        return out

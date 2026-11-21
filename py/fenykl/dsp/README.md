@@ -13,10 +13,10 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`) and by unit (`slots()`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
 | `disasm.py` | listings and DSL source of a program |
-| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store |
+| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register facts and boot parameters |
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics` |
-| `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and applies its load and store |
+| `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields` |
 
