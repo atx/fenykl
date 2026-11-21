@@ -8,6 +8,10 @@ idle word, a confidence and a one-line fact.
 Confidence qualifies the field itself: that these bits form one field of this kind. Facts about
 single values or words carry their own tags in `fact` and `values`. The emulator does not use
 it: it propagates the confidence of the semantics a result depends on (see `semantics`).
+
+Some values span fields. In a control word (f229 clear) bits 15..22 and 128..132 hold the target
+T, which `TARGET` composes from the positional fields f15_18, f19_22 and f128_132; those fields
+stay as they are in every word, so the table is one partition of the bits for all words.
 """
 
 from collections.abc import Mapping
@@ -106,11 +110,13 @@ def _const(lo: int, hi: int, unit: str) -> Field:
         unit,
         ones,
         V,
-        "always all-ones in every word of the five stock programs",
+        "always all-ones in every word of the five stock programs, and across later firmware "
+        "versions of the same family but for one word that may be data",
         allowed=(ones,),
     )
 
 
+END_OP = 4
 SEGMENTED = "boundary from a value-entropy segmentation of the stock programs"
 
 
@@ -131,8 +137,15 @@ GRID_FACT = (
 STAIRCASE = {194: 19, 84: 20, 198: 29, 88: 30, 182: 59, 76: 60}
 
 
+GRID_PAIR = (
+    "2-bit grid field, a source or path select, at lag 110 like grids A and B; all-ones in every "
+    "word of the five stock programs, cleared in hundreds of words of some programs across later "
+    "firmware versions of the same family"
+)
+
+
 def _grid(lo: int, hi: int, unit: str) -> Field:
-    fact = GRID_FACT
+    fact = GRID_PAIR if hi - lo == 1 else GRID_FACT
     if lo in STAIRCASE:
         fact += (
             f"; program 16 sets it to 0 from word {STAIRCASE[lo]} on, held to the end "
@@ -225,6 +238,28 @@ SIGNATURE = (
     "only in bits 128, 273, 318, 319 (clear) and 17, 18 (set); it ends programs 6, 0xC and 0xF "
     "and recurs mid-program (a control operation with three drain words, hypothesis)"
 )
+RARE = (
+    "rarely used: all-ones in every word of the five stock programs, clear in 1..12 words of "
+    "some programs across later firmware versions of the same family"
+)
+CONTROL_FACT = (
+    "clear in the control words, set in all others: a control word holds its target T in bits "
+    "15..22 and 128..132, or with bits 313..319 = 4 it is the end op (verified in the bytes "
+    "of 44 programs of this program family, across later firmware versions of the same family "
+    "too); what a control word does (a jump, a loop end, a call) is a hypothesis"
+)
+T_LOW = (
+    "in a control word bits 15..22 are one 8-bit field, the low byte of the target T (verified "
+    "in the bytes); the 15..18 / 19..22 cut holds in the other words"
+)
+T_HIGH = "in a control word bits 8..12 of the target T, not a register (verified in the bytes)"
+END_FACT = (
+    "in a control word, 4 marks the end op, whose bits 15..22 and 128..132 are no target: "
+    "those control words have a zero T low byte, some of them a T past their program's end, "
+    "while every other control word's T lies inside its program, across later firmware "
+    "versions of the same family too (verified in the bytes); it ends program 16 and the "
+    "sections of program 7, an end or stop op (inferred)"
+)
 XFER_BASIS = (
     "cut from 308..312 (the segmentation's field) at the register-transfer signature"
 )
@@ -287,6 +322,7 @@ def _c2() -> list[Field]:
 GRID_A = [
     (23, 30),
     (31, 34),
+    (35, 36),
     *((lo, lo + 3) for lo in range(37, 68, 4)),
     (69, 71),
     *((lo, lo + 3) for lo in range(72, 99, 4)),
@@ -301,12 +337,10 @@ FIELDS: tuple[Field, ...] = (
     _ctl(2, 6, "ctl_lo", 0),
     _ctl(7, 8, "ctl_lo", 0),
     _ctl(9, 14, "ctl_lo", 0, "program 16 never sets bits 11 and 14"),
-    _ctl(15, 18, "ctl_lo", 0, f"bits 17, 18: {SIGNATURE}"),
-    _ctl(19, 22, "ctl_lo", 0),
-    # grid_a: bits 23..99, the 35..36 constant in between.
-    *(_grid(lo, hi, "grid_a") for lo, hi in GRID_A[:2]),
-    _const(35, 36, "grid_a"),
-    *(_grid(lo, hi, "grid_a") for lo, hi in GRID_A[2:]),
+    _ctl(15, 18, "ctl_lo", 0, f"{T_LOW}; bits 17, 18: {SIGNATURE}"),
+    _ctl(19, 22, "ctl_lo", 0, T_LOW),
+    # grid_a: bits 23..99.
+    *(_grid(lo, hi, "grid_a") for lo, hi in GRID_A),
     # regs_a: bits 100..132 and the 133..140 constant.
     _reg(100, "regs_a", 31),
     _reg(105, "regs_a", 31),
@@ -324,12 +358,10 @@ FIELDS: tuple[Field, ...] = (
     ),
     Field(120, 122, Kind.RAW, "regs_a", 7, H, "3 bits between the register specifiers"),
     _reg(123, "regs_a", 31),
-    _reg(128, "regs_a", 31, f"bit 128: {SIGNATURE}"),
+    _reg(128, "regs_a", 31, f"{T_HIGH}; bit 128: {SIGNATURE}"),
     _const(133, 140, "regs_a"),
-    # grid_b: grid A + 110, the 145..146 constant in between.
-    _grid(141, 144, "grid_b"),
-    _const(145, 146, "grid_b"),
-    *(_grid(lo, hi, "grid_b") for lo, hi in GRID_B[1:]),
+    # grid_b: grid A + 110.
+    *(_grid(lo, hi, "grid_b") for lo, hi in GRID_B),
     # regs_b: bits 206..228.
     _reg(
         206,
@@ -346,16 +378,27 @@ FIELDS: tuple[Field, ...] = (
     _reg(216, "regs_b", 31),
     Field(221, 223, Kind.RAW, "regs_b", 7, H, "3 bits between the register specifiers"),
     _reg(224, "regs_b", 0),
-    # c2: bit 229, the 230..232 constant, then the control block C2 233..301.
-    _ctl(229, 229, "c2", 1, basis="the bit between register group B and a constant"),
-    _const(230, 232, "c2"),
+    # c2: the control-word flag 229, the 230..231 constant, bit 232, then C2 233..301.
+    Field(
+        229,
+        229,
+        Kind.FLAG,
+        "c2",
+        1,
+        V,
+        CONTROL_FACT,
+        name="ctl_n",
+        values={0: "control word", 1: "other word"},
+    ),
+    _const(230, 231, "c2"),
+    Field(232, 232, Kind.FLAG, "c2", 1, H, RARE),
     _op(
         233,
         233,
         1,
         "program 16 never moves it; clear in some words of every compute program",
     ),
-    _const(234, 235, "c2"),
+    Field(234, 235, Kind.RAW, "c2", 3, H, RARE),
     *_c2(),
     # ctl_hi: control bits 302..319, all set in the idle word.
     _ctl(302, 307, "ctl_hi", 0x3F),
@@ -368,7 +411,16 @@ FIELDS: tuple[Field, ...] = (
         basis=XFER_BASIS,
     ),
     _ctl(310, 312, "ctl_hi", 0x7, basis=XFER_BASIS),
-    _ctl(313, 319, "ctl_hi", 0x7F, f"bits 318, 319: {SIGNATURE}"),
+    Field(
+        313,
+        319,
+        Kind.RAW,
+        "ctl_hi",
+        0x7F,
+        H,
+        f"control bits; {SEGMENTED}. {END_FACT}; bits 318, 319: {SIGNATURE}",
+        values={END_OP: "the end op, in a control word"},
+    ),
 )
 
 
@@ -398,6 +450,53 @@ def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
 BY_KEY = _index(FIELDS)
 IDLE_VALUE = sum(f.idle << f.lo for f in FIELDS)
 """The idle word (a no-op) composed from the fields' idle values."""
+
+
+@dataclass(frozen=True)
+class Composite:
+    """A value whose bits lie in several positional fields, lowest part first."""
+
+    name: str
+    parts: tuple[Field, ...]
+    confidence: Confidence
+    fact: str
+
+    def get(self, word: int) -> int:
+        value = 0
+        for f in reversed(self.parts):
+            value = value << f.width | f.get(word)
+        return value
+
+
+CONTROL_FLAG = BY_KEY["f229"]
+"""Clear in a control word."""
+END_FIELD = BY_KEY["f313_319"]
+"""END_OP here marks a control word as the end op, which has no target."""
+
+TARGET = Composite(
+    "target",
+    (BY_KEY["f15_18"], BY_KEY["f19_22"], BY_KEY["f128_132"]),
+    V,
+    "a control word's target: an absolute word index into its program, bits 15..22 | bits "
+    "128..132 << 8 (verified in the bytes: it follows its target word wherever code moved "
+    "across later firmware versions of the same family, and lies inside its program in every "
+    "control word but the end op); whether a jump, loop end or call goes there is a hypothesis",
+)
+
+
+def is_control(word: int) -> bool:
+    return CONTROL_FLAG.get(word) == 0
+
+
+def is_end(word: int) -> bool:
+    return is_control(word) and END_FIELD.get(word) == END_OP
+
+
+def target(word: int) -> int | None:
+    """The target of a control word other than the end op; None for other words."""
+    if not is_control(word) or is_end(word):
+        return None
+    return TARGET.get(word)
 
 
 def lookup(key: str) -> Field:

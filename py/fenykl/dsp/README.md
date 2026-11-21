@@ -8,9 +8,9 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 
 | module | contents |
 |---|---|
-| `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact |
+| `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the control word's target `TARGET` |
 | `units.py` | units (contiguous groups of fields) and their slot classes, derived from the table |
-| `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`) and by unit (`slots()`); `IDLE` |
+| `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
 | `disasm.py` | listings and DSL source of a program |
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store and their application |
@@ -51,6 +51,23 @@ of its `unit`.
 
 Kinds: `reg` (register specifier r0..r31), `opcode`, `route` (source or path select), `flag`
 (one control bit), `const` (the same value in every stock word), `raw` (not decoded).
+
+### Control words
+
+A word with f229 (`ctl_n`) clear is a control word. Unless f313_319 is 4, which marks the end op,
+it names a target T = bits 15..22 | bits 128..132 << 8, an absolute word index into its program:
+`word.target`, None for the end op and for other words. The structure is verified in the bytes:
+across later firmware versions of the same family T follows its target word wherever code moved,
+and every control word but the end op has its T inside its program. What a control word does
+there (a jump, a loop end, a call) is a hypothesis. In a control word f15_18 and f19_22 are one
+8-bit field, T's low byte, and f128_132 holds T's high bits, not a register; elsewhere they keep
+their reading.
+
+T's bits stay in the positional fields, so every word has the same partition and the codec stays
+exact; `TARGET` in the table composes T from f15_18, f19_22 and f128_132, and the selector is
+data next to it (`CONTROL_FLAG`, `END_FIELD`, `END_OP`). Listings show a control word as
+`-> T` and the end op as `end t=...` (T's bits, raw), in place of the fields they consist of;
+`fenykl dsp fields` prints T's definition after the table.
 
 ## Confidence
 

@@ -42,7 +42,7 @@ _UNITS = (
     ),
     ("grid_b", "GridB", "the second grid, grid A's layout at +110"),
     ("regs_b", "RegsB", "the second register group"),
-    ("c2", "C2", "the op-code candidates of 229..301"),
+    ("c2", "C2", "the control-word flag 229 and the op-code candidates of 230..301"),
     ("ctl_hi", "CtlHi", "control bits 302..319, set when idle"),
 )
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..firmware import TARGETS
 from .disasm import listing, source
-from .fields import FIELDS
+from .fields import CONTROL_FLAG, END_FIELD, END_OP, FIELDS, TARGET
 from .program import STOCK, Program, stock_programs
 
 
@@ -36,6 +36,14 @@ def cmd_fields(args: argparse.Namespace) -> None:
             f"{f.id:<9} {bits:>8}  {f.unit:<6} {f.kind:<6} {f.confidence.name.lower():<10} "
             f"idle {f.idle:#x}{name}: {f.fact}"
         )
+    shift, parts = 0, []
+    for f in TARGET.parts:
+        parts.append(f.id if shift == 0 else f"{f.id} << {shift}")
+        shift += f.width
+    print(
+        f"{TARGET.name}: {' | '.join(parts)} in control words ({CONTROL_FLAG.id} = 0, "
+        f"{END_FIELD.id} != {END_OP}), {TARGET.confidence.name.lower()}: {TARGET.fact}"
+    )
     kinds = Counter(str(f.kind) for f in FIELDS)
     confidence = Counter(f.confidence.name.lower() for f in FIELDS)
     print(f"{len(FIELDS)} fields; {dict(kinds)}; {dict(confidence)}")

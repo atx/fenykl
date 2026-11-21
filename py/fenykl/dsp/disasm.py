@@ -4,11 +4,13 @@ A listing shows per word the fields that differ from the idle word, grouped by u
 semantic names or ids; a mark after the value gives the field's confidence (`!` verified,
 `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
+A control word starts with `-> T`, its target word index, in place of f229 and T's fields; the end
+op starts with `end t=...`, T's bits as a raw value, in place of f229, T's fields and f313_319.
 """
 
 from collections.abc import Iterator
 
-from .fields import Field, Kind
+from .fields import CONTROL_FLAG, END_FIELD, TARGET, Field, Kind
 from .program import Program
 from .units import UNITS
 from .word import IDLE, Word
@@ -22,12 +24,25 @@ def _value(f: Field, value: int) -> str:
     return f"{f.label}={text}{f.confidence.mark}"
 
 
+def _control(word: Word) -> tuple[list[str], set[str]]:
+    """A control word's leading part and the ids of the fields it shows."""
+    if not word.control:
+        return [], set()
+    shown = {CONTROL_FLAG.id, *(f.id for f in TARGET.parts)}
+    if word.end:
+        return [f"end t={TARGET.get(word.value):x}"], shown | {END_FIELD.id}
+    return [f"-> {word.target}{TARGET.confidence.mark}"], shown
+
+
 def word_parts(word: Word, base: Word = IDLE) -> list[str]:
-    """The fields that differ from `base` as "unit: field=value ..." groups in bit order."""
+    """The fields that differ from `base` as "unit: field=value ..." groups in bit order,
+    after a control word's target or end mark."""
+    head, shown = _control(word)
     by_unit: dict[str, list[str]] = {}
     for f, v in word.changed(base):
-        by_unit.setdefault(f.unit, []).append(_value(f, v))
-    return [f"{unit}: {' '.join(items)}" for unit, items in by_unit.items()]
+        if f.id not in shown:
+            by_unit.setdefault(f.unit, []).append(_value(f, v))
+    return head + [f"{unit}: {' '.join(items)}" for unit, items in by_unit.items()]
 
 
 def _runs(words: tuple[Word, ...]) -> Iterator[tuple[int, int]]:
@@ -45,6 +60,7 @@ def listing(program: Program, title: str = "") -> str:
     lines.append(
         "; marks: ! verified, ~ inferred, none a hypothesis; ^ = the word before, changed"
     )
+    lines.append("; -> T: a control word and its target word index; end: the end op")
     prev = IDLE
     for start, count in _runs(program.words):
         word = program.words[start]
@@ -87,6 +103,9 @@ def source(program: Program, name: str = "PROGRAM") -> str:
         f"{name} = [",
     ]
     for index, word in enumerate(program.words):
-        lines.append(f"    {word_source(word)},  # {index}")
+        note = (
+            " end" if word.end else "" if word.target is None else f" -> {word.target}"
+        )
+        lines.append(f"    {word_source(word)},  # {index}{note}")
     lines.append("]")
     return "\n".join(lines) + "\n"

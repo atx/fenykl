@@ -6,7 +6,17 @@ Validation of assembled words (constants, allowed values) is `Word.check`.
 
 from collections.abc import Mapping
 
-from .fields import FIELDS, IDLE_VALUE, WORD_BITS, WORD_BYTES, Field, lookup
+from .fields import (
+    FIELDS,
+    IDLE_VALUE,
+    WORD_BITS,
+    WORD_BYTES,
+    Field,
+    is_control,
+    is_end,
+    lookup,
+    target,
+)
 from .units import SLOTS, UNITS, Slot
 
 
@@ -68,6 +78,21 @@ class Word:
 
     def __getitem__(self, key: str) -> int:
         return lookup(key).get(self.value)
+
+    @property
+    def control(self) -> bool:
+        """A control word: f229 clear."""
+        return is_control(self.value)
+
+    @property
+    def end(self) -> bool:
+        """The end op: a control word with f313_319 = 4, which has no target."""
+        return is_end(self.value)
+
+    @property
+    def target(self) -> int | None:
+        """The word index a control word names; None for the end op and other words."""
+        return target(self.value)
 
     def fields(self) -> dict[str, int]:
         """Every field's value, by id in bit order."""

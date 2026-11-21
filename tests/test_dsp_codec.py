@@ -64,3 +64,23 @@ def test_program_16_route_staircase(items):
         start = STAIRCASE[f.lo]
         assert words[start - 1][f.id] != 0, f.id
         assert {w[f.id] for w in words[start:]} == {0}, f.id
+
+
+def test_control_word_targets_lie_inside_their_program(items):
+    # (control words, end ops) per program; every other control word names a word of its program.
+    counts = {}
+    for item, data in items.items():
+        words = decode_item(data, STOCK[item]).words
+        control = [w for w in words if w.control]
+        counts[item] = (len(control), sum(w.end for w in control))
+        for index, word in enumerate(words):
+            if word.target is not None:
+                assert word.target < len(words), (item, index)
+    assert counts == {7: (72, 9), 13: (24, 2), 15: (15, 2), 16: (5, 1), 17: (36, 4)}
+
+
+def test_program_16_targets(items):
+    words = decode_item(items[16], STOCK[16]).words
+    targets = {i: w.target for i, w in enumerate(words) if w.target is not None}
+    assert targets == {0: 10, 27: 79, 45: 58, 53: 50}
+    assert [i for i, w in enumerate(words) if w.end] == [79]

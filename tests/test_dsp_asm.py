@@ -5,7 +5,7 @@ from conftest import stock_image
 
 from fenykl.dsp.disasm import listing, source
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_programs
-from fenykl.dsp.units import CtlHi, RegsA
+from fenykl.dsp.units import C2, CtlHi, CtlLo, RegsA
 from fenykl.dsp.word import IDLE, Word
 
 
@@ -32,9 +32,34 @@ def test_assemble_warns_only_about_hypothesis_fields():
         )
 
 
-def test_assemble_rejects_a_cleared_constant():
-    with pytest.raises(ValueError, match="f133_140"):
-        assemble([Word(regs_a=RegsA(f133_140=0))])
+@pytest.mark.parametrize("const", ["f133_140", "f230_231", "f277"])
+def test_assemble_rejects_a_cleared_constant(const):
+    with pytest.raises(ValueError, match=const):
+        assemble([Word.from_fields({const: 0})])
+
+
+@pytest.mark.parametrize("field", ["f35_36", "f145_146", "f232", "f234_235"])
+def test_fields_constant_only_in_the_stock_programs_take_other_values(field):
+    Word.from_fields({field: 0}).check()
+
+
+def test_listing_shows_a_control_words_target_and_the_end_op():
+    # T = 0x5A3: low nibble in f15_18, high nibble in f19_22, bits 8..12 in f128_132.
+    control = Word(
+        ctl_lo=CtlLo(f15_18=0x3, f19_22=0xA, f1=1),
+        regs_a=RegsA(f128_132=0x5),
+        c2=C2(ctl_n=0),
+    )
+    end = Word(regs_a=RegsA(f128_132=1), c2=C2(ctl_n=0), ctl_hi=CtlHi(f313_319=4))
+    assert (control.target, control.end, end.target, end.end) == (
+        0x5A3,
+        False,
+        None,
+        True,
+    )
+    text = listing(Program((control, end)))
+    body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
+    assert body == ["0  -> 1443!  ctl_lo: f1=1", "1  end t=100"]
 
 
 def test_listing_collapses_idle_runs_repeats_and_deltas():
