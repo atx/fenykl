@@ -14,6 +14,10 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
 | `disasm.py` | listings and DSL source of a program |
 | `memcpy.py` | the stock copy program (item 16) written in the DSL |
+| `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register facts and boot parameters |
+| `semantics.py` | word classes, the parts of the stock words, the transfer roles, the hidden sequencer, `UnknownSemantics` |
+| `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and resolves its load and store |
+| `commands.py` | the CPU setups of the commands as jobs (cmd 0xF) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields` |
 
 Bit k of a word is bit (k % 8) of byte k // 8 of its 40 bytes. A word decodes from any 320-bit
@@ -54,12 +58,52 @@ words carry their own wording in `fact`. The rules:
 - `assemble()` rejects words whose constant fields are off, and emits one
   `HypothesisFieldWarning` that lists every hypothesis field the program moves off idle;
 - listings mark verified values `!` and inferred ones `~`; unmarked values are hypotheses;
-- the emulator (to come) raises on an undecoded field that is off idle, unless told to ignore
-  it, and gives every output byte the weakest confidence of the fields it depends on.
+- the emulator gives every output byte the weakest confidence of the semantics that produced or
+  moved it (the field's own confidence does not enter).
 
-## Next
+## The emulator
 
-The emulator works per word on a state of DSP local memory, an internal buffer, the register
-file and a sparse DRAM view (`state.py`, `semantics.py`, `emu.py`). A job is a `Program` plus a
-local-memory image; `commands.py` will rebuild the stock CPU setups that write that image. A
-`Program` already carries its constant block, which the setups copy to local memory.
+```python
+from fenykl.dsp import commands, memcpy
+from fenykl.dsp.emu import Boot, Emulator
+
+boot = Boot()  # BootParams: r14, r29, r21's format; None = unknown
+boot.put(src, data, "src")  # known DRAM bytes, with a source name
+result = Emulator(boot).run(commands.copy(memcpy.program(), src, dst, len(data)))
+out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), off
+```
+
+A `Job` is a program plus the bytes its command's CPU setup writes to local memory
+(`commands.copy` for cmd 0xF: src, dst and len at 0x9D000000..08). State persists across the jobs
+of a `Boot`: local memory, the buffer between load and store (position-addressed, reaching below
+index 0) and the DRAM view. `back_firmware(boot, image)` maps the main code of a stock `.BIN` for
+loads from firmware text. A byte is known or UNKNOWN, and its source says where it came from or
+why it is unknown; the emulator never guesses a byte.
+
+Each word gets the semantics of its class (`semantics.CLASSES`): the idle word, the register
+transfer (matched by its signature, every field idle but the register groups, the route nibbles
+and f308_309) or a stock word of program 16 matched by its value. At the end the sequencer gives
+the transfers their roles (the stock word 66 loads, 67 addresses, 68 offsets, 73 counts, 76
+offsets the store, 47 formats it, ...) and the job resolves into a status, one load and one store.
+
+Strict mode (the default) raises `UnknownSemantics` for a word that matches no class, naming the
+fields that differ from the nearest class, and for a role at a register without registered
+semantics. `Emulator(boot, strict=False)` runs such a word as its nearest class, ignores the
+fields and taints every byte the job stores "hypothesis".
+
+### Adding a semantic
+
+- **A register value**: add or refine a `RegisterFact` in `state.py` (an exact value or an
+  interval, from the job's request or the boot parameters, with its confidence). A role that
+  reads the value then works at that register without further change.
+- **A role's outcome at a register** (seen on the camera): add the register to the role's
+  `table` in `semantics.CHANNELS`, or to `FORMATS` for word 47.
+- **A new use of the register value**: a new `Role.value` kind, handled in `Emulator._role`.
+- **What a stock word does without it**: its `Part` in `semantics.PARTS` (`missing` outcome and
+  the fact); a swept register field goes in `operand`.
+- **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
+  `operands` (fields it reads or ignores) and `act`, which records into the job's `Trace`; add
+  it to `CLASSES`. Every field outside `match` and `operands` must be idle.
+
+Each semantic carries its confidence, and a test vector should come with it: the curated camera
+vectors live in `tests/data/dsp/` (jobs, expected status and dst with UNKNOWN regions).
