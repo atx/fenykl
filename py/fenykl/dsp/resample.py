@@ -18,7 +18,7 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
 - the kernel: plane 0 uses the job's taps, phase p = taps (p, 0..3), s16 with 256 = 1.0, word
   2p = tap 0 | tap 1 << 16, word 2p + 1 = tap 2 | tap 3 << 16; planes 1 and 2 ignore the taps
   and use the fixed (0, 256 - 16p, 16p, 0) [verified: tap patches reach plane 0 only]; taps
-  beyond +-2048 (gains past 8.0) never ran, so the bytes they reach are a hypothesis;
+  outside -637..2048 (gains -2.49 .. 8.0) never ran, so the bytes they reach are a hypothesis;
 - b = 1: the kernel acts down the lines, phase p = frac(a) x 16, tap k on source line
   floor(a) - 1 + k, line -1 read as line 0 [verified: impulse responses];
 - b != 1 (integer a only): the kernel acts along the line at u(x) = u0 + b x, u0 = 31.5 (1 - b)
@@ -81,8 +81,8 @@ B_RANGE = (0x4000, 0x20000)
 """The steps that ran lie in this range (0.25 .. 2)."""
 HELD = H_MAX
 """The height at which the held line pairs were seen."""
-GAIN_RAN = 2048
-"""The largest |tap| that ran on plane 0: gains up to 8.0."""
+TAPS_RAN = (-637, 2048)
+"""The taps that ran on plane 0: gains -2.49 .. 8.0."""
 
 
 def chroma(p: int) -> tuple[int, int, int, int]:
@@ -106,7 +106,8 @@ def footprint(h: int) -> int:
 
 
 def _gain_taint(kernel: tuple[int, ...]) -> Confidence:
-    return H if any(abs(t) > GAIN_RAN for t in kernel) else V
+    lo, hi = TAPS_RAN
+    return H if any(not lo <= t <= hi for t in kernel) else V
 
 
 def u0(b: int) -> tuple[Fraction, bool]:

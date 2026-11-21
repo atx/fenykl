@@ -217,19 +217,16 @@ def test_the_prediction_meets_the_own_tap_vectors(name: str):
             assert bytes(got.dst.data[a:z]) == base64.b64decode(seg["data"]), (k, a)
 
 
-def test_taps_beyond_the_gains_that_ran_are_a_hypothesis():
-    # b 1: lines 1, 3, ... at phase 1 (gain 16), the others at phase 0 (unit).
+def test_taps_outside_those_that_ran_are_a_hypothesis():
+    # b 1, line i at phase i % 4: unit, 4096, the lowest tap that ran (-637), one below it.
     phases = [(0, 256, 0, 0)] * 16
-    phases[1] = (0, 4096, 0, 0)
+    phases[1:4] = [(0, 4096, 0, 0), (0, 893, -637, 0), (0, 894, -638, 0)]
     image = bytes(range(64)) * 3 * 16
-    table = [(i << 16 | i % 2 << 12, 0x10000) for i in range(16)]
+    table = [(i << 16 | i % 4 << 12, 0x10000) for i in range(16)]
     conf = predict(model(), Taps.of(phases), image, table).confidence()
-    assert {conf[64 * i + x] for i in (1, 3) for x in range(64)} == {
-        Confidence.HYPOTHESIS
-    }
-    assert {conf[64 * i + x] for i in (0, 2) for x in range(64)} == {
-        Confidence.INFERRED
-    }
+    line = [set(conf[64 * i : 64 * i + 64]) for i in range(4)]
+    I, H = Confidence.INFERRED, Confidence.HYPOTHESIS
+    assert line == [{I}, {H}, {I}, {H}]
     assert Confidence.HYPOTHESIS not in conf[1024:]
     # b != 1: plane 0's vertical pass at phase 0 reaches every pixel; a gain of 16 on values
     # below 16 keeps it exact.
