@@ -1,0 +1,101 @@
+"""The DSP word: an immutable 320-bit value with views by field and by unit.
+
+Decoding never fails: every 320-bit value is a Word, so bytes -> Word -> bytes is exact.
+Validation of assembled words (constants, allowed values) is `Word.check`.
+"""
+
+from collections.abc import Mapping
+
+from .fields import FIELDS, IDLE_VALUE, WORD_BITS, WORD_BYTES, Field, lookup
+from .units import SLOTS, UNITS, Slot
+
+
+class Word:
+    """One instruction. Built from slots, unset fields keep `base` (default: the idle word)::
+
+    Word(regs_a=RegsA(xreg=3), ctl_hi=CtlHi(f308_309=0))
+    """
+
+    __slots__ = ("value",)
+    value: int
+
+    def __init__(self, base: "Word | None" = None, /, **slots: Slot) -> None:
+        value = IDLE_VALUE if base is None else base.value
+        for unit, slot in slots.items():
+            if unit not in UNITS:
+                raise TypeError(f"no DSP unit {unit!r}")
+            if not isinstance(slot, SLOTS[unit]):
+                raise TypeError(f"{unit}= takes a {SLOTS[unit].__name__}, not {slot!r}")
+            for f, v in slot.items():
+                value = f.put(value, v)
+        object.__setattr__(self, "value", value)
+
+    @classmethod
+    def from_int(cls, value: int) -> "Word":
+        if not 0 <= value < 1 << WORD_BITS:
+            raise ValueError(f"{value:#x} is not a {WORD_BITS}-bit word")
+        word = object.__new__(cls)
+        object.__setattr__(word, "value", value)
+        return word
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "Word":
+        if len(data) != WORD_BYTES:
+            raise ValueError(f"a word is {WORD_BYTES} bytes, got {len(data)}")
+        return cls.from_int(int.from_bytes(data, "little"))
+
+    @classmethod
+    def from_fields(
+        cls, values: Mapping[str, int], base: "Word | None" = None
+    ) -> "Word":
+        """A word from field values by id or name; unset fields keep `base`."""
+        value = IDLE_VALUE if base is None else base.value
+        for key, v in values.items():
+            value = lookup(key).put(value, v)
+        return cls.from_int(value)
+
+    def to_bytes(self) -> bytes:
+        return self.value.to_bytes(WORD_BYTES, "little")
+
+    def __setattr__(self, key: str, value: object) -> None:
+        raise AttributeError("Word is immutable")
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Word) and other.value == self.value
+
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+    def __getitem__(self, key: str) -> int:
+        return lookup(key).get(self.value)
+
+    def fields(self) -> dict[str, int]:
+        """Every field's value, by id in bit order."""
+        return {f.id: f.get(self.value) for f in FIELDS}
+
+    def changed(self, base: "Word | None" = None) -> list[tuple[Field, int]]:
+        """(field, value) of the fields that differ from `base` (default: idle), in bit order."""
+        ref = IDLE_VALUE if base is None else base.value
+        diff = self.value ^ ref
+        return [(f, f.get(self.value)) for f in FIELDS if f.get(diff)]
+
+    def slots(self, base: "Word | None" = None) -> dict[str, Slot]:
+        """The fields that differ from `base` as slots, by unit; `Word(base, **slots) == self`."""
+        by_unit: dict[str, dict[str, int]] = {}
+        for f, v in self.changed(base):
+            by_unit.setdefault(f.unit, {})[f.id] = v
+        return {unit: SLOTS[unit](**values) for unit, values in by_unit.items()}
+
+    def check(self) -> None:
+        """Raise ValueError if a field holds a value no assembled word may hold."""
+        for f in FIELDS:
+            f.check(f.get(self.value))
+
+    def __repr__(self) -> str:
+        slots = self.slots()
+        if not slots:
+            return "IDLE"
+        return f"Word({', '.join(f'{u}={s!r}' for u, s in slots.items())})"
+
+
+IDLE = Word.from_int(IDLE_VALUE)
