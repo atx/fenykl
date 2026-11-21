@@ -8,7 +8,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import commands
-from fenykl.dsp.emu import Boot, Emulator, Status, back_firmware
+from fenykl.dsp.emu import MAIN_CODE, Boot, Emulator, Status, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.memcpy import Copy16Model
 from fenykl.dsp.program import Program
@@ -77,32 +77,128 @@ def needs_firmware(vector: dict) -> bool:
     return False
 
 
+VECTOR_KEYS = {"name", "fact", "boot", "jobs"}
+BOOT_KEYS = {"r14", "r29", "r21_format"}
+JOB_KEYS = {"edits", "src", "dst", "len", "pattern", "fill", "fill_len"}
+SEGMENT_KEYS = {
+    "bytes": {"at", "end", "kind", "data"},
+    "firmware": {"at", "end", "kind", "address"},
+    "unknown": {"at", "end", "kind"},
+}
+CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
+
+# Per job: the weakest taint of the known checked dst bytes ("-" none known or no dst checked,
+# "." job not checked),
+# then the result's taint, by the README's rule: a copy is at most inferred; r6, r11, r14 and
+# r21's format are hypotheses, and so is what they placed or formatted, also when a later job
+# stores it again; regs_b off the stock values and an unset slot (idled 66) are hypotheses;
+# what an idled word or a role's register decides alone at 1 KiB is verified (dst keeps the
+# verified prefill), and at most inferred at other lengths or with a second edit.
+TAINTS = {
+    "abort-idle66-b": "II -H II",
+    "abort-idle66": "II II -H II HH HH HH HH II",
+    "compose-68-76": "II II II HH II HH",
+    "compose-count-r29": "II II II HH II HH",
+    "count-1k": "II II II II",
+    "count-4k": "II II II II",
+    "firmware-r21": "II II II II II II",
+    "format47-2k": "II II II HH II II II",
+    "format47-pack": "II II II II HH II II II II II",
+    "format47-store-side": "II II HH IV II IV",
+    "format47-zero-boot": "II II HH HH II II II II",
+    "format47-zero-cells": "II II II II II II II",
+    "idle-no-store": "VV VV VV VV VV VV VV VV VV II",
+    "idle15-zero-fill": ".I IV",
+    "idle61": "II II II -V",
+    "offset68-2k": "II II HH II II HH",
+    "offset68-512": "II II HH II II HH",
+    "place-1k": "II II HH II HH II HH II HH",
+    "place-firmware": "II II II HH II HH II II II",
+    "r14-below": "HH",
+    "r14-exact": "II II HH HH .I HH HH HH HH HH II",
+    "regs-b-flips": "II II HH HH HH HH",
+    "replay-4k": "II II",
+    "replay-after-count": "II II II IV II II IV II HH HV",
+    "stock-copy": "II",
+}
+
+
+def check_keys(vector: dict) -> list[str]:
+    """Keys the fixture holds that the replay does not check, or misses."""
+    bad = []
+    if set(vector) != VECTOR_KEYS or set(vector["boot"]) != BOOT_KEYS:
+        bad.append(f"vector keys {sorted(vector)}, boot {sorted(vector['boot'])}")
+    for k, job in enumerate(vector["jobs"]):
+        extra = set(job) - JOB_KEYS - {"expect", "follow_up"}
+        if extra or not JOB_KEYS <= set(job):
+            bad.append(f"job {k}: keys {sorted(job)}")
+        for e in job["edits"]:
+            if set(e) not in ({"at", "idle"}, {"at", "set"}):
+                bad.append(f"job {k}: edit keys {sorted(e)}")
+        expect = job.get("expect", {})
+        if set(expect) - {"status", "dst"}:
+            bad.append(f"job {k}: expect keys {sorted(expect)}")
+        for seg in expect.get("dst", []):
+            if set(seg) != SEGMENT_KEYS[seg["kind"]]:
+                bad.append(f"job {k}: segment keys {sorted(seg)}")
+    return bad
+
+
 def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
     """Replays the vector's jobs; returns its mismatches, empty when every check holds."""
+    bad = check_keys(vector)
     boot = boot_of(vector["boot"])
     firmware = (
         back_firmware(boot, stock_image("em10ii")) if needs_firmware(vector) else None
     )
     emu = Emulator(boot, model(), sequencer=Sequencer(mode))
-    bad = []
-    for k, job in enumerate(vector["jobs"]):
+    taints = TAINTS[vector["name"]].split()
+    if len(taints) != len(vector["jobs"]):
+        bad.append(f"{len(taints)} taints for {len(vector['jobs'])} jobs")
+    status = None
+    for k, (job, taint) in enumerate(zip(vector["jobs"], taints)):
+        if job.get("follow_up") and (job["edits"] or status is not Status.TIMEOUT):
+            bad.append(f"job {k}: a follow-up must be a stock job after a timeout")
         p = job["pattern"]
         boot.put(
             job["src"],
             pattern(p["kind"], p["seed"], job["src"], job["len"]),
             f"job {k} src",
         )
-        boot.put(job["dst"], bytes([job["fill"]]) * job["fill_len"], f"job {k} prefill")
+        fill = bytes([job["fill"]]) * job["fill_len"]
+        prefill = boot.put(job["dst"], fill, f"job {k} prefill")
         result = emu.run(
             commands.copy(edited(job["edits"]), job["src"], job["dst"], job["len"])
         )
+        status = result.status
+        if CONF[taint[1]] is not result.taint:
+            bad.append(
+                f"job {k}: result taint {result.taint.name}, expected {taint[1]}"
+            )
+        if status is Status.TIMEOUT:
+            got = boot.read(job["dst"], job["fill_len"])
+            if (
+                bytes(got.data) != fill
+                or not all(got.known)
+                or set(got.src) != {prefill}
+            ):
+                bad.append(f"job {k}: a timeout changed the prefill")
         expect = job.get("expect")
         if expect is None:
+            if taint[0] != ".":
+                bad.append(f"job {k}: not checked, expected taint {taint[0]}")
             continue
-        if result.status.name.lower() != expect["status"]:
+        if status.name.lower() != expect["status"]:
             bad.append(
-                f"job {k}: status {result.status.name}, expected {expect['status']}: {result.why}"
+                f"job {k}: status {status.name}, expected {expect['status']}: {result.why}"
             )
+        weakest = boot.read(job["dst"], job["fill_len"]).weakest()
+        if "dst" not in expect:
+            weakest = None
+        if (weakest is None and taint[0] not in "-.") or (
+            weakest is not None and CONF.get(taint[0]) is not weakest
+        ):
+            bad.append(f"job {k}: dst taint {weakest}, expected {taint[0]}")
         for seg in expect.get("dst", []):
             a, z = seg["at"], seg["end"]
             got = boot.read(job["dst"] + a, z - a)
@@ -115,8 +211,11 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
                 bad.append(f"{where}: {len(got) - sum(got.known)} bytes unknown")
                 continue
             if seg["kind"] == "firmware":
+                start = dram_alias(seg["address"]) - dram_alias(MAIN_CODE)
                 if set(got.src) != {firmware}:
                     bad.append(f"{where}: not from the firmware")
+                elif list(got.off) != list(range(start, start + z - a)):
+                    bad.append(f"{where}: not the firmware at {seg['address']:#x}")
                 continue
             want = base64.b64decode(seg["data"])
             if bytes(got.data) != want:
@@ -130,7 +229,12 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
 @pytest.mark.parametrize("path", sorted(VECTORS.glob("*.json")), ids=lambda p: p.stem)
 def test_camera_vector(path: Path, mode: Mode):
     vector = json.loads(path.read_text())
+    assert vector["name"] == path.stem
     assert run_vector(vector, mode) == [], vector["fact"]
+
+
+def test_every_vector_has_its_taints():
+    assert sorted(TAINTS) == sorted(p.stem for p in VECTORS.glob("*.json"))
 
 
 SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
@@ -203,13 +307,14 @@ def test_lenient_mode_ignores_it_and_taints():
 def test_taint_marks_hypothesis_derived_bytes():
     boot = Boot(BootParams(r14=R14_EXACT))
     data = bytes(range(256)) * 4
+    # No word of the copy is decoded: its bytes are at most inferred, the stock copy's too.
     _, dst = copy(boot, stock(), data)
-    assert dst.weakest() is Confidence.VERIFIED
+    assert dst.weakest() is Confidence.INFERRED
     # Word 68 at r14 places the load at -0xE0: r14's value is a hypothesis, so are the bytes it placed.
     _, dst = copy(boot, with_reg(68, 14), data[::-1])
     assert bytes(dst.data[: LEN - 0xE0]) == data[::-1][0xE0:]
     assert {dst.taint[i] for i in range(LEN - 0xE0)} == {Confidence.HYPOTHESIS}
-    assert {dst.taint[i] for i in range(LEN - 0xE0, LEN)} == {Confidence.VERIFIED}
+    assert {dst.taint[i] for i in range(LEN - 0xE0, LEN)} == {Confidence.INFERRED}
     # A replay without a load stores the held buffer again, taint and all.
     _, dst = copy(boot, with_reg(66, 0), bytes(LEN))
     assert bytes(dst.data[: LEN - 0xE0]) == data[::-1][0xE0:]
@@ -238,3 +343,82 @@ def test_the_spare_channel_is_not_needed():
         )
         assert result.status is Status.OK, word
         assert bytes(dst.data) == bytes(range(256)) * 4
+
+
+def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
+    boot = boot or Boot()
+    boot.put(SRC, bytes(range(256)) * (length // 256), "src")
+    boot.put(DST, b"\xa5" * length, "prefill")
+    emu = Emulator(boot, model(), strict=strict)
+    result = emu.run(commands.copy(program, SRC, DST, length))
+    return result, boot
+
+
+def idled(*words: int) -> Program:
+    return edited([{"at": w, "idle": True} for w in words])
+
+
+def test_a_single_seen_edit_is_verified_a_combination_inferred():
+    result, boot = run(idled(12))
+    assert result.status is Status.OK and result.stored is None
+    assert result.taint is Confidence.VERIFIED
+    assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
+    result, _ = run(idled(13))
+    assert result.taint is Confidence.VERIFIED
+    result, _ = run(idled(12, 13))
+    assert result.stored is None
+    assert result.taint is Confidence.INFERRED
+
+
+def test_table_outcomes_seen_at_1k_are_inferred_at_other_lengths():
+    result, _ = run(with_reg(42, 1))
+    assert result.stored is None and result.taint is Confidence.VERIFIED
+    result, _ = run(with_reg(42, 1), length=0x800)
+    assert result.stored is None and result.taint is Confidence.INFERRED
+
+
+def lenient_program(*words: int) -> Program:
+    """The stock copy without `words`, and idle word 3 with control bit 0 set."""
+    program = idled(*words) if words else stock()
+    synthetic = Word(ctl_lo=CtlLo(f0=1))
+    return Program((*program.words[:3], synthetic, *program.words[4:]))
+
+
+def test_lenient_mode_taints_the_loaded_buffer():
+    result, boot = run(lenient_program(), strict=False)
+    assert result.ignored == [(3, ["f0"])]
+    assert boot.buffer.read(0, LEN).weakest() is Confidence.HYPOTHESIS
+
+
+def test_lenient_mode_taints_the_zero_fill():
+    _, boot = run(lenient_program(15), strict=False)
+    zeros = boot.read(DST, 0x4000)
+    assert bytes(zeros.data) == bytes(0x4000)
+    assert zeros.weakest() is Confidence.HYPOTHESIS
+
+
+def test_route_nibbles_must_hold_the_stock_values():
+    word = Word.from_fields({"f76_79": 1}, base=stock().words[73])
+    program = Program((*stock().words[:73], word, *stock().words[74:]))
+    with pytest.raises(UnknownSemantics, match=r"word 73: no semantics for f76_79=0x1"):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert result.ignored == [(73, ["f76_79"])]
+    assert boot.read(DST, LEN).weakest() is Confidence.HYPOTHESIS
+
+
+@pytest.mark.parametrize(
+    "order",
+    [list(range(19, -1, -1)), [*range(1, 20), 0], [1, 0, *range(2, 20)]],
+    ids=["reversed", "rotated", "swapped"],
+)
+def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int]):
+    words = stock().words
+    program = Program((*(words[i] for i in order), *words[20:]))
+    try:
+        result, boot = run(program)
+    except UnknownSemantics:
+        return
+    assert result.taint is Confidence.HYPOTHESIS
+    dst = boot.read(DST, LEN)
+    assert dst.weakest() is Confidence.HYPOTHESIS or bytes(dst.data) == b"\xa5" * LEN

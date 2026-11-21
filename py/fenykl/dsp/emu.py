@@ -69,6 +69,7 @@ class JobResult:
     stored: tuple[int, int] | None = None
     """The dst range the store wrote, None when it wrote nothing."""
     taint: Confidence = V
+    """The confidence of the status and of whether and what the job stored."""
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -136,7 +137,10 @@ class Emulator:
         for index, word in enumerate(job.program.words):
             c = classify(classes, word, index, trace, self.strict)
             c.act(trace, word, index, self.strict)
-        plan = self.model.resolve(trace, regs, view, self.sequencer)
+        stock = self.model.program.words
+        words = job.program.words
+        edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
+        plan = self.model.resolve(trace, regs, view, self.sequencer, edits)
         return self._apply(plan, trace, view)
 
     # -- application
@@ -151,7 +155,8 @@ class Emulator:
             status = Status.OK
         result = JobResult(
             status,
-            [why for o, why in plan.outcomes],
+            [why for _, why, _ in plan.outcomes],
+            taint=plan.result_taint(),
             ignored=trace.ignored,
             notes=trace.notes,
         )
@@ -168,13 +173,14 @@ class Emulator:
         dst = view.dst
         if plan.has(Outcome.ZERO_FILL):
             zero = boot.source("zero fill", "word 15 missing: the store writes zeros")
-            boot.dram.write(dram_alias(dst), Bytes.of(bytes(ZERO_FILL), zero, V))
+            data = Bytes.of(bytes(ZERO_FILL), zero, plan.store_taint)
+            boot.dram.write(dram_alias(dst), data)
             result.stored = (dst, dst + ZERO_FILL)
             return result
         n = plan.count
         if unknown_data or n is None or plan.o76 is None or (plan.format is None):
             why = "; ".join(
-                w for o, w in plan.outcomes if o is Outcome.DATA_UNKNOWN
+                w for o, w, _ in plan.outcomes if o is Outcome.DATA_UNKNOWN
             ) or ("the store's count, offset or format is not known")
             n = length if n is None else n
             boot.dram.write(
@@ -184,7 +190,6 @@ class Emulator:
             result.stored = (dst, dst + n)
             return result
         data = self._format(plan.format, plan.o76, n)
-        result.taint = plan.store_taint
         boot.dram.write(dram_alias(dst), data.capped(plan.store_taint))
         result.stored = (dst, dst + n)
         return result

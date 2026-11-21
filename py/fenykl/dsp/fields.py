@@ -6,8 +6,8 @@ an optional semantic name that may be renamed at will, a kind, its value in the
 idle word, a confidence and a one-line fact.
 
 Confidence qualifies the field itself: that these bits form one field of this kind. Facts about
-single values or words carry their own tags in `fact` and `values`. The emulator propagates the
-weakest confidence of the fields a result depends on.
+single values or words carry their own tags in `fact` and `values`. The emulator does not use
+it: it propagates the confidence of the semantics a result depends on (see `semantics`).
 """
 
 from collections.abc import Mapping

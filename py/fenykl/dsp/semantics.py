@@ -49,6 +49,9 @@ class Outcome(Enum):
     DATA_UNKNOWN = "dst is written with data the model does not know"
 
 
+KIB = 0x400
+
+
 @dataclass(frozen=True)
 class Transfer:
     """A register transfer as the sequencer sees it."""
@@ -65,11 +68,14 @@ class Trace:
 
     parts: Counter["OpaqueClass"] = field(default_factory=Counter)
     """How often each opaque class ran."""
-    operands: dict["OpaqueClass", int] = field(default_factory=dict)
-    """The register of the opaque classes whose register field matters."""
+    operands: dict["OpaqueClass", tuple[int, int]] = field(default_factory=dict)
+    """(index, register) of the opaque classes whose register field matters."""
     channels: dict[str, list[Transfer]] = field(default_factory=dict)
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
+    classes: Confidence = V
+    """The weakest confidence of the classes that ran, at the positions they ran at."""
     taint: Confidence = V
+    """Hypothesis when a field was ignored (lenient mode) or a word ran off its stock position."""
     notes: list[str] = field(default_factory=list)
 
 
@@ -78,7 +84,8 @@ class WordClass:
     """A class of words; compared by identity.
 
     `match` holds field values and `masks` the bits of each field that `match` fixes (default:
-    all of them); the other bits of a masked field are don't-care.
+    all of them); the other bits of a masked field are don't-care. `confidence` is that of the
+    class's semantics where it was seen (`confidence_at`).
     """
 
     name: str
@@ -86,6 +93,7 @@ class WordClass:
     match: Mapping[str, int]
     operands: frozenset[str]
     masks: Mapping[str, int] = field(default_factory=dict)
+    confidence: Confidence = H
     mask: int = field(init=False, repr=False)
     bits: int = field(init=False, repr=False)
 
@@ -110,6 +118,9 @@ class WordClass:
                 out.append((f, word[key]))
         return out
 
+    def confidence_at(self, index: int) -> Confidence:
+        return self.confidence
+
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         raise NotImplementedError
 
@@ -124,6 +135,7 @@ IDLE_CLASS = IdleClass(
     "the no-op of the stock programs (program 16 holds it at 3, 4, 6..9) [verified]",
     {f.id: f.idle for f in FIELDS},
     frozenset(),
+    confidence=V,
 )
 
 
@@ -137,6 +149,12 @@ class Part:
     fact: str
     operand: Mapping[int, Outcome] | None = None
     """Outcomes by the value of its register field 115..119, where that field was swept."""
+    seen: tuple[int, ...] = (KIB,)
+    """The job lengths at which `missing` and `operand` were seen on the camera [verified];
+    at other lengths they are inferred."""
+
+    def at(self, length: int) -> Confidence:
+        return V if length in self.seen else I
 
 
 @dataclass(frozen=True, eq=False)
@@ -147,10 +165,14 @@ class OpaqueClass(WordClass):
     positions: frozenset[int] = frozenset()
     """The indices of the stock words of this class."""
 
+    def confidence_at(self, index: int) -> Confidence:
+        """Its confidence at its stock positions, hypothesis anywhere else."""
+        return self.confidence if index in self.positions else H
+
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         trace.parts[self] += 1
         if self.operands:
-            trace.operands[self] = word["xreg"]
+            trace.operands[self] = (index, word["xreg"])
 
 
 # -- roles of the register transfers
@@ -174,10 +196,25 @@ class Role:
     """The stock word that holds the role."""
     fact: str
     table: Mapping[int, Outcome] = field(default_factory=dict)
-    """Outcome by register, seen on the camera at 1 KiB [verified]; checked before `use`."""
+    """Outcome by register, seen on the camera at the `seen` lengths [verified], inferred at
+    the others; checked before `use`."""
     use: Use = Use.NONE
     load: bool = False
     """A role of the load (its taint goes to the loaded bytes), else of the store."""
+    confidence: Confidence = I
+    """That of `use`: at the stock register, and at the others at the `seen` lengths."""
+    seen: tuple[int, ...] = (KIB,)
+    """The job lengths at which the table and the other registers ran on the camera."""
+    beyond: Confidence = I
+    """That of `use` at another register and length."""
+
+    def table_at(self, length: int) -> Confidence:
+        return V if length in self.seen else I
+
+    def use_at(self, stock: bool, length: int) -> Confidence:
+        if stock or length in self.seen:
+            return self.confidence
+        return min(self.confidence, self.beyond)
 
 
 @dataclass(frozen=True)
@@ -277,6 +314,7 @@ def classify(
     differ from the nearest class (recorded in `trace`, which is tainted)."""
     for c in classes:
         if c.matches(word):
+            _ran(trace, c, index)
             return c
     best, best_miss = None, None
     for c in classes:
@@ -288,4 +326,13 @@ def classify(
         raise UnknownSemantics(index, best.name, best_miss)
     trace.ignored.append((index, [f.id for f, _ in best_miss]))
     trace.taint = H
+    _ran(trace, best, index)
     return best
+
+
+def _ran(trace: Trace, c: WordClass, index: int) -> None:
+    conf = c.confidence_at(index)
+    trace.classes = min(trace.classes, conf)
+    if conf < c.confidence:
+        trace.taint = H
+        trace.notes.append(f"word {index}: {c.name} off its stock position")

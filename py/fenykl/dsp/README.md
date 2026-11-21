@@ -59,7 +59,35 @@ words carry their own wording in `fact`. The rules:
   `HypothesisFieldWarning` that lists every hypothesis field the program moves off idle;
 - listings mark verified values `!` and inferred ones `~`; unmarked values are hypotheses;
 - the emulator gives every output byte the weakest confidence of the semantics that produced or
-  moved it (the field's own confidence does not enter).
+  moved it (the field's own confidence does not enter); see the rule below.
+
+### The emulator's confidence rule
+
+Every semantic carries a confidence: each word class (`WordClass.confidence`), each part's
+outcomes (`Part.seen`), each role's table and use (`Role.confidence`, `seen`, `beyond`), each
+register fact. What was seen on the camera exactly is verified; what the model extends from it
+is weaker:
+
+- **Positions.** A semantic at its stock position is at most inferred, at any other position a
+  hypothesis: an undecoded stock word runs as its class, inferred at its stock indices and a
+  hypothesis elsewhere; a transfer whose role the sequencer assigns away from the role's stock
+  word is a hypothesis; the idle word is verified anywhere.
+- **Roles.** A role's outcome table and a role's use at a register other than its stock one
+  are verified at the lengths they ran at on the camera (`seen`, 1 KiB unless stated) and
+  inferred at others (word 76's use: a hypothesis); a use is never stronger than its register's
+  fact.
+- **Combinations.** A job that differs from the stock program in two or more words is at most
+  inferred: no combination of edits is registered as seen together.
+- **Lenient mode.** An ignored field, or a route nibble off the stock transfers' values, makes
+  the job a hypothesis: its loaded, stored and zero-filled bytes alike.
+
+Per output byte the emulator takes the minimum: the loaded bytes get the weakest of the classes
+that ran, the parts' outcomes, the caps above and the load's roles (66, 67, 68); the stored bytes
+the weakest of the buffer bytes they come from and the same with the store's roles. Since no word
+of program 16 is decoded, every byte it copies is at most inferred, the stock copy's too.
+`JobResult.taint` qualifies the status and whether and what the job stored: the weakest of the
+outcomes that decided it (an idled word, a role's register) under the caps, else the load's
+and the store's.
 
 ## The emulator
 
@@ -92,8 +120,9 @@ offsets the store, 47 formats it, ...) and the job resolves into a status, one l
 
 Strict mode (the default) raises `UnknownSemantics` for a word that matches no class, naming the
 fields that differ from the nearest class, and for a role at a register without registered
-semantics. `Emulator(boot, model, strict=False)` runs such a word as its nearest class, ignores the
-fields and taints every byte the job stores "hypothesis".
+semantics, and for a transfer whose route nibbles differ from the stock transfers' values.
+`Emulator(boot, model, strict=False)` runs such a word as its nearest class, ignores the fields
+and taints every byte the job loads or stores "hypothesis".
 
 ### Adding a semantic
 
@@ -101,7 +130,8 @@ fields and taints every byte the job stores "hypothesis".
   interval, from the job's request or the boot parameters, with its confidence). A role that
   reads the value then works at that register without further change.
 - **A role's outcome at a register** (seen on the camera): add the register to the role's
-  `table` in `memcpy._CHANNELS`, or to `memcpy._FORMATS` for word 47.
+  `table` in `memcpy._CHANNELS` (and the job lengths it ran at to `seen`), or to
+  `memcpy._FORMATS` for word 47.
 - **A new use of the register value**: a new `semantics.Use`, handled in `Copy16Model._role`.
 - **What a stock word does without it**: its `Part` in `memcpy._PARTS` (`token`, `missing`
   outcome and the fact); a swept register field goes in `operand`.

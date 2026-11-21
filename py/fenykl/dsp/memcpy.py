@@ -280,6 +280,7 @@ _CHANNELS: tuple[Channel, ...] = (
                 "the buffer index of the store: dst[i] = buffer[i + o], o = value / 32 rounded "
                 "down to 32 bytes (hypothesis for negative values)",
                 use=Use.STORE_OFFSET,
+                beyond=H,  # its other registers ran only at 1 KiB
             ),
             Role(
                 "stream",
@@ -321,6 +322,8 @@ class TransferClass(WordClass):
 
     channel_of: dict[tuple[int, ...], str] = field(default_factory=dict)
     reference: dict[tuple[int, ...], Reference] = field(default_factory=dict)
+    holding: frozenset[int] = frozenset()
+    """The indices of the stock holding transfers (bit 308 set)."""
 
     def matches(self, word: Word) -> bool:
         return super().matches(word) and word["f308_309"] in (0, 1)
@@ -335,10 +338,23 @@ class TransferClass(WordClass):
                 [(lookup(k), word[k]) for k in CONTEXT],
                 "no stock transfer has this register context",
             )
+        routes = [(lookup(k), word[k]) for k in ROUTES if word[k] not in ref.routes[k]]
+        if routes:
+            if strict:
+                raise UnknownSemantics(
+                    index,
+                    self.name,
+                    routes,
+                    "route nibbles off the stock transfers' values",
+                )
+            trace.ignored.append((index, [f.id for f, _ in routes]))
+            trace.taint = H
         if word["f308_309"] == 1:
             # 74 and 78 differ from 73 and 77 only here and copy at every register (hypothesis:
             # a transfer that does not take a slot).
             trace.notes.append(f"word {index}: a holding transfer, no slot")
+            if index not in self.holding:
+                trace.taint = H
             return
         channel = self.channel_of.get(ctx)
         if channel is None:
@@ -391,13 +407,18 @@ def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
     for i, w in enumerate(words):
         if cls.matches(w) and w["f308_309"] == 0 and i not in roles:
             raise ValueError(f"stock transfer {i} has no role")
+    holding = frozenset(
+        i for i, w in enumerate(words) if cls.matches(w) and w["f308_309"] == 1
+    )
     return TransferClass(
         cls.name,
         cls.fact,
         cls.match,
         cls.operands,
+        confidence=I,
         channel_of=channel_of,
         reference=reference,
+        holding=holding,
     )
 
 
@@ -426,6 +447,7 @@ def _opaque_classes(
                 part.fact,
                 match,
                 operands,
+                confidence=I,
                 part=part,
                 positions=frozenset(at),
             )
@@ -441,9 +463,13 @@ def _opaque_classes(
 
 @dataclass
 class Plan:
-    """The resolved job: outcomes, and the parameters of the load and the store."""
+    """The resolved job: outcomes, the parameters of the load and the store, and taints."""
 
-    outcomes: list[tuple[Outcome, str]] = field(default_factory=list)
+    outcomes: list[tuple[Outcome, str, Confidence]] = field(default_factory=list)
+    """(outcome, why, confidence) of the parts and roles that decided something."""
+    cap: Confidence = V
+    """Hypothesis for ignored fields and words off their stock position; at most inferred for
+    two or more edited words."""
     load_taint: Confidence = V
     store_taint: Confidence = V
     address: int | None = None
@@ -455,7 +481,18 @@ class Plan:
     format: str | None = "bytes"
 
     def has(self, o: Outcome) -> bool:
-        return any(x is o for x, _ in self.outcomes)
+        return any(x is o for x, _, _ in self.outcomes)
+
+    def deciding(self) -> list[tuple[Outcome, str, Confidence]]:
+        return [x for x in self.outcomes if x[0] is not Outcome.OK]
+
+    def result_taint(self) -> Confidence:
+        """The confidence of the job's status and of whether and what it stored: that of the
+        outcomes that decided it, else that of the load and the store."""
+        deciding = self.deciding()
+        if deciding:
+            return min(self.cap, *(c for _, _, c in deciding))
+        return min(self.load_taint, self.store_taint)
 
 
 def _trunc32(v: int) -> int:
@@ -487,11 +524,18 @@ class Copy16Model:
         return cls(stock_programs(image)[ITEM])
 
     def resolve(
-        self, trace: Trace, regs: RegisterFile, view: JobView, sequencer: Sequencer
+        self,
+        trace: Trace,
+        regs: RegisterFile,
+        view: JobView,
+        sequencer: Sequencer,
+        edits: int,
     ) -> Plan:
-        # The stock transfers at their own slots leave these defaults: they are what every
-        # stock copy shows (load at src, offsets 0, count len, bytes).
-        plan = Plan(count=view.length)
+        """The plan of a job of `edits` words that differ from the stock program."""
+        length = view.length
+        assert length is not None
+        # The defaults are what every stock copy shows: load at src, offsets 0, count len, bytes.
+        plan = Plan(count=length, cap=min(trace.taint, I if edits >= 2 else V))
         for c in self.opaque:
             part = c.part
             assert part is not None
@@ -501,59 +545,65 @@ class Copy16Model:
                     (
                         part.missing,
                         f"{part.token} (stock word {at}) missing: {part.fact}",
+                        part.at(length),
                     )
                 )
             elif part.operand is not None:
-                reg = trace.operands[c]
+                index, reg = trace.operands[c]
                 o = part.operand.get(reg)
                 if o is None:
-                    raise UnknownSemantics(
-                        min(c.positions), c.name, [(lookup("xreg"), reg)]
-                    )
-                if o is not Outcome.OK:
-                    plan.outcomes.append((o, f"{part.token} at r{reg}: {o.value}"))
+                    raise UnknownSemantics(index, c.name, [(lookup("xreg"), reg)])
+                stock = reg == self.program.words[min(c.positions)]["xreg"]
+                conf = V if stock else part.at(length)
+                plan.outcomes.append((o, f"{part.token} at r{reg}: {o.value}", conf))
         filled, unset = sequencer.assign(self.channels, trace.channels)
         for slot in unset:
             plan.outcomes.append(
-                (Outcome.TIMEOUT, f"unset {slot}: the stream never completes")
+                (Outcome.TIMEOUT, f"unset {slot}: the stream never completes", H)
             )
-            plan.store_taint = H
-        for role, t, taint in filled:
-            stock = self.program.words[role.word]["xreg"] == t.reg and taint is V
-            taint = min(taint, t.taint)
-            if not stock:
-                taint = min(taint, self._role(plan, role, t.reg, t.index, regs, view))
-            if role.load:
-                plan.load_taint = min(plan.load_taint, taint)
-            else:
-                plan.store_taint = min(plan.store_taint, taint)
-        plan.store_taint = min(plan.store_taint, trace.taint)
+        roles = []
+        for role, t, assigned in filled:
+            pre = min(assigned, t.taint)
+            conf = min(pre, self._role(plan, role, t, pre, regs, view))
+            roles.append((role, conf))
+        base = min(plan.cap, trace.classes, *(c for _, _, c in plan.outcomes))
+        plan.load_taint = min([base, *(c for r, c in roles if r.load)])
+        plan.store_taint = min([base, *(c for r, c in roles if not r.load)])
         return plan
 
     def _role(
         self,
         plan: Plan,
         role: Role,
-        reg: int,
-        index: int,
+        t: Transfer,
+        pre: Confidence,
         regs: RegisterFile,
         view: JobView,
     ) -> Confidence:
-        """Apply `role` at register `reg`; returns the confidence of what it did."""
+        """Apply `role` at the transfer's register; returns the confidence of what it did.
+
+        An outcome it records gets `pre`, the confidence of the assignment, at most.
+        """
+        length = view.length
+        assert length is not None
+        reg, index = t.reg, t.index
+        stock = reg == self.program.words[role.word]["xreg"]
         o = role.table.get(reg)
+        table = V if stock else role.table_at(length)
         if o is not None and o is not Outcome.OK:
-            plan.outcomes.append(
-                (o, f"word {index} ({role.name}) at r{reg}: {o.value}")
-            )
-            return V
+            why = f"word {index} ({role.name}) at r{reg}: {o.value}"
+            plan.outcomes.append((o, why, min(pre, table)))
+            return table
         if role.use is Use.NONE:
             if o is None:
                 raise UnknownSemantics(
                     index, role.name, [(lookup("xreg"), reg)], role.fact
                 )
-            return V
+            return table
+        conf = role.use_at(stock, length)
         value = regs[reg]
-        taint = V if value is None else value.taint
+        if value is not None:
+            conf = min(conf, value.taint)
         match role.use:
             case Use.ADDRESS:
                 plan.address = None
@@ -571,22 +621,22 @@ class Copy16Model:
                 plan.o68 = None if value is None else value.image(_trunc32)
             case Use.STORE_OFFSET:
                 plan.o76 = None if value is None else value.image(_floor32)
-                if view.length != 0x400:
-                    taint = H  # off-stock values of word 76 ran only at 1 KiB
             case Use.COUNT:
                 n = None if value is None else value.exact
                 if n is not None and n > MAX_COUNT:
-                    plan.outcomes.append(
-                        (Outcome.TIMEOUT, f"word {index} at r{reg}: a count of {n:#x}")
-                    )
+                    why = f"word {index} at r{reg}: a count of {n:#x}"
+                    plan.outcomes.append((Outcome.TIMEOUT, why, H))
                     return H
                 plan.count = n
             case Use.FORMAT:
-                fmt = view.boot.r21_format if reg == 21 else self.formats.get(reg)
-                if fmt is None and reg != 21:
+                # The format is a table by register: the register's value does not enter.
+                conf = role.use_at(stock, length)
+                if reg == 21:
+                    plan.format, conf = view.boot.r21_format, H
+                elif reg in self.formats:
+                    plan.format = self.formats[reg]
+                else:
                     raise UnknownSemantics(
                         index, role.name, [(lookup("xreg"), reg)], role.fact
                     )
-                plan.format = fmt
-                taint = V if reg != 21 else H
-        return taint
+        return conf
