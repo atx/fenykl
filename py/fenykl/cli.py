@@ -9,6 +9,8 @@ from pathlib import Path
 
 from . import dev, sampler, screen, tp
 from .assets import ASSET_LAYOUTS, AssetError, dump_assets
+from .dsp import cli as dsp_cli
+from .dsp.program import ProgramFormatError
 from .firmware import (
     FIRMWARE_DIR,
     TARGETS,
@@ -302,6 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     tp_build.set_defaults(func=cmd_tp_build)
 
     sampler.add_parser(dev.add_parser(commands))
+    dsp_cli.add_parser(commands)
 
     toolchain = commands.add_parser("toolchain", help="locate the cross toolchain")
     toolchain_commands = toolchain.add_subparsers(required=True, metavar="COMMAND")
@@ -325,6 +328,7 @@ def main(argv: list[str] | None = None) -> None:
         StockMissingError,
         TargetError,
         AssetError,
+        ProgramFormatError,
         dev.DevmonError,
         screen.ScreenError,
     ) as error:

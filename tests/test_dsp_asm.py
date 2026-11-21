@@ -4,7 +4,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import memcpy
-from fenykl.dsp.disasm import listing
+from fenykl.dsp.disasm import listing, source
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_programs
 from fenykl.dsp.units import CtlHi, RegsA
 from fenykl.dsp.word import IDLE, Word
@@ -23,8 +23,12 @@ def test_assemble_warns_only_about_hypothesis_fields():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assemble([Word(regs_a=RegsA(xreg=3)), IDLE])
-    with pytest.warns(HypothesisFieldWarning, match=r"2 hypothesis fields: f123_127, f308_309$"):
-        assemble([Word(regs_a=RegsA(xreg=3, f123_127=2)), Word(ctl_hi=CtlHi(f308_309=0))])
+    with pytest.warns(
+        HypothesisFieldWarning, match=r"2 hypothesis fields: f123_127, f308_309$"
+    ):
+        assemble(
+            [Word(regs_a=RegsA(xreg=3, f123_127=2)), Word(ctl_hi=CtlHi(f308_309=0))]
+        )
 
 
 def test_assemble_rejects_a_cleared_constant():
@@ -43,3 +47,10 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
         "5  ^  regs_a: xreg=r7~",
         "6  idle",
     ]
+
+
+def test_dsl_source_rebuilds_every_stock_program():
+    for item, program in stock_programs(stock_image("em10ii")).items():
+        namespace: dict = {}
+        exec(source(program, "P"), namespace)
+        assert namespace["P"] == list(program.words), item

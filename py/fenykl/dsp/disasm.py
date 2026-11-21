@@ -42,7 +42,9 @@ def _runs(words: tuple[Word, ...]) -> Iterator[tuple[int, int]]:
 def listing(program: Program, title: str = "") -> str:
     lines = [f"; {title}"] if title else []
     lines.append(f"; {len(program)} words, {len(program.constants)} constant bytes")
-    lines.append("; marks: ! verified, ~ inferred, none a hypothesis; ^ = the word before, changed")
+    lines.append(
+        "; marks: ! verified, ~ inferred, none a hypothesis; ^ = the word before, changed"
+    )
     prev = IDLE
     for start, count in _runs(program.words):
         word = program.words[start]
