@@ -80,14 +80,21 @@ class Boot:
     def __init__(self, params: BootParams | None = None) -> None:
         self.params = params or BootParams()
         self.sources: list[Source] = []
+        self._source_ids: dict[Source, int] = {}
+        self.regs = RegisterFile()
         never = self.source("unwritten", "no job on this boot wrote it")
         self.local = Space("local", LOCAL_BASE, LOCAL_SIZE, never)
         self.buffer = Space("buffer", BUFFER_LO, BUFFER_HI - BUFFER_LO, never)
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
 
     def source(self, name: str, fact: str = "") -> int:
-        self.sources.append(Source(name, fact))
-        return len(self.sources) - 1
+        """The id of source (name, fact). Equal sources share one id, so the list stays bounded
+        by the distinct sources; give puts distinct names to tell them apart."""
+        s = Source(name, fact)
+        if s not in self._source_ids:
+            self._source_ids[s] = len(self.sources)
+            self.sources.append(s)
+        return self._source_ids[s]
 
     def put(self, addr: int, data: bytes, name: str, taint: Confidence = V) -> int:
         """Known DRAM bytes (a src, a prefill); returns their source."""
@@ -131,7 +138,7 @@ class Emulator:
         view = JobView(boot.u32(0), boot.u32(4), boot.u32(8), boot.params)
         if view.dst is None or view.length is None:
             raise ValueError("local memory holds no dst and len (no command setup ran)")
-        regs = RegisterFile.at_job(view)
+        boot.regs.start_job(view)
         trace = Trace()
         classes = self.model.classes
         for index, word in enumerate(job.program.words):
@@ -140,7 +147,7 @@ class Emulator:
         stock = self.model.program.words
         words = job.program.words
         edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
-        plan = self.model.resolve(trace, regs, view, self.sequencer, edits)
+        plan = self.model.resolve(trace, boot.regs, view, self.sequencer, edits)
         return self._apply(plan, trace, view)
 
     # -- application

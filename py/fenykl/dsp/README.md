@@ -106,9 +106,9 @@ out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), 
 A `Job` is a program plus the bytes its command's CPU setup writes to local memory
 (`commands.copy` for cmd 0xF: src, dst and len at 0x9D000000..08). State persists across the jobs
 of a `Boot`: local memory, the buffer between load and store (position-addressed, reaching below
-index 0) and the DRAM view. `back_firmware(boot, image)` maps the main code of a stock `.BIN` for
-loads from firmware text. A byte is known or UNKNOWN, and its source says where it came from or
-why it is unknown; the emulator never guesses a byte.
+index 0), the register file and the DRAM view. `back_firmware(boot, image)` maps the main code
+of a stock `.BIN` for loads from firmware text. A byte is known or UNKNOWN, and its source says
+where it came from or why it is unknown; the emulator never guesses a byte.
 
 Each word gets the semantics of its class (`model.classes`): the idle word, the register
 transfer (matched by its signature, every field idle but the register groups, the route nibbles

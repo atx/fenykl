@@ -65,6 +65,8 @@ class Slot:
         resolved: dict[str, int] = {}
         for key, value in values.items():
             f = self.field(key)
+            if f.id in resolved:
+                raise ValueError(f"{f.label} given twice (as {f.id} and {f.name})")
             f.put(0, value)  # width check; allowed values are checked on assembly
             resolved[f.id] = value
         object.__setattr__(self, "_values", resolved)

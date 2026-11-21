@@ -56,3 +56,8 @@ def test_dsl_source_rebuilds_every_stock_program():
         namespace: dict = {}
         exec(source(program, "P"), namespace)  # noqa: S102 (our own generated source)
         assert namespace["P"] == list(program.words), item
+
+
+def test_a_slot_rejects_a_field_given_by_id_and_name():
+    with pytest.raises(ValueError, match="xreg given twice"):
+        RegsA(xreg=3, f115_119=4)

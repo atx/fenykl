@@ -422,3 +422,33 @@ def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int]):
     assert result.taint is Confidence.HYPOTHESIS
     dst = boot.read(DST, LEN)
     assert dst.weakest() is Confidence.HYPOTHESIS or bytes(dst.data) == b"\xa5" * LEN
+
+
+def test_registers_persist_but_a_fact_without_a_value_forgets():
+    boot = Boot()
+    run(stock(), boot=boot)
+    reg = boot.regs[11]
+    assert reg is not None and reg.lo == 0x400
+    run(stock(), length=0x800, boot=boot)
+    assert boot.regs[11] is None
+    assert boot.regs[1] is not None and boot.regs[1].exact == 0x800
+
+
+def test_backing_fills_pages_made_before_it_below_written_bytes():
+    boot = Boot()
+    boot.put(0x60001000, b"\x11" * 16, "written")
+    boot.read(0x60001100, 16)  # makes the page, unknown there
+    src = boot.back(0x60001000, bytes(range(256)), "image")
+    got = boot.read(0x60001000, 256)
+    assert bytes(got.data[:16]) == b"\x11" * 16
+    assert bytes(got.data[16:]) == bytes(range(16, 256)) and all(got.known)
+    assert set(got.src[16:]) == {src} and list(got.off[16:]) == list(range(16, 256))
+
+
+def test_sources_stay_bounded_over_jobs():
+    boot = Boot()
+    run(stock(), boot=boot)
+    n = len(boot.sources)
+    for _ in range(3):
+        run(stock(), boot=boot)
+    assert len(boot.sources) == n

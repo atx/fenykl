@@ -9,7 +9,8 @@ The spaces of one boot, all persistent across its jobs:
 - `local`: DSP local memory at 0x9D000000, where the CPU setup of a command writes its request;
 - `buffer`: the internal buffer between the load and the store, position-addressed;
 - `dram`: a sparse view of DRAM, unknown except where written or backed by an image;
-- the register file, set per job from `REGISTER_FACTS` and the boot's parameters.
+- the register file; when a job starts, `REGISTER_FACTS` set the registers they cover from the
+  job's request and the boot's parameters (unknown where a fact has no value for the job).
 """
 
 from array import array
@@ -176,6 +177,23 @@ class SparseSpace:
     def back(self, base: int, data: bytes, src: int) -> None:
         """Known bytes `data` at `base` (e.g. firmware text), below anything written."""
         self.backing.append((base, data, src))
+        for page in self.pages.values():
+            self._fill(page, base, data, src)
+
+    def _fill(self, page: Space, base: int, data: bytes, src: int) -> None:
+        """The backing image's bytes in `page`, in the runs where nothing was written."""
+        lo, hi = max(base, page.base), min(base + len(data), page.base + PAGE)
+        own = page.bytes.src
+        a = lo
+        while a < hi:
+            if own[a - page.base] != self.unwritten:
+                a += 1
+                continue
+            b = a
+            while b < hi and own[b - page.base] == self.unwritten:
+                b += 1
+            page.write(a, Bytes.of(data[a - base : b - base], src, V, a - base))
+            a = b
 
     def _page(self, number: int) -> Space:
         page = self.pages.get(number)
@@ -183,9 +201,7 @@ class SparseSpace:
             return page
         page = Space(f"{self.name}:{number:#x}", number * PAGE, PAGE, self.unwritten)
         for base, data, src in self.backing:
-            lo, hi = max(base, page.base), min(base + len(data), page.base + PAGE)
-            if lo < hi:
-                page.write(lo, Bytes.of(data[lo - base : hi - base], src, V, lo - base))
+            self._fill(page, base, data, src)
         self.pages[number] = page
         return page
 
@@ -361,16 +377,16 @@ R14_BELOW = (-0x1FFF, -0x1C01)
 
 @dataclass
 class RegisterFile:
+    """The registers of one boot; they persist across its jobs."""
+
     regs: list[Reg | None] = field(default_factory=lambda: [None] * 32)
 
-    @classmethod
-    def at_job(cls, job: JobView) -> "RegisterFile":
-        rf = cls()
+    def start_job(self, job: JobView) -> None:
+        """Set the registers the facts give when a job starts; a fact without a value for this
+        job leaves its register unknown."""
         for f in REGISTER_FACTS:
             v = f.value(job)
-            if v is not None:
-                rf.regs[f.reg] = Reg(v[0], v[1], f.taint, f.fact)
-        return rf
+            self.regs[f.reg] = None if v is None else Reg(v[0], v[1], f.taint, f.fact)
 
     def __getitem__(self, r: int) -> Reg | None:
         return self.regs[r]
