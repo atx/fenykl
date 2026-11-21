@@ -14,6 +14,11 @@ Bits 313..319 are one op field in every word (`OPS` names its values). In a cont
 fields f15_22 and f128_132; those fields stay as they are in every word, so the table is one
 partition of the bits for all words. The sequencer rule that spans words, four delay slots after
 every control op, is `DELAY_SLOTS`.
+
+A data op 8..73 holds its operands in the op slot: the register ra (f123_127), then f128_132 as a
+register rb or as bits 8..12 of the immediate, f120_122 as an operand or as bits 13..15. Which,
+and how wide the immediate is, is the op's family (`FAMILIES`, `FORMATS`); as with T, the
+operands compose from the positional fields.
 """
 
 from collections.abc import Mapping
@@ -248,20 +253,32 @@ CONTROL_FACT = (
 IMM_FACT = (
     "the 8-bit immediate of the op in f313_319: 0 in every word whose op is idle (verified in the "
     "bytes of the five stock programs and across later firmware versions of the same family); in "
-    "a control op 0..3 it is the low byte of the target T (verified in the bytes); in data words "
-    "mostly a small value"
+    "a control op 0..3 it is the low byte of the target T (verified in the bytes); in a data op the "
+    "low bits of an immediate 5, 13, 15 or 16 bits wide by op, and 0 in every register-form op "
+    "(verified in the bytes, `FAMILIES`)"
 )
 T_HIGH = (
     "in a control op 0..3 bits 8..12 of the target T, not a register (verified in the bytes); in a "
     "return mostly 1 (in every return of the five stock programs but three, which hold 2, 3 and "
-    "7), meaning open; it may extend the immediate of some data ops to 13 bits, as in program 13 "
-    "words 682, 689 and 696 (hypothesis)"
+    "7), meaning open. In a data op it is the register rb of the register forms (families A', C, "
+    "E) or bits 8..12 of the immediate (families A, B, D, F) (verified in the bytes across later "
+    "firmware versions of the same family: in 31878 of 32911 idle-op words it holds the last "
+    "register-form word's value, which survives the immediate forms in between)"
+)
+RA_FACT = (
+    "the op slot's register ra: it changes in 1 of 33175 idle-op words and in 19884 of 33290 "
+    "data-op words across later firmware versions of the same family, so only a word that "
+    "carries an op writes it, a data op or a control op 0..2, while a call holds it (verified "
+    "in the bytes); whether it is a destination, a source or a base is open; in ops 0..2 the "
+    "candidate for the branch or loop condition (hypothesis)"
 )
 FLAGS_FACT = (
     "3 bits between the register specifiers; bits 120..121 are 0 in every op 0..3 word and bit 122 "
     "is a flag in them, set in some words of each control op and mostly constant within a routine "
-    "(verified in the bytes across later firmware versions of the same family), its meaning open; "
-    "in data words all eight values occur"
+    "(verified in the bytes across later firmware versions of the same family), its meaning open. "
+    "In a data op bits 13..15 of the immediate in ops 0x0a, 0x0b, 0x38 and 13..14 in 0x37, 0 in 99 % "
+    "of family D, an operand of open meaning in families A, A', C and E, where it varies apart "
+    "from the immediate (verified in the bytes)"
 )
 SELECTOR = (
     "the loop-end selector pair f270_271 / f272_273: in every op 0 word of the five stock programs exactly "
@@ -286,6 +303,12 @@ XFER = (
 )
 
 
+CONDITION = (
+    "the condition is no field of its own; the candidate is the register ra (f123_127), which "
+    "ops 0..2 write and calls hold (hypothesis)"
+)
+
+
 @dataclass(frozen=True)
 class Op:
     """A meaning of a value of the op field f313_319."""
@@ -293,6 +316,8 @@ class Op:
     name: str
     confidence: Confidence
     fact: str
+    format: "Format | None" = None
+    """The operand layout of a data op in the op slot; None for the other ops."""
 
 
 OPS: dict[int, Op] = {
@@ -307,13 +332,13 @@ OPS: dict[int, Op] = {
         "brf",
         I,
         "forward conditional branch, T always after it; the guard of a loop, at the loop's T - 5 "
-        "with its own T at the loop's exit (inferred); the condition is not in the word",
+        "with its own T at the loop's exit (inferred); " + CONDITION,
     ),
     2: Op(
         "br",
         I,
-        "conditional branch either way, the back-edge of most guarded loops (inferred); the "
-        "condition is not in the word",
+        "conditional branch either way, the back-edge of most guarded loops (inferred); "
+        + CONDITION,
     ),
     3: Op(
         "call",
@@ -343,8 +368,8 @@ CONTROL_OPS = range(5)
 DATA_OPS = range(8, 74)
 DATA_OP_CONFIDENCE = I
 DATA_OP_FACT = (
-    "a data op: it leaves f229 set and uses the immediate; what it does is open "
-    "(inferred)"
+    "a data op: it leaves f229 set and holds its operands in the op slot (`FAMILIES`); what it "
+    "does is open (inferred)"
 )
 UNSEEN_OP_FACT = (
     "never occurs in the stock programs nor across later firmware versions of the "
@@ -356,9 +381,14 @@ def op(value: int) -> Op:
     """The meaning of op value `value`; data ops and unseen values are named op<hex>."""
     if value in OPS:
         return OPS[value]
-    if value in DATA_OPS:
-        return Op(f"op{value:02x}", DATA_OP_CONFIDENCE, DATA_OP_FACT)
-    return Op(f"op{value:02x}", H, UNSEEN_OP_FACT)
+    name = f"op{value:02x}"
+    if value in FORMATS:
+        fmt = FORMATS[value]
+        fact = f"{DATA_OP_FACT}; family {fmt.family.name} ({FAMILY_BASIS}): {fmt.family.fact}"
+        if value in MEANINGS:
+            fact += f"; {MEANINGS[value]}"
+        return Op(name, DATA_OP_CONFIDENCE, fact, fmt)
+    return Op(name, H, UNSEEN_OP_FACT)
 
 
 DELAY_SLOTS = 4
@@ -459,7 +489,7 @@ FIELDS: tuple[Field, ...] = (
         confidence=I,
     ),
     Field(120, 122, Kind.RAW, "regs_a", 7, H, FLAGS_FACT),
-    _reg(123, "regs_a", 31),
+    _reg(123, "regs_a", 31, RA_FACT, name="ra", confidence=V),
     _reg(128, "regs_a", 31, T_HIGH),
     _const(133, 140, "regs_a"),
     # grid_b: grid A + 110.
@@ -570,6 +600,18 @@ class Composite:
             value = value << f.width | f.get(word)
         return value
 
+    @property
+    def width(self) -> int:
+        return sum(f.width for f in self.parts)
+
+    def put(self, word: int, value: int) -> int:
+        if not 0 <= value < 1 << self.width:
+            raise ValueError(f"{self.name}: {value:#x} does not fit {self.width} bits")
+        for f in self.parts:
+            word = f.put(word, value & f.mask)
+            value >>= f.width
+        return word
+
 
 CONTROL_FLAG = BY_KEY["f229"]
 """Clear exactly in the words whose op is a control op."""
@@ -587,9 +629,231 @@ TARGET = Composite(
     "op 0..3 word); what goes there is the op's meaning",
 )
 
+RA = BY_KEY["ra"]
+RB = BY_KEY["f128_132"]
+IMM = BY_KEY["imm"]
+IMM13 = Composite(
+    "imm13",
+    (IMM, RB),
+    V,
+    "a data op's 13-bit immediate, imm | f128_132 << 8 (verified in the bytes across later firmware "
+    "versions of the same family: in the immediate forms f128_132 moves with imm and the register "
+    "value it held comes back after them)",
+)
+IMM16 = Composite(
+    "imm16",
+    (IMM, RB, BY_KEY["f120_122"]),
+    V,
+    "a data op's 16-bit immediate, imm | f128_132 << 8 | f120_122 << 13 (verified in the bytes "
+    "across later firmware versions of the same family: in 0x38 f120_122 = 7 exactly when "
+    "f128_132 = 31, a sign extension)",
+)
+IMM_WIDTHS = {
+    5: Composite("imm5", (IMM,), V, "imm, its values 0..31"),
+    13: IMM13,
+    15: IMM16,
+    16: IMM16,
+}
+"""The fields of an immediate by its width; a 15-bit one leaves bit 122 clear."""
+
+
+@dataclass(frozen=True)
+class Family:
+    """Data ops that share one layout of the op slot: ra (f123_127) in every family, then rb
+    (f128_132) when `rb`, then an immediate `imm_bits` wide (0: none)."""
+
+    name: str
+    ops: tuple[int, ...]
+    rb: bool
+    imm_bits: int
+    fact: str
+
+
+FAMILY_BASIS = (
+    "the format verified in the bytes across later firmware versions of the same family, the "
+    "meanings hypotheses"
+)
+FAMILIES = (
+    Family(
+        "A",
+        tuple(range(0x0C, 0x1B, 2)),
+        False,
+        13,
+        "ra and a 13-bit immediate; f120_122 an operand that varies apart from it (0x0c holds "
+        "every f120_122 with f128_132 = 31); the immediates lie within 0x200 of a multiple of 0x800, "
+        "so bits 11..12 may select one of four regions and the rest be a small signed offset "
+        "(hypothesis); each op's register form is the op + 1",
+    ),
+    Family(
+        "A'",
+        tuple(range(0x0D, 0x1C, 2)),
+        True,
+        0,
+        "ra and rb, imm 0 in every word; f120_122 an operand; the operation of the op - 1 with a "
+        "register in place of its immediate (inferred from the pairing)",
+    ),
+    Family(
+        "B",
+        (0x0A, 0x0B, 0x37, 0x38),
+        False,
+        16,
+        "ra and a wide immediate, f120_122 its bits 13..15 (13..14 in 0x37, whose f120_122 is "
+        "0..3 in every word)",
+    ),
+    Family(
+        "C",
+        (0x3E, 0x3F, 0x40),
+        True,
+        5,
+        "ra, rb and an immediate 0..31 in every word; f120_122 an operand; shifts or bit-field ops "
+        "by a 5-bit count (hypothesis), 16 the most common count of all three",
+    ),
+    Family(
+        "D",
+        (*range(0x1C, 0x22), *range(0x23, 0x26), 0x36),
+        False,
+        13,
+        "ra and a small 13-bit immediate; f120_122 is 0 in 99 % of the words",
+    ),
+    Family(
+        "E",
+        (
+            0x08,
+            0x09,
+            *range(0x28, 0x2D),
+            *range(0x2E, 0x36),
+            0x3A,
+            0x3C,
+            0x3D,
+            0x41,
+            0x42,
+            0x43,
+            0x47,
+            0x48,
+            0x49,
+        ),
+        True,
+        0,
+        "ra, rb and f120_122, imm 0 in every word; register-register ALU or multiply-accumulate "
+        "ops (hypothesis)",
+    ),
+    Family(
+        "F",
+        (0x44, 0x46),
+        False,
+        13,
+        "ra and a 13-bit immediate whose f128_132 is 4 or 8 (0x404, 0x408, 0x40c, 0x460): packed "
+        "constants (hypothesis)",
+    ),
+)
+IMM_BITS = {0x37: 15}
+"""Ops whose immediate is narrower than their family's."""
+SIGNED_OPS = frozenset({0x0C, 0x10})
+"""Ops whose 13-bit immediates 0x1fxx read as small negative numbers, two's complement (inferred)."""
+MEANINGS = {
+    0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
+    "from its position), what it does open",
+    0x0A: "periodic immediates such as 0x5555 and 0x1111: a lane or phase mask set-up (hypothesis)",
+    0x0B: "the most varied immediates, often in a call's delay slots: sets ra from the immediate "
+    "(hypothesis, strong)",
+    0x0C: "its immediates 0x1fxx read as small negative numbers (inferred)",
+    0x10: "its immediates 0x1fxx read as small negative numbers (inferred); in program 13 every "
+    "non-zero immediate lies in its tap block 0x00..0x1f: reads a coefficient or line by index "
+    "(hypothesis)",
+    0x12: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f: reads a "
+    "coefficient or line by index (hypothesis)",
+    0x16: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f, in runs that "
+    "step 0, 1, 2, 3 with one ra per run: reads a coefficient or line by index (hypothesis)",
+    0x18: "its immediates spread over the four regions as 0x1a's do: a local-memory access at its "
+    "immediate (hypothesis)",
+    0x1A: "reads the local word at its immediate (inferred, strong): program 16's three 0x1a words "
+    "name local words 0, 1 and 2 (src, dst, len), all with ra = 5; idling the one at 2 on the "
+    "camera stores 16 KiB of zeros whatever len is, idling the other two leaves dst unwritten",
+    0x1E: "at a routine's entry + 1 in 67 routines: adds or subtracts a small immediate, a frame or "
+    "pointer adjust (hypothesis)",
+    0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: adds or subtracts a "
+    "small immediate, a frame or pointer adjust (hypothesis)",
+    0x36: "imm 1, f128_132 and f120_122 0 in all 53 words: an increment (hypothesis)",
+    0x37: "periodic immediates such as 0x5555 and 0x2222: a lane or phase mask set-up (hypothesis)",
+    0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: an AND with a mask (hypothesis)",
+}
+
+
+@dataclass(frozen=True)
+class Operands:
+    """A data op's operands; rb and imm are None where its format has none."""
+
+    ra: int
+    rb: int | None = None
+    imm: int | None = None
+
+
+@dataclass(frozen=True)
+class Format:
+    """The operand layout of one data op; decoding never fails, encoding checks the widths."""
+
+    family: Family
+    imm_bits: int
+    signed: bool
+
+    @property
+    def imm(self) -> Composite | None:
+        return IMM_WIDTHS.get(self.imm_bits)
+
+    @property
+    def fields(self) -> tuple[Field, ...]:
+        """The fields the operands stand for."""
+        regs = (RA, RB) if self.family.rb else (RA,)
+        return regs + (self.imm.parts if self.imm else ())
+
+    def decode(self, word: int) -> Operands:
+        rb = RB.get(word) if self.family.rb else None
+        if self.imm is None:
+            return Operands(RA.get(word), rb)
+        imm = self.imm.get(word)
+        if self.signed and imm >> (self.imm_bits - 1):
+            imm -= 1 << self.imm_bits
+        return Operands(RA.get(word), rb, imm)
+
+    def encode(self, word: int, operands: Operands) -> int:
+        if (operands.rb is not None) != self.family.rb:
+            raise ValueError(f"family {self.family.name}: rb {operands.rb!r}")
+        if (operands.imm is not None) != (self.imm is not None):
+            raise ValueError(f"family {self.family.name}: imm {operands.imm!r}")
+        word = RA.put(word, operands.ra)
+        if operands.rb is not None:
+            word = RB.put(word, operands.rb)
+        if self.imm is None:
+            return word
+        lo = -(1 << (self.imm_bits - 1)) if self.signed else 0
+        if not lo <= operands.imm < lo + (1 << self.imm_bits):
+            raise ValueError(f"imm {operands.imm} does not fit {self.imm_bits} bits")
+        return self.imm.put(word, operands.imm & ((1 << self.imm_bits) - 1))
+
+
+def _formats(families: tuple[Family, ...]) -> dict[int, Format]:
+    """Each data op's format; raises on an op in two families or outside `DATA_OPS`."""
+    formats: dict[int, Format] = {}
+    for family in families:
+        for value in family.ops:
+            if value in formats or value not in DATA_OPS:
+                raise ValueError(f"op {value:#x} in family {family.name}")
+            bits = IMM_BITS.get(value, family.imm_bits)
+            formats[value] = Format(family, bits, value in SIGNED_OPS)
+    return formats
+
+
+FORMATS = _formats(FAMILIES)
+
 
 def is_control(word: int) -> bool:
     return OP_FIELD.get(word) in CONTROL_OPS
+
+
+def operands(word: int) -> Operands | None:
+    """The operands of a data op; None for the other words."""
+    fmt = op(OP_FIELD.get(word)).format
+    return None if fmt is None else fmt.decode(word)
 
 
 def target(word: int) -> int | None:

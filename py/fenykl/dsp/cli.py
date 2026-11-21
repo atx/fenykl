@@ -12,7 +12,12 @@ from .fields import (
     DATA_OPS,
     DELAY_FACT,
     DELAY_SLOTS,
+    FAMILIES,
     FIELDS,
+    FORMATS,
+    IMM13,
+    IMM16,
+    MEANINGS,
     OP_FIELD,
     OPS,
     TARGET,
@@ -62,6 +67,19 @@ def cmd_fields(args: argparse.Namespace) -> None:
         print(
             f"{OP_FIELD.label} {value:<6} {name:<5} {confidence.name.lower():<10} {fact}"
         )
+    for family in FAMILIES:
+        regs = "ra, rb" if family.rb else "ra"
+        imm = f", imm{family.imm_bits}" if family.imm_bits else ""
+        ops = " ".join(f"{v:02x}" for v in family.ops)
+        print(f"family {family.name:<2} {regs}{imm}  ops {ops}: {family.fact}")
+    for value, fmt in FORMATS.items():
+        if fmt.imm_bits != fmt.family.imm_bits or fmt.signed:
+            sign = ", two's complement" if fmt.signed else ""
+            print(f"  op{value:02x}: imm{fmt.imm_bits}{sign}")
+    for composite in (IMM13, IMM16):
+        print(f"{composite.name}: {composite.fact}")
+    for value, meaning in MEANINGS.items():
+        print(f"  op{value:02x}: {meaning}")
     print(f"delay slots: {DELAY_SLOTS}; {DELAY_FACT}")
     kinds = Counter(str(f.kind) for f in FIELDS)
     confidence = Counter(f.confidence.name.lower() for f in FIELDS)

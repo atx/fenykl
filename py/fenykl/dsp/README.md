@@ -76,10 +76,39 @@ f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 
 8, an absolute word index into the program (`word.target`, None for other words): T follows its
 target word wherever code moved across later firmware versions of the same family, and lies inside
 its program in every op 0..3 word (verified in the bytes). In those words `imm` is T's low byte and
-f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` are not in the word.
+f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` have no field of
+their own; the candidate is the register ra (f123_127), which ops 0..2 write and calls hold
+(hypothesis).
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.
+
+### Data ops: the op slot
+
+A data op holds its operands in five fields, the op slot: `op`, `imm`, the register `ra`
+(f123_127), f128_132 and f120_122. `ra` changes only in a word that carries an op (a data op or a
+control op 0..2; a call holds it), verified in the bytes across later firmware versions of the
+same family; whether it is a destination, a source or a base is open. The data ops fall into
+families by the layout of the slot (`FAMILIES`; the formats are verified in the bytes, every
+meaning is a hypothesis unless tagged):
+
+| family | ops | operands | f120_122 |
+|---|---|---|---|
+| A | 0x0c..0x1a even | ra, imm13 | an operand |
+| A' | 0x0d..0x1b odd | ra, rb | an operand |
+| B | 0x0a 0x0b 0x37 0x38 | ra, imm16 (imm15 in 0x37) | immediate bits 13..15 |
+| C | 0x3e 0x3f 0x40 | ra, rb, imm5 | an operand |
+| D | 0x1c..0x25 but 0x22, 0x36 | ra, imm13 | 0 in 99 % of the words |
+| E | 0x08 0x09 0x28..0x35 but 0x2d, 0x3a 0x3c 0x3d 0x41..0x43 0x47..0x49 | ra, rb | an operand |
+| F | 0x44 0x46 | ra, imm13 | open |
+
+rb is f128_132; imm13 is `imm` | f128_132 << 8 and imm16 adds f120_122 << 13. 0x0c's and 0x10's
+immediates are two's complement (inferred: their 0x1fxx values read as small negative numbers).
+The A ops are the immediate forms of the A' ops at op + 1. The strongest meaning is 0x1a, a read
+of the local word at its immediate (inferred, strong): program 16's three 0x1a words name the
+local words of src, dst and len. `word.operands` decodes a data op's operands (`Operands`), and
+`Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
+`op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
 
 Every control op has four delay slots (`DELAY_SLOTS`, `Program.delay_slots()`): in the five stock
 programs words i+1..i+4 of a control word at i are never a target or a control word (verified in

@@ -8,9 +8,11 @@ from fenykl.dsp.fields import (
     CONTROL_OPS,
     DATA_OPS,
     FIELDS,
+    FORMATS,
     IDLE_OP,
     STAIRCASE,
     WORD_BITS,
+    Operands,
     op,
 )
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
@@ -129,3 +131,92 @@ def test_program_16_control_flow(items):
         79: ("ret", None),
     }
     assert (45 + 5, 53 + 5) == (words[53].target, words[45].target)
+
+
+@pytest.mark.parametrize(
+    "code, args, fields",
+    [
+        # Family A: imm13 = imm | f128_132 << 8; f120_122 keeps the base word's value.
+        (
+            0x1A,
+            Operands(ra=5, imm=0x1ABC),
+            {"ra": 5, "imm": 0xBC, "f128_132": 0x1A, "f120_122": 7},
+        ),
+        # 0x0c's immediate is two's complement: -7 is 0x1ff9.
+        (0x0C, Operands(ra=3, imm=-7), {"ra": 3, "imm": 0xF9, "f128_132": 0x1F}),
+        # Family B: imm16 takes f120_122 as bits 13..15.
+        (
+            0x0B,
+            Operands(ra=1, imm=0xABCD),
+            {"ra": 1, "imm": 0xCD, "f128_132": 0x0B, "f120_122": 5},
+        ),
+        (
+            0x37,
+            Operands(ra=1, imm=0x7FFF),
+            {"imm": 0xFF, "f128_132": 0x1F, "f120_122": 3},
+        ),
+        # Family C: ra, rb and a 5-bit immediate in imm.
+        (
+            0x3F,
+            Operands(ra=2, rb=9, imm=31),
+            {"ra": 2, "f128_132": 9, "imm": 31, "f120_122": 7},
+        ),
+        # Family E: registers only, imm stays 0.
+        (0x49, Operands(ra=4, rb=6), {"ra": 4, "f128_132": 6, "imm": 0}),
+    ],
+)
+def test_data_op_operands_assemble_and_decode(code, args, fields):
+    word = Word.data(code, args)
+    assert word.op == code
+    assert {key: word[key] for key in fields} == fields
+    assert word.operands == args
+
+
+def test_only_0x0c_and_0x10_immediates_are_signed():
+    raw = Word.data(0x1A, Operands(ra=0, imm=0x1FF9))
+    assert raw.operands.imm == 0x1FF9
+    assert Word.data(0x10, Operands(ra=0, imm=-1)).operands.imm == -1
+    assert Word.data(0x10, Operands(ra=0, imm=-0x1000)).operands.imm == -0x1000
+
+
+@pytest.mark.parametrize(
+    "code, args",
+    [
+        (0x37, Operands(ra=0, imm=0x8000)),  # 15 bits
+        (0x40, Operands(ra=0, rb=0, imm=32)),  # 5 bits
+        (0x0C, Operands(ra=0, imm=0x1000)),  # signed 13 bits
+        (0x0C, Operands(ra=0, imm=-0x1001)),
+        (0x1A, Operands(ra=0, imm=-1)),  # unsigned
+        (0x49, Operands(ra=0)),  # rb missing
+        (0x1A, Operands(ra=0, rb=1, imm=0)),  # no rb in family A
+        (0x49, Operands(ra=0, rb=1, imm=0)),  # no immediate in family E
+        (0x22, Operands(ra=0)),  # a data op value that never occurs has no format
+    ],
+)
+def test_data_op_assembly_rejects_operands_outside_the_format(code, args):
+    with pytest.raises(ValueError):
+        Word.data(code, args)
+
+
+def test_every_stock_data_op_fits_its_format(items):
+    # Every data op word has a family; re-encoding its operands reproduces it, so the widths hold,
+    # and the register forms leave imm 0.
+    for item, data in items.items():
+        for index, w in enumerate(decode_item(data, STOCK[item]).words):
+            if w.op not in DATA_OPS:
+                continue
+            fmt = FORMATS[w.op]
+            assert Word.data(w.op, w.operands, base=w) == w, (item, index)
+            if fmt.imm is None:
+                assert w["imm"] == 0, (item, index)
+
+
+def test_program_16_reads_its_local_words_by_immediate(items):
+    # The three 0x1a words name the local words of src, dst and len, all through ra = 5.
+    words = decode_item(items[16], STOCK[16]).words
+    reads = {i: w.operands for i, w in enumerate(words) if w.op == 0x1A}
+    assert reads == {
+        13: Operands(ra=5, imm=1),
+        15: Operands(ra=5, imm=2),
+        24: Operands(ra=5, imm=0),
+    }

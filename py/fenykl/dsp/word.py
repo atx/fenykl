@@ -13,8 +13,11 @@ from .fields import (
     WORD_BITS,
     WORD_BYTES,
     Field,
+    Operands,
     is_control,
     lookup,
+    op,
+    operands,
     target,
 )
 from .units import SLOTS, UNITS, Slot
@@ -64,6 +67,15 @@ class Word:
             value = lookup(key).put(value, v)
         return cls.from_int(value)
 
+    @classmethod
+    def data(cls, code: int, args: Operands, base: "Word | None" = None) -> "Word":
+        """Data op `code` with operands `args` in its format; other fields keep `base`."""
+        fmt = op(code).format
+        if fmt is None:
+            raise ValueError(f"op {code:#x} has no operand format")
+        word = OP_FIELD.put(IDLE_VALUE if base is None else base.value, code)
+        return cls.from_int(fmt.encode(word, args))
+
     def to_bytes(self) -> bytes:
         return self.value.to_bytes(WORD_BYTES, "little")
 
@@ -93,6 +105,11 @@ class Word:
     def target(self) -> int | None:
         """The word index a control op 0..3 names; None for other words."""
         return target(self.value)
+
+    @property
+    def operands(self) -> Operands | None:
+        """The operands of a data op in its format; None for other words."""
+        return operands(self.value)
 
     def fields(self) -> dict[str, int]:
         """Every field's value, by id in bit order."""

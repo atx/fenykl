@@ -5,14 +5,17 @@ semantic names or ids; a mark after the value gives the field's confidence (`!` 
 `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
 Every word but the idle word starts with its op's name (`fields.op`) in place of f313_319; a
-control op 0..3 follows it with `-> T`, its target word index, in place of T's fields. A control
-op drops f229 while it is clear, as in every stock control word. A `|` after the index marks the
-delay slots of a control word.
+control op 0..3 follows it with `-> T`, its target word index, in place of T's fields. A data op
+follows it with its operands in its family's format in place of their fields: `ra, rb, #imm`, an
+immediate in decimal below 10 and in hex above, signed where the op's is two's complement; a field
+of the slot outside the format (f120_122 as an operand, imm in a register form) stays a field. A
+control op drops f229 while it is clear, as in every stock control word. A `|` after the index
+marks the delay slots of a control word.
 """
 
 from collections.abc import Iterator
 
-from .fields import CONTROL_FLAG, IDLE_OP, OP_FIELD, TARGET, Field, Kind, op
+from .fields import CONTROL_FLAG, IDLE_OP, OP_FIELD, TARGET, Field, Kind, Operands, op
 from .program import Program
 from .units import UNITS
 from .word import IDLE, Word
@@ -26,11 +29,28 @@ def _value(f: Field, value: int) -> str:
     return f"{f.label}={text}{f.confidence.mark}"
 
 
+def _imm(value: int) -> str:
+    return f"#{value}" if -10 < value < 10 else f"#{value:#x}"
+
+
+def operand_text(args: Operands) -> str:
+    """`args` as "rA, rB, #imm", leaving out what the format has not."""
+    parts = [f"r{args.ra}"]
+    if args.rb is not None:
+        parts.append(f"r{args.rb}")
+    if args.imm is not None:
+        parts.append(_imm(args.imm))
+    return ", ".join(parts)
+
+
 def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
-    """The op and target part of `word` and the ids of the fields it stands for."""
+    """The op, operands and target part of `word` and the ids of the fields it stands for."""
     meaning = op(word.op)
     head = meaning.name + (meaning.confidence.mark if marks else "")
     shown = {OP_FIELD.id}
+    if meaning.format is not None:
+        head += f" {operand_text(meaning.format.decode(word.value))}"
+        shown.update(f.id for f in meaning.format.fields)
     if word.target is not None:
         head += f" -> {word.target}" + (TARGET.confidence.mark if marks else "")
         shown.update(f.id for f in TARGET.parts)
@@ -74,8 +94,8 @@ def listing(program: Program, title: str = "") -> str:
         "; marks: ! verified, ~ inferred, none a hypothesis; ^ = the word before, changed"
     )
     lines.append(
-        "; ops: loop brf br call ret halt, opNN a data op (hex), idle; -> T: the target word "
-        "index; | a delay slot"
+        "; ops: loop brf br call ret halt, opNN a data op (hex) with ra, rb, #imm by its family, "
+        "idle; -> T: the target word index; | a delay slot"
     )
     slots = program.delay_slots()
     prev = IDLE
