@@ -1,24 +1,24 @@
 """Edits of program 13 measured on the camera: per edited stock word and job class, what each
 plane of the output does.
 
-An edit sets some bits of one stock word to the idle word's (`Idle`): the grid and C2's free
-bits, the grid alone, C2's free bits alone, or one bit. Every edit below ran on the camera,
-one per job, at H 16 with stride 64, and each plane of its output was compared byte for byte
-with the stock program's output of the same job on the same boot. The outcomes hold on the job
-classes (`Probe`) they ran on, whatever the source's values and the taps: a plane is `STOCK`
-only if no byte changed in any run of that class (bytes the stock law leaves unknown, such as
-the right edge, aside), and gets a law only where the law gives every changed byte exactly.
-Outside its classes an edit gives no prediction.
+An edit kind sets some bits of one stock word to the idle word's (`Idle`): the grid and C2's
+free bits, the grid alone, C2's free bits alone, the op bits, or one bit; or sets one field of
+the field table to a value (`FieldValue`, such as a register specifier renamed). Every edit
+below ran on the camera, one per job, at H 16 with stride 64, and each plane of its output was
+compared byte for byte with the stock program's output of the same job on the same boot. The
+outcomes hold on the job classes (`Probe`) they ran on, whatever the source's values and the
+taps: a plane is `STOCK` only if no byte changed in any run of that class (bytes the stock law
+leaves unknown, such as the right edge, aside), and gets a law only where the law gives every
+changed byte exactly. Outside its classes an edit gives no prediction.
 
 The classes that ran: sources whose lines are constant along x ("flat") or not, at b = 1, 1 +
-1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48.
-"""
+1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from .fields import FIELDS, P16_C2_BITS, Kind
+from .fields import FIELDS, P16_C2_BITS, Field, Kind, lookup
 from .word import IDLE, Word
 
 ONE = 0x10000
@@ -46,13 +46,45 @@ C2_FREE = sum(
 """C2's free bits: 233..301 without the bits program 16 moves and the subfields 274..295 that
 hold one."""
 
+OP = sum(
+    f.mask << f.lo
+    for f in FIELDS
+    if f.id in ("f265_268", "f272_273") or f.unit == "ctl_hi"
+)
+"""The op bits: C2's 265..268 and 272..273 and the control bits 302..319, all set in the idle
+word."""
+
 GRID_C2 = Idle("grid and C2 free bits idle", GRID | C2_FREE)
 GRID_ONLY = Idle("grid idle", GRID)
 C2_ONLY = Idle("C2 free bits idle", C2_FREE)
+OP_IDLE = Idle("op bits idle", OP)
 
 
 def bit(b: int) -> Idle:
     return Idle(f"bit {b} idle", 1 << b)
+
+
+@dataclass(frozen=True)
+class FieldValue:
+    """An edit kind: the field with id or name `key` set to `value`."""
+
+    key: str
+    value: int
+
+    @property
+    def field(self) -> Field:
+        return lookup(self.key)
+
+    @property
+    def name(self) -> str:
+        f = self.field
+        return f"{f.label} = {f.literal(self.value)}"
+
+    def apply(self, stock: Word) -> Word:
+        return Word.from_int(self.field.put(stock.value, self.value))
+
+
+Edit = Idle | FieldValue
 
 
 @dataclass(frozen=True)
@@ -133,7 +165,7 @@ def _planes(spec: str, *laws: Effect) -> Planes:
 
 @dataclass(frozen=True)
 class Fact:
-    kind: Idle
+    kind: Edit
     words: tuple[int, ...]
     planes: Mapping[Probe, Planes]
     fact: str

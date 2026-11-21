@@ -65,9 +65,9 @@ from .resample_edits import (
     FACTS,
     STOCK,
     Changed,
+    Edit,
     Effect,
     Fact,
-    Idle,
     Operand,
     Operands,
     Phase,
@@ -219,9 +219,10 @@ class Resample13Model:
     """The model of program 13, built from the stock program (`from_image` reads it from a
     stock E-M10 II `.BIN`). Its classes are the idle word, one class per distinct stock word and
     one per measured edited word, matched by value; the law applies to the stock program run as
-    it is, and to the measured edits on the job classes they ran on."""
+    it is, and to the measured edits (`facts`, default the camera's) on the job classes they
+    ran on."""
 
-    def __init__(self, program: Program) -> None:
+    def __init__(self, program: Program, facts: Sequence[Fact] = FACTS) -> None:
         self.program = program
         positions: dict[int, list[int]] = {}
         for index, word in enumerate(program.words):
@@ -244,7 +245,7 @@ class Resample13Model:
             )
             for at in positions.values()
         ]
-        self.edits = _measured_edits(program)
+        self.edits = _measured_edits(program, facts)
         edited = [
             OpaqueClass(
                 f"word {i}, {e.kind.name}",
@@ -260,8 +261,10 @@ class Resample13Model:
         self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *edited, *self.opaque)
 
     @classmethod
-    def from_image(cls, image: bytes) -> "Resample13Model":
-        return cls(stock_programs(image)[ITEM])
+    def from_image(
+        cls, image: bytes, facts: Sequence[Fact] = FACTS
+    ) -> "Resample13Model":
+        return cls(stock_programs(image)[ITEM], facts)
 
     def job(
         self,
@@ -271,7 +274,7 @@ class Resample13Model:
         table: int,
         width: int,
         height: int,
-        edits: Sequence[tuple[int, Idle]] = (),
+        edits: Sequence[tuple[int, Edit]] = (),
     ) -> Job:
         """The cmd 0xC job of the stock program with `taps` as its tap words, at stride 64, and
         each (index, kind) of `edits` applied to its stock word."""
@@ -528,10 +531,12 @@ class Resample13Model:
 STOCK_PLANES: Planes = (STOCK, STOCK, STOCK)
 
 
-def _measured_edits(program: Program) -> dict[tuple[int, int], Fact]:
+def _measured_edits(
+    program: Program, facts: Sequence[Fact]
+) -> dict[tuple[int, int], Fact]:
     """The measured edits by (index, edited word value); the facts of one edited word merge."""
     out: dict[tuple[int, int], Fact] = {}
-    for fact in FACTS:
+    for fact in facts:
         for i in fact.words:
             stock = program.words[i]
             word = fact.kind.apply(stock)
@@ -634,7 +639,7 @@ def predict(
     src: bytes,
     table: list[tuple[int, int]],
     width: int = STRIDE,
-    edits: Sequence[tuple[int, Idle]] = (),
+    edits: Sequence[tuple[int, Edit]] = (),
     strict: bool = True,
 ) -> Prediction:
     """The dst of the stock program, with `edits` applied (see `model.job`), run with `taps` on

@@ -7,12 +7,21 @@ from pathlib import Path
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp import commands
+from fenykl.dsp import commands, resample_edits
 from fenykl.dsp.emu import Boot, Emulator, Status
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.resample import Resample13Model, footprint, predict
-from fenykl.dsp.resample_edits import C2_ONLY, GRID_C2, GRID_ONLY, Idle, bit
+from fenykl.dsp.resample_edits import (
+    C2_ONLY,
+    GRID_C2,
+    GRID_ONLY,
+    OP_IDLE,
+    Fact,
+    FieldValue,
+    Idle,
+    bit,
+)
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.taps import Taps
 from fenykl.dsp.word import IDLE
@@ -307,3 +316,46 @@ def test_a_measured_edit_outside_its_classes_gives_no_prediction():
         model(), Taps.of(PHASES), FLAT, TABLE13, edits=[(439, GRID_C2), (490, GRID_C2)]
     )
     assert not any(got.dst.known)
+
+
+def bits(*ranges: tuple[int, int]) -> int:
+    return sum(((1 << (hi - lo + 1)) - 1) << lo for lo, hi in ranges)
+
+
+def test_the_edit_kinds_are_the_bench_harness_encoding():
+    # The harness sets the op bits to 1; the idle word holds 1 in every one of them.
+    op = bits((265, 268), (272, 273), (302, 319))
+    assert OP_IDLE.mask == op
+    for w in model().program.words:
+        assert OP_IDLE.apply(w).value == w.value | op
+    # It sets register groups 115..119 and 211..215 whole, each one field of the table.
+    w = model().program.words[437]
+    for lo, v in ((115, 6), (211, 4)):
+        got = FieldValue(f"f{lo}_{lo + 4}", v).apply(w).value
+        assert got == w.value & ~bits((lo, lo + 4)) | v << lo
+    with pytest.raises(KeyError):
+        FieldValue("f115_118", 6).apply(w)
+    with pytest.raises(ValueError):
+        FieldValue("f211_215", 32).apply(w)
+
+
+def test_a_field_value_edit_is_scored_on_its_classes_only():
+    rename = FieldValue("f211_215", 4)
+    stock_planes = (resample_edits.STOCK,) * 3
+    fact = Fact(rename, (437,), {resample_edits.FLAT: stock_planes}, "")
+    m = Resample13Model(model().program, (fact,))
+    taps = Taps.of(PHASES)
+    got = predict(m, taps, FLAT, TABLE13, edits=[(437, rename)])
+    stock = predict(m, taps, FLAT, TABLE13)
+    assert [c for _, c in got.result.edits] == [Confidence.VERIFIED]
+    assert got.dst.known[:3072] == stock.dst.known[:3072]
+    assert got.dst.data[:3072] == stock.dst.data[:3072]
+    # At b 0.5 it never ran: unknown in strict mode, a hypothesis in lenient mode.
+    table = [(i << 16, 0x8000) for i in range(16)]
+    got = predict(m, taps, FLAT, table, edits=[(437, rename)])
+    assert not any(got.dst.known) and got.result.edits == []
+    got = predict(m, taps, FLAT, table, edits=[(437, rename)], strict=False)
+    assert set(got.confidence()) - {None} == {Confidence.HYPOTHESIS}
+    # Another value is no measured edit.
+    with pytest.raises(UnknownSemantics, match="word 437"):
+        predict(m, taps, FLAT, TABLE13, edits=[(437, FieldValue("f211_215", 9))])

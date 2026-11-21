@@ -169,12 +169,14 @@ taps, table and source image, an edit as {word, kind}; dst segments).
 #### Edits
 
 `resample_edits.FACTS` holds the edits measured on the camera: a stock word with some bits set to
-the idle word's (`Idle`: the grid and C2's free bits, the grid, C2's free bits, one bit), and per
+the idle word's (`Idle`: the grid and C2's free bits, the grid, C2's free bits, the op bits, one
+bit) or one field set to a value (`FieldValue("f211_215", 4)`: a register renamed), and per
 job class (`Probe`: a flat source or not, the step b, W; H 16) what each plane does: the stock law
 (`Stock`), unknown (`Changed`), or a law (`Operands`: plane 0 with each tap multiplying another
 tap's line, nothing or a bounded value; `Phase`: a chroma plane sampled at another horizontal
 phase). The model matches an edited word by its value, so the classes hold the measured edited
-words too. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them.
+words too. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
+`Resample13Model(program, facts)` takes another outcome table.
 
 - one measured edit on a class it ran on: its planes; `JobResult.edits` names it, verified (the
   bytes stay at most inferred, through the law);
