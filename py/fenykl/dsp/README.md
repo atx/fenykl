@@ -71,7 +71,8 @@ confidence and fact; `fields.op(value)` is total:
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
 | 127 | `idle` | no op | inferred |
 
-5, 6 and 74..126 never occur. Ops 0..4 are the control ops (`CONTROL_OPS`, `word.control`), and
+5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, 0x2d, 0x39, 0x3b and 0x45 never occur.
+Ops 0..4 are the control ops (`CONTROL_OPS`, `word.control`), and
 f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 | bits 128..132 <<
 8, an absolute word index into the program (`word.target`, None for other words): T follows its
 target word wherever code moved across later firmware versions of the same family, and lies inside

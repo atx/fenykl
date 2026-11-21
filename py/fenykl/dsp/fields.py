@@ -288,7 +288,8 @@ SELECTOR = (
 OP_FACT = (
     "the op, one 7-bit field in every word (verified in the bytes of the five stock programs and "
     "across later firmware versions of the same family): 0..4 the control ops with f229 clear, 7 "
-    "halt, 8..73 data ops, 127 idle; 5, 6 and 74..126 never occur. Bits 17, 18 set with 128, "
+    "halt, 8..73 data ops, 127 idle; 5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, "
+    "0x2d, 0x39, 0x3b and 0x45 never occur. Bits 17, 18 set with 128, "
     "273, 318 and 319 clear, once read as a control signature, is a coincidence of fields that "
     "several ops share; the word it marks at the end of programs 6, 0xC and 0xF is data op 0x1f "
     "in a return's delay slot, its 13-bit immediate (f15_22 | f128_132 << 8) a multiple of 4 in all "
@@ -753,7 +754,7 @@ SIGNED_OPS = frozenset({0x0C, 0x10})
 MEANINGS = {
     0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
     "from its position), what it does open",
-    0x0A: "periodic immediates such as 0x5555 and 0x1111: a lane or phase mask set-up (hypothesis)",
+    0x0A: "periodic immediates such as 0x5555 and 0x3333: a lane or phase mask set-up (hypothesis)",
     0x0B: "the most varied immediates, often in a call's delay slots: sets ra from the immediate "
     "(hypothesis, strong)",
     0x0C: "its immediates 0x1fxx read as small negative numbers (inferred)",
