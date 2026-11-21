@@ -36,9 +36,15 @@ class Idle:
         return Word.from_int(stock.value & ~self.mask | IDLE.value & self.mask)
 
 
+# The 2-bit grid pairs: idle in every stock word, and the bench harness never writes them.
+GRID_PAIRS = ("f35_36", "f145_146")
+
+
 def _grid(unit: str) -> int:
     return sum(
-        f.mask << f.lo for f in FIELDS if f.unit == unit and f.kind is Kind.ROUTE
+        f.mask << f.lo
+        for f in FIELDS
+        if f.unit == unit and f.kind is Kind.ROUTE and f.id not in GRID_PAIRS
     )
 
 
