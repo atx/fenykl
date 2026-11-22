@@ -107,7 +107,9 @@ class Boot:
         self.substitute: int | None = None
         """The resampler's tap-0 substitute, a per-lane value that program 13 adds in place of tap
         0's product when word 439's grid A is idled; None while it is not known: its value at boot
-        varies per boot and other edits move it (`resample_edits.SUBSTITUTE_MOVER`)."""
+        varies per boot and edits move it (`resample_edits.SUBSTITUTE_MOVER`)."""
+        self.substitute_at_boot = True
+        """Whether the substitute still holds its boot value: no edit has moved it."""
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
 
     def source(self, name: str, fact: str = "") -> int:
@@ -143,7 +145,7 @@ class Boot:
         unknown (source `why`): after a job that raised `UnknownSemantics`, whose effect on them
         is not known."""
         self.lines.forget(why)
-        self.substitute = None
+        self.substitute, self.substitute_at_boot = None, False
 
     def setup(self, job: Job) -> None:
         """Write the job's request to local memory, as its command's CPU setup does."""

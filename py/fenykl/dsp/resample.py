@@ -445,16 +445,21 @@ class Resample13Model:
         self, boot: Boot, job: Job, edited: list[int], probe: Probe | None
     ) -> None:
         """A stock job keeps the tap-0 substitute; on a flat source at W 64 the mover sets it
-        to 0 and a keeper keeps it; any other edited job makes it unknown."""
+        to 0 from its boot value or 0 and a keeper keeps it; any other edited job makes it
+        unknown, and the mover does not bring it back from there."""
         if not edited:
             return
         words = job.program.words
         i = edited[0]
         key = (i, words[i].value) if len(edited) == 1 and i < len(words) else None
+        if probe == FLAT and key in self.keepers:
+            return
         if probe == FLAT and key in self.mover:
-            boot.substitute = 0
-        elif probe != FLAT or key not in self.keepers:
+            if boot.substitute_at_boot or boot.substitute == 0:
+                boot.substitute = 0
+        else:
             boot.substitute = None
+        boot.substitute_at_boot = False
 
     def _pixel(
         self,

@@ -63,7 +63,7 @@ word."""
 
 GRID_C2 = Idle("grid and C2 free bits idle", GRID | C2_FREE)
 GRID_ONLY = Idle("grid idle", GRID)
-# The grid A / grid B halves of GRID_ONLY; no measured facts yet.
+# The grid A / grid B halves of GRID_ONLY.
 GRID_A_ONLY = Idle("grid A idle", GRID_A)
 GRID_B_ONLY = Idle("grid B idle", GRID_B)
 C2_ONLY = Idle("C2 free bits idle", C2_FREE)
@@ -473,7 +473,7 @@ FACTS: tuple[Fact, ...] = (
         FieldValue("op", 0x0E),
         (433,),
         {FLAT: _planes("l..", TapLoad(1, 1, "b"))},
-        "tap 1 takes c0's bits 8..15, sign-extended (one run each on two tap sets); a byte "
+        "tap 1 takes c0's bits 8..15, sign-extended (one run on each of two tap sets); a byte "
         "load at the same address and byte 1 of the datum the word before delivers are not "
         "separated",
     ),
@@ -628,9 +628,11 @@ FACTS: tuple[Fact, ...] = (
 )
 
 SUBSTITUTE_MOVER = (433, GRID_B_ONLY)
-"""The edit that sets the tap-0 substitute to 0 on a flat source at W 64, whatever it held
-before (inferred: on every boot where it ran, word 439's grid A idle gave the drop of tap 0's
-product after it, and a per-lane pattern before it where that ran)."""
+"""The edit that sets the tap-0 substitute to 0 on a flat source at W 64 from its boot value
+(inferred: on the boots where it ran before any other edit that moves it, word 439's grid A idle
+gave a per-lane pattern before it and the drop of tap 0's product after it). From a value that
+another edit moved it to, its effect is not known: grid edits that contain it left a non-zero
+moved value in place."""
 SUBSTITUTE_KEEPERS: tuple[tuple[int, Edit], ...] = (
     (433, GRID_A_ONLY),
     *((437, k) for k in (GRID_ONLY, GRID_A_ONLY, GRID_B_ONLY)),

@@ -360,22 +360,25 @@ def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
     # Not known on a fresh boot; 433's grid B idle sets it to 0, which drops tap 0's product.
     assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
     run_on(boot, taps, [(433, GRID_B_ONLY)])
-    for kind in (GRID_A_ONLY, GRID_ONLY, GRID_C2):
+    for kind in (GRID_A_ONLY, GRID_ONLY):
         got = run_on(boot, taps, [(439, kind)])
         assert plane0(got) == plane0(drop) != plane0(stock)
-    run_on(boot, taps, [(433, GRID_B_ONLY)])
-    # A keeper and a stock job leave it at 0; another edit, measured or not, makes it unknown.
+    # A keeper and a stock job leave it at 0.
     for edits in ([(439, FieldValue("f88_91", 2))], []):
         run_on(boot, taps, edits)
         assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) == plane0(drop)
+    assert plane0(run_on(boot, taps, [(439, GRID_C2)])) == plane0(drop)
+    # Another edit, measured or not, makes it unknown, and the mover does not bring it back.
     for edits in ([(433, GRID_C2)], [(433, OP_IDLE)]):
+        boot = Boot()
         run_on(boot, taps, [(433, GRID_B_ONLY)])
         run_on(boot, taps, edits)
         assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
+        run_on(boot, taps, [(433, GRID_B_ONLY)])
+        assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
     # The mover acts on its class only: on a source varying along x it makes it unknown.
-    run_on(boot, taps, [(433, GRID_B_ONLY)])
-    vary = bytes(range(64)) * 48
-    boot.put(SRC, vary, "src")
+    boot = Boot()
+    boot.put(SRC, bytes(range(64)) * 48, "src")
     Emulator(boot, model()).run(
         model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
     )

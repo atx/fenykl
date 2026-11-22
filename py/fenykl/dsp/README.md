@@ -343,10 +343,11 @@ that word; 0 and 1 select none of the four and are unknown). Idling 439's grid A
 triple) replaces tap 0's product by a per-lane value added without the multiply, the **tap-0
 substitute** (`Boot.substitute`). Its value at boot varies per boot, so it is unknown on a fresh
 boot and every such prediction there is unknown. A grid B idle of word 433 on a flat source at
-W 64 sets it to 0 whatever it held (`SUBSTITUTE_MOVER`, inferred: five boots), where the idle
+W 64 sets it from its boot value to 0 (`SUBSTITUTE_MOVER`, inferred: three boots), where the idle
 gives the drop of tap 0's product; the edits seen to keep it (`SUBSTITUTE_KEEPERS`) and stock jobs
-keep it, and any other edited job makes it unknown again, as does `Boot.forget_held` after a job
-that raised. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
+keep it. Any other edited job makes it unknown, as does `Boot.forget_held` after a job that
+raised, and from there the grid B idle does not bring it back to a known value: grid edits that
+contain it left a non-zero moved value in place. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
 `Resample13Model(program, facts)` takes another outcome table.
 
 - one measured edit on a class it ran on: its planes; `JobResult.edits` names it, verified (the

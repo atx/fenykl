@@ -591,7 +591,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "reads the local byte at ra + imm bytes, sign-extended, ra a base register it does not "
         "write (inferred: on the camera, 0x0e in place of the resampler's tap-1 read, ra kept, "
         "gave tap 1 c0's bits 0..7 at imm 0 and its bits 8..15 at imm 1, sign-extended, on "
-        "every line of two tap sets; nothing delivered and a zero-extended byte are refuted; "
+        "every line (imm 1 on two tap sets); nothing delivered and a zero-extended byte are refuted; "
         "a load from local memory and a select of byte imm of the datum the word before it "
         "delivered give the same bytes there, so the direction is open); "
         f"{_ADDRESS}; the core records the read only; covered at f120_122 = 7",
