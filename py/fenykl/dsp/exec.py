@@ -373,7 +373,10 @@ class Machine:
         if word[S2_HEAD] == S2_TERM:
             if index not in self.anchors.routing:
                 raise UnknownSemantics(
-                    index, "window", [], "an S2 term word with no accumulator"
+                    index,
+                    "window",
+                    [(lookup(S2_HEAD), S2_TERM)],
+                    "an S2 term word with no accumulator",
                 )
             r, c = self.read(("R", word["f57_60"])), self.read(("C", word["f88_91"]))
             tier = min(self.tier(index, n) for n in ("f53_56", "f57_60", "f88_91"))
