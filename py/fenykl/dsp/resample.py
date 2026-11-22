@@ -239,11 +239,12 @@ _WHY = {
 
 
 LAST_H = 16
-"""The height at which plane 0's last line at b = 1 reads its rows H and H + 1 both as the
-linear row H, plane 1's line 0, in the window's jobs (the stock program, own taps, and window
-edits) on x-varying sources [verified: both rows at 256 = 1.0, every column; the cause, a
-buffer layout or a pointer step past the last row, inferred]. Not measured on flat sources
-or under the rows' edits."""
+"""The height at which plane 0's last output line, H - 1, with its a at source line H - 1
+at b = 1 reads its plane-0 rows H and H + 1 both as the linear row H, plane 1's line 0, in
+the window's jobs (the stock program, own taps, and window edits) on x-varying sources
+(`_x_varying`) [verified: both rows at 256 = 1.0, every column; the cause, a buffer layout or
+a pointer step past the last row, inferred]. Not measured on other output lines or planes, on
+sources that are not x-varying, or under the rows' edits."""
 
 
 Acc = Mapping[int, Sequence[Term]] | Unknown
@@ -316,9 +317,10 @@ class Resample13Model:
         table_taint = min(table_b.taint) if all(table_b.known) else V
         px = _Pixels(boot.read(req.src, PLANES * STRIDE * h), h)
         job_class = _probe(px, entries, w)
+        varying = job_class == VARY and _x_varying(px, entries)
         probe = job_class if edited else None
         effects, window = (
-            self._effects(emu, job, edited, probe, result)
+            self._effects(emu, job, edited, probe, varying, result)
             if edited
             else (STOCK_PLANES, self.stock)
         )
@@ -351,12 +353,13 @@ class Resample13Model:
                     continue
                 entry = entries[min(i, h - 1)]
                 line = Bytes(w)
+                last = varying and c == 0 and i == LAST_H - 1
                 for x in range(full):
                     try:
                         if entry is None or (c == 0 and taps is None):
                             raise _Miss("input")
                         v, t = self._pixel(
-                            px, taps, c, entry, x, w, effect, ran, window, job_class
+                            px, taps, c, entry, x, w, effect, ran, window, last
                         )
                     except _Miss as m:
                         line.src[x] = (
@@ -440,14 +443,15 @@ class Resample13Model:
         job: Job,
         edited: list[int],
         probe: Probe | None,
+        varying: bool,
         result: JobResult,
     ) -> tuple[Planes | None, Acc | None]:
         """What each plane does in a job with these edited words, and the window's term lists
         where the window covers the job: one edited word that is a measured edit on a class it
         ran on gives its planes [verified]; else a job whose every changed field the window
         covers runs the window, its edited fields at their scoped tiers under the composition
-        cap; anything else is unknown in strict mode and None in lenient mode (the stock law,
-        as a hypothesis)."""
+        cap, at most inferred on a source that is neither flat nor `varying`; anything else is
+        unknown in strict mode and None in lenient mode (the stock law, as a hypothesis)."""
         words = job.program.words
         stock = self.program.words
         edits = [
@@ -484,6 +488,8 @@ class Resample13Model:
             return STOCK_PLANES, w.acc
         if isinstance(w, Window):
             cap = composition_cap(w.edits, words, probe)
+            if probe == VARY and not varying:
+                cap = min(cap, I)
             for i, c in w.edits:
                 assert c.confidence is not None
                 value = c.field.get(words[i].value)
@@ -526,13 +532,13 @@ class Resample13Model:
         effect: Effect,
         ran: tuple[int, int],
         window: Acc | None,
-        job_class: Probe | None,
+        last: bool,
     ) -> tuple[int, Confidence]:
         """The output byte at pixel x of plane c for table entry (a, b) under an edit's
         `effect` on the plane, and its taint; at b = 1 from the `window`'s term lists where
-        the window covers the job (plane 0's last line as `LAST_H` on x-varying sources);
-        plane-0 taps outside `ran` and chroma weights outside `CHROMA_WEIGHTS_RAN` taint
-        it."""
+        the window covers the job (as `LAST_H` where the byte is on plane 0's `last` line of a
+        job on an x-varying source); plane-0 taps outside `ran` and chroma weights outside
+        `CHROMA_WEIGHTS_RAN` taint it."""
         a, b = entry
         h = px.h
         if not 0 <= a <= (h - 1) << 16 or not B_RANGE[0] <= b <= B_RANGE[1]:
@@ -556,11 +562,7 @@ class Resample13Model:
             return read(c, y, xx)
 
         def last_line(plane: int, y: int, xx: int) -> int:
-            if (
-                job_class == VARY
-                and (plane, base) == (0, LAST_H - 1)
-                and y in (LAST_H, LAST_H + 1)
-            ):
+            if last and (plane, base) == (0, LAST_H - 1) and y in (LAST_H, LAST_H + 1):
                 return read(1, 0, xx)
             return read(plane, y, xx)
 
@@ -740,6 +742,30 @@ def _probe(px: _Pixels, entries: list[tuple[int, int] | None], w: int) -> Probe 
         len(set(data.data[o : o + STRIDE])) == 1 for o in range(0, len(data), STRIDE)
     )
     return Probe(flat, steps.pop(), w)
+
+
+def _x_varying(px: _Pixels, entries: list[tuple[int, int] | None]) -> bool:
+    """Whether a known H 16 source is x-varying as the window's x-varying cells and `LAST_H`
+    were measured on it: in each plane, the 64 columns over the source lines the table reaches
+    (lines a - 1 .. a + 2 of every entry, line -1 read as line 0, none past H - 1) are pairwise
+    distinct. The seeded source that ran has this; the lines of one output line alone are too
+    few to tell 64 seeded columns apart, so the rule is per job. A source that is neither flat
+    nor x-varying keeps the window's x-varying cells at most inferred and gets no `LAST_H`;
+    the rows' edits keep their two classes (flat or not), which ran on such sources too."""
+    h = px.h
+    lines = {
+        max(0, (e[0] >> 16) - 1 + k)
+        for e in entries
+        if e is not None
+        for k in range(4)
+        if (e[0] >> 16) - 1 + k <= h - 1
+    }
+    data = px.data.data
+    for c in range(PLANES):
+        rows = [data[(c * h + y) * STRIDE : (c * h + y + 1) * STRIDE] for y in lines]
+        if len({bytes(col) for col in zip(*rows)}) < STRIDE:
+            return False
+    return True
 
 
 def _operands(

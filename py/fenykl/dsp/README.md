@@ -399,7 +399,9 @@ x-varying ones at b = 1, W 64: on x-varying sources the cells that ran there are
 1 and 5 at 439, 4 at 440, 3 at 441 and 442; 57 = 4 at 439, 5 at 440..442: every byte of the
 three planes as the per-pixel law gives it, each column reading its own source column), and
 every other cell, don't-care and mechanism holds at most inferred; b != 1 stays off the
-classes. Unless the job edits one semantic at a measured cell, an edited
+classes. A source is x-varying there as the cells ran on it: in each plane, the 64 columns over
+the lines the table reaches are pairwise distinct (`resample._x_varying`); on a source neither
+flat nor x-varying the cells are at most inferred. Unless the job edits one semantic at a measured cell, an edited
 register value that reaches a word reading it without a semantic (`exec.readers`; words shown
 inert at b = 1 aside) makes the window unknown.
 
@@ -412,9 +414,10 @@ Jobs with exactly those (word, field, value) sets keep their fields' tiers on fl
 other job that edits two or more semantics, and those on x-varying sources, is at most
 inferred.
 
-On x-varying sources at H 16 the window's jobs read plane 0's last line (a = 15) on lines 16
-and 17 both as plane 1's line 0 (`resample.LAST_H`) [verified]; elsewhere a tap on a line past
-H - 1 stays unknown (`resampler bottom`).
+On x-varying sources at H 16 the window's jobs read plane 0's lines 16 and 17 on plane 0's
+output line 15 (a = 15) both as plane 1's line 0 (`resample.LAST_H`) [verified]; elsewhere (other
+output lines and planes, other sources) a tap on a line past H - 1 stays unknown (`resampler
+bottom`).
 
 ### Stepping
 

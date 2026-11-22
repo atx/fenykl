@@ -145,9 +145,9 @@ Cells = dict[tuple[Probe, str, int, tuple[int, ...]], Confidence]
 def _cells(program: Program) -> Cells:
     """The measured cells per job class, at b = 1, W 64: one run each, verified where the
     outcome was pre-registered, inferred for a post hoc fit. On flat sources every cell; on
-    x-varying ones (every column different) the pre-registered cells that ran there, every
-    byte of the three planes as the per-pixel law gives it (each column reads its own source
-    column only) [verified]."""
+    x-varying ones (every column different, `resample._x_varying`) the pre-registered cells
+    that ran there, every byte of the three planes as the per-pixel law gives it (each column
+    reads its own source column only) [verified]."""
     read = program.words[TAP_READ]
     high, ra = read["f128_132"], read["ra"]
     loads = (
@@ -211,7 +211,8 @@ def inert(facts: Sequence[Fact]) -> frozenset[int]:
 
 CLASSES = {FLAT: None, VARY: (FLAT, I)}
 """The window's job classes: flat sources, and x-varying ones, where what ran flat only holds
-at most inferred."""
+at most inferred; a source neither flat nor x-varying runs as VARY with every cell at most
+inferred (`resample._x_varying`)."""
 
 
 def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:

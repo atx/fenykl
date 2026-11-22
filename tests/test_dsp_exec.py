@@ -538,12 +538,12 @@ def per_pixel(taps, at: int | None = None, field: str = "", value: int = 0):
     phase 0) by the per-pixel law, None where it gives none, under the window edit `field` =
     `value` at word `at`: f88_91 at 439 + t gives tap t the coefficient it selects (3, 2, 4, 5:
     c0..c3; 1: 16 - p), f57_60 = 4 at 439 reads tap 0 on line a, f57_60 = 5 at 439 + t reads tap
-    t on plane 1's line a + 1. Each output pixel reads its own column. Plane 0 reads line -1 as
-    line 0 and, from line 15, lines 16 and 17 as plane 1's line 0; any other line past 15 has
-    no law."""
+    t on plane 1's line a + 1. Each output pixel reads its own column. Line -1 reads as line 0;
+    plane 0's output line 15 (a = 15) reads plane 0's lines 16 and 17 as plane 1's line 0; any
+    other line past 15 has no law."""
 
-    def pixel(c: int, y: int, x: int, base: int) -> int | None:
-        if c == 0 and base == 15 and y in (16, 17):
+    def pixel(last: bool, c: int, y: int, x: int) -> int | None:
+        if last and c == 0 and y in (16, 17):
             c, y = 1, 0
         if y > 15:
             return None
@@ -551,7 +551,7 @@ def per_pixel(taps, at: int | None = None, field: str = "", value: int = 0):
 
     out: list[int | None] = []
     for c in range(3):
-        for a, _ in TABLE:
+        for i, (a, _) in enumerate(TABLE):
             base, p = a >> 16, a >> 12 & 15
             kernel = taps[p] if c == 0 else (0, 256 - 16 * p, 16 * p, 0)
             terms = [(w, c, base - 1 + k) for k, w in enumerate(kernel)]
@@ -563,8 +563,9 @@ def per_pixel(taps, at: int | None = None, field: str = "", value: int = 0):
                 terms[t] = (
                     (kernel[t], 0, base) if value == 4 else (kernel[t], 1, base + 1)
                 )
+            last = c == 0 and i == 15 and base == 15
             for x in range(64):
-                reads = [(w, pixel(pc, y, x, base)) for w, pc, y in terms if w]
+                reads = [(w, pixel(last, pc, y, x)) for w, pc, y in terms if w]
                 if any(v is None for _, v in reads):
                     out.append(None)
                     continue
@@ -637,3 +638,47 @@ def test_window_edits_at_b_not_1_on_an_x_varying_source_stay_unknown():
     edits = [(439, FieldValue("f88_91", 5))]
     got = predict(model(), Taps.of(COMPOSE), VARY_SRC, table, edits=edits)
     assert not any(got.dst.known) and got.result.edits == []
+
+
+def between() -> list[bytes]:
+    """Sources neither flat nor x-varying: one pixel of `FLAT_SRC` flipped, one column of
+    every line flipped, and `VARY_SRC` with each line's second half a copy of its first."""
+    pixel = bytearray(FLAT_SRC)
+    pixel[5] ^= 1
+    column = bytearray(FLAT_SRC)
+    for y in range(48):
+        column[y * 64 + 40] ^= 0x55
+    halves = bytes(VARY_SRC[k // 64 * 64 + k % 32] for k in range(len(VARY_SRC)))
+    return [bytes(pixel), bytes(column), halves]
+
+
+@pytest.mark.parametrize("src", between(), ids=["pixel", "column", "halves"])
+def test_a_source_neither_flat_nor_x_varying_has_no_last_line_and_inferred_cells(src):
+    got = predict(model(), Taps.of(EDGE), src, TABLE)
+    known = [bool(k) for k in got.dst.known]
+    assert known == [True] * 15 * 64 + [False] * 64 + [True] * 32 * 64
+    for at, field, value in RAN_VARYING_CELLS:
+        edits = [(at, FieldValue(field, value))]
+        got = predict(model(), Taps.of(COMPOSE), src, TABLE, edits=edits)
+        assert [c for _, c in got.result.edits] == [I]
+
+
+def test_only_plane_0s_last_output_line_reads_past_the_last_line():
+    """Every line at a = 15: lines 0..14 read lines 16 and 17 too, but only output line 15
+    reads them as plane 1's line 0 (`VARY_SRC` is x-varying on lines 14 and 15 alone)."""
+    table = [(15 << 16, 0x10000)] * 16
+    got = predict(model(), Taps.of(EDGE), VARY_SRC, table)
+    known = [any(got.dst.known[y * 64 : (y + 1) * 64]) for y in range(16)]
+    assert known == [False] * 15 + [True]
+    assert bytes(got.dst.data[15 * 64 : 16 * 64]) == VARY_SRC[16 * 64 : 17 * 64]
+
+
+@pytest.mark.parametrize("at, plane", [(443, 1), (445, 2)])
+def test_a_chroma_plane_reading_plane_0_has_no_last_line(at: int, plane: int):
+    """f57_60 = 3 at 443 (445) has a tap of plane 1 (2) read plane 0's lines; its line 15 reads
+    plane 0's lines 16 and 17, which only plane 0's output reads as plane 1's line 0."""
+    edits = [(at, FieldValue("f57_60", 3))]
+    got = predict(model(), Taps.of(EDGE), VARY_SRC, TABLE, edits=edits)
+    line = (plane * 16 + 15) * 64
+    assert not any(got.dst.known[line : line + 64])
+    assert all(got.dst.known[plane * 1024 : line - 128])
