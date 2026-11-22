@@ -384,6 +384,12 @@ class Core:
         if effect is not None:
             for r, v in effect.writes:
                 self.boot.slot[r] = v
+            for addr, n in effect.stores:
+                src = self.boot.source("local store", f"op {word.op:#x}: its datum is open")
+                if addr is None:
+                    self.boot.local.forget(src)
+                else:
+                    self.boot.local.write(addr, Bytes.unknown(n, src))
             return Step(
                 i, word.op, slot, args, note=effect.note, confidence=sem.confidence
             )

@@ -354,11 +354,13 @@ def _ran(trace: Trace, c: WordClass, index: int) -> None:
 
 @dataclass(frozen=True)
 class Effect:
-    """What a data op did: register writes in the op slot's file (None = unknown after it) and
-    a note for the trace."""
+    """What a data op did: register writes in the op slot's file (None = unknown after it), a
+    note for the trace and local memory writes of unknown data (address, bytes; address None =
+    anywhere)."""
 
     writes: tuple[tuple[int, Reg | None], ...] = ()
     note: str = ""
+    stores: tuple[tuple[int | None, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -371,24 +373,48 @@ class OpSemantics:
     run: Callable[[Word, RegisterFile, Space], Effect | None]
 
 
-LOAD_UNITS = {4: "word", 2: "halfword", 1: "byte"}
+LOCAL_UNITS = {4: "word", 2: "halfword", 1: "byte"}
+FLAG_BITS = {4: 0x1800, 2: 0x1000, 1: 0}
+"""The imm13 bits of a family A op above the 13-bit byte offset: a flag that does not move the
+address on r0 (inferred), its meaning open; words with it set are not covered."""
+
+
+def local_offset(width: int, imm13: int) -> int:
+    """The byte offset of a family A access: the low 13 bits of width x imm13, signed."""
+    off = width * imm13 & 0x1FFF
+    return off - 0x2000 if off & 0x1000 else off
+
+
+def _local_access(
+    width: int, word: Word, slot: RegisterFile
+) -> tuple[str, int | None] | None:
+    """(the access as text, its index in units of `width` from the local base, None for an
+    unknown base) at byte 4 ra + offset, ra a word index; None outside what is covered."""
+    args = word.operands
+    assert args is not None and args.imm is not None
+    imm13 = args.imm & 0x1FFF
+    if word["f120_122"] != 7 or imm13 & FLAG_BITS[width]:
+        return None
+    units = local_offset(width, imm13) // width
+    where = f"local {LOCAL_UNITS[width]} r{args.ra} + {units:#x}"
+    base = slot[args.ra]
+    if base is None or base.exact is None:
+        return f"{where}, r{args.ra} unknown", None
+    return where, 4 * base.exact // width + units
 
 
 def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A read of `width` bytes of local memory at byte 4 ra + width imm: ra a word index, the
-    immediate in units of the width. ra is a base it does not write; the read is recorded only."""
-    unit = LOAD_UNITS[width]
+    """A read of `width` bytes of local memory; ra is a base it does not write. The read is
+    recorded only: where the datum goes is open."""
+    unit = LOCAL_UNITS[width]
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        args = word.operands
-        assert args is not None and args.imm is not None
-        if word["f120_122"] != 7:
+        access = _local_access(width, word, slot)
+        if access is None:
             return None
-        base = slot[args.ra]
-        where = f"local {unit} r{args.ra} + {args.imm:#x}"
-        if base is None or base.exact is None:
-            return Effect(note=f"reads {where}, r{args.ra} unknown")
-        k = 4 * base.exact // width + args.imm
+        where, k = access
+        if k is None:
+            return Effect(note=f"reads {where}")
         addr = local.base + width * k
         if not local.contains(addr, width):
             return Effect(
@@ -397,6 +423,30 @@ def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | No
         b = local.read(addr, width)
         value = f"{int.from_bytes(b.data, 'little'):#x}" if all(b.known) else "unknown"
         return Effect(note=f"reads local {unit} {k:#x}: {value}")
+
+    return run
+
+
+def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
+    """A write of `width` bytes of local memory; ra is a base it does not write. The datum's
+    source is open, so the bytes become unknown; with an unknown base, all of local memory."""
+    unit = LOCAL_UNITS[width]
+
+    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+        access = _local_access(width, word, slot)
+        if access is None:
+            return None
+        where, k = access
+        if k is None:
+            return Effect(stores=((None, width),), note=f"writes {where}: anywhere")
+        addr = local.base + width * k
+        if not local.contains(addr, width):
+            return Effect(
+                note=f"writes {where} = {k:#x}, outside the modelled local memory"
+            )
+        return Effect(
+            stores=((addr, width),), note=f"writes local {unit} {k:#x}: unknown datum"
+        )
 
     return run
 
@@ -453,6 +503,19 @@ def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     return _computed(word, src, name, (0, min(src.hi, mask) if mask >= 0 else src.hi))
 
 
+_ADDRESS = (
+    "the byte address is 4 ra plus the low 13 bits of width x imm13 as a signed offset; imm13's "
+    "bits above them (11..12 in the word ops, 12 in the halfword ops) do not move the address "
+    "on r0 (inferred: across later firmware versions of the same family, every read of an "
+    "r0-based slot follows a store to the same low-13-bit bytes whatever those bits hold), so "
+    "they are a flag of open meaning and words with it set are not covered"
+)
+_R0_READS = (
+    "across later firmware versions of the same family, every read of an r0-based slot follows "
+    "a store to the same bytes"
+)
+
+
 OP_SEMANTICS: dict[int, OpSemantics] = {
     IDLE_OP: OpSemantics(
         I,
@@ -466,8 +529,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "16's three 0x1a words name local words 0, 1 and 2 (src, dst, len) with one ra, and "
         "across later firmware versions of the same family, in 59 % of its words the next "
         "naming of that register is this op again, with another immediate in 95 % of those "
-        "pairs, which as writes would be dead); where the datum goes is open, so the "
-        "core records the read only; covered at f120_122 = 7, the value of those three words",
+        f"pairs, which as writes would be dead); {_ADDRESS}; where the datum goes is open, so "
+        "the core records the read only; covered at f120_122 = 7, the value of those three "
+        "words",
         _local_load(4),
     ),
     0x16: OpSemantics(
@@ -477,8 +541,17 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "the resampler, the word that reads tap 1 of the line's phase holds imm 1, and imm 0 "
         "gave tap 1 tap 0's coefficient, byte for byte; the halfword unit is inferred from "
         "that and from the request's halfwords, and ra a word index as 0x1a's is a hypothesis); "
-        "where the datum goes is open, so the core records the read only; covered at f120_122 "
-        "= 7, the value of that word",
+        f"{_ADDRESS}; the sign extension is open; where the datum goes is open, so the core "
+        "records the read only; covered at f120_122 = 7, the value of that word",
+        _local_load(2),
+    ),
+    0x14: OpSemantics(
+        I,
+        "reads the local halfword at ra + imm halfwords, ra a base register it does not write "
+        f"(inferred: {_R0_READS}, 31 of 31 for 0x14, and its displacements fit a halfword "
+        f"unit; the second halfword load beside 0x16, the two plausibly differing in sign "
+        f"extension, which is open); {_ADDRESS}; the core records the read only; covered at "
+        "f120_122 = 7",
         _local_load(2),
     ),
     0x10: OpSemantics(
@@ -488,9 +561,30 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "ra kept, gave tap 1 the coefficient c0's bits 8..15 zero-extended, the byte at offset 1 "
         "of the phase's taps, on every line; a sign-extended byte is refuted; that the "
         "immediate counts bytes and not another unit that lands on byte 1 rests on that one "
-        "word and immediate); where the datum goes is open, so the core records the read only; "
-        "covered at f120_122 = 7, the value of that word",
+        f"word and immediate); {_ADDRESS}; where the datum goes is open, so the core records "
+        "the read only; covered at f120_122 = 7, the value of that word",
         _local_load(1),
+    ),
+    0x12: OpSemantics(
+        I,
+        "writes the local halfword at ra + imm halfwords, ra a base register it does not write "
+        "(inferred: across later firmware versions of the same family, 108 of its 114 accesses "
+        "of r0-based slots are their first touch, 105 of its 124 accesses at -64..-1 B lie in "
+        "the first fifth of their routine, an entry spill, and its displacements fit a halfword "
+        f"unit); {_ADDRESS}; the datum's source is open, so the bytes become unknown; covered at "
+        "f120_122 = 7",
+        _local_store(2),
+    ),
+    0x18: OpSemantics(
+        I,
+        "writes the local word at ra + imm words, ra a base register it does not write "
+        "(inferred: across later firmware versions of the same family, it opens 88 of the 95 "
+        "r0-based word slots of the E-M10 II programs, its accesses at -64..-1 B lean to the "
+        "first fifth of their routine (101 against 61 in the last), and a later access to the "
+        "same address repeats the op in 0.19 of the cases against 0.66 for 0x1a); "
+        f"{_ADDRESS}; the datum's source is open, so the bytes become unknown; covered at "
+        "f120_122 = 7",
+        _local_store(4),
     ),
     0x38: OpSemantics(
         I,

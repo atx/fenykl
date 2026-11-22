@@ -256,7 +256,9 @@ T_HIGH = (
     "7), meaning open. In a data op it is the register rb of the register forms (families A', C, "
     "E) or bits 8..12 of the immediate (families A, B, D, F) (verified in the bytes across later "
     "firmware versions of the same family: in 31878 of 32911 idle-op words it holds the last "
-    "register-form word's value, which survives the immediate forms in between). In families "
+    "register-form word's value, which survives the immediate forms in between); in family A "
+    "its bits 11..12 (imm13 bits 11..12 of a word op, bit 12 of a halfword op) are a flag that "
+    "does not move the address on r0 (inferred). In families "
     "A', C and E a source that stays fixed across consecutive register-form ops while ra changes "
     "(same rb with another ra in 59 % of such pairs, 10 % by chance), live into the routine more "
     "often than chance; a register named as ra reaches a later rb no more often than chance "
@@ -955,9 +957,14 @@ FAMILIES = (
         False,
         13,
         "ra and a 13-bit immediate; f120_122 an operand that varies apart from it (0x0c holds "
-        "every f120_122 with f128_132 = 31); the immediates lie within 0x200 of a multiple of 0x800, "
-        "so bits 11..12 may select one of four regions and the rest be a small signed offset "
-        "(hypothesis); each op's register form is the op + 1",
+        "every f120_122 with f128_132 = 31); loads and stores of width w (bytes 0x0c..0x10, "
+        "halfwords 0x12..0x16, words 0x18, 0x1a) at the base ra plus the low 13 bits of "
+        "w x imm13 as a signed byte offset (inferred); imm13's bits above them, 11..12 in the "
+        "word ops and 12 in the halfword ops, do not move the address on r0: across later "
+        "firmware versions of the same family every read of an r0-based slot follows a store to "
+        "the same low-13-bit bytes whatever they hold, so they are a flag (a mode, port or "
+        "attribute) of open meaning, not address bits (inferred); each op's register form is the "
+        "op + 1",
     ),
     Family(
         "A'",
@@ -1035,19 +1042,29 @@ MEANINGS = {
     "A uses it as a base (24 % against 7 % by chance across later firmware versions of the same "
     "family), but in program 16 base plus immediate addressing with 0x0b writing ra would move "
     "the local words that the camera shows 0x1a reading",
-    0x0C: "its immediates 0x1fxx read as small negative numbers (inferred)",
+    0x0C: "its immediates 0x1fxx read as small negative numbers (inferred); a byte store by its "
+    "place before the byte loads 0x0e and 0x10 (hypothesis: no anchor; 7 of its 10 accesses of "
+    "r0-based slots are their first touch, but 21 of 24 later accesses at its address are 0x0c "
+    "again, as a load's would be)",
+    0x0E: "a byte load by its place between 0x0c and 0x10 (hypothesis: every one of its 8 reads "
+    "of r0-based slots follows a store to them, its width only from its place)",
     0x10: "its immediates 0x1fxx read as small negative numbers (inferred); in program 13 every "
     "non-zero immediate lies in its tap block 0x00..0x1f; on the camera, 0x10 in place of the "
     "resampler's 0x16 tap-1 read (imm 1, ra kept) gave tap 1 c0's bits 8..15 zero-extended: a "
     "byte load at ra + imm bytes (inferred)",
-    0x12: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f: reads a "
-    "coefficient or line by index (hypothesis)",
+    0x12: "a halfword store (inferred: across later firmware versions of the same family, the "
+    "first touch of r0-based slots in 108 of its 114 accesses of them, and entry spills at "
+    "-64..-1 B)",
+    0x14: "a halfword load (inferred: every one of its 31 reads of r0-based slots follows a store "
+    "to the same bytes across later firmware versions of the same family); its sign extension "
+    "against 0x16's is open",
     0x16: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f, in runs that "
     "step 0, 1, 2, 3 with one ra per run; on the camera, imm 1 -> 0 in the resampler's tap-1 "
     "read gave tap 1 tap 0's coefficient byte for byte (verified at that word): a halfword "
     "load at ra + imm halfwords, the imm the tap index (the unit inferred)",
-    0x18: "its immediates spread over the four regions as 0x1a's do: a local-memory access at its "
-    "immediate (hypothesis)",
+    0x18: "a word store (inferred: across later firmware versions of the same family, it opens "
+    "88 of the 95 r0-based word slots of the E-M10 II programs, with entry spills and exit "
+    "restores by 0x1a at -64..-1 B)",
     0x1A: "reads the local word at its immediate (inferred, strong): program 16's three 0x1a words "
     "name local words 0, 1 and 2 (src, dst, len), all with ra = 5; idling the one at 2 on the "
     "camera stores 16 KiB of zeros whatever len is, idling the other two leaves dst unwritten; ra "

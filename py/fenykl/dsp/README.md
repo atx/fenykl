@@ -154,7 +154,15 @@ bit moved a copy's store by 16 B). Where 0x3f's result goes is open: the core wr
 hypothesis taint. 0x16 and 0x10 load a halfword and a byte at ra + imm in units of their width:
 in the resampler the word that reads tap 1 is a 0x16 with imm 1; on the camera imm 0 gave tap 1
 tap 0's coefficient byte for byte, and op 0x10 gave it c0's bits 8..15 zero-extended (one run
-each; ra as a word index is a hypothesis). Like 0x1a, the core records the read only.
+each; ra as a word index is a hypothesis). Like 0x1a, the core records the read only. Family A
+as a whole reads as loads and stores of width w (inferred from the static access patterns:
+every read of an r0-based slot follows a store to the same bytes): the byte address is 4 ra
+plus the low 13 bits of w x imm13 as a signed offset, and imm13's bits above them (11..12 in
+the word ops, 12 in the halfword ops) are a flag that does not move the address on r0, its
+meaning open. The core also runs 0x14 as a halfword load and 0x12 and 0x18 as halfword and word
+stores (inferred); a store's datum is open, so its bytes become unknown, and at an unknown base
+all of local memory does. Words with the flag set, the byte ops 0x0c and 0x0e and the register
+forms have no semantics.
 `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
@@ -338,9 +346,10 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   testing ra as it is or after decrementing it (all hypotheses). On the copy's transfer
   registers at job start it reproduces the camera's path, but nothing shows those to be the
   registers the control ops name.
-- **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): 0x1a reads local word ra +
-  imm (inferred; it records the read, where the datum goes is open) and the idle op does
-  nothing in the slot. Every other op has no semantics: strict mode raises `UnknownSemantics`,
+- **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): the family A loads 0x1a,
+  0x16, 0x14 and 0x10 record their read (where the datum goes is open), the stores 0x18 and
+  0x12 make their bytes unknown, 0x38 and 0x3f compute ra, and the idle op does nothing in the
+  slot. Every other op has no semantics: strict mode raises `UnknownSemantics`,
   lenient mode records it in its step and makes its ra unknown. An undecided branch raises in
   strict mode and stops the run in lenient mode; a loop end into its own delay slots, a control
   op in a delay slot and a return without a call raise in both.

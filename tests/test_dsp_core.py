@@ -116,9 +116,10 @@ def test_local_read_uses_ra_as_a_base():
         Core(Boot()).run(commands.copy(Program((other, HALT)), SRC, DST, 0x400))
 
 
-def load(op: int, imm: int) -> Word:
+def load(op: int, imm: int, ra: int = 4) -> Word:
+    """A family A word (a load or a store) at ra + imm, covered (f120_122 = 7)."""
     return Word.from_fields(
-        {"f120_122": 7}, base=Word.data(op, Operands(ra=4, imm=imm))
+        {"f120_122": 7}, base=Word.data(op, Operands(ra=ra, imm=imm))
     )
 
 
@@ -138,6 +139,48 @@ def test_word_halfword_and_byte_loads_share_one_base():
     _, flow = run_slot((load(0x16, 1), load(0x10, 1)), r4=given(1))
     assert flow.steps[0].note == f"reads local halfword 0x3: {DST >> 16:#x}"
     assert flow.steps[1].note == f"reads local byte 0x5: {DST >> 8 & 0xFF:#x}"
+
+
+def test_family_a_offset_is_the_signed_low_13_bits_of_width_times_imm13():
+    # From local word 2: 4 x 0x7ff and 2 x 0xffe are -4 B in 13 bits, the word and halfwords
+    # below; 0x14 loads halfwords as 0x16 does.
+    words = (load(0x1A, 0x7FF), load(0x16, 0xFFE), load(0x14, 0xFFF), load(0x14, 1))
+    _, flow = run_slot(words, r4=given(2))
+    assert [s.note for s in flow.steps[:4]] == [
+        f"reads local word 0x1: {DST:#x}",
+        f"reads local halfword 0x2: {DST & 0xFFFF:#x}",
+        f"reads local halfword 0x3: {DST >> 16:#x}",
+        "reads local halfword 0x5: 0x0",
+    ]
+    # Bit 11 of a halfword op's imm13 is the offset's sign, not the flag.
+    _, flow = run_slot((load(0x16, 0x800),), r4=given(0))
+    assert flow.steps[0].note.endswith("= -0x800, outside the modelled local memory")
+
+
+@pytest.mark.parametrize("op, imm", [(0x1A, 0x800), (0x1A, 0x1000), (0x16, 0x1000)])
+def test_family_a_flag_bits_are_not_covered(op: int, imm: int):
+    with pytest.raises(UnknownSemantics, match="outside what its semantics covers"):
+        run_slot((load(op, imm),), r4=given(0))
+
+
+def test_family_a_stores_make_their_bytes_unknown():
+    # 0x18 writes local word 1, 0x12 halfword 5 (bytes 10, 11): the reads after see unknown
+    # data there and the request elsewhere.
+    words = (load(0x18, 1), load(0x12, 5), load(0x1A, 0), load(0x1A, 1), load(0x16, 4))
+    boot, flow = run_slot((*words, load(0x16, 5)), r4=given(0))
+    assert [s.note for s in flow.steps[:6]] == [
+        "writes local word 0x1: unknown datum",
+        "writes local halfword 0x5: unknown datum",
+        f"reads local word 0x0: {SRC:#x}",
+        "reads local word 0x1: unknown",
+        "reads local halfword 0x4: 0x400",
+        "reads local halfword 0x5: unknown",
+    ]
+    assert boot.slot[4] == given(0)
+    # At an unknown base the store may hit any byte.
+    boot, flow = run_slot((load(0x12, 0), load(0x1A, 0, ra=5)), r5=given(0))
+    assert flow.steps[0].note == "writes local halfword r4 + 0x0, r4 unknown: anywhere"
+    assert flow.steps[1].note == "reads local word 0x0: unknown"
 
 
 def test_loop_end_count_hypotheses():
