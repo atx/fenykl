@@ -148,6 +148,8 @@ class Cover:
     coverage: Coverage
     confidence: Confidence | None
     why: str = ""
+    semantic: str = ""
+    """The semantic that covers the field (its fields read as one value)."""
 
 
 HELD = frozenset(
@@ -250,7 +252,7 @@ def _cover_field(
     if sem is not None:
         tier, why = scoped(anchors, sem, index, sem.key(word), sem.key(stock), probe)
         kind = Coverage.UNKNOWN if tier is None else Coverage.SEMANTIC
-        return Cover(f, kind, tier, why)
+        return Cover(f, kind, tier, why, sem.name)
     own = owner(f)
     if own is not None and own.get(word.value) == own.idle:
         if f.id not in changed:

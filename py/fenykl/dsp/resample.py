@@ -96,7 +96,6 @@ from .resample_edits import (
     Probe,
     Stock,
     Substitute,
-    TapLoad,
 )
 from .resample_window import anchors as window_anchors
 from .resample_window import composition_cap, free, uncovered
@@ -638,8 +637,6 @@ class Resample13Model:
         base = a >> 16
         p = (a & 0xFFFF) >> 12
         kernel = taps[p] if c == 0 else chroma(p)
-        if isinstance(effect, TapLoad):
-            kernel = effect.kernel(kernel)
         taint = min(taint, _gain_taint(kernel, ran))
         if isinstance(effect, Phase):
             return _phase(get, base, kernel, x, effect.q), taint

@@ -226,16 +226,19 @@ def uncovered(anchors: Anchors, stock: Word, word: Word, index: int) -> str:
 
 
 def composition_cap(edits: Sequence[tuple[int, Cover]]) -> Confidence:
-    """The cap on the tiers of a job's edited fields: none for one field and for the two
+    """The cap on the tiers of a job's edited fields: none for one semantic and for the two
     compositions that ran [verified]: f57_60 with f88_91 in one tap term word (the tap's
     coefficient times its operand), and f88_91 at two term words, both taps of plane 0 or one
     tap and one chroma term (each acts in its accumulation as it does alone); inferred for any
     other composition."""
-    if len(edits) < 2:
+    if any(c.coverage is not Coverage.SEMANTIC for _, c in edits):
+        return V if len(edits) < 2 else I
+    parts = sorted({(i, c.semantic) for i, c in edits})
+    if len(parts) < 2:
         return V
-    if len(edits) > 2 or any(c.coverage is not Coverage.SEMANTIC for _, c in edits):
+    if len(parts) > 2:
         return I
-    (i, f), (j, g) = sorted((i, c.field.id) for i, c in edits)
+    (i, f), (j, g) = parts
     if i == j and i in TAP_WORDS and {f, g} == {"f57_60", "f88_91"}:
         return V
     if (

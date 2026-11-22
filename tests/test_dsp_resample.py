@@ -518,7 +518,9 @@ def test_an_edited_tap_read_loads_another_coefficient():
     for edit, loaded in loads:
         got = predict(model(), Taps.of(phases), FLAT, TABLE13, edits=[(433, edit)])
         want = predict(model(), Taps.of(loaded), FLAT, TABLE13)
-        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED]
+        # One entry per edited field, each at its measured cell.
+        fields = len(getattr(edit, "values", (edit,)))
+        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED] * fields
         assert got.dst.known[:1024] == want.dst.known[:1024]
         assert got.dst.data[:1024] == want.dst.data[:1024] != stock.dst.data[:1024]
         assert set(got.confidence()[:1024]) - {None} == {Confidence.INFERRED}

@@ -16,7 +16,6 @@ gives no prediction.
 The classes that ran: sources whose lines are constant along x ("flat") or not, at b = 1, 1 +
 1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48."""
 
-import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -178,21 +177,6 @@ class Phase:
 
 
 @dataclass(frozen=True)
-class TapLoad:
-    """Plane 0 at b = 1 with tap `tap`'s coefficient loaded from the phase's taps as the tap
-    words hold them (c0..c3, s16 little-endian): the value of struct format `fmt` at byte
-    `offset`; the tap still multiplies its own source line."""
-
-    tap: int
-    offset: int
-    fmt: str
-
-    def kernel(self, kernel: tuple[int, ...]) -> tuple[int, ...]:
-        (c,) = struct.unpack_from(self.fmt, struct.pack("<4h", *kernel), self.offset)
-        return (*kernel[: self.tap], c, *kernel[self.tap + 1 :])
-
-
-@dataclass(frozen=True)
 class Substitute:
     """Plane 0 at b = 1 with tap `tap`'s product replaced by the boot's tap-0 substitute
     (`Boot.substitute`), a per-lane value added without the multiply: the drop of the tap's
@@ -204,7 +188,7 @@ class Substitute:
     tap: int = 0
 
 
-Effect = Stock | Changed | Operands | Phase | TapLoad | Substitute
+Effect = Stock | Changed | Operands | Phase | Substitute
 Planes = tuple[Effect, Effect, Effect]
 
 STOCK = S = Stock()
@@ -240,9 +224,6 @@ B1 = {FLAT: _planes("..."), VARY: _planes("...")}
 
 TAP1_LOW = Operands((Operand.UNKNOWN, Operand.LOW, Operand.UNKNOWN, Operand.UNKNOWN))
 PHASE14 = Phase(14)
-TAP1_FROM_C0 = TapLoad(1, 0, "<h")
-TAP1_FROM_C0_HIGH = TapLoad(1, 1, "B")
-"""Tap 1 := c0's bits 8..15, zero-extended: the byte at offset 1 of the phase's taps."""
 SUBSTITUTE = Substitute()
 COEFFICIENT_SELECT = (3, 2, 4, 5)
 """Word 439 + k's f88_91 value selecting c0..c3 for tap k (k 0..3); each word's stock value
@@ -455,58 +436,6 @@ FACTS: tuple[Fact, ...] = (
         (445, *_r(447, 450)),
         {FLAT: _planes("ooo"), VARY: _planes("ooo"), VARY_UP: _planes("ooo")},
         "every plane changes: pass set-up (accumulator, scale or output format)",
-    ),
-    # Word 433 reads tap 1 of the line's phase (a halfword load, imm 1).
-    Fact(
-        FieldValue("imm", 0),
-        (433,),
-        {FLAT: _planes("l..", TAP1_FROM_C0)},
-        "tap 1 takes tap 0's coefficient: the immediate is the tap index (one run)",
-    ),
-    Fact(
-        FieldValue("op", 0x10),
-        (433,),
-        {FLAT: _planes("l..", TAP1_FROM_C0_HIGH)},
-        "tap 1 takes c0's bits 8..15, zero-extended: a byte load at the same address (one run)",
-    ),
-    Fact(
-        set_fields(op=0x10, imm=0),
-        (433,),
-        {FLAT: _planes("l..", TapLoad(1, 0, "B"))},
-        "tap 1 takes c0's bits 0..7, zero-extended: op 0x10's immediate counts bytes (one run)",
-    ),
-    Fact(
-        FieldValue("op", 0x0E),
-        (433,),
-        {FLAT: _planes("l..", TapLoad(1, 1, "b"))},
-        "tap 1 takes c0's bits 8..15, sign-extended (one run on each of two tap sets); a byte "
-        "load at the same address and byte 1 of the datum the word before delivers are not "
-        "separated",
-    ),
-    Fact(
-        set_fields(op=0x0E, imm=0),
-        (433,),
-        {FLAT: _planes("l..", TapLoad(1, 0, "b"))},
-        "tap 1 takes c0's bits 0..7, sign-extended (one run); load or datum select as at imm 1",
-    ),
-    Fact(
-        FieldValue("op", 0x14),
-        (433,),
-        {FLAT: _planes("...")},
-        "op 0x14 at imm 1 reads the stock coefficient c1: a halfword at imm halfwords (one run)",
-    ),
-    Fact(
-        set_fields(op=0x14, imm=0),
-        (433,),
-        {FLAT: _planes("l..", TAP1_FROM_C0)},
-        "tap 1 takes c0, as 0x16 at imm 0 (one run)",
-    ),
-    Fact(
-        FieldValue("op", 0x1A),
-        (433,),
-        {FLAT: _planes("l..", TapLoad(1, 4, "<h"))},
-        "tap 1 takes c2: the word at imm 1 words, its low 16 bits reaching the coefficient "
-        "(one run)",
     ),
     # Words 439..442's S2 operands run on the loop-head window, but for these two values.
     *(
