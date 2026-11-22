@@ -242,8 +242,8 @@ LAST_H = 16
 """The height at which plane 0's last line at b = 1 reads its rows H and H + 1 both as the
 linear row H, plane 1's line 0, in the window's jobs (the stock program, own taps, and window
 edits) on x-varying sources [verified: both rows at 256 = 1.0, every column; the cause, a
-buffer layout or a pointer step past the last row, inferred]. Flat sources and the rows'
-edits never showed it."""
+buffer layout or a pointer step past the last row, inferred]. Not measured on flat sources
+or under the rows' edits."""
 
 
 Acc = Mapping[int, Sequence[Term]] | Unknown
