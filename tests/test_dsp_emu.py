@@ -345,6 +345,39 @@ def test_the_spare_channel_is_not_needed():
         assert bytes(dst.data) == bytes(range(256)) * 4
 
 
+def moved(**at: int) -> Program:
+    """The stock copy with word `to` holding stock word `src`, given as w<to>=src."""
+    words = list(stock().words)
+    for to, src in at.items():
+        words[int(to[1:])] = stock().words[src]
+    return Program(tuple(words))
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        moved(w73=74, w74=73),
+        moved(w74=75, w75=76, w76=74),
+        moved(w74=75, w75=76, w76=77, w77=78),
+    ],
+    ids=["count-later", "two-earlier", "three-earlier"],
+)
+def test_roles_follow_moved_counted_transfers(program: Program):
+    result, dst = copy(Boot(), program, bytes(range(256)) * 4)
+    assert result.status is Status.OK and bytes(dst.data) == bytes(range(256)) * 4
+    assert result.taint is Confidence.HYPOTHESIS  # off their stock indices
+
+
+def test_a_counted_transfer_before_the_return_stalls_the_job():
+    result, dst = copy(Boot(), moved(w77=78, w78=77), bytes(range(256)) * 4)
+    assert result.status is Status.TIMEOUT and bytes(dst.data) == b"\xa5" * LEN
+    assert any("counted transfer at word 78" in why for why in result.why)
+    # A holding word at 77 without the counted one leaves 77's slot unset instead.
+    result, _ = copy(Boot(), moved(w77=78), bytes(range(256)) * 4)
+    assert result.status is Status.TIMEOUT
+    assert any("unset stream slot" in why for why in result.why)
+
+
 def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
     boot = boot or Boot()
     boot.put(SRC, bytes(range(256)) * (length // 256), "src")

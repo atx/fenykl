@@ -234,6 +234,8 @@ class Channel:
     roles: tuple[Role, ...]
     needed: bool = True
     """False when idling its transfers has no effect: its unset slots do not stall the job."""
+    stalls: tuple[int, ...] = ()
+    """Word indices at which a counted transfer of the channel stalls the job (inferred)."""
 
 
 class Mode(Enum):
@@ -242,22 +244,26 @@ class Mode(Enum):
 
 
 class Sequencer:
-    """Hidden state that gives the register transfers their roles [hypothesis].
+    """Hidden state that gives the register transfers their roles.
 
     POINTER (the default): each channel has a slot pointer; a transfer with bit 308 clear takes
-    the slot at the pointer and advances it, so roles follow the order of the transfers. Idling
-    a transfer leaves its channel's last slot unset, and an unset slot stalls the job; this
-    reproduces the camera: every idled counted transfer of 42..49 and 66..77 times out, while
-    74 and 78 (bit 308 set) have no effect. The pointers start at slot 0 with every job.
+    the slot at the pointer and advances it, so roles follow the order of the transfers
+    (inferred). Idling a transfer leaves its channel's last slot unset, and an unset slot stalls
+    the job; this reproduces the camera: every idled counted transfer of 42..49 and 66..77 times
+    out, while 74 and 78 (bit 308 set) have no effect. The pointers start at slot 0 with every
+    job. On the camera the roles followed the counted transfers when they moved: the count one
+    index later (exchanged with the holding word 74, also at another register), and 75..77 one
+    index earlier as a block, with a holding word after them (one run each, verified on the
+    camera). A counted transfer at a channel's `stalls` index stalls the job: program 16's word
+    78, the word before the return 79, where exchanging 77 with the holding word 78 times the job
+    out (verified on the camera, two boots). Why 78 fails is open: too late for the stream, a
+    restriction of that index alone, or a window per role that lets a role move one index early
+    and the count one late but not 77 one late (hypothesis, not separated by the runs so far). A
+    transfer off its stock index is still assigned at hypothesis taint.
 
-    POSITION (the alternative considered): the role is the stock word index's role; a transfer
-    at another index has none. Both give the same results on the field sweeps and idled words.
-    Moved transfers fit neither alone [verified on the camera, one run each]: exchanging the
-    count transfer 73 with the holding word 74 moves the count role to 74, with 74's register
-    (POINTER; POSITION predicts a timeout); exchanging 77 with the holding word 78 times the job
-    out (POSITION; POINTER predicts a copy). POINTER, which misses only the 77 / 78 exchange,
-    stays the default because nothing decides against it, at hypothesis taint wherever a
-    transfer is off its stock index.
+    POSITION (the comparison mode): the role is the stock word index's role; a transfer at
+    another index has none. Both give the same results on the field sweeps and idled words; the
+    moved transfers above refute it for the count and for 75..77.
     """
 
     def __init__(self, mode: Mode = Mode.POINTER) -> None:
@@ -265,11 +271,13 @@ class Sequencer:
 
     def assign(
         self, channels: Sequence[Channel], transfers: dict[str, list[Transfer]]
-    ) -> tuple[list[tuple[Role, Transfer, Confidence]], list[str]]:
-        """(role, transfer, assignment taint) per filled slot, and the unset slots.
+    ) -> tuple[list[tuple[Role, Transfer, Confidence]], list[tuple[str, Confidence]]]:
+        """(role, transfer, assignment taint) per filled slot, and why the job stalls, with
+        the confidence: each unset slot (hypothesis) and each counted transfer at a stall index
+        (inferred).
 
-        A channel with an unset slot stalls the job, so its filled slots are left out: what the
-        shifted transfers would do there is not modelled.
+        A channel that stalls has its filled slots left out: what the shifted transfers would do
+        there is not modelled.
         """
         by_name = {c.name: c for c in channels}
         by_channel: dict[str, list[tuple[Role, Transfer, Confidence]]] = {
@@ -298,20 +306,25 @@ class Sequencer:
                         )
                     name, role = stock[t.index]
                     by_channel[name].append((role, t, V))
-        filled, unset = [], []
+        filled, stalls = [], []
         for c in channels:
             have = {role.word for role, _, _ in by_channel[c.name]}
-            missing = [
-                f"{c.name} slot {k} ({role.name}, stock word {role.word})"
+            why = [
+                (f"unset {c.name} slot {k} ({role.name}, stock word {role.word})", H)
                 for k, role in enumerate(c.roles)
                 if role.word not in have
             ]
             if not c.needed:
-                missing = []
-            unset += missing
-            if not missing:
+                why = []
+            why += [
+                (f"{c.name}: a counted transfer at word {t.index}", I)
+                for t in transfers.get(c.name, [])
+                if t.index in c.stalls
+            ]
+            stalls += why
+            if not why:
                 filled += by_channel[c.name]
-        return filled, unset
+        return filled, stalls
 
 
 def classify(

@@ -320,6 +320,7 @@ _CHANNELS: tuple[Channel, ...] = (
                 _table(Outcome.NO_STORE, ok=(2,)),
             ),
         ),
+        stalls=(78,),
     ),
 )
 """Channels cmd 0xF does not need (`needed=False`): idling their transfers has no effect, with
@@ -410,8 +411,8 @@ def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
         "transfer",
         "register transfer: hands the register named in 115..119 to the stream "
         "configuration; its role (address, offset, count, enable, format) is given by the "
-        "sequencer, by transfer order or by word index [hypothesis: the camera runs fit neither "
-        "rule alone, see `Sequencer`]",
+        "sequencer, by transfer order [inferred, strong for moves within 73..77; a counted "
+        "transfer at 78 stalls the job, see `Sequencer`]",
         {f.id: f.idle for f in FIELDS if f.id not in TRANSFER_OPERANDS},
         TRANSFER_OPERANDS,
     )
@@ -655,10 +656,10 @@ class Copy16Model:
                 at = f"r{value}" if f.kind is Kind.REG else f"{f.label}={value:#x}"
                 why = f"{part.token} at {at}: {o.value}"
                 plan.outcomes.append((o, why, part.at(length)))
-        filled, unset = sequencer.assign(self.channels, trace.channels)
-        for slot in unset:
+        filled, stalls = sequencer.assign(self.channels, trace.channels)
+        for why, conf in stalls:
             plan.outcomes.append(
-                (Outcome.TIMEOUT, f"unset {slot}: the stream never completes", H)
+                (Outcome.TIMEOUT, f"{why}: the stream never completes", conf)
             )
         roles = []
         for role, t, assigned in filled:

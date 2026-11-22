@@ -248,7 +248,10 @@ and f308_309) or an undecoded stock word of program 16 matched by its value. The
 these classes, the transfers' register contexts and their reference values from the stock
 program it is built from, so no stock word is part of the code. At the end the sequencer gives
 the transfers their roles (the stock word 66 loads, 67 addresses, 68 offsets, 73 counts, 76
-offsets the store, 47 formats it, ...) and the job resolves into a status, one load and one store.
+offsets the store, 47 formats it, ...) in the order of the transfers (`Sequencer`, inferred: the
+roles followed counted transfers moved by one index on the camera, and a counted transfer at
+word 78, the word before the return, stalls the job) and the job resolves into a status, one
+load and one store.
 An op 7 off the stock halt ends the job where the stepping core reaches it (`Copy16Model._halt`):
 before the stream words 58..79 with status 0 and dst not written; after the stream started it
 raises `UnknownSemantics`.

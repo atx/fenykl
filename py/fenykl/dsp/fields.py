@@ -315,10 +315,11 @@ XFER_BASIS = (
 )
 XFER = (
     "0 in the register-transfer words; their role (load address, offset, count, enable, store "
-    "format) is given by the sequencer, not by an opcode; whether by transfer order or by word "
-    "index is open: exchanging program 16's count transfer 73 with the holding word 74 moved the "
-    "count role to 74, while exchanging 77 with the holding word 78 stalled the job (verified on "
-    "the camera, one run each), so neither rule fits both (hypothesis)"
+    "format) is given by the sequencer, not by an opcode, in the order of the transfers "
+    "(inferred): in program 16 the count role followed its transfer from 73 to 74 and the roles "
+    "of 75..77 followed theirs one index earlier, while a counted transfer at 78, the word "
+    "before the return 79, stalls the job (verified on the camera, one run each, the stall on "
+    "two boots); why 78 fails is open (hypothesis)"
 )
 
 
