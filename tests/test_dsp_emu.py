@@ -640,22 +640,19 @@ def two_stand_ins(*at: int) -> Program:
     return Program(tuple(words))
 
 
-def test_only_the_stand_ins_that_overfill_a_channel_yield():
-    """Of the stand-ins for 42 and 43 only the last yields: 3, 42 and 44 fill the channel in
-    that order and the copy runs."""
-    program = two_stand_ins(42, 43)
+@pytest.mark.parametrize("at", [(42, 43), (43, 44)])
+def test_only_the_stand_ins_that_overfill_a_channel_yield(at: tuple[int, int]):
+    """Of the two stand-ins only the first yields: 3, the other stand-in and the remaining
+    real transfer fill the channel, the later stand-in in its stock role, and the copy runs."""
+    program = two_stand_ins(*at)
     with pytest.raises(UnknownSemantics):
         run(program)
     result, boot = run(program, strict=False)
     assert result.status is Status.OK and result.stored is not None
-    assert [i for i, _ in result.ignored] == [42, 43]
+    assert [i for i, _ in result.ignored] == list(at)
     dst = boot.read(DST, LEN)
     assert bytes(dst.data) == bytes(range(256)) * (LEN // 256)
     assert dst.weakest() is Confidence.HYPOTHESIS
-    # Stand-ins for 43 and 44: 44 yields, and the stock word 43 in slot 2 (word 44's role)
-    # has no semantics at its register there; no slot stays unset.
-    with pytest.raises(UnknownSemantics, match="word 43: .*completion"):
-        run(two_stand_ins(43, 44), strict=False)
 
 
 def test_registers_persist_but_a_fact_without_a_value_forgets():

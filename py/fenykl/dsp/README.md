@@ -293,7 +293,8 @@ values. `Executor(boot, model, strict=False)` runs the stock word at such a word
 ignores every field that differs from it and taints every byte the job loads or stores
 "hypothesis"; stock transfers run so yield to the transfers of their channel that the job
 carries, where they would overfill it (a transfer moved onto another word's index): as many as
-overfill it, the last ones in program order (the slot pointer's overflow).
+overfill it, the first ones in program order, so that a transfer moved before them leaves
+the later ones in their stock roles.
 
 ### The resampler
 
