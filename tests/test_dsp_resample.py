@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from conftest import stock_image
+from test_dsp_exec import rne
 
 from fenykl.dsp import commands, resample_edits
 from fenykl.dsp.emu import Boot, Executor, Status
@@ -249,6 +250,25 @@ def test_the_prediction_meets_the_own_tap_vectors(name: str):
                 continue
             assert None not in confidence[a:z], (k, a)
             assert bytes(got.dst.data[a:z]) == base64.b64decode(seg["data"]), (k, a)
+
+
+def test_own_phases_line_15_is_the_last_line_reading():
+    """The vector's dst segments leave plane 0's line 15 out (no camera bytes for it); its
+    source is x-varying and line 15 (a = 15, phase 0) reads lines 14 and 15 and, for lines 16
+    and 17, plane 1's line 0, through R64(R4(S)) clamped, at the law's tier."""
+    job = json.loads((VECTORS / "own-phases.json").read_text())["jobs"][0]
+    src = base64.b64decode(job["src"]["data"])
+    table = [tuple(e) for e in job["table"]]
+    assert table[15] == (15 << 16, 0x10000)
+    kernel = job["taps"]["phases"][0]
+    got = predict(model(), taps_of(job["taps"]), src, table, job["w"])
+    want = []
+    for x in range(64):
+        lines = [src[14 * 64 + x], src[15 * 64 + x]] + [src[16 * 64 + x]] * 2
+        s = sum(t * v for t, v in zip(kernel, lines))
+        want.append(max(0, min(255, rne(rne(s, 4), 64))))
+    assert list(got.dst.data[15 * 64 : 16 * 64]) == want
+    assert got.confidence()[15 * 64 : 16 * 64] == [Confidence.INFERRED] * 64
 
 
 def test_taps_outside_those_that_ran_are_a_hypothesis():
