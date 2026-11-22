@@ -249,11 +249,6 @@ COEFFICIENT_SELECT = (3, 2, 4, 5)
 selects its own tap's coefficient."""
 
 
-def tap_from(tap: int, value: int) -> TapLoad:
-    """Word 439 + `tap` with f88_91 = `value`: the tap takes the coefficient it selects."""
-    return TapLoad(tap, 2 * COEFFICIENT_SELECT.index(value), "<h")
-
-
 HELD_433 = set_fields(
     f147_150=15,
     f151_154=15,
@@ -513,27 +508,14 @@ FACTS: tuple[Fact, ...] = (
         "tap 1 takes c2: the word at imm 1 words, its low 16 bits reaching the coefficient "
         "(one run)",
     ),
-    # Words 439..442's S2 operands: f88_91 taps 0..3's coefficients, f57_60 at 439 tap 0's
-    # source line.
+    # Words 439..442's S2 operands (their coefficient selects run on the loop-head window):
+    # f57_60 at 439 tap 0's source line.
     Fact(
         FieldValue("f57_60", 4),
         (439,),
         {FLAT: _planes("l..", Operands((1, 1, 2, 3)))},
         "tap 0 multiplies tap 1's line, with its own coefficient (5, the stock value, is its "
         "own line)",
-    ),
-    *(
-        Fact(
-            FieldValue("f88_91", v),
-            (439 + t,),
-            {FLAT: _planes("l..", tap_from(t, v))},
-            f"tap {t} takes c{COEFFICIENT_SELECT.index(v)} (pre-registered, one run each); "
-            f'"tap {t} takes c_j", "tap {t}\'s product under tap j\'s coefficient" and "tap j '
-            f"multiplies tap {t}'s line too\" give the same bytes",
-        )
-        for t in range(4)
-        for v in COEFFICIENT_SELECT
-        if v != COEFFICIENT_SELECT[t]
     ),
     *(
         Fact(

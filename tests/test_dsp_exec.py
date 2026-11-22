@@ -22,14 +22,9 @@ from fenykl.dsp.exec import (
 from fenykl.dsp.fields import FIELDS, Confidence
 from fenykl.dsp.resample import Resample13Model, predict
 from fenykl.dsp.resample_edits import (
-    FACTS,
     FLAT,
     VARY,
     FieldValue,
-    FieldValues,
-    Operands,
-    Stock,
-    TapLoad,
     set_fields,
 )
 from fenykl.dsp.resample_window import WINDOW
@@ -94,44 +89,48 @@ def test_the_stock_window_gives_the_laws_kernels_for_every_phase_and_plane():
     assert {t.confidence for terms in acc.values() for t in terms} == {I}
 
 
-def reproduced_rows():
-    """The measured rows of single field edits in the window that give plane 0 a law."""
-    fields = {"op", "imm", "f57_60", "f88_91", "f53_56"}
-    out = []
-    for fact in FACTS:
-        kind = fact.kind
-        values = kind.values if isinstance(kind, FieldValues) else (kind,)
-        if not all(isinstance(v, FieldValue) and v.key in fields for v in values):
-            continue
-        planes = fact.planes.get(FLAT)
-        if planes is None or not isinstance(planes[0], Stock | TapLoad | Operands):
-            continue
-        out += [(i, kind, planes) for i in fact.words]
-    return out
+def s8(b: int) -> int:
+    return b - 256 if b > 127 else b
 
 
-def row_kernel(effect, taps: tuple[int, ...]) -> dict[int, int]:
-    """The row's plane-0 kernel by line offset, as its effect states it."""
-    if isinstance(effect, TapLoad):
-        taps = effect.kernel(taps)
-    if not isinstance(effect, Operands):
-        return law(0, taps, 0)
-    out: Counter[int] = Counter()
-    for k, j in enumerate(effect.ops):
-        out[j - 1] += taps[k]
-    return {dy: w for dy, w in out.items() if w}
+def tap(t: int, f):
+    """Tap t of a phase's taps c replaced by f(c)."""
+    return lambda c: tuple(f(c) if k == t else c[k] for k in range(4))
 
 
-def test_the_window_reproduces_the_rows_of_its_field_edits():
-    rows = reproduced_rows()
-    assert len(rows) == 22
+SELECT = (3, 2, 4, 5)
+"""The f88_91 values selecting c0..c3 (word 439 + k's stock value selects c_k)."""
+FIELD_EDITS = [
+    # Word 433 reads tap 1: the load's width, sign and immediate pick the bytes.
+    (433, FieldValue("imm", 0), tap(1, lambda c: c[0])),
+    (433, FieldValue("op", 0x10), tap(1, lambda c: c[0] >> 8 & 0xFF)),
+    (433, set_fields(op=0x10, imm=0), tap(1, lambda c: c[0] & 0xFF)),
+    (433, FieldValue("op", 0x0E), tap(1, lambda c: s8(c[0] >> 8 & 0xFF))),
+    (433, set_fields(op=0x0E, imm=0), tap(1, lambda c: s8(c[0] & 0xFF))),
+    (433, FieldValue("op", 0x14), lambda c: c),
+    (433, set_fields(op=0x14, imm=0), tap(1, lambda c: c[0])),
+    (433, FieldValue("op", 0x1A), tap(1, lambda c: c[2])),
+    # Word 439's operand 4 is tap 1's line, its f53_56 a don't-care.
+    (439, FieldValue("f57_60", 4), lambda c: (0, c[0] + c[1], c[2], c[3])),
+    (439, FieldValue("f53_56", 1), lambda c: c),
+    *[
+        (439 + t, FieldValue("f88_91", v), tap(t, lambda c, k=k: c[k]))
+        for t in range(4)
+        for k, v in enumerate(SELECT)
+        if k != t
+    ],
+]
+"""The measured single field edits of the window, with the plane-0 taps each gives."""
+
+
+def test_the_window_gives_the_measured_field_edits_laws():
+    assert len(FIELD_EDITS) == 22
     m = model()
-    for at, kind, planes in rows:
+    for at, kind, taps_of in FIELD_EDITS:
         w = run_window(m.anchors, m.program.words, edited(at, kind), FLAT)
         assert isinstance(w, Window) and not isinstance(w.acc, Unknown), (at, kind)
-        assert all(isinstance(e, Stock) for e in planes[1:])
         for p, taps in enumerate(PHASES):
-            assert kernel(w.acc[0], 0, taps, p) == row_kernel(planes[0], taps), (
+            assert kernel(w.acc[0], 0, taps, p) == law(0, taps_of(taps), 0), (
                 at,
                 kind,
                 p,
