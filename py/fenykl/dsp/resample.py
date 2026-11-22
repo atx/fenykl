@@ -274,9 +274,11 @@ class Resample13Model:
         ]
         self.edits = _measured_edits(program, facts)
         self.anchors = window_anchors(program, facts)
-        stock = run_window(self.anchors, program.words, program.words, None)
-        assert isinstance(stock, Window) and not isinstance(stock.acc, Unknown)
-        self.stock: Acc = stock.acc
+        match run_window(self.anchors, program.words, program.words, None):
+            case Window(acc=Unknown(why=why)) | Uncovered(why=why):
+                raise ValueError(f"the stock program's window gives no terms: {why}")
+            case Window(acc=acc):
+                self.stock: Acc = acc
         words = program.words
         self.mover = {(i, k.apply(words[i]).value) for i, k in (SUBSTITUTE_MOVER,)}
         self.keepers = {(i, k.apply(words[i]).value) for i, k in SUBSTITUTE_KEEPERS}
