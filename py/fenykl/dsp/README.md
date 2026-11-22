@@ -254,7 +254,12 @@ word 78, the word before the return, stalls the job) and the job resolves into a
 load and one store.
 An op 7 off the stock halt ends the job where the stepping core reaches it (`Copy16Model._halt`):
 before the stream words 58..79 with status 0 and dst not written; after the stream started it
-raises `UnknownSemantics`.
+raises `UnknownSemantics`. Some timeouts come after the store (`Outcome.STORE_TIMEOUT`: idled
+5, 28 or 79, 45's target moved to the loop's top 50, bit 6 of 65's immediate cleared): dst is
+written, then the job never completes. The guard 45 skips the loop 50..57 in every tested job,
+so the loop's words are known only with the loop skipped: an edit of 28 or 45 together with one
+of 50..57 has the measured outcome of `memcpy._LOOP_ENTRIES` (45 and 53 idled: dst not written,
+status 0) and no semantics otherwise.
 
 Strict mode (the default) raises `UnknownSemantics` for a word that matches no class, naming the
 fields that differ from the nearest class, and for a role at a register without registered
@@ -344,7 +349,7 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
 - **Branches** (`semantics.Branching`): no condition of ops 0..2 is known, so the default
   `Given()` decides none. `Given({index: taken or [per visit]})` takes the caller's decisions;
   `memcpy.copy_branches(len)` gives the copy's two forward branches as the camera runs show them
-  (27 not taken, 45 taken). `RaTest` is the alternative to test: brf, br and the loop end on
+  (27 not taken, 45 taken, also at odd src, dst and len). `RaTest` is the alternative to test: brf, br and the loop end on
   ra == 0 or ra != 0, in the op slot's registers or the transfer registers, the loop end
   testing ra as it is or after decrementing it (all hypotheses). On the copy's transfer
   registers at job start it reproduces the camera's path, but nothing shows those to be the
@@ -374,7 +379,10 @@ flow.
 - **A new use of the register value**: a new `semantics.Use`, handled in `Copy16Model._role`.
 - **What a stock word does without it**: its `Part` in `memcpy._PARTS` (`token`, `missing`
   outcome and the fact); a swept field goes in `operand`, by value, with its key in
-  `operand_field` (xreg by default; word 60's f76_79 copies at 0 only).
+  `operand_field` (xreg by default; word 60's f76_79 copies at 0 only); single edits of other
+  fields go in `flips`, by the bits flipped against the stock value (45's target, 65's
+  immediate), so that no stock value is part of the code. A word edited together with another
+  field of the same word has no semantics.
 - **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
   `masks` (the bits of each matched field it fixes, default all), `operands` (fields it reads
   or ignores) and `act`, which records into the job's `Trace`; add it to the model's

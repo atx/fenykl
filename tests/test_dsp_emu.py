@@ -467,6 +467,79 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     assert result.stored is None and result.taint is Confidence.HYPOTHESIS
 
 
+def flipped(at: int, key: str, bits: int, base: Program | None = None) -> Program:
+    """`base` (default the stock copy) with `bits` of field `key` of word `at` flipped."""
+    words = list((base or stock()).words)
+    words[at] = Word.from_fields({key: words[at][key] ^ bits}, base=words[at])
+    return Program(tuple(words))
+
+
+def without(program: Program, *at: int) -> Program:
+    words = list(program.words)
+    for i in at:
+        words[i] = IDLE
+    return Program(tuple(words))
+
+
+RAMP = bytes(range(256)) * 4
+TARGET_50, TARGET_51 = 58 ^ 50, 58 ^ 51  # 45's target 58 moved to the loop's top / one after
+
+
+@pytest.mark.parametrize(
+    "program, stores",
+    [
+        (flipped(45, "imm", TARGET_50), True),
+        (without(flipped(45, "imm", TARGET_50), 53), True),
+        (flipped(45, "imm", TARGET_51), False),
+        (idled(45), False),
+        (idled(28), True),
+        (idled(28, 53), True),
+        (idled(79), True),
+        (flipped(65, "imm", 0x40), True),
+    ],
+    ids=["to-50", "to-50-idle-53", "to-51", "idle-45", "idle-28", "idle-28-53", "idle-79", "imm65"],
+)
+def test_timeouts_with_and_without_the_store(program: Program, stores: bool):
+    result, dst = copy(Boot(), program, RAMP)
+    assert result.status is Status.TIMEOUT
+    assert bytes(dst.data) == (RAMP if stores else b"\xa5" * LEN)
+    assert (result.stored is not None) is stores
+
+
+def test_the_loop_words_need_the_guard_unless_both_are_idle():
+    result, dst = copy(Boot(), idled(45, 53), RAMP)
+    assert result.status is Status.OK and result.stored is None
+    assert bytes(dst.data) == b"\xa5" * LEN
+    assert result.taint is Confidence.INFERRED  # two edits
+    # The loop's words were measured with the loop skipped: other pairs are open.
+    for program in (without(flipped(45, "imm", TARGET_50), 50), idled(45, 56), idled(28, 51)):
+        with pytest.raises(UnknownSemantics, match="measured with the loop skipped"):
+            copy(Boot(), program, RAMP)
+    # With the guard stock they still have no effect.
+    result, dst = copy(Boot(), idled(51, 53), RAMP)
+    assert result.status is Status.OK and bytes(dst.data) == RAMP
+
+
+def test_operand_edits_are_measured_one_field_at_a_time():
+    result, dst = copy(Boot(), flipped(27, "imm", 79 ^ 32), RAMP)  # its own fall-through
+    assert result.status is Status.OK and bytes(dst.data) == RAMP
+    with pytest.raises(UnknownSemantics, match="word 45: no semantics for f15_22"):
+        copy(Boot(), flipped(45, "imm", 0x10), RAMP)
+    with pytest.raises(UnknownSemantics, match="two fields of one word"):
+        copy(Boot(), flipped(45, "xreg", 1, flipped(45, "imm", TARGET_50)), RAMP)
+
+
+def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there():
+    words = list(without(stock(), *range(51, 58)).words)
+    words[50] = stock().words[5]
+    marker = Program(tuple(words))
+    result, dst = copy(Boot(), marker, RAMP)
+    assert result.status is Status.OK and bytes(dst.data) == RAMP
+    result, dst = copy(Boot(), flipped(45, "imm", TARGET_50, marker), RAMP)
+    assert result.status is Status.OK and result.stored is None
+    assert bytes(dst.data) == b"\xa5" * LEN
+
+
 def test_route_nibbles_must_hold_the_stock_values():
     word = Word.from_fields({"f76_79": 1}, base=stock().words[73])
     program = Program((*stock().words[:73], word, *stock().words[74:]))

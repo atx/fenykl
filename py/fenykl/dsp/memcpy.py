@@ -20,8 +20,13 @@ them to the boot (`apply`):
     load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
     store:  dst[i] = format(buffer)[i + o76] for i in [0, n73); dst[n73, len) not written
 
-A job that does not complete stores nothing. A placement out of range, a register of unknown
-value or a load that may or may not have run makes its bytes UNKNOWN.
+A job that does not complete stores nothing, unless its outcome says that dst is written first
+(`Outcome.STORE_TIMEOUT`). A placement out of range, a register of unknown value or a load that
+may or may not have run makes its bytes UNKNOWN.
+
+The guard 45 skips the loop 50..57 in every job tested, so what is known of 50..57 alone was seen
+with the loop skipped: an edit of 28 or 45 together with one of 50..57 has the outcome of
+`_LOOP_ENTRIES`, where measured, and no semantics otherwise.
 
 Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the job with status
 -5; these register values lost the link too: word 44 at 0, 1, 4, 8, 10; word 47 at 16, 18, 19,
@@ -75,6 +80,7 @@ ZERO_FILL = 0x4000
 
 _STORE_PATH = "idled, dst is not written (prefill intact)"
 _COMPLETION = "idled, the job times out"
+_END = "idled, dst is written (a copy), then the job times out"
 _NONE = "no effect seen when idled, also with len, dst and src changing between jobs"
 
 
@@ -84,7 +90,7 @@ def _store_path(token: str = "store path") -> Part:
 
 _PARTS: dict[int, Part] = {
     0: _store_path("prologue store path"),
-    5: Part("prologue completion", Outcome.TIMEOUT, _COMPLETION),
+    5: Part("prologue completion", Outcome.STORE_TIMEOUT, _END),
     15: Part(
         "store count and data",
         Outcome.ZERO_FILL,
@@ -94,19 +100,30 @@ _PARTS: dict[int, Part] = {
     27: Part(
         "load address (hypothesis)",
         Outcome.DATA_UNKNOWN,
-        "idled, dst gets foreign data",
+        "idled, dst gets foreign data; its target moved from 79 to 32, its own fall-through, "
+        "copies: the target bits have no other effect",
+        flips={"imm": {79 ^ 32: Outcome.OK}},
     ),
-    28: Part("completion", Outcome.TIMEOUT, _COMPLETION),
+    28: Part(
+        "completion",
+        Outcome.STORE_TIMEOUT,
+        f"{_END}, also with 53 idled; whether it is needed for the end in its own right or "
+        "makes 45 fall through into 50..57 is open",
+    ),
     31: Part(
         "store-side buffer address (hypothesis)",
         Outcome.DATA_UNKNOWN,
         "idled, dst gets data of an older job, 16 bytes off",
     ),
     45: Part(
-        "completion",
+        "guard",
         Outcome.TIMEOUT,
-        f"{_COMPLETION}; its register field is don't-care (copies at all 31 values)",
+        f"{_COMPLETION} with dst not written; its register field is don't-care (copies at all "
+        "31 values); its target moved from 58 to 50, the loop's top: dst is written, then the "
+        "job times out (the target is live, so 45 is taken in a copy); moved to 51: the job "
+        "times out with dst not written (whether 51 is reached as an index is open)",
         operand={r: Outcome.OK for r in range(31)},
+        flips={"imm": {58 ^ 50: Outcome.STORE_TIMEOUT, 58 ^ 51: Outcome.TIMEOUT}},
     ),
     58: Part(
         "fixed-content load address",
@@ -129,14 +146,21 @@ _PARTS: dict[int, Part] = {
     62: Part("link keeper", Outcome.HAZARD, "idled, the camera lost its link"),
     63: Part("stream completion", Outcome.TIMEOUT, _COMPLETION),
     64: Part("wedge guard", Outcome.HAZARD, "idled, the job wedged (status -5)"),
-    65: Part("stream completion", Outcome.TIMEOUT, _COMPLETION),
+    65: Part(
+        "stream completion",
+        Outcome.TIMEOUT,
+        f"{_COMPLETION}; bit 6 of its immediate cleared: dst is written, then the job times "
+        "out, so its constant is consumed on the end side, not by the store's count, data or "
+        "address (inferred)",
+        flips={"imm": {0x40: Outcome.STORE_TIMEOUT}},
+    ),
     69: Part(
         "store side",
         Outcome.NO_STORE,
         f"{_STORE_PATH}; its register: dst not written at r0 and r4, a copy at the others",
         operand={r: Outcome.NO_STORE if r in (0, 4) else Outcome.OK for r in range(31)},
     ),
-    79: Part("stream end", Outcome.TIMEOUT, _COMPLETION),
+    79: Part("stream end", Outcome.STORE_TIMEOUT, _END),
     **{i: _store_path() for i in (12, 13, 14, 16, 17, 21, 22, 23, 24, *range(32, 42))},
     **{
         i: Part("no effect seen", Outcome.OK, _NONE)
@@ -471,8 +495,9 @@ def _opaque_classes(
         part = _PARTS[at[0]]
         if any(_PARTS[i] != part for i in at):
             raise ValueError(f"stock words {at} are equal but have different parts")
-        operands = (
-            frozenset({lookup(part.operand_field).id}) if part.operand else frozenset()
+        operands = frozenset(
+            lookup(k).id
+            for k in (*((part.operand_field,) if part.operand else ()), *part.flips)
         )
         word = words[at[0]]
         match = {f.id: f.get(word.value) for f in FIELDS if f.id not in operands}
@@ -497,6 +522,40 @@ STREAM = range(58, 80)
 """The stream words: a halt before them stores nothing."""
 HALTS_SEEN = (11,)
 """The indices stock word 5, the halt, ran at on the camera besides its own (in place of 11)."""
+
+GUARD = 45
+LOOP = range(50, 58)
+"""The loop the guard 45 skips in every tested job."""
+LOOP_GROUP = frozenset({28, GUARD, *LOOP})
+
+
+def _edit(stock: Word, word: Word) -> str:
+    """An edit of a stock word: "idle", or the fields it flips against the stock value."""
+    if word == IDLE:
+        return "idle"
+    return ", ".join(
+        f"{f.label} ^ {f.get(word.value) ^ f.get(stock.value):#x}"
+        for f in FIELDS
+        if f.get(word.value) != f.get(stock.value)
+    )
+
+
+_LOOP_ENTRIES: dict[frozenset[tuple[int, str]], tuple[Outcome, str]] = {
+    frozenset({(GUARD, "idle"), (53, "idle")}): (
+        Outcome.NO_STORE,
+        "45 and 53 idled: the job ends through the done path, so idle 45's timeout needs 53",
+    ),
+    frozenset({(GUARD, f"imm ^ {58 ^ 50:#x}"), (53, "idle")}): (
+        Outcome.STORE_TIMEOUT,
+        "45's target moved to 50 and 53 idled: as with 53 stock, so 53 does not cause that "
+        "timeout",
+    ),
+    frozenset({(28, "idle"), (53, "idle")}): (
+        Outcome.STORE_TIMEOUT,
+        "28 and 53 idled: as idle 28 alone, so its timeout does not need 53",
+    ),
+}
+"""The measured edits of 28 or 45 with words of the loop (verified on the camera at 1 KiB)."""
 
 # -- resolution
 
@@ -570,13 +629,10 @@ class Copy16Model:
         """Resolve the job and apply its one load and one store to the boot."""
         boot = emu.boot
         view = start_copy(boot)
-        stock = self.program.words
-        words = job.program.words
-        edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
         halted = self._halt(job, trace, view)
         if halted is not None:
             return halted
-        plan = self.resolve(trace, boot.regs, view, emu.sequencer, edits)
+        plan = self.resolve(trace, boot.regs, view, emu.sequencer, job.program.words)
         return self._apply(boot, plan, trace, view)
 
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
@@ -626,16 +682,23 @@ class Copy16Model:
         regs: RegisterFile,
         view: JobView,
         sequencer: Sequencer,
-        edits: int,
+        words: tuple[Word, ...],
     ) -> Plan:
-        """The plan of a job of `edits` words that differ from the stock program."""
+        """The plan of a job of the program `words`."""
         length = view.length
         assert length is not None
+        stock = self.program.words
+        edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
         # The defaults are what every stock copy shows: load at src, offsets 0, count len, bytes.
         plan = Plan(count=length, cap=min(trace.taint, I if edits >= 2 else V))
+        entry = self._loop_entry(words, length)
+        if entry is not None:
+            plan.outcomes.append(entry)
         for c in self.opaque:
             part = c.part
             assert part is not None
+            if entry is not None and c.positions & LOOP_GROUP:
+                continue
             if trace.parts[c] < len(c.positions):
                 at = ", ".join(str(i) for i in sorted(c.positions))
                 plan.outcomes.append(
@@ -645,17 +708,12 @@ class Copy16Model:
                         part.at(length),
                     )
                 )
-            elif part.operand is not None:
-                index, value = trace.operands[c]
-                f = lookup(part.operand_field)
-                o = part.operand.get(value)
-                if o is None:
-                    raise UnknownSemantics(index, c.name, [(f, value)])
-                if value == f.get(self.program.words[min(c.positions)].value):
-                    continue
-                at = f"r{value}" if f.kind is Kind.REG else f"{f.label}={value:#x}"
-                why = f"{part.token} at {at}: {o.value}"
-                plan.outcomes.append((o, why, part.at(length)))
+            elif c.operands:
+                edit = self._operand_edit(c, *trace.operands[c])
+                if edit is not None:
+                    o, at = edit
+                    why = f"{part.token} at {at}: {o.value}"
+                    plan.outcomes.append((o, why, part.at(length)))
         filled, stalls = sequencer.assign(self.channels, trace.channels)
         for why, conf in stalls:
             plan.outcomes.append(
@@ -670,6 +728,56 @@ class Copy16Model:
         plan.load_taint = min([base, *(c for r, c in roles if r.load)])
         plan.store_taint = min([base, *(c for r, c in roles if not r.load)])
         return plan
+
+    def _operand_edit(
+        self, c: OpaqueClass, index: int, values: dict[str, int]
+    ) -> tuple[Outcome, str] | None:
+        """The outcome of the edit of an operand field of `c`'s word and how it reads; None
+        for the stock word. Edits of two fields of one word are not measured."""
+        part = c.part
+        assert part is not None
+        stock = self.program.words[min(c.positions)]
+        changed = [(lookup(k), v) for k, v in values.items() if v != stock[k]]
+        if not changed:
+            return None
+        if len(changed) > 1:
+            raise UnknownSemantics(index, c.name, changed, "edits of two fields of one word")
+        f, value = changed[0]
+        if part.operand is not None and f is lookup(part.operand_field):
+            o = part.operand.get(value)
+            at = f"r{value}" if f.kind is Kind.REG else f"{f.label}={value:#x}"
+        else:
+            flipped = value ^ stock[f.id]
+            flips = {lookup(k).id: t for k, t in part.flips.items()}
+            o = flips.get(f.id, {}).get(flipped)
+            at = f"{f.label} ^ {flipped:#x}"
+        if o is None:
+            raise UnknownSemantics(index, c.name, [(f, value)])
+        return o, at
+
+    def _loop_entry(
+        self, words: tuple[Word, ...], length: int
+    ) -> tuple[Outcome, str, Confidence] | None:
+        """The outcome of an edit of 28 or 45 together with one of the loop 50..57, from
+        `_LOOP_ENTRIES`; None without such a pair. Unmeasured pairs have no semantics."""
+        stock = self.program.words
+        edits = frozenset(
+            (i, _edit(stock[i], words[i])) for i in LOOP_GROUP if words[i] != stock[i]
+        )
+        at = {i for i, _ in edits}
+        if not (at & {28, GUARD} and at & set(LOOP)):
+            return None
+        entry = _LOOP_ENTRIES.get(edits)
+        if entry is None:
+            listed = ", ".join(f"{i} {e}" for i, e in sorted(edits))
+            raise UnknownSemantics(
+                min(at & set(LOOP)),
+                "loop",
+                [],
+                f"{listed}: the loop's words were measured with the loop skipped only",
+            )
+        o, fact = entry
+        return o, f"{fact}: {o.value}", V if length == KIB else I
 
     def _role(
         self,
@@ -744,7 +852,7 @@ class Copy16Model:
     def _apply(self, boot: Boot, plan: Plan, trace: Trace, view: JobView) -> JobResult:
         if plan.has(Outcome.HAZARD):
             status = Status.HAZARD
-        elif plan.has(Outcome.TIMEOUT):
+        elif plan.has(Outcome.TIMEOUT) or plan.has(Outcome.STORE_TIMEOUT):
             status = Status.TIMEOUT
         else:
             status = Status.OK
@@ -757,7 +865,11 @@ class Copy16Model:
         length = view.length
         assert length is not None and view.dst is not None
         loads = not plan.has(Outcome.NO_LOAD)
-        stores = status is Status.OK and not plan.has(Outcome.NO_STORE)
+        stores = not (
+            status is Status.HAZARD
+            or plan.has(Outcome.TIMEOUT)
+            or plan.has(Outcome.NO_STORE)
+        )
         result.taint = plan.result_taint(stores)
         unknown_data = plan.has(Outcome.DATA_UNKNOWN)
 
@@ -874,15 +986,20 @@ class Copy16Model:
 SEEN_LENGTHS = range(0x200, 0x4001, 0x10)
 """The lengths within the range and alignment of the copies run on the camera: 0.5..16 KiB in
 whole 16-byte lines."""
+ODD_LENGTHS = (0x40F,)
+"""Odd lengths whose copies ran on the camera, with the halt test at 50 (`copy_branches`)."""
 
 
 def copy_branches(length: int) -> Given:
     """The decisions of the copy's two forward branches as the camera runs show them, for the
     stepping core: 27 (to the return 79) not taken (inferred: the store words after it act) and
     45 (over the loop 50..57) taken (inferred, strong: idling its delay slots 46..49 times the
-    job out, idling 50..57 has no effect). The loop's back-edge 53 is never reached; inferred
-    at the lengths the runs had, a hypothesis at others."""
-    seen = length in SEEN_LENGTHS
+    job out, idling 50..57 has no effect, moving its target to 50 changes the copy into a
+    timeout, and a halt at 50 with 51..57 idled has no effect in an aligned copy and with each
+    of src, dst, len, src + len, dst + len and src - dst odd, so no low-bit test of a job value
+    decides it). The loop's back-edge 53 is never reached; inferred at the lengths the runs had,
+    a hypothesis at others."""
+    seen = length in SEEN_LENGTHS or length in ODD_LENGTHS
     return Given(
         {27: False, 45: True},
         Confidence.INFERRED if seen else Confidence.HYPOTHESIS,

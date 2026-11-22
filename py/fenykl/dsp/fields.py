@@ -327,7 +327,9 @@ CONDITION = (
     "the condition is no field of its own; the candidate is the register ra (f123_127), a loop "
     "or condition operand that a guard and its loop end share in about half the guarded loops, "
     "named in its own loop body less often than chance: a count held or decremented outside "
-    "the op slot (hypothesis)"
+    "the op slot (hypothesis); program 16's guard 45 is taken in every job tested on the "
+    "camera, also with each of src, dst, len and their sums and difference odd, so it tests no "
+    "low bits of a job value (inferred)"
 )
 
 

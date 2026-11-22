@@ -50,6 +50,7 @@ class Outcome(Enum):
     NO_STORE = "dst not written"
     NO_LOAD = "no load: the store emits the held buffer"
     TIMEOUT = "the job never completes (timeout-abort)"
+    STORE_TIMEOUT = "dst is written, then the job never completes (timeout-abort)"
     HAZARD = "the job wedges or the camera loses its link"
     ZERO_FILL = "the store writes 0x4000 zero bytes from dst"
     DATA_UNKNOWN = "dst is written with data the model does not know"
@@ -74,8 +75,8 @@ class Trace:
 
     parts: Counter["OpaqueClass"] = field(default_factory=Counter)
     """How often each opaque class ran."""
-    operands: dict["OpaqueClass", tuple[int, int]] = field(default_factory=dict)
-    """(index, register) of the opaque classes whose register field matters."""
+    operands: dict["OpaqueClass", tuple[int, dict[str, int]]] = field(default_factory=dict)
+    """(index, {field id: value}) of the opaque classes with operand fields."""
     channels: dict[str, list[Transfer]] = field(default_factory=dict)
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
     classes: Confidence = V
@@ -156,6 +157,9 @@ class Part:
     operand: Mapping[int, Outcome] | None = None
     """Outcomes by the value of its field `operand_field`, where that field was swept."""
     operand_field: str = "xreg"
+    flips: Mapping[str, Mapping[int, Outcome]] = field(default_factory=dict)
+    """Outcomes of edits of one field, by field and by the bits flipped against the stock
+    value (so that no stock value is part of the code)."""
     seen: tuple[int, ...] = (KIB,)
     """The job lengths at which `missing` and `operand` were seen on the camera [verified];
     at other lengths they are inferred."""
@@ -178,8 +182,8 @@ class OpaqueClass(WordClass):
 
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         trace.parts[self] += 1
-        if self.part is not None and self.part.operand is not None:
-            trace.operands[self] = (index, word[self.part.operand_field])
+        if self.operands:
+            trace.operands[self] = (index, {k: word[k] for k in self.operands})
 
 
 # -- roles of the register transfers
@@ -709,7 +713,9 @@ class RaTest:
     No reading is supported: in program 16 the transfer registers' job-start values fit both
     branches seen on the camera (27 names r7 = len / 2, not taken; 45 names r5, about 0, taken),
     but nothing shows the op slot's ra and xreg to name one file, and 27 tests r7 before any
-    word of the slot names it. A guard and its loop end name the same register in about half
+    word of the slot names it. 45 is taken in every tested job, also with each of src, dst, len,
+    src + len, dst + len and src - dst odd, so a test of ra = a job value & 0xf (the AND at 28)
+    is refuted under either polarity (inferred); what 45 tests is open. A guard and its loop end name the same register in about half
     the guarded loops, so the register is a shared loop operand of open meaning."""
 
     brf: Test = Test.ZERO
