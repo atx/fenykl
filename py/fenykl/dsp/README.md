@@ -333,15 +333,23 @@ job class (`Probe`: a flat source or not, the step b, W; H 16) what each plane d
 tap's line, nothing or a bounded value; `Phase`: a chroma plane sampled at another horizontal
 phase; `TapLoad`: plane 0 with one tap's coefficient loaded from another place in the phase's
 taps, as 433's imm 0 (c1 := c0) and op 0x10 (c1 := c0's bits 8..15, zero-extended) do;
-`Substitute`: plane 0 with tap 0's product replaced by the boot's tap-0 substitute, below).
+`Substitute`: plane 0 with a tap's product replaced by the boot's tap-0 substitute, below).
 `FieldValues` sets several fields of one word at once (`set_fields(op=0x10, imm=0)`). The model
 matches an edited word by its value, so the classes hold the measured edited words too.
 
-Word 439's S2 operands select tap 0's term: f57_60 its source line (5, stock, its own; 4 tap 1's)
-and f88_91 its coefficient (3, stock, 2, 4, 5: c0, c1, c2, c3, pre-registered and verified at
-that word; 0 and 1 select none of the four and are unknown). Idling 439's grid A (or the S2
-triple) replaces tap 0's product by a per-lane value added without the multiply, the **tap-0
-substitute** (`Boot.substitute`). Its value at boot varies per boot, so it is unknown on a fresh
+Words 439..442 hold one S2 operand set per tap, 0..3. f88_91 selects the tap's coefficient
+with one map in all four words (3, 2, 4, 5: c0, c1, c2, c3; each word's stock value is its own
+tap's; pre-registered and verified at each word, `tap_from`). At 439, f57_60 selects tap 0's
+source line (5, stock, its own; 4 tap 1's), and f88_91's 0 and 1 select none of the four:
+post hoc tap 0's coefficient reads as p and 16 - p (p the phase in 16ths, the chroma planes'
+weights; inferred, not modelled), so their plane 0 is unknown. At 440, f57_60 = 5 does not
+give tap 1 tap 0's line (pre-registered, refuted) and its plane 0 is unknown; that the value
+names an operand register written by grid B is a hypothesis the model does not use. Idling
+439's grid A (or the S2 triple) replaces tap 0's product by a per-lane value added without the
+multiply, the **tap-0 substitute** (`Boot.substitute`). Idling 440's or 441's grid A drops tap
+1's or tap 2's product; it ran only on boots where the substitute was 0, so the model gives
+the drop there and unknown bytes elsewhere (`Substitute(tap)`). Idling 442's grid A changes plane
+0 along x, and its plane 0 is unknown. Its value at boot varies per boot, so it is unknown on a fresh
 boot and every such prediction there is unknown. A grid B idle of word 433 on a flat source at
 W 64 sets it from its boot value to 0 (`SUBSTITUTE_MOVER`, inferred: three boots), where the idle
 gives the drop of tap 0's product; the edits seen to keep it (`SUBSTITUTE_KEEPERS`) and stock jobs

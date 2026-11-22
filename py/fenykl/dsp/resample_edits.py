@@ -194,10 +194,14 @@ class TapLoad:
 
 @dataclass(frozen=True)
 class Substitute:
-    """Plane 0 at b = 1 with tap 0's product replaced by the boot's tap-0 substitute
-    (`Boot.substitute`), a per-lane value added without the multiply: the drop of tap 0's
-    product (`Operands((None, 1, 2, 3))`) where the substitute is known to be 0, unknown where it
-    is not known."""
+    """Plane 0 at b = 1 with tap `tap`'s product replaced by the boot's tap-0 substitute
+    (`Boot.substitute`), a per-lane value added without the multiply: the drop of the tap's
+    product (`Operands((None, 1, 2, 3))` for tap 0) where the substitute is known to be 0,
+    unknown where it is not known. Taps 1 and 2 (words 440 and 441) ran only on boots where it
+    was 0 and gave their drop there; that they read the same state is a hypothesis, so
+    elsewhere their bytes are unknown too."""
+
+    tap: int = 0
 
 
 Effect = Stock | Changed | Operands | Phase | TapLoad | Substitute
@@ -234,15 +238,22 @@ def _r(lo: int, hi: int) -> tuple[int, ...]:
 B1 = {FLAT: _planes("..."), VARY: _planes("...")}
 """No byte changed at b = 1, W 64, on flat and x-varying sources."""
 
-DROP0 = Operands((None, 1, 2, 3))
 TAP1_LOW = Operands((Operand.UNKNOWN, Operand.LOW, Operand.UNKNOWN, Operand.UNKNOWN))
 PHASE14 = Phase(14)
 TAP1_FROM_C0 = TapLoad(1, 0, "<h")
 TAP1_FROM_C0_HIGH = TapLoad(1, 1, "B")
 """Tap 1 := c0's bits 8..15, zero-extended: the byte at offset 1 of the phase's taps."""
 SUBSTITUTE = Substitute()
-TAP0_FROM = {v: TapLoad(0, 2 * k, "<h") for k, v in enumerate((3, 2, 4, 5))}
-"""Word 439's f88_91 value -> tap 0 := c_k (3, 2, 4, 5: c0..c3)."""
+COEFFICIENT_SELECT = (3, 2, 4, 5)
+"""Word 439 + k's f88_91 value selecting c0..c3 for tap k (k 0..3); each word's stock value
+selects its own tap's coefficient."""
+
+
+def tap_from(tap: int, value: int) -> TapLoad:
+    """Word 439 + `tap` with f88_91 = `value`: the tap takes the coefficient it selects."""
+    return TapLoad(tap, 2 * COEFFICIENT_SELECT.index(value), "<h")
+
+
 HELD_433 = set_fields(
     f147_150=15,
     f151_154=15,
@@ -502,7 +513,8 @@ FACTS: tuple[Fact, ...] = (
         "tap 1 takes c2: the word at imm 1 words, its low 16 bits reaching the coefficient "
         "(one run)",
     ),
-    # Word 439's S2 operands: f57_60 tap 0's source line, f88_91 tap 0's coefficient.
+    # Words 439..442's S2 operands: f88_91 taps 0..3's coefficients, f57_60 at 439 tap 0's
+    # source line.
     Fact(
         FieldValue("f57_60", 4),
         (439,),
@@ -513,25 +525,33 @@ FACTS: tuple[Fact, ...] = (
     *(
         Fact(
             FieldValue("f88_91", v),
-            (439,),
-            {FLAT: _planes("l..", TAP0_FROM[v])},
-            f"tap 0 takes c{TAP0_FROM[v].offset // 2} (pre-registered, one run each); "
-            f'"tap 0 takes c_k", "tap 0\'s product under tap k\'s coefficient" and "tap k '
-            "multiplies tap 0's line too\" give the same bytes",
+            (439 + t,),
+            {FLAT: _planes("l..", tap_from(t, v))},
+            f"tap {t} takes c{COEFFICIENT_SELECT.index(v)} (pre-registered, one run each); "
+            f'"tap {t} takes c_j", "tap {t}\'s product under tap j\'s coefficient" and "tap j '
+            f"multiplies tap {t}'s line too\" give the same bytes",
         )
-        for v in (2, 4, 5)
+        for t in range(4)
+        for v in COEFFICIENT_SELECT
+        if v != COEFFICIENT_SELECT[t]
+    ),
+    *(
+        Fact(
+            FieldValue("f88_91", v),
+            (439,),
+            {FLAT: _planes("o..")},
+            "no coefficient select fits; post hoc, tap 0's coefficient reads as "
+            f"{weight}, p the phase in 16ths (inferred, one run: the chroma planes' linear "
+            "weights), not modelled",
+        )
+        for v, weight in ((0, "p"), (1, "16 - p"))
     ),
     Fact(
-        FieldValue("f88_91", 0),
-        (439,),
+        FieldValue("f57_60", 5),
+        (440,),
         {FLAT: _planes("o..")},
-        "no coefficient select fits; what 0 selects is open",
-    ),
-    Fact(
-        FieldValue("f88_91", 1),
-        (439,),
-        {FLAT: _planes("o..")},
-        "no coefficient select fits; what 1 selects is open",
+        "tap 1 does not read tap 0's line (pre-registered, refuted); what it reads is not "
+        "modelled",
     ),
     Fact(FieldValue("f53_56", 1), (439,), {FLAT: _planes("...")}, "a don't-care here"),
     Fact(S2_439, (439,), {FLAT: _planes("l..", SUBSTITUTE)}, "as grid A idle"),
@@ -610,6 +630,22 @@ FACTS: tuple[Fact, ...] = (
         "tap 0's product is replaced by the boot's tap-0 substitute",
     ),
     Fact(GRID_B_ONLY, (439,), {FLAT: _planes(".o.")}, "the second plane's path"),
+    *(
+        Fact(
+            GRID_A_ONLY,
+            (439 + t,),
+            {FLAT: _planes("l..", Substitute(t))},
+            f"tap {t}'s product is dropped where the boot's tap-0 substitute is 0, the only "
+            "state it ran in",
+        )
+        for t in (1, 2)
+    ),
+    Fact(
+        GRID_A_ONLY,
+        (442,),
+        {FLAT: _planes("o..")},
+        "plane 0 changes on every line, varying along x",
+    ),
     # Single grid nibbles, at their idle values.
     Fact(FieldValue("f198_201", 15), (433,), {FLAT: _planes("o..")}, "as grid B idle"),
     Fact(FieldValue("f202_205", 15), (433,), {FLAT: _planes("...")}, ""),
@@ -651,6 +687,14 @@ SUBSTITUTE_KEEPERS: tuple[tuple[int, Edit], ...] = (
         )
     ),
     *((439, FieldValue("f88_91", v)) for v in (0, 1, 2, 4, 5)),
+    *((439 + t, GRID_A_ONLY) for t in (1, 2, 3)),
+    (440, FieldValue("f57_60", 5)),
+    *(
+        (439 + t, FieldValue("f88_91", v))
+        for t in (1, 2, 3)
+        for v in COEFFICIENT_SELECT
+        if v != COEFFICIENT_SELECT[t]
+    ),
 )
 """The edits seen to leave a substitute of 0 in place, on a flat source at W 64 (verified: a
 grid A idle of word 439 after them still gave the drop of tap 0's product). Every other edited

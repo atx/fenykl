@@ -862,14 +862,22 @@ UNIT_FACTS = {
     "f57_60": "program 13 word 439, S2's head active: tap 0's source line, 5 (stock) its own "
     f"line, 4 tap 1's ({_CAMERA}); idled with f53_56 and f88_91 it equals idling all of grid A "
     "there, which replaces tap 0's product by a per-boot value (`Boot.substitute`); at word 437, "
-    "4 -> 1 changes tap 0's line at the top edge only",
-    "f88_91": "program 13 word 439, S2's head active: tap 0's coefficient, 3 (stock), 2, 4, 5 "
-    f"selecting c0, c1, c2, c3 ({_CAMERA}, pre-registered); 0 and 1 select none of them, what "
-    "they select is open; that tap 0 takes c_k and that its product moves under tap k's "
-    "coefficient give the same bytes; at word 437, 4 -> 5 changes tap 0's line at the edge "
-    "lines only",
+    "4 -> 1 changes tap 0's line at the top edge only; at word 440 (stock 4), 5 does not give "
+    f"tap 1 tap 0's line ({_CAMERA}, pre-registered), so a value does not name one tap's line "
+    "in every word; post hoc, there tap 1 reads the second source plane's line int(a) + 1 "
+    "(inferred, one run, not modelled); hypothesis: the value names an operand register that "
+    "grid B's f163_166 and f167_170 write from the next word on, the register their value "
+    "names",
+    "f88_91": "program 13 words 439..442, S2's head active: taps 0..3's coefficients, one map "
+    "for the four words, 3, 2, 4, 5 selecting c0, c1, c2, c3, each word's stock value its own "
+    f"tap's ({_CAMERA}, pre-registered); that tap k takes c_j and that its product moves under "
+    "tap j's coefficient give the same bytes; at word 439, 0 and 1 select none of the four: "
+    "post hoc, tap 0's coefficient reads as p and 16 - p, p the phase in 16ths, the chroma "
+    "planes' two linear weights (inferred, one run each, not modelled); at word 437, 4 -> 5 "
+    "changes tap 0's line at the edge lines only",
     "f292_295": "its operands f57_60 and f88_91 select program 13 word 439's tap 0 line and "
-    f"coefficient ({_CAMERA}; the head itself not idled)",
+    "coefficient, and f88_91 at words 440..442 taps 1..3's coefficients "
+    f"({_CAMERA}; the head itself not idled)",
     "f69_71": f"program 13 word 439, X0 active: idling it has no effect ({_CAMERA}), so an "
     "active owner is not sufficient for an effect",
     **{

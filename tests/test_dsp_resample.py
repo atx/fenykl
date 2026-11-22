@@ -347,15 +347,16 @@ def run_on(boot: Boot, taps: Taps, edits=()) -> bytes:
     )
 
 
+def plane0(dst: bytes) -> bytes | None:
+    """Plane 0 of a `run_on` footprint, None if a byte of it is unknown."""
+    n = footprint(16)
+    return None if any(dst[n : n + 1024]) else dst[:1024]
+
+
 def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
     taps = Taps.of(PHASES)
-    n = footprint(16)
     drop = run_on(Boot(), Taps.of([(0, *p[1:]) for p in PHASES]))
     stock = run_on(Boot(), taps)
-
-    def plane0(dst: bytes) -> bytes | None:
-        return None if any(dst[n : n + 1024]) else dst[:1024]
-
     boot = Boot()
     # Not known on a fresh boot; 433's grid B idle sets it to 0, which drops tap 0's product.
     assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
@@ -383,6 +384,28 @@ def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
         model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
     )
     assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
+
+
+def test_words_440_and_441s_grid_a_idle_drop_their_tap_where_the_substitute_is_0():
+    # Phase 0 (line 15) has no tap 2: it would read below the source.
+    phases = [(0, 256, 0, 0)] + [(-8, 200, 64, 0)] * 15
+    taps = Taps.of(phases)
+    stock = run_on(Boot(), taps)
+    for tap in (1, 2):
+        drop = run_on(Boot(), Taps.of([(*p[:tap], 0, *p[tap + 1 :]) for p in phases]))
+        boot = Boot()
+        assert plane0(run_on(boot, taps, [(439 + tap, GRID_A_ONLY)])) is None
+        run_on(boot, taps, [(433, GRID_B_ONLY)])
+        got = run_on(boot, taps, [(439 + tap, GRID_A_ONLY)])
+        assert plane0(got) == plane0(drop) != plane0(stock)
+    # 442's is no drop; it keeps the substitute, as do the coefficient selects at 440..442.
+    drop0 = run_on(Boot(), Taps.of([(0, *p[1:]) for p in phases]))
+    boot = Boot()
+    run_on(boot, taps, [(433, GRID_B_ONLY)])
+    assert plane0(run_on(boot, taps, [(442, GRID_A_ONLY)])) is None
+    for at, v in ((440, 3), (441, 2), (442, 4)):
+        run_on(boot, taps, [(at, FieldValue("f88_91", v))])
+    assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) == plane0(drop0)
 
 
 def test_a_measured_edit_runs_its_law_on_the_class_it_ran_on():
@@ -502,26 +525,39 @@ def test_an_edited_tap_read_loads_another_coefficient():
         assert got.dst.data[1024:] == stock.dst.data[1024:]
 
 
-def test_word_439s_s2_operands_select_tap_0s_line_and_coefficient():
+def test_words_439_to_442s_s2_operands_select_their_taps_line_and_coefficient():
     phases = [(-8, 264, 0, 0)] * 16
     phases[3] = (0, 0, 0, 256)
     phases[5] = (40, 100, 70, 46)
     taps = Taps.of(phases)
     stock = predict(model(), taps, FLAT, TABLE13)
-    # f57_60 4: tap 0 multiplies tap 1's line with its own coefficient.
+    # f57_60 4 at 439: tap 0 multiplies tap 1's line with its own coefficient.
     merged = Taps.of([(0, c0 + c1, c2, c3) for c0, c1, c2, c3 in phases])
-    # f88_91 2, 4, 5: tap 0 takes c1, c2, c3.
-    loads = [(FieldValue("f57_60", 4), merged)] + [
-        (FieldValue("f88_91", v), Taps.of([(p[k], *p[1:]) for p in phases]))
-        for v, k in ((2, 1), (4, 2), (5, 3))
+    # f88_91 3, 2, 4, 5 at word 439 + t: tap t takes c0, c1, c2, c3.
+    loads = [(439, FieldValue("f57_60", 4), merged)] + [
+        (
+            439 + t,
+            FieldValue("f88_91", v),
+            Taps.of([(*p[:t], p[k], *p[t + 1 :]) for p in phases]),
+        )
+        for t in range(4)
+        for k, v in enumerate((3, 2, 4, 5))
+        if k != t
     ]
-    for edit, want_taps in loads:
-        got = predict(model(), taps, FLAT, TABLE13, edits=[(439, edit)])
+    for at, edit, want_taps in loads:
+        got = predict(model(), taps, FLAT, TABLE13, edits=[(at, edit)])
         want = predict(model(), want_taps, FLAT, TABLE13)
-        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], edit
+        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], (at, edit)
         assert got.dst.known[:1024] == want.dst.known[:1024]
         assert got.dst.data[:1024] == want.dst.data[:1024] != stock.dst.data[:1024]
         assert got.dst.data[1024:] == stock.dst.data[1024:]
-    # 0 and 1 select no coefficient: plane 0 is unknown.
-    got = predict(model(), taps, FLAT, TABLE13, edits=[(439, FieldValue("f88_91", 0))])
-    assert not any(got.dst.known[:1024])
+    # 0 and 1 at 439 select no coefficient, and 57 = 5 at 440 no line: plane 0 is unknown.
+    for at, edit in (
+        (439, FieldValue("f88_91", 0)),
+        (439, FieldValue("f88_91", 1)),
+        (440, FieldValue("f57_60", 5)),
+    ):
+        got = predict(model(), taps, FLAT, TABLE13, edits=[(at, edit)])
+        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], (at, edit)
+        assert not any(got.dst.known[:1024])
+        assert got.dst.data[1024:] == stock.dst.data[1024:]

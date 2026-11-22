@@ -69,7 +69,6 @@ from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
 from .fields import FIELDS, Confidence
 from .program import Program, stock_programs
 from .resample_edits import (
-    DROP0,
     FACTS,
     FLAT,
     STOCK,
@@ -574,15 +573,15 @@ STOCK_PLANES: Planes = (STOCK, STOCK, STOCK)
 
 
 def _substituted(boot: Boot, effect: Effect) -> Effect:
-    """`effect` with the boot's tap-0 substitute resolved: the drop of tap 0's product where it
-    is 0, unknown bytes where it is not known."""
+    """`effect` with the boot's tap-0 substitute resolved: the drop of the tap's product where
+    it is 0, unknown bytes where it is not known."""
     if not isinstance(effect, Substitute):
         return effect
     if boot.substitute == 0:
-        return DROP0
+        return Operands(tuple(None if k == effect.tap else k for k in range(4)))
     return Changed(
-        "tap 0's product replaced by the boot's tap-0 substitute, which is not known on this "
-        "boot: its boot value varies per boot"
+        f"tap {effect.tap}'s product replaced by the boot's tap-0 substitute, which is not "
+        "known on this boot: its boot value varies per boot"
     )
 
 
