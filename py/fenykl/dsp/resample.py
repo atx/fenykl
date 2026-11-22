@@ -493,19 +493,8 @@ class Resample13Model:
             return p[0]
 
         if b == ONE:
-            if a & 0xFFF:
-                taint = H  # a phase between the 16 never ran
-            p = (a & 0xFFFF) >> 12
-            kernel = taps[p] if c == 0 else chroma(p)
-            if isinstance(effect, TapLoad):
-                kernel = effect.kernel(kernel)
-            taint = min(Confidence(taint), _gain_taint(kernel, ran))
-            if isinstance(effect, Phase):
-                return _phase(get, base, kernel, x, effect.q), taint
-            if isinstance(effect, Operands):
-                return _operands(effect, kernel, lambda j: get(base - 1 + j, x)), taint
-            s = sum(t * get(base - 1 + k, x) for k, t in enumerate(kernel) if t)
-            return out_of(s), taint
+            v, t = self._vertical(get, taps, c, a, x, effect, ran)
+            return v, min(Confidence(taint), t)
         assert isinstance(effect, Stock), "edit laws hold at b = 1 only"
         if a & 0xFFFF:
             raise _Miss("frac")
@@ -535,6 +524,32 @@ class Resample13Model:
             # R4 fits the runs that vary down the lines; the designed runs did not test it.
             s += t * rhe(v, 4)
         return max(0, min(255, rhe(s, 1 << 14))), Confidence(taint)
+
+    def _vertical(
+        self,
+        get: Callable[[int, int], int],
+        taps: tuple[tuple[int, ...], ...] | None,
+        c: int,
+        a: int,
+        x: int,
+        effect: Effect,
+        ran: tuple[int, int],
+    ) -> tuple[int, Confidence]:
+        """The b = 1 byte of plane c at pixel x for source line a (16.16) and the taint of its
+        kernel; `get(y, x)` reads a source pixel and raises _Miss where the law gives none."""
+        taint = H if a & 0xFFF else V  # a phase between the 16 never ran
+        base = a >> 16
+        p = (a & 0xFFFF) >> 12
+        kernel = taps[p] if c == 0 else chroma(p)
+        if isinstance(effect, TapLoad):
+            kernel = effect.kernel(kernel)
+        taint = min(taint, _gain_taint(kernel, ran))
+        if isinstance(effect, Phase):
+            return _phase(get, base, kernel, x, effect.q), taint
+        if isinstance(effect, Operands):
+            return _operands(effect, kernel, lambda j: get(base - 1 + j, x)), taint
+        s = sum(t * get(base - 1 + k, x) for k, t in enumerate(kernel) if t)
+        return out_of(s), taint
 
     def _hold(
         self,

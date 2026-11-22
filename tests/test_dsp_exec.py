@@ -1,0 +1,271 @@
+from collections import Counter
+from functools import cache
+
+import pytest
+from conftest import stock_image
+
+from fenykl.dsp.exec import (
+    Coverage,
+    Row,
+    TapBytes,
+    Term,
+    Unknown,
+    UnknownTerm,
+    Window,
+    accumulate,
+    chroma_out,
+    cover,
+    readers,
+    run_window,
+    weight,
+)
+from fenykl.dsp.fields import FIELDS, Confidence
+from fenykl.dsp.resample import Resample13Model, predict
+from fenykl.dsp.resample_edits import (
+    FACTS,
+    FLAT,
+    VARY,
+    FieldValue,
+    FieldValues,
+    Operands,
+    Stock,
+    TapLoad,
+    set_fields,
+)
+from fenykl.dsp.resample_window import WINDOW, WindowModel
+from fenykl.dsp.semantics import UnknownSemantics
+from fenykl.dsp.taps import Taps
+
+I = Confidence.INFERRED
+
+
+@cache
+def window_model() -> WindowModel:
+    return WindowModel.from_image(stock_image("em10ii"))
+
+
+@cache
+def model() -> Resample13Model:
+    return Resample13Model.from_image(stock_image("em10ii"))
+
+
+def rne(n: int, d: int) -> int:
+    """n / d to nearest, ties to even (the law's R_d)."""
+    q, r = divmod(n, d)
+    return q + (2 * r > d or (2 * r == d and q % 2 == 1))
+
+
+def law(c: int, taps: tuple[int, ...], p: int) -> dict[int, int]:
+    """The law's kernel of plane c at phase p by line offset: plane 0 the phase's taps on lines
+    a - 1 .. a + 2, the chroma planes (0, 256 - 16p, 16p, 0)."""
+    kernel = taps if c == 0 else (0, 256 - 16 * p, 16 * p, 0)
+    return {k - 1: t for k, t in enumerate(kernel) if t}
+
+
+def kernel(terms, c: int, taps: tuple[int, ...], p: int) -> dict[int, int]:
+    """The window's kernel of plane c by line offset, at the law's scale (the chroma stage
+    divides by 16, the law's by 256)."""
+    out: Counter[int] = Counter()
+    for t in terms:
+        assert t.operand.plane == c
+        out[t.operand.dy] += weight(t.weight, taps, p) * (1 if c == 0 else 16)
+    return {dy: w for dy, w in out.items() if w}
+
+
+PHASES = [
+    (-8, 264, 0, 0),
+    (0, 0, 0, 256),
+    (40, 100, 70, 46),
+    (-300, 900, -200, -144),
+    (0x7FFF, -0x8000, 1, -1),
+    (17, -3, 255, 0),
+    *[(p, 2 * p, -3 * p, 256 - p) for p in range(10)],
+]
+
+
+def edited(at: int, kind) -> list:
+    words = list(window_model().program.words)
+    words[at] = kind.apply(words[at])
+    return words
+
+
+def test_the_stock_window_gives_the_laws_kernels_for_every_phase_and_plane():
+    m = window_model()
+    acc = m.stock.acc
+    assert sorted(acc) == [0, 1, 2]
+    for p, taps in enumerate(PHASES):
+        for c in range(3):
+            assert kernel(acc[c], c, taps, p) == law(c, taps, p), (p, c)
+    assert {t.confidence for terms in acc.values() for t in terms} == {I}
+
+
+def reproduced_rows():
+    """The measured rows of single field edits in the window that give plane 0 a law."""
+    fields = {"op", "imm", "f57_60", "f88_91", "f53_56"}
+    out = []
+    for fact in FACTS:
+        kind = fact.kind
+        values = kind.values if isinstance(kind, FieldValues) else (kind,)
+        if not all(isinstance(v, FieldValue) and v.key in fields for v in values):
+            continue
+        planes = fact.planes.get(FLAT)
+        if planes is None or not isinstance(planes[0], Stock | TapLoad | Operands):
+            continue
+        out += [(i, kind, planes) for i in fact.words]
+    return out
+
+
+def row_kernel(effect, taps: tuple[int, ...]) -> dict[int, int]:
+    """The row's plane-0 kernel by line offset, as its effect states it."""
+    if isinstance(effect, TapLoad):
+        taps = effect.kernel(taps)
+    if not isinstance(effect, Operands):
+        return law(0, taps, 0)
+    out: Counter[int] = Counter()
+    for k, j in enumerate(effect.ops):
+        out[j - 1] += taps[k]
+    return {dy: w for dy, w in out.items() if w}
+
+
+def test_the_window_reproduces_the_rows_of_its_field_edits():
+    rows = reproduced_rows()
+    assert len(rows) == 22
+    m = window_model()
+    for at, kind, planes in rows:
+        w = run_window(m.anchors, m.program.words, edited(at, kind), FLAT)
+        assert isinstance(w, Window) and not isinstance(w.acc, Unknown), (at, kind)
+        assert all(isinstance(e, Stock) for e in planes[1:])
+        for p, taps in enumerate(PHASES):
+            assert kernel(w.acc[0], 0, taps, p) == row_kernel(planes[0], taps), (
+                at,
+                kind,
+                p,
+            )
+            for c in (1, 2):
+                assert kernel(w.acc[c], c, taps, p) == law(c, taps, p)
+        # Off the job classes the edits ran on, the window gives no terms.
+        assert not isinstance(
+            run_window(m.anchors, m.program.words, edited(at, kind), VARY), Window
+        )
+
+
+SOURCE = bytes((11 * (k // 64) + 5) & 0xFF for k in range(3 * 64 * 16))
+TABLE = [(i << 16 | (i % 16) << 12, 0x10000) for i in range(16)]
+
+
+@pytest.mark.parametrize("taps", [PHASES[:16], [(-8, 264, 0, 0)] * 16])
+def test_the_window_model_predicts_as_the_model_on_the_stock_program_and_its_rows(taps):
+    taps = Taps.of(taps)
+    jobs = [[]] + [[(at, kind)] for at, kind, _ in reproduced_rows()]
+    computed = window_model().computed
+    for edits in jobs:
+        old = predict(model(), taps, SOURCE, TABLE, edits=edits)
+        new = predict(window_model(), taps, SOURCE, TABLE, edits=edits)
+        assert new.dst.data == old.dst.data, edits
+        assert new.dst.known == old.dst.known
+        assert new.dst.taint == old.dst.taint
+        assert new.unknown() == old.unknown()
+        assert new.result.edits == old.result.edits
+    assert window_model().computed == computed + len(jobs)
+
+
+def test_coverage_census_of_the_stock_window():
+    """Per stock window word: the fields with a semantic, don't-cares and anchored ones."""
+    m = window_model()
+    words = m.program.words
+    census = {}
+    for i in WINDOW:
+        c = Counter(
+            x.coverage for x in cover(m.anchors, words[i], words[i], i, None, FIELDS)
+        )
+        assert Coverage.UNKNOWN not in c
+        census[i] = c[Coverage.SEMANTIC], c[Coverage.DONT_CARE], c[Coverage.ANCHORED]
+    assert census == {
+        430: (4, 33, 53),
+        431: (4, 33, 53),
+        432: (4, 33, 53),
+        433: (5, 31, 54),
+        434: (6, 31, 53),
+        435: (6, 31, 53),
+        436: (2, 31, 57),
+        437: (3, 27, 60),
+        438: (3, 26, 61),
+        439: (4, 29, 57),
+        440: (4, 28, 58),
+        441: (4, 28, 58),
+        442: (3, 25, 62),
+        443: (3, 27, 60),
+        444: (3, 21, 66),
+        445: (3, 27, 60),
+        446: (0, 24, 66),
+        447: (3, 24, 63),
+    }
+
+
+def test_def_use_census_of_the_stock_program():
+    m = window_model()
+    reads = readers(m.anchors, m.program.words)
+    inside = {item: [i for i in at if i in WINDOW] for item, at in reads.items()}
+    # The window's words that read state without a semantic: the two head-8 words.
+    assert {k: v for k, v in inside.items() if v} == {
+        ("R", 4): [437],
+        ("C", 4): [437],
+        ("R", 1): [438],
+        ("C", 5): [438],
+    }
+    # The unlocated elements (R2's writes at 436 and 437) and the loads off the tap base (C4
+    # and C5's writes at 433 and 434) reach no term: every term is a coefficient x a pixel.
+    terms = [t for terms in m.stock.acc.values() for t in terms]
+    assert all(
+        isinstance(t.operand, Row) and not isinstance(t.weight, Unknown) for t in terms
+    )
+
+
+def test_an_edited_value_that_reaches_a_word_without_semantics_makes_the_window_unknown():
+    m = window_model()
+    words = m.program.words
+    # Word 434's port writes R7 instead of R4: R4 still holds no value at 437's head-8 read.
+    w = run_window(m.anchors, words, edited(434, FieldValue("f163_166", 7)), FLAT)
+    assert isinstance(w, Window) and isinstance(w.acc, Unknown)
+    assert "R4 reaches word 437" in w.acc.why
+    # An off-cell load at 433 leaves C2 edited after the window, where other words read it.
+    w = run_window(m.anchors, words, edited(433, FieldValue("imm", 2)), FLAT)
+    assert isinstance(w, Window) and isinstance(w.acc, Unknown)
+    assert "C2 reaches word" in w.acc.why
+    # The measured load at 433 changes C2 too, but its cell's measurement covers the job.
+    w = run_window(m.anchors, words, edited(433, set_fields(op=0x1A)), FLAT)
+    assert isinstance(w, Window) and not isinstance(w.acc, Unknown)
+    assert w.acc[0][1].weight == TapBytes(4, "<h")
+
+
+def test_two_writes_to_one_register_in_one_step_raise():
+    m = window_model()
+    words = edited(438, FieldValue("f167_170", 2))
+    with pytest.raises(UnknownSemantics, match="write conflict on R2"):
+        run_window(m.anchors, m.program.words, words, FLAT)
+
+
+def test_the_chroma_stage_equals_the_law_on_every_weight_and_pixel_pair():
+    for p in range(16):
+        for a in range(256):
+            for b in range(256):
+                t = (16 - p) * a + p * b
+                s = (256 - 16 * p) * a + 16 * p * b
+                assert chroma_out(t) == max(0, min(255, rne(rne(s, 4), 64))), (p, a, b)
+
+
+def test_a_zero_weight_term_reads_no_operand():
+    def read(row: Row) -> int:
+        raise AssertionError(f"read {row}")
+
+    zero = Term(TapBytes(0, "<h"), Row(0, 2), I)
+    unknown = Term(TapBytes(0, "<h"), Unknown("not a pixel"), I)
+    assert accumulate([zero, unknown], (0, 5, 0, 0), 0, read) == (
+        0,
+        Confidence.VERIFIED,
+    )
+    with pytest.raises(UnknownTerm, match="not a pixel"):
+        accumulate([unknown], (3, 5, 0, 0), 0, read)
+    lines = {0: 10, 1: 20}
+    terms = [Term(TapBytes(2 * k, "<h"), Row(0, k), I) for k in range(2)]
+    assert accumulate(terms, (3, -1, 0, 0), 0, lambda r: lines[r.dy]) == (10, I)

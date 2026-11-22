@@ -19,6 +19,8 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace; `Core`: steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
+| `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
+| `resample_window.py` | program 13's loop-head window on the executor: its anchors and measured cells, and `WindowModel`, the model with its b = 1 bytes from the window, run in shadow |
 | `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields`, `fenykl dsp flow` |
@@ -365,6 +367,23 @@ contain it left a non-zero moved value in place. `model.job(..., edits=[(439, GR
 - any other edited word: `UnknownSemantics` (strict), the stock law as a hypothesis (lenient).
 
 An edited job forgets the held lines, and its partial column block is unknown.
+
+#### The loop-head window
+
+`resample_window.WindowModel` is `Resample13Model` with its b = 1 bytes taken from the
+field-level executor (`exec.run_window`) over words 430..447, for the stock program and for the
+measured edits the window covers; the rows still decide which planes a job gives, so it gives
+the same bytes, masks, taints and reasons as the model (a shadow, not the default). The window
+runs once per job on symbolic values: the tap loads put `TapBytes` of the line's phase into the
+load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register,
+the operand write ports put each word's anchored source line (`Row`) into a register, and each
+S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator. Every changed field must
+be a semantic or a don't-care (a held field under an idle owner), else the executor gives no
+terms (`Uncovered`). A stock value at its stock index has the law's tier on every job class;
+an edited value its measured cell's tier, the mechanism's off its cells, and no semantic off
+the job classes it ran on. Off a measured cell, an edited register value that reaches a word
+reading it without a semantic (`exec.readers`; words shown inert at b = 1 aside) makes the
+window unknown.
 
 ### The stepping core
 
