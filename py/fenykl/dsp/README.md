@@ -328,7 +328,8 @@ hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, at b != 1 a ta
 -637..2048 and in an edited program a tap outside -1840..2048 (the taps that ran there; with the
 stock program at b = 1 the whole s16 range ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
 A partial column block is unknown unless the job is an H 16 identity with a unit phase-0 kernel.
-Bytes the law does not give (the bottom and right edges, a fractional a with b != 1, W < 64 with
+Bytes the law does not give (the bottom edge but for the window's last line on x-varying
+sources, the right edge, a fractional a with b != 1, W < 64 with
 b != 1, an odd H above 1) are UNKNOWN with a source that says why. The curated camera vectors are in
 `tests/data/dsp/resample/` (jobs with their taps, table and source image, an edit as {word, kind};
 dst segments).
@@ -393,7 +394,12 @@ S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator. Every chan
 be a semantic or a don't-care (a held field under an idle owner), else the executor gives no
 terms (`Uncovered`). A stock value at its stock index has the law's tier on every job class;
 an edited value its measured cell's tier, the mechanism's off its cells, and no semantic off
-the job classes it ran on. Unless the job edits one semantic at a measured cell, an edited
+the job classes it ran on. The window's classes (`resample_window.CLASSES`) are flat sources and
+x-varying ones at b = 1, W 64: on x-varying sources the cells that ran there are verified (88 =
+1 and 5 at 439, 4 at 440, 3 at 441 and 442; 57 = 4 at 439, 5 at 440..442: every byte of the
+three planes as the per-pixel law gives it, each column reading its own source column), and
+every other cell, don't-care and mechanism holds at most inferred; b != 1 stays off the
+classes. Unless the job edits one semantic at a measured cell, an edited
 register value that reaches a word reading it without a semantic (`exec.readers`; words shown
 inert at b = 1 aside) makes the window unknown.
 
@@ -402,8 +408,13 @@ bytes [verified] (`COMPOSED`): f57_60 with f88_91 in one tap word, 57 = 4 with 8
 and 57 = 5 with 88 = 5 at 441 (the tap takes the selected coefficient times the selected
 operand), and f88_91 at two words, 88 = 2 at 439 with 88 = 3 at 440, 88 = 5 at 441 with 88 = 4
 at 442 and 88 = 3 at 440 with 88 = 2 at 444 (each acts in its accumulation as it does alone).
-Jobs with exactly those (word, field, value) sets keep their fields' tiers; any other job that
-edits two or more semantics is at most inferred.
+Jobs with exactly those (word, field, value) sets keep their fields' tiers on flat sources; any
+other job that edits two or more semantics, and those on x-varying sources, is at most
+inferred.
+
+On x-varying sources at H 16 the window's jobs read plane 0's last line (a = 15) on lines 16
+and 17 both as plane 1's line 0 (`resample.LAST_H`) [verified]; elsewhere a tap on a line past
+H - 1 stays unknown (`resampler bottom`).
 
 ### Stepping
 

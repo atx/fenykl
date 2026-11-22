@@ -1,3 +1,4 @@
+import random
 from collections import Counter
 from functools import cache
 
@@ -28,6 +29,7 @@ from fenykl.dsp.resample_edits import (
     HELD_A_439,
     HELD_B_439,
     VARY,
+    VARY_UP,
     FieldValue,
     set_fields,
 )
@@ -125,6 +127,14 @@ FIELD_EDITS = [
     ],
 ]
 """The measured single field edits of the window, with the plane-0 taps each gives."""
+RAN_VARYING = {
+    (439, FieldValue("f88_91", 5)),
+    (440, FieldValue("f88_91", 4)),
+    (441, FieldValue("f88_91", 3)),
+    (442, FieldValue("f88_91", 3)),
+    (439, FieldValue("f57_60", 4)),
+}
+"""The edits of `FIELD_EDITS` that ran on an x-varying source too."""
 
 
 def test_the_window_gives_the_measured_field_edits_laws():
@@ -141,9 +151,15 @@ def test_the_window_gives_the_measured_field_edits_laws():
             )
             for c in (1, 2):
                 assert kernel(w.acc[c], c, taps, p) == law(c, taps, p)
-        # Off the job classes the edits ran on, the window gives no terms.
+        # On x-varying sources the same terms, verified for the cells that ran there and at
+        # most inferred for the others; at b != 1 the window gives no terms.
+        w = run_window(m.anchors, m.program.words, edited(at, kind), VARY)
+        assert isinstance(w, Window) and not isinstance(w.acc, Unknown), (at, kind)
+        assert kernel(w.acc[0], 0, PHASES[3], 3) == law(0, taps_of(PHASES[3]), 0)
+        tier = V if (at, kind) in RAN_VARYING else I
+        assert {c.confidence for _, c in w.edits} == {tier}, (at, kind)
         assert not isinstance(
-            run_window(m.anchors, m.program.words, edited(at, kind), VARY), Window
+            run_window(m.anchors, m.program.words, edited(at, kind), VARY_UP), Window
         )
 
 
@@ -508,3 +524,116 @@ def test_chroma_word_weight_selects_give_the_wrapping_chroma_law():
                 assert set(got.confidence()[line : line + 64]) == {I}
     # The sums left 0..255: a clamping stage would give other bytes.
     assert wrapped
+
+
+# An x-varying source: every pixel of the three planes' 48 lines drawn from a seeded generator,
+# so the columns differ.
+VARY_SRC = random.Random(17).randbytes(3 * 64 * 16)
+EDGE = [(0, 0, 128, 128), *COMPOSE[1:]]
+"""COMPOSE with phase 0 on lines a + 1 and a + 2: line 15 (phase 0) reads lines 16 and 17."""
+
+
+def per_pixel(taps, at: int | None = None, field: str = "", value: int = 0):
+    """The bytes of a b = 1 job on `VARY_SRC` with `TABLE` (line i < 15 at phase i, line 15 at
+    phase 0) by the per-pixel law, None where it gives none, under the window edit `field` =
+    `value` at word `at`: f88_91 at 439 + t gives tap t the coefficient it selects (3, 2, 4, 5:
+    c0..c3; 1: 16 - p), f57_60 = 4 at 439 reads tap 0 on line a, f57_60 = 5 at 439 + t reads tap
+    t on plane 1's line a + 1. Each output pixel reads its own column. Plane 0 reads line -1 as
+    line 0 and, from line 15, lines 16 and 17 as plane 1's line 0; any other line past 15 has
+    no law."""
+
+    def pixel(c: int, y: int, x: int, base: int) -> int | None:
+        if c == 0 and base == 15 and y in (16, 17):
+            c, y = 1, 0
+        if y > 15:
+            return None
+        return VARY_SRC[(c * 16 + max(0, y)) * 64 + x]
+
+    out: list[int | None] = []
+    for c in range(3):
+        for a, _ in TABLE:
+            base, p = a >> 16, a >> 12 & 15
+            kernel = taps[p] if c == 0 else (0, 256 - 16 * p, 16 * p, 0)
+            terms = [(w, c, base - 1 + k) for k, w in enumerate(kernel)]
+            if c == 0 and field == "f88_91":
+                w = 16 - p if value == 1 else kernel[SELECT.index(value)]
+                terms[at - 439] = (w, 0, terms[at - 439][2])
+            if c == 0 and field == "f57_60":
+                t = at - 439
+                terms[t] = (
+                    (kernel[t], 0, base) if value == 4 else (kernel[t], 1, base + 1)
+                )
+            for x in range(64):
+                reads = [(w, pixel(pc, y, x, base)) for w, pc, y in terms if w]
+                if any(v is None for _, v in reads):
+                    out.append(None)
+                    continue
+                s = sum(w * v for w, v in reads)
+                out.append(max(0, min(255, rne(rne(s, 4), 64))))
+    return out
+
+
+def meets(got, want: list[int | None]) -> None:
+    assert [bool(k) for k in got.dst.known] == [w is not None for w in want]
+    assert [d for d, w in zip(got.dst.data, want) if w is not None] == [
+        w for w in want if w is not None
+    ]
+
+
+RAN_VARYING_CELLS = [
+    (439, "f88_91", 1),
+    (439, "f88_91", 5),
+    (440, "f88_91", 4),
+    (441, "f88_91", 3),
+    (442, "f88_91", 3),
+    (439, "f57_60", 4),
+    (440, "f57_60", 5),
+    (441, "f57_60", 5),
+    (442, "f57_60", 5),
+]
+"""The window edits measured on an x-varying source at b = 1, W 64."""
+
+
+def test_the_stock_program_on_an_x_varying_source_meets_the_per_pixel_law():
+    for taps in (COMPOSE, EDGE):
+        got = predict(model(), Taps.of(taps), VARY_SRC, TABLE)
+        meets(got, per_pixel(taps))
+        assert set(got.confidence()) - {None} == {I}
+    # EDGE's line 15 reads lines 16 and 17, both plane 1's line 0.
+    got = predict(model(), Taps.of(EDGE), VARY_SRC, TABLE)
+    assert bytes(got.dst.data[15 * 64 : 16 * 64]) == VARY_SRC[16 * 64 : 17 * 64]
+
+
+@pytest.mark.parametrize("at, field, value", RAN_VARYING_CELLS)
+def test_the_cells_that_ran_on_an_x_varying_source_are_verified_there(at, field, value):
+    for taps in (COMPOSE, EDGE):
+        edits = [(at, FieldValue(field, value))]
+        got = predict(model(), Taps.of(taps), VARY_SRC, TABLE, edits=edits)
+        meets(got, per_pixel(taps, at, field, value))
+        assert [c for _, c in got.result.edits] == [V]
+        assert set(got.confidence()) - {None} == {I}
+
+
+def test_other_window_edits_hold_on_an_x_varying_source_at_most_inferred():
+    for at, value in ((440, 5), (441, 2), (442, 4), (439, 2)):
+        edits = [(at, FieldValue("f88_91", value))]
+        flat = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+        assert [c for _, c in flat.result.edits] == [V]
+        got = predict(model(), Taps.of(COMPOSE), VARY_SRC, TABLE, edits=edits)
+        meets(got, per_pixel(COMPOSE, at, "f88_91", value))
+        assert [c for _, c in got.result.edits] == [I]
+    # A composition that ran on flat sources only.
+    edits = [(439, set_fields(f57_60=4, f88_91=5))]
+    got = predict(model(), Taps.of(COMPOSE), VARY_SRC, TABLE, edits=edits)
+    assert [c for _, c in got.result.edits] == [I, I]
+    # A held field measured don't-care on flat sources.
+    got = predict(model(), Taps.of(COMPOSE), VARY_SRC, TABLE, edits=[(439, HELD_B_439)])
+    assert {c for _, c in got.result.edits} == {I}
+    meets(got, per_pixel(COMPOSE))
+
+
+def test_window_edits_at_b_not_1_on_an_x_varying_source_stay_unknown():
+    table = [(i << 16, 0x11000) for i in range(16)]
+    edits = [(439, FieldValue("f88_91", 5))]
+    got = predict(model(), Taps.of(COMPOSE), VARY_SRC, table, edits=edits)
+    assert not any(got.dst.known) and got.result.edits == []

@@ -43,8 +43,10 @@ from .resample_edits import (
     HELD_A_439,
     HELD_B_439,
     ONE,
+    VARY,
     Fact,
     Idle,
+    Probe,
     Stock,
 )
 from .word import Word
@@ -137,9 +139,15 @@ SEMANTICS = (
 )
 
 
-def _cells(program: Program) -> dict[tuple[str, int, tuple[int, ...]], Confidence]:
-    """The measured cells, on flat sources at b = 1, W 64: one run each, verified where the
-    outcome was pre-registered, inferred for a post hoc fit."""
+Cells = dict[tuple[Probe, str, int, tuple[int, ...]], Confidence]
+
+
+def _cells(program: Program) -> Cells:
+    """The measured cells per job class, at b = 1, W 64: one run each, verified where the
+    outcome was pre-registered, inferred for a post hoc fit. On flat sources every cell; on
+    x-varying ones (every column different) the pre-registered cells that ran there, every
+    byte of the three planes as the per-pixel law gives it (each column reads its own source
+    column only) [verified]."""
     read = program.words[TAP_READ]
     high, ra = read["f128_132"], read["ra"]
     loads = (
@@ -161,7 +169,16 @@ def _cells(program: Program) -> dict[tuple[str, int, tuple[int, ...]], Confidenc
     cells |= {("f57_60", 439, (4,)): V, ("f57_60", 440, (5,)): I}
     cells |= {("f57_60", i, (5,)): V for i in (441, 442)}
     cells["f53_56", 439, (1,)] = V
-    return cells
+    vary = {
+        ("f88_91", 439, (1,)),
+        ("f88_91", 439, (5,)),
+        ("f88_91", 440, (4,)),
+        ("f88_91", 441, (3,)),
+        ("f88_91", 442, (3,)),
+        ("f57_60", 439, (4,)),
+        *(("f57_60", i, (5,)) for i in (440, 441, 442)),
+    }
+    return {(FLAT, *k): c for k, c in cells.items()} | {(VARY, *k): V for k in vary}
 
 
 def _dont_cares(program: Program) -> dict[int, tuple[frozenset[str], ...]]:
@@ -192,6 +209,11 @@ def inert(facts: Sequence[Fact]) -> frozenset[int]:
     return frozenset(out)
 
 
+CLASSES = {FLAT: None, VARY: (FLAT, I)}
+"""The window's job classes: flat sources, and x-varying ones, where what ran flat only holds
+at most inferred."""
+
+
 def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:
     """Program 13's window anchors; the tap base register is the stock tap read's."""
     return Anchors(
@@ -203,7 +225,7 @@ def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:
         coefficients={0: PhaseWeight(False), 1: PhaseWeight(True)},
         semantics=SEMANTICS,
         cells=_cells(program),
-        classes=frozenset({FLAT}),
+        classes=CLASSES,
         dont_cares=_dont_cares(program),
         inert=inert(facts),
     )
@@ -239,13 +261,14 @@ a chroma term (each acts in its accumulation as it does alone)."""
 
 
 def composition_cap(
-    edits: Sequence[tuple[int, Cover]], words: Sequence[Word]
+    edits: Sequence[tuple[int, Cover]], words: Sequence[Word], probe: Probe | None
 ) -> Confidence:
-    """The cap on the tiers of a job's edited fields of `words`: none for one semantic and for
-    the compositions that ran (`COMPOSED`), inferred for any other composition."""
+    """The cap on the tiers of a job's edited fields of `words` on job class `probe`: none
+    for one semantic and for the compositions that ran (`COMPOSED`, flat sources), inferred
+    for any other composition."""
     if any(c.coverage is not Coverage.SEMANTIC for _, c in edits):
         return V if len(edits) < 2 else I
     if len({(i, c.semantic) for i, c in edits}) < 2:
         return V
     ran = frozenset((i, c.field.id, c.field.get(words[i].value)) for i, c in edits)
-    return V if ran in COMPOSED else I
+    return V if ran in COMPOSED and probe == FLAT else I

@@ -18,6 +18,8 @@ Confidence is scoped: a field at its stock value and stock index has the law's t
 on every job class; an edited value has the tier of its measured cell (verified for a
 pre-registered confirmed cell, inferred for a post hoc fit) on the job classes it ran on, the
 mechanism's tier off its cells, and no semantic (unknown) outside the job classes it ran on.
+A job class can extend another under a cap: its own cells keep their tiers, the other class's
+cells and mechanisms hold there at most at the cap.
 """
 
 import struct
@@ -178,7 +180,8 @@ class Anchors:
     """What a window takes from its stock region: its words, the element each write port
     delivers per (word, port field), the accumulator of each S2 term word, the op-slot register
     that holds the phase's tap base, the coefficient registers at the window's entry, the
-    semantics with their measured cells and the job classes the cells ran on, per word the sets
+    semantics with their measured cells per job class and the job classes (each None, or the
+    class it extends and the cap on that class's tiers there), per word the sets
     of held fields measured don't-care together, and the stock words shown inert in the job's
     class (their reads do not count for the def-use rule); the output stage per
     accumulator."""
@@ -190,8 +193,8 @@ class Anchors:
     phase_base: int
     coefficients: Mapping[int, Value]
     semantics: tuple[FieldSemantic, ...]
-    cells: Mapping[tuple[str, int, tuple[int, ...]], Confidence]
-    classes: frozenset[Probe]
+    cells: Mapping[tuple[Probe, str, int, tuple[int, ...]], Confidence]
+    classes: Mapping[Probe, tuple[Probe, Confidence] | None]
     dont_cares: Mapping[int, tuple[frozenset[str], ...]]
     inert: frozenset[int]
 
@@ -209,13 +212,37 @@ def scoped(
     none."""
     if values == stock:
         return LAW, ""
-    cell = anchors.cells.get((sem.name, index, values))
+    cell = measured(anchors, probe, (sem.name, index, values))
     off = sem.off(index, values)
+    if probe not in anchors.classes:
+        ran = any(
+            (p, sem.name, index, values) in anchors.cells for p in anchors.classes
+        )
+        if not ran and off is None:
+            return None, f"{sem.name} has no semantic for {values} at word {index}"
+        return None, f"{sem.name} at word {index}: outside the measured job classes"
     if cell is None and off is None:
         return None, f"{sem.name} has no semantic for {values} at word {index}"
-    if probe not in anchors.classes:
-        return None, f"{sem.name} at word {index}: outside the measured job classes"
-    return (cell if cell is not None else off), ""
+    return (cell if cell is not None else min(off, cap(anchors, probe))), ""
+
+
+def cap(anchors: Anchors, probe: Probe | None) -> Confidence:
+    """The cap on what holds on `probe` from the class it extends (none on its own)."""
+    via = anchors.classes.get(probe)
+    return V if via is None else via[1]
+
+
+def measured(
+    anchors: Anchors, probe: Probe | None, key: tuple[str, int, tuple[int, ...]]
+) -> Confidence | None:
+    """The tier of the cell `key` (semantic, index, values) on `probe`: its own, else the
+    extended class's under the cap; None where neither ran."""
+    own = anchors.cells.get((probe, *key))
+    via = anchors.classes.get(probe)
+    if own is not None or via is None:
+        return own
+    base = anchors.cells.get((via[0], *key))
+    return None if base is None else min(base, via[1])
 
 
 def cover(
@@ -280,9 +307,9 @@ def _cover_field(
             return Cover(f, Coverage.UNKNOWN, None, "outside the measured job classes")
         sets = anchors.dont_cares.get(index, ())
         if together in sets:
-            return Cover(f, Coverage.DONT_CARE, V)
+            return Cover(f, Coverage.DONT_CARE, cap(anchors, probe))
         tier = I if any(f.id in s for s in sets) else H
-        return Cover(f, Coverage.DONT_CARE, tier)
+        return Cover(f, Coverage.DONT_CARE, min(tier, cap(anchors, probe)))
     if f.id not in changed:
         return Cover(f, Coverage.ANCHORED, LAW)
     value = f.get(word.value)
@@ -482,7 +509,7 @@ def run_window(
     it, makes every accumulator unknown; words in `anchors.inert` do not count."""
     tiers: dict[tuple[int, str], Confidence] = {}
     edits: list[tuple[int, Cover]] = []
-    measured = True
+    one_cell = True
     for index, (s, w) in enumerate(zip(stock, words, strict=True)):
         if s == w:
             continue
@@ -498,10 +525,11 @@ def run_window(
             tier, _ = scoped(anchors, sem, index, sem.key(w), sem.key(s), probe)
             assert tier is not None
             tiers[index, sem.name] = tier
-            measured &= (sem.name, index, sem.key(w)) in anchors.cells
+            cell = (sem.name, index, sem.key(w))
+            one_cell &= measured(anchors, probe, cell) is not None
     edited = Machine(anchors, tiers)
     acc = edited.run(words)
-    if measured and len(tiers) <= 1:
+    if one_cell and len(tiers) <= 1:
         return Window(acc, tuple(edits))
     base = Machine(anchors)
     base.run(stock)

@@ -37,8 +37,12 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
 - b = 1: the sum S of tap x pixel becomes clamp(R64(R4(S)), 0, 255), R_n = divide by n to
   nearest, ties to even: a Q6 intermediate, then 8 bits (the b != 1 arithmetic with a unit
   horizontal pass, R16384(256 I) = R64(I));
-- unknown: a nonzero tap on a line past H - 1 (the bottom edge reads irregularly: the next
-  plane, or other lines) or on a pixel past 63 (the right edge reads stale content at b != 1),
+- b = 1, H 16, an x-varying source, the stock program or a window edit: plane 0's last line
+  (a = 15) reads lines 16 and 17 both as plane 1's line 0 [verified: each line at a unit tap,
+  every column];
+- unknown: any other nonzero tap on a line past H - 1 (the bottom edge reads irregularly: the
+  next plane, or other lines; line 14 at b = 1 reads its line 16 as line 15, fitted post hoc,
+  not modelled) or on a pixel past 63 (the right edge reads stale content at b != 1),
   a fractional a with b != 1 and W < 64 with b != 1 (never ran).
 
 Column blocks: the job runs in 32-pixel column blocks with a held line pair per block. In a
@@ -88,6 +92,7 @@ from .resample_edits import (
     STOCK,
     SUBSTITUTE_KEEPERS,
     SUBSTITUTE_MOVER,
+    VARY,
     Changed,
     Edit,
     Effect,
@@ -233,6 +238,14 @@ _WHY = {
 }
 
 
+LAST_H = 16
+"""The height at which plane 0's last line at b = 1 reads its rows H and H + 1 both as the
+linear row H, plane 1's line 0, in the window's jobs (the stock program, own taps, and window
+edits) on x-varying sources [verified: both rows at 256 = 1.0, every column; the cause, a
+buffer layout or a pointer step past the last row, inferred]. Flat sources and the rows'
+edits never showed it."""
+
+
 Acc = Mapping[int, Sequence[Term]] | Unknown
 """The window's term lists per accumulator, or why they are unknown."""
 
@@ -302,7 +315,8 @@ class Resample13Model:
         ]
         table_taint = min(table_b.taint) if all(table_b.known) else V
         px = _Pixels(boot.read(req.src, PLANES * STRIDE * h), h)
-        probe = _probe(px, entries, w) if edited else None
+        job_class = _probe(px, entries, w)
+        probe = job_class if edited else None
         effects, window = (
             self._effects(emu, job, edited, probe, result)
             if edited
@@ -342,7 +356,7 @@ class Resample13Model:
                         if entry is None or (c == 0 and taps is None):
                             raise _Miss("input")
                         v, t = self._pixel(
-                            px, taps, c, entry, x, w, effect, ran, window
+                            px, taps, c, entry, x, w, effect, ran, window, job_class
                         )
                     except _Miss as m:
                         line.src[x] = (
@@ -469,7 +483,7 @@ class Resample13Model:
             result.notes.append(w.acc.why)
             return STOCK_PLANES, w.acc
         if isinstance(w, Window):
-            cap = composition_cap(w.edits, words)
+            cap = composition_cap(w.edits, words, probe)
             for i, c in w.edits:
                 assert c.confidence is not None
                 value = c.field.get(words[i].value)
@@ -512,11 +526,13 @@ class Resample13Model:
         effect: Effect,
         ran: tuple[int, int],
         window: Acc | None,
+        job_class: Probe | None,
     ) -> tuple[int, Confidence]:
         """The output byte at pixel x of plane c for table entry (a, b) under an edit's
         `effect` on the plane, and its taint; at b = 1 from the `window`'s term lists where
-        the window covers the job; plane-0 taps outside `ran` and chroma weights outside
-        `CHROMA_WEIGHTS_RAN` taint it."""
+        the window covers the job (plane 0's last line as `LAST_H` on x-varying sources);
+        plane-0 taps outside `ran` and chroma weights outside `CHROMA_WEIGHTS_RAN` taint
+        it."""
         a, b = entry
         h = px.h
         if not 0 <= a <= (h - 1) << 16 or not B_RANGE[0] <= b <= B_RANGE[1]:
@@ -539,8 +555,17 @@ class Resample13Model:
         def get(y: int, xx: int) -> int:
             return read(c, y, xx)
 
+        def last_line(plane: int, y: int, xx: int) -> int:
+            if (
+                job_class == VARY
+                and (plane, base) == (0, LAST_H - 1)
+                and y in (LAST_H, LAST_H + 1)
+            ):
+                return read(1, 0, xx)
+            return read(plane, y, xx)
+
         if b == ONE and window is not None:
-            v, t = self._terms(read, taps, c, a, x, ran, window)
+            v, t = self._terms(last_line, taps, c, a, x, ran, window)
             return v, min(Confidence(taint), t)
         if b == ONE:
             v, t = self._vertical(get, taps, c, a, x, effect, ran)
