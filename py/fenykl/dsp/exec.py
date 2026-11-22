@@ -573,13 +573,9 @@ def rhe(n: int, d: int) -> int:
 
 
 def out_of(s: int) -> int:
-    """The output byte of a sum of tap x pixel."""
+    """clamp(R64(R4(S)), 0, 255), ties to even: the output byte of a sum of tap x pixel, the
+    plane-0 output stage."""
     return max(0, min(255, rhe(rhe(s, 4), 64)))
-
-
-def luma_out(s: int) -> int:
-    """clamp(R64(R4(S)), 0, 255), ties to even: the plane-0 output stage."""
-    return out_of(s)
 
 
 def chroma_out(s: int) -> int:

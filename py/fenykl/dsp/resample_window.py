@@ -32,7 +32,7 @@ from .exec import (
     cover,
     field_is,
     is_load,
-    luma_out,
+    out_of,
     owner,
 )
 from .fields import Confidence, lookup
@@ -200,7 +200,7 @@ def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:
         words=WINDOW,
         elements=ELEMENTS,
         routing=ROUTING,
-        stages={0: luma_out, 1: chroma_out, 2: chroma_out},
+        stages={0: out_of, 1: chroma_out, 2: chroma_out},
         phase_base=program.words[TAP_READ]["ra"],
         coefficients={0: PhaseWeight(False), 1: PhaseWeight(True)},
         semantics=SEMANTICS,
