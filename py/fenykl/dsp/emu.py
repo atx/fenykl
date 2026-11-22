@@ -260,8 +260,8 @@ class Executor:
     halts at once at any word and call depth, the return stack unchecked (whether a halt has
     delay slots of its own is open). `branching` decides ops 0..2; the default `Given()`
     decides none of them. A loop end whose T lies in its own delay slots, a control op in
-    another's delay slots and a return without a call raise `UnknownSemantics`: what they do is
-    open. A data op runs as the op slot's semantics `ops`; one without semantics raises
+    another's delay slots, a return without a call and a step past the program end raise
+    `UnknownSemantics`: what they do is open. A data op runs as the op slot's semantics `ops`; one without semantics raises
     `UnknownSemantics` (strict) or is recorded in its step, and then its ra in the op slot's
     registers is unknown, since the op may write it. Strict mode also raises at an undecided
     control op; lenient mode stops there. Stepping does not model the register transfers or any
@@ -307,8 +307,11 @@ class Executor:
         visits: dict[int, int] = {}
         pc, slots, pending = 0, 0, None
         for _ in range(self.limit):
-            if not 0 <= pc < len(words):
-                raise IndexError(f"word {pc} outside the program of {len(words)} words")
+            if pc >= len(words):
+                # On the camera a program without a halt keeps running: the job times out.
+                raise UnknownSemantics(
+                    pc, "end", [], f"past the program end ({len(words)} words)"
+                )
             word = words[pc]
             if word.op == HALT_OP:
                 steps.append(

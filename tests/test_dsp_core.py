@@ -118,6 +118,12 @@ def test_local_read_uses_ra_as_a_base():
         Executor(Boot()).step(commands.copy(Program((other, HALT)), SRC, DST, 0x400))
 
 
+def test_a_program_without_a_halt_runs_past_its_end():
+    job = commands.copy(Program((IDLE, IDLE)), SRC, DST, 0x400)
+    with pytest.raises(UnknownSemantics, match="word 2: .*past the program end"):
+        Executor(Boot(), strict=False).step(job)
+
+
 def load(op: int, imm: int, ra: int = 4) -> Word:
     """A family A word (a load or a store) at ra + imm, covered (f120_122 = 7)."""
     return Word.from_fields(
