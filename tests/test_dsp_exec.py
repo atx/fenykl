@@ -408,6 +408,19 @@ def test_a_row_word_with_a_window_edit_is_unknown():
     assert set(got.unknown()) == {"resampler edit"}
 
 
+@pytest.mark.parametrize("at", [10, 100, 428])
+def test_a_held_field_outside_the_window_has_no_semantics(at: int):
+    # The don't-care rule holds in the window only: elsewhere an edited held field under an
+    # idle owner raises (strict) or is ignored at hypothesis (lenient).
+    edits = [(at, FieldValue("f23_30", 0))]
+    assert model().program.words[at]["f23_30"] != 0
+    with pytest.raises(UnknownSemantics, match=f"word {at}"):
+        predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+    got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits, strict=False)
+    assert got.result.ignored == [(at, ["f23_30"])]
+    assert set(got.confidence()) - {None} == {Confidence.HYPOTHESIS}
+
+
 def test_a_chroma_weight_beyond_the_ones_that_ran_is_a_hypothesis():
     # 88 = 3 at 443 weights plane 1's line a by c0: 2000 lies inside the plane-0 taps that ran
     # with an edited program, beyond the chroma weights that ran.

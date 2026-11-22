@@ -375,7 +375,7 @@ class Resample13Model:
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
         """A job's word at `index` is covered when it is the stock word, a measured edit of it
-        or a word whose changed fields the window covers; any other word raises
+        or a window word whose changed fields the window covers; any other word raises
         UnknownSemantics (strict) or has its changed fields ignored, tainting the job."""
         unknown = self._unknown(index, word)
         if unknown is None:
@@ -394,7 +394,8 @@ class Resample13Model:
         elif (
             word == stock[index]
             or (index, word.value) in self.edits
-            or not uncovered(self.anchors, stock[index], word, index)
+            or index in self.anchors.words
+            and not uncovered(self.anchors, stock[index], word, index)
         ):
             return None
         else:
