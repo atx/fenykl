@@ -38,8 +38,7 @@ from dataclasses import dataclass, field
 from .emu import (
     HALT_OP,
     Boot,
-    Core,
-    Emulator,
+    Executor,
     Job,
     JobResult,
     Status,
@@ -624,7 +623,7 @@ class Copy16Model:
     def from_image(cls, image: bytes) -> "Copy16Model":
         return cls(stock_programs(image)[ITEM])
 
-    def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
+    def apply(self, emu: Executor, job: Job, trace: Trace) -> JobResult:
         """Resolve the job and apply its one load and one store to the boot."""
         boot = emu.boot
         view = start_copy(boot)
@@ -645,7 +644,9 @@ class Copy16Model:
             return None
         length = view.length
         assert length is not None
-        flow = Core(Boot(), copy_branches(length), strict=False).run(job, start_copy)
+        flow = Executor(Boot(), branching=copy_branches(length), strict=False).step(
+            job, start_copy
+        )
         if flow.stop is not Stop.HALT:
             raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
         at = flow.steps[-1].index
@@ -993,7 +994,7 @@ ODD_LENGTHS = (0x40F,)
 
 def copy_branches(length: int) -> Given:
     """The decisions of the copy's two forward branches as the camera runs show them, for the
-    stepping core: 27 (to the return 79) not taken (inferred: the store words after it act) and
+    stepping: 27 (to the return 79) not taken (inferred: the store words after it act) and
     45 (over the loop 50..57) taken (inferred, strong: idling its delay slots 46..49 times the
     job out, idling 50..57 has no effect, moving its target to 50 changes the copy into a
     timeout, and a halt at 50 with 51..57 idled has no effect in an aligned copy and with each

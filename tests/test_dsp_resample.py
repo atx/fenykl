@@ -8,7 +8,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import commands, resample_edits
-from fenykl.dsp.emu import Boot, Emulator, Status
+from fenykl.dsp.emu import Boot, Executor, Status
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.resample import Resample13Model, footprint, predict
@@ -71,7 +71,7 @@ def edit_of(entry: dict) -> Idle:
     return kinds.get(name) or bit(int(name.split()[1]))
 
 
-def run_job(emu: Emulator, job: dict, k: int):
+def run_job(emu: Executor, job: dict, k: int):
     boot = emu.boot
     ctx = bytes([job["src"]["ctx"]]) * CTX
     boot.put(
@@ -92,7 +92,7 @@ def run_job(emu: Emulator, job: dict, k: int):
 
 def run_vector(vector: dict) -> list[str]:
     bad = []
-    emu = Emulator(Boot(), model())
+    emu = Executor(Boot(), model())
     taints = TAINTS[vector["name"]].split()
     if len(taints) != len(vector["jobs"]):
         bad.append(f"{len(taints)} taints for {len(vector['jobs'])} jobs")
@@ -183,13 +183,13 @@ def test_an_edited_program_has_no_semantics():
     boot = Boot()
     job = commands.resample(program, SRC, DST, TABLE, 64, 64, 16)
     with pytest.raises(UnknownSemantics, match="word 439"):
-        Emulator(boot, model()).run(job)
-    result = Emulator(boot, model(), strict=False).run(job)
+        Executor(boot, model()).run(job)
+    result = Executor(boot, model(), strict=False).run(job)
     assert result.taint is Confidence.HYPOTHESIS
 
 
 def test_a_partial_block_on_a_fresh_boot_is_unknown():
-    emu = Emulator(Boot(), model())
+    emu = Executor(Boot(), model())
     run_job(emu, identity_job(w=48), 0)
     line = emu.boot.read(DST, 64)
     assert all(line.known[:32]) and not any(line.known[32:48])
@@ -199,7 +199,7 @@ def test_a_partial_block_on_a_fresh_boot_is_unknown():
 
 def test_a_partial_block_of_a_job_that_is_no_identity_is_unknown():
     # The held lines are known after the first job; the second reads source lines 2i.
-    emu = Emulator(Boot(), model())
+    emu = Executor(Boot(), model())
     run_job(emu, identity_job(), 0)
     job = identity_job(w=48)
     job["table"] = [[min(2 * i, 15) << 16, 0x10000] for i in range(16)]
@@ -210,7 +210,7 @@ def test_a_partial_block_of_a_job_that_is_no_identity_is_unknown():
 
 
 def test_an_odd_height_above_1_is_unknown():
-    emu = Emulator(Boot(), model())
+    emu = Executor(Boot(), model())
     result, _ = run_job(emu, identity_job(h=3), 0)
     assert result.status is Status.OK and result.stored == (DST, DST + footprint(3))
     assert not any(emu.boot.read(DST, footprint(3)).known)
@@ -338,7 +338,7 @@ def run_on(boot: Boot, taps: Taps, edits=()) -> bytes:
     boot.put(TABLE, b"".join(struct.pack("<iI", a, b) for a, b in TABLE13), "table")
     job = model().job(taps, SRC, DST, TABLE, 64, 16, edits)
     try:
-        Emulator(boot, model()).run(job)
+        Executor(boot, model()).run(job)
     except UnknownSemantics:
         boot.forget_held(boot.source("unmodelled job"))
     got = boot.read(DST, footprint(16))
@@ -380,7 +380,7 @@ def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
     # The mover acts on its class only: on a source varying along x it makes it unknown.
     boot = Boot()
     boot.put(SRC, bytes(range(64)) * 48, "src")
-    Emulator(boot, model()).run(
+    Executor(boot, model()).run(
         model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
     )
     assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None

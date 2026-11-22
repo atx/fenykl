@@ -8,7 +8,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import commands
-from fenykl.dsp.emu import MAIN_CODE, Boot, Emulator, Status, back_firmware, dram_alias
+from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.memcpy import Copy16Model
 from fenykl.dsp.program import Program
@@ -151,7 +151,7 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
     firmware = (
         back_firmware(boot, stock_image("em10ii")) if needs_firmware(vector) else None
     )
-    emu = Emulator(boot, model(), sequencer=Sequencer(mode))
+    emu = Executor(boot, model(), sequencer=Sequencer(mode))
     taints = TAINTS[vector["name"]].split()
     if len(taints) != len(vector["jobs"]):
         bad.append(f"{len(taints)} taints for {len(vector['jobs'])} jobs")
@@ -243,7 +243,7 @@ SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 def copy(boot: Boot, program: Program, data: bytes, strict: bool = True):
     boot.put(SRC, data, "src")
     boot.put(DST, b"\xa5" * LEN, "prefill")
-    result = Emulator(boot, model(), strict=strict).run(
+    result = Executor(boot, model(), strict=strict).run(
         commands.copy(program, SRC, DST, LEN)
     )
     return result, boot.read(DST, LEN)
@@ -378,7 +378,7 @@ def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
     boot = boot or Boot()
     boot.put(SRC, bytes(range(256)) * (length // 256), "src")
     boot.put(DST, b"\xa5" * length, "prefill")
-    emu = Emulator(boot, model(), strict=strict)
+    emu = Executor(boot, model(), strict=strict)
     result = emu.run(commands.copy(program, SRC, DST, length))
     return result, boot
 
@@ -546,7 +546,7 @@ def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
     data = bytes(i & 0xFF for i in range(length))
     boot.put(src, data, "src")
     boot.put(dst, b"\xa5" * length, "prefill")
-    result = Emulator(boot, model()).run(commands.copy(marker, src, dst, length))
+    result = Executor(boot, model()).run(commands.copy(marker, src, dst, length))
     assert result.status is Status.OK and bytes(boot.read(dst, length).data) == data
     result, dst = copy(Boot(), flipped(45, "imm", TARGET_50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None

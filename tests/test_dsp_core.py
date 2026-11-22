@@ -7,7 +7,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import commands
-from fenykl.dsp.emu import Boot, Core, Flow, Stop, start_copy
+from fenykl.dsp.emu import Boot, Executor, Flow, Stop, start_copy
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.memcpy import ITEM, copy_branches
 from fenykl.dsp.program import Program, stock_programs
@@ -25,7 +25,7 @@ def copy_program() -> Program:
 
 def run_copy(length: int, branching: Branching, strict: bool = False) -> Flow:
     job = commands.copy(copy_program(), SRC, DST, length)
-    return Core(Boot(), branching, strict=strict).run(job, start_copy)
+    return Executor(Boot(), branching=branching, strict=strict).step(job, start_copy)
 
 
 def span(*runs: tuple[int, int]) -> list[int]:
@@ -56,7 +56,9 @@ def test_a_halt_inside_a_called_routine_ends_the_job():
     words = list(copy_program().words)
     words[11] = words[5]
     job = commands.copy(Program(tuple(words)), SRC, DST, 0x400)
-    flow = Core(Boot(), copy_branches(0x400), strict=False).run(job, start_copy)
+    flow = Executor(Boot(), branching=copy_branches(0x400), strict=False).step(
+        job, start_copy
+    )
     assert flow.stop is Stop.HALT and flow.order() == span((0, 4), (10, 11))
 
 
@@ -108,12 +110,12 @@ def test_local_read_uses_ra_as_a_base():
     job = commands.copy(Program((read, HALT)), SRC, DST, 0x400)
     boot = Boot()
     boot.slot[4] = Reg(1, 1, Confidence.VERIFIED, "set by the test")
-    flow = Core(boot).run(job)
+    flow = Executor(boot).step(job)
     assert flow.steps[0].note == "reads local word 0x2: 0x400"
     assert boot.slot[4] == Reg(1, 1, Confidence.VERIFIED, "set by the test")
     other = Word.from_fields({"f120_122": 3}, base=read)
     with pytest.raises(UnknownSemantics, match="outside what its semantics covers"):
-        Core(Boot()).run(commands.copy(Program((other, HALT)), SRC, DST, 0x400))
+        Executor(Boot()).step(commands.copy(Program((other, HALT)), SRC, DST, 0x400))
 
 
 def load(op: int, imm: int, ra: int = 4) -> Word:
@@ -193,7 +195,7 @@ def test_loop_end_count_hypotheses():
     def run(count: Count, limit: int = 1000) -> Flow:
         boot = Boot()
         boot.slot[1] = Reg(3, 3, Confidence.VERIFIED, "set by the test")
-        return Core(boot, RaTest(count=count), limit=limit).run(job)
+        return Executor(boot, branching=RaTest(count=count), limit=limit).step(job)
 
     flow = run(Count.DECREMENT)
     assert flow.stop is Stop.HALT
@@ -207,7 +209,7 @@ def run_slot(words: tuple[Word, ...], **regs: Reg) -> tuple[Boot, Flow]:
     for name, reg in regs.items():
         boot.slot[int(name[1:])] = reg
     job = commands.copy(Program((*words, HALT)), SRC, DST, 0x400)
-    return boot, Core(boot).run(job)
+    return boot, Executor(boot).step(job)
 
 
 def given(lo: int, hi: int | None = None) -> Reg:
@@ -260,7 +262,7 @@ def test_measured_ops_chain_through_the_slot():
     boot = Boot()
     boot.slot[2] = given(0x40F)
     job = commands.copy(Program((*words, HALT)), SRC, DST, 0x400)
-    flow = Core(boot, strict=False).run(job)
+    flow = Executor(boot, strict=False).step(job)
     assert boot.slot[7].exact == 0x100
     assert flow.steps[2].unknown and boot.slot[2] is None
     assert boot.slot[8] is None

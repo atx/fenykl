@@ -8,9 +8,9 @@ request from local memory, resolves the job and writes its result to the boot's 
 Whatever a model cannot tell becomes UNKNOWN, with a source that says why; a later job that
 reads it gets UNKNOWN bytes, never guessed ones.
 
-`Core` steps a job instead: a program counter that follows the control ops (calls, returns,
-branches and loop ends with their delay slots, the halt) and runs the data ops by their
-semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
+`Executor.step` steps a job instead: a program counter that follows the control ops (calls,
+returns, branches and loop ends with their delay slots, the halt) and runs the data ops by the
+op slot's semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
 """
 
 from collections.abc import Callable
@@ -170,31 +170,7 @@ class Model(Protocol):
     program: Program
     classes: tuple[WordClass, ...]
 
-    def apply(self, emu: "Emulator", job: Job, trace: Trace) -> JobResult: ...
-
-
-class Emulator:
-    """Runs jobs of `model`'s program on `boot`. strict=False ignores fields without semantics
-    (and taints)."""
-
-    def __init__(
-        self,
-        boot: Boot,
-        model: Model,
-        strict: bool = True,
-        sequencer: Sequencer | None = None,
-    ) -> None:
-        self.boot, self.model, self.strict = boot, model, strict
-        self.sequencer = sequencer or Sequencer()
-
-    def run(self, job: Job) -> JobResult:
-        self.boot.setup(job)
-        trace = Trace()
-        classes = self.model.classes
-        for index, word in enumerate(job.program.words):
-            c = classify(classes, word, index, trace, self.strict)
-            c.act(trace, word, index, self.strict)
-        return self.model.apply(self, job, trace)
+    def apply(self, emu: "Executor", job: Job, trace: Trace) -> JobResult: ...
 
 
 class Stop(Enum):
@@ -271,39 +247,56 @@ def _run(a: Step, b: Step) -> str:
 HALT_OP = 7
 
 
-class Core:
-    """Steps a job's program word by word from word 0.
+class Executor:
+    """Runs jobs on `boot`.
 
-    The control ops (`fields.OPS`, inferred): a call at i goes to T and returns to i + 5, a
-    return goes back there, brf / br / a loop end go to T when `branching` takes them; every
-    control op has four delay slots that run before its transfer takes effect, and op 7 halts
-    at once at any word and call depth, the return stack unchecked (whether a halt has delay
-    slots of its own is open).
-    `branching` decides ops 0..2; the default `Given()` decides none of them. A loop end whose
-    T lies in its own delay slots, a control op in another's delay slots and a return without a
-    call raise `UnknownSemantics`: what they do is open.
+    `run` runs a job of `model`'s program and has the model apply its trace. `step` steps a
+    job's program through its control flow from word 0, with no model: a program counter that
+    follows the control ops (`fields.OPS`, inferred): a call at i goes to T and returns to
+    i + 5, a return goes back there, brf / br / a loop end go to T when `branching` takes them;
+    every control op has four delay slots that run before its transfer takes effect, and op 7
+    halts at once at any word and call depth, the return stack unchecked (whether a halt has
+    delay slots of its own is open). `branching` decides ops 0..2; the default `Given()`
+    decides none of them. A loop end whose T lies in its own delay slots, a control op in
+    another's delay slots and a return without a call raise `UnknownSemantics`: what they do is
+    open. A data op runs as the op slot's semantics `ops`; one without semantics raises
+    `UnknownSemantics` (strict) or is recorded in its step, and then its ra in the op slot's
+    registers is unknown, since the op may write it. Strict mode also raises at an undecided
+    control op; lenient mode stops there. Stepping does not model the register transfers or any
+    datapath unit.
 
-    A data op runs by `ops`; one without semantics raises `UnknownSemantics` (strict) or is
-    recorded in its step, and then its ra in the op slot's registers is unknown, since the op
-    may write it. Strict mode also raises at an undecided control op; lenient mode stops there.
-    The core does not model the register transfers or any datapath unit.
+    strict=False ignores fields without semantics (and taints).
     """
 
     def __init__(
         self,
         boot: Boot,
+        model: "Model | None" = None,
+        strict: bool = True,
+        sequencer: Sequencer | None = None,
         branching: Branching | None = None,
         ops: dict[int, OpSemantics] | None = None,
-        strict: bool = True,
         limit: int = 100_000,
     ) -> None:
-        self.boot, self.strict, self.limit = boot, strict, limit
+        self.boot, self.model, self.strict, self.limit = boot, model, strict, limit
+        self.sequencer = sequencer or Sequencer()
         self.branching = branching or Given()
         self.ops = OP_SEMANTICS if ops is None else ops
 
-    def run(self, job: Job, start: Callable[[Boot], object] | None = None) -> Flow:
-        """Run `job` after its setup and `start`, which sets the registers the job starts
-        with (`start_copy`)."""
+    def run(self, job: Job) -> JobResult:
+        if self.model is None:
+            raise ValueError("run needs a model; step runs a job without one")
+        self.boot.setup(job)
+        trace = Trace()
+        classes = self.model.classes
+        for index, word in enumerate(job.program.words):
+            c = classify(classes, word, index, trace, self.strict)
+            c.act(trace, word, index, self.strict)
+        return self.model.apply(self, job, trace)
+
+    def step(self, job: Job, start: Callable[[Boot], object] | None = None) -> Flow:
+        """Step `job` from word 0 after its setup and `start`, which sets the registers the
+        job starts with (`start_copy`)."""
         self.boot.setup(job)
         if start is not None:
             start(self.boot)

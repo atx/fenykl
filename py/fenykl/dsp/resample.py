@@ -67,7 +67,7 @@ from math import floor
 
 from . import commands
 from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
-from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
+from .emu import LOCAL_BASE, Boot, Executor, Job, JobResult, Status, dram_alias
 from .exec import (
     Term,
     Uncovered,
@@ -338,7 +338,7 @@ class Resample13Model:
         program = Program(tuple(words), taps.pack())
         return commands.resample(program, src, dst, table, STRIDE, width, height)
 
-    def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
+    def apply(self, emu: Executor, job: Job, trace: Trace) -> JobResult:
         boot = emu.boot
         req = Request.read(boot)
         req.check()
@@ -430,7 +430,7 @@ class Resample13Model:
             self._hold(boot, req, entries, taps, px, full)
         return result
 
-    def _edited(self, emu: Emulator, job: Job) -> list[int]:
+    def _edited(self, emu: Executor, job: Job) -> list[int]:
         """The indices of the words that differ from the stock program. In strict mode a word
         that is no measured edit and whose changed fields the window does not cover raises
         UnknownSemantics."""
@@ -461,7 +461,7 @@ class Resample13Model:
 
     def _effects(
         self,
-        emu: Emulator,
+        emu: Executor,
         job: Job,
         edited: list[int],
         probe: Probe | None,
@@ -847,5 +847,5 @@ def predict(
     unwritten = boot.source("not written", "the job does not write it")
     boot.dram.write(dram_alias(_DST), Bytes.unknown(n, unwritten))
     job = model.job(taps, _SRC, _DST, _TABLE, width, h, edits)
-    result = Emulator(boot, model, strict).run(job)
+    result = Executor(boot, model, strict).run(job)
     return Prediction(boot.read(_DST, n), boot.sources, result)

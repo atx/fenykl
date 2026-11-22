@@ -13,7 +13,7 @@ hypothesis confidence run and taint what they touch.
 The classes and tables of one program are held by its model (`memcpy.Copy16Model` for program
 16, `resample.Resample13Model` for program 13), which the emulator takes.
 
-The stepping core (`emu.Core`) takes the op semantics `OP_SEMANTICS` (what a data op does,
+Stepping (`emu.Executor.step`) takes the op semantics `OP_SEMANTICS` (what a data op does,
 each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
 decisions (the default, none: no condition is known) or `RaTest`.
 """
@@ -368,7 +368,7 @@ def _ran(trace: Trace, c: WordClass, index: int) -> None:
         trace.notes.append(f"word {index}: {c.name} off its stock position")
 
 
-# -- the stepping core (`emu.Core`): op semantics and the branch hypotheses
+# -- stepping (`emu.Executor.step`): op semantics and the branch hypotheses
 
 
 @dataclass(frozen=True)
@@ -539,7 +539,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     IDLE_OP: OpSemantics(
         I,
         "no op in the slot; the word's other units (the register transfers) are outside the "
-        "core",
+        "op slot",
         lambda word, slot, local: Effect(),
     ),
     0x1A: OpSemantics(
@@ -551,7 +551,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "pairs, which as writes would be dead; on the camera, 0x1a in place of the resampler's "
         "tap-1 read, imm 1 and ra kept, gave tap 1 the coefficient c2, the low 16 bits of the "
         f"word at 4 bytes: the immediate counts words); {_ADDRESS}; where the datum goes is "
-        "open, so the core records the read only; covered at f120_122 = 7, the value of those "
+        "open, so stepping records the read only; covered at f120_122 = 7, the value of those "
         "three words",
         _local_load(4),
     ),
@@ -562,7 +562,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "the resampler, the word that reads tap 1 of the line's phase holds imm 1, and imm 0 "
         "gave tap 1 tap 0's coefficient, byte for byte; the halfword unit is inferred from "
         "that and from the request's halfwords, and ra a word index as 0x1a's is a hypothesis); "
-        f"{_ADDRESS}; the sign extension is open; where the datum goes is open, so the core "
+        f"{_ADDRESS}; the sign extension is open; where the datum goes is open, so stepping "
         "records the read only; covered at f120_122 = 7, the value of that word",
         _local_load(2),
     ),
@@ -572,7 +572,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         f"(inferred: {_R0_READS}, 31 of 31 for 0x14; on the camera, 0x14 in place of the "
         "resampler's tap-1 read gave tap 1 c0 at imm 0 and the stock c1 at imm 1, so the "
         "immediate counts halfwords and the word does not pass on the datum read before it; "
-        f"its sign extension against 0x16's is open); {_ADDRESS}; the core records the read "
+        f"its sign extension against 0x16's is open); {_ADDRESS}; stepping records the read "
         "only; covered at f120_122 = 7",
         _local_load(2),
     ),
@@ -582,7 +582,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "write (inferred: on the camera, 0x10 in place of the resampler's tap-1 read, ra kept, "
         "gave tap 1 c0's bits 8..15 zero-extended at imm 1 and its bits 0..7 at imm 0, the "
         "bytes at offsets 1 and 0 of the phase's taps, on every line; a sign-extended byte is "
-        f"refuted); {_ADDRESS}; where the datum goes is open, so the core records the read "
+        f"refuted); {_ADDRESS}; where the datum goes is open, so stepping records the read "
         "only; covered at f120_122 = 7",
         _local_load(1),
     ),
@@ -594,7 +594,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "every line (imm 1 on two tap sets); nothing delivered and a zero-extended byte are refuted; "
         "a load from local memory and a select of byte imm of the datum the word before it "
         "delivered give the same bytes there, so the direction is open); "
-        f"{_ADDRESS}; the core records the read only; covered at f120_122 = 7",
+        f"{_ADDRESS}; stepping records the read only; covered at f120_122 = 7",
         _local_load(1),
     ),
     0x12: OpSemantics(
@@ -641,7 +641,8 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _shift_right,
     ),
 }
-"""The data ops the core runs; every other op has no semantics (`Core`'s strict switch)."""
+"""The op slot's semantics: the data ops stepping runs; every other op has none (strict
+stepping raises)."""
 
 
 @dataclass(frozen=True)
@@ -670,7 +671,7 @@ class Branching(Protocol):
 @dataclass(frozen=True)
 class Given:
     """Decisions supplied by the caller, by word index: one for every visit, or one per visit;
-    every other decision is undecided. The default of the core: no condition of ops 0..2 is
+    every other decision is undecided. The default of stepping: no condition of ops 0..2 is
     known."""
 
     decisions: Mapping[int, bool | Sequence[bool]] = field(default_factory=dict)

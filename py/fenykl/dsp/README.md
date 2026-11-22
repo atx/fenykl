@@ -15,8 +15,8 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `disasm.py` | listings and DSL source of a program |
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
-| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the core's op semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
-| `emu.py` | `Boot`, `Job`, `Emulator`: runs a job word by word and has its model apply the trace; `Core`: steps a job through its control flow (`Flow`, `Step`) |
+| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
+| `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
@@ -155,10 +155,10 @@ of the local word at its immediate (inferred, strong): program 16's three 0x1a w
 local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
 destination (inferred: across later firmware versions of the same family, in 59 % of its words
 the next naming of that register is this op again, with another immediate in 95 % of those
-pairs, which as writes would be dead). Four ops have camera-measured meanings, run by the stepping
-core (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
+pairs, which as writes would be dead). Four ops have camera-measured meanings, run by
+stepping (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
 quartered at imm 1 and 2), and 0x38, an AND of ra with its sign-extended imm16 (one cleared mask
-bit moved a copy's store by 16 B). Where 0x3f's result goes is open: the core writes ra at
+bit moved a copy's store by 16 B). Where 0x3f's result goes is open: stepping writes ra at
 hypothesis taint. The resampler's word that reads tap 1 is a 0x16 with imm 1; on the camera,
 with ra kept (one run each; ra as a word index is a hypothesis):
 
@@ -172,12 +172,12 @@ with ra kept (one run each; ra as a word index is a hypothesis):
 
 So the coefficient port keeps between 9 and 16 bits of what reaches it (a zero-extended 0xff
 arrives as 255, a word as its low half). The halfword loads' sign extension is open. Like 0x1a, the
-core records the read only. Family A
+stepping records the read only. Family A
 as a whole reads as loads and stores of width w (inferred from the static access patterns:
 every read of an r0-based slot follows a store to the same bytes): the byte address is 4 ra
 plus the low 13 bits of w x imm13 as a signed offset, and imm13's bits above them (11..12 in
 the word ops, 12 in the halfword ops) are a flag that does not move the address on r0, its
-meaning open. The core also runs 0x14 as a halfword load and 0x12 and 0x18 as halfword and word
+meaning open. Stepping also runs 0x14 as a halfword load and 0x12 and 0x18 as halfword and word
 stores (inferred); a store's datum is open, so its bytes become unknown, and at an unknown base
 all of local memory does. Words with the flag set, the byte store 0x0c and the register forms
 have no semantics.
@@ -244,13 +244,13 @@ still through the buffer they come from (a held buffer of an older job).
 
 ```python
 from fenykl.dsp import commands
-from fenykl.dsp.emu import Boot, Emulator
+from fenykl.dsp.emu import Boot, Executor
 from fenykl.dsp.memcpy import Copy16Model
 
 model = Copy16Model.from_image(image)  # the stock E-M10 II .BIN
 boot = Boot()  # BootParams: r14, r29, r21's format; None = unknown
 boot.put(src, data, "src")  # known DRAM bytes, with a source name
-result = Emulator(boot, model).run(commands.copy(model.program, src, dst, len(data)))
+result = Executor(boot, model).run(commands.copy(model.program, src, dst, len(data)))
 out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), off
 ```
 
@@ -271,7 +271,7 @@ offsets the store, 47 formats it, ...) in the order of the transfers (`Sequencer
 roles followed counted transfers moved by one index on the camera, and a counted transfer at
 word 78, the word before the return, stalls the job) and the job resolves into a status, one
 load and one store.
-An op 7 off the stock halt ends the job where the stepping core reaches it (`Copy16Model._halt`):
+An op 7 off the stock halt ends the job where stepping reaches it (`Copy16Model._halt`):
 before the stream words 58..79 with status 0 and dst not written; after the stream started it
 raises `UnknownSemantics`. Some timeouts come after the store (`Outcome.STORE_TIMEOUT`: idled
 5, 28 or 79, 45's target moved to the loop's top 50, bit 6 of 65's immediate cleared): dst is
@@ -283,7 +283,7 @@ status 0) and no semantics otherwise.
 Strict mode (the default) raises `UnknownSemantics` for a word that matches no class, naming the
 fields that differ from the nearest class, and for a role at a register without registered
 semantics, and for a transfer whose route nibbles differ from the stock transfers' values.
-`Emulator(boot, model, strict=False)` runs such a word as its nearest class, ignores the fields
+`Executor(boot, model, strict=False)` runs such a word as its nearest class, ignores the fields
 and taints every byte the job loads or stores "hypothesis".
 
 ### The resampler
@@ -300,7 +300,7 @@ taps = Taps.from_floats(
 boot.put(src, planes, "src")  # three planes of 64 x H bytes at stride 64 (format 0x306)
 boot.put(table, entries, "table")  # H x {s32 a, u32 b}: source line and step in 16.16
 job = model.job(taps, src, dst, table, w, h)  # the stock words, these tap words
-result = Emulator(boot, model).run(job)
+result = Executor(boot, model).run(job)
 ```
 
 `predict(model, taps, image, [(a, b), ...], w)` runs that job on a fresh boot and returns a
@@ -397,19 +397,21 @@ at 442 and 88 = 3 at 440 with 88 = 2 at 444 (each acts in its accumulation as it
 Jobs with exactly those (word, field, value) sets keep their fields' tiers; any other job that
 edits two or more semantics is at most inferred.
 
-### The stepping core
+### Stepping
 
 ```python
-from fenykl.dsp.emu import Boot, Core, start_copy
+from fenykl.dsp.emu import Boot, Executor, start_copy
 from fenykl.dsp.memcpy import copy_branches
 
 job = commands.copy(model.program, src, dst, length)
 # start_copy: the copy's register facts in the transfer registers, after the job's setup
-flow = Core(Boot(), copy_branches(length), strict=False).run(job, start_copy)
+flow = Executor(Boot(), branching=copy_branches(length), strict=False).step(
+    job, start_copy
+)
 print(flow.runs())  # 0, |1..4, 10..27, |28..31, 32..45, |46..49, 58..79, |80..83, 5
 ```
 
-`Core` follows the program counter from word 0: a call at i goes to T and returns to i + 5, a
+`Executor.step` follows the program counter from word 0: a call at i goes to T and returns to i + 5, a
 return goes back there, brf, br and a loop end go to T when taken, op 7 halts at any depth; the four delay
 slots of every control op run before its transfer (`DELAY_SLOTS`). Each executed word is a
 `Step` (index, op, operands, delay slot, decision or effect, confidence); `Flow` holds them in
@@ -433,7 +435,7 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
 - **Registers**: the op slot's (`Boot.slot`) and the transfer registers (`Boot.regs`) are kept
   apart; whether ra / rb and xreg name one file is open.
 
-The core models neither the register transfers nor the datapath, so it says which words run in
+Stepping models neither the register transfers nor the datapath, so it says which words run in
 which order, not what they move. `fenykl dsp flow [--len N] [--branch I=0|1]` prints the copy's
 flow.
 

@@ -47,7 +47,7 @@ def cmd_source(args: argparse.Namespace) -> None:
 
 def cmd_flow(args: argparse.Namespace) -> None:
     from . import commands
-    from .emu import Boot, Core, start_copy
+    from .emu import Boot, Executor, start_copy
     from .memcpy import ITEM, copy_branches
 
     args.item = ITEM
@@ -59,7 +59,7 @@ def cmd_flow(args: argparse.Namespace) -> None:
             index, _, taken = text.partition("=")
             given[int(index, 0)] = taken == "1"
         branching = Given(given, fact="the copy runs' decisions and the command line's")
-    flow = Core(Boot(), branching, strict=False).run(job, start_copy)
+    flow = Executor(Boot(), branching=branching, strict=False).step(job, start_copy)
     print(flow.runs())
     for step in flow.steps:
         if step.op != 0x7F:
