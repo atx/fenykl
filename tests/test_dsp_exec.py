@@ -20,7 +20,7 @@ from fenykl.dsp.exec import (
     weight,
 )
 from fenykl.dsp.fields import FIELDS, Confidence
-from fenykl.dsp.resample import Resample13Model, predict
+from fenykl.dsp.resample import Resample13Model
 from fenykl.dsp.resample_edits import (
     FACTS,
     FLAT,
@@ -32,16 +32,10 @@ from fenykl.dsp.resample_edits import (
     TapLoad,
     set_fields,
 )
-from fenykl.dsp.resample_window import WINDOW, WindowModel
+from fenykl.dsp.resample_window import WINDOW
 from fenykl.dsp.semantics import UnknownSemantics
-from fenykl.dsp.taps import Taps
 
 I = Confidence.INFERRED
-
-
-@cache
-def window_model() -> WindowModel:
-    return WindowModel.from_image(stock_image("em10ii"))
 
 
 @cache
@@ -84,14 +78,14 @@ PHASES = [
 
 
 def edited(at: int, kind) -> list:
-    words = list(window_model().program.words)
+    words = list(model().program.words)
     words[at] = kind.apply(words[at])
     return words
 
 
 def test_the_stock_window_gives_the_laws_kernels_for_every_phase_and_plane():
-    m = window_model()
-    acc = m.stock.acc
+    m = model()
+    acc = m.stock
     assert sorted(acc) == [0, 1, 2]
     for p, taps in enumerate(PHASES):
         for c in range(3):
@@ -130,7 +124,7 @@ def row_kernel(effect, taps: tuple[int, ...]) -> dict[int, int]:
 def test_the_window_reproduces_the_rows_of_its_field_edits():
     rows = reproduced_rows()
     assert len(rows) == 22
-    m = window_model()
+    m = model()
     for at, kind, planes in rows:
         w = run_window(m.anchors, m.program.words, edited(at, kind), FLAT)
         assert isinstance(w, Window) and not isinstance(w.acc, Unknown), (at, kind)
@@ -149,29 +143,9 @@ def test_the_window_reproduces_the_rows_of_its_field_edits():
         )
 
 
-SOURCE = bytes((11 * (k // 64) + 5) & 0xFF for k in range(3 * 64 * 16))
-TABLE = [(i << 16 | (i % 16) << 12, 0x10000) for i in range(16)]
-
-
-@pytest.mark.parametrize("taps", [PHASES[:16], [(-8, 264, 0, 0)] * 16])
-def test_the_window_model_predicts_as_the_model_on_the_stock_program_and_its_rows(taps):
-    taps = Taps.of(taps)
-    jobs = [[]] + [[(at, kind)] for at, kind, _ in reproduced_rows()]
-    computed = window_model().computed
-    for edits in jobs:
-        old = predict(model(), taps, SOURCE, TABLE, edits=edits)
-        new = predict(window_model(), taps, SOURCE, TABLE, edits=edits)
-        assert new.dst.data == old.dst.data, edits
-        assert new.dst.known == old.dst.known
-        assert new.dst.taint == old.dst.taint
-        assert new.unknown() == old.unknown()
-        assert new.result.edits == old.result.edits
-    assert window_model().computed == computed + len(jobs)
-
-
 def test_coverage_census_of_the_stock_window():
     """Per stock window word: the fields with a semantic, don't-cares and anchored ones."""
-    m = window_model()
+    m = model()
     words = m.program.words
     census = {}
     for i in WINDOW:
@@ -203,7 +177,7 @@ def test_coverage_census_of_the_stock_window():
 
 
 def test_def_use_census_of_the_stock_program():
-    m = window_model()
+    m = model()
     reads = readers(m.anchors, m.program.words)
     inside = {item: [i for i in at if i in WINDOW] for item, at in reads.items()}
     # The window's words that read state without a semantic: the two head-8 words.
@@ -215,14 +189,14 @@ def test_def_use_census_of_the_stock_program():
     }
     # The unlocated elements (R2's writes at 436 and 437) and the loads off the tap base (C4
     # and C5's writes at 433 and 434) reach no term: every term is a coefficient x a pixel.
-    terms = [t for terms in m.stock.acc.values() for t in terms]
+    terms = [t for terms in m.stock.values() for t in terms]
     assert all(
         isinstance(t.operand, Row) and not isinstance(t.weight, Unknown) for t in terms
     )
 
 
 def test_an_edited_value_that_reaches_a_word_without_semantics_makes_the_window_unknown():
-    m = window_model()
+    m = model()
     words = m.program.words
     # Word 434's port writes R7 instead of R4: R4 still holds no value at 437's head-8 read.
     w = run_window(m.anchors, words, edited(434, FieldValue("f163_166", 7)), FLAT)
@@ -239,7 +213,7 @@ def test_an_edited_value_that_reaches_a_word_without_semantics_makes_the_window_
 
 
 def test_two_writes_to_one_register_in_one_step_raise():
-    m = window_model()
+    m = model()
     words = edited(438, FieldValue("f167_170", 2))
     with pytest.raises(UnknownSemantics, match="write conflict on R2"):
         run_window(m.anchors, m.program.words, words, FLAT)

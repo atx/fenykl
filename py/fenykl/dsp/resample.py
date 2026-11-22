@@ -58,7 +58,7 @@ Edits: an edited program runs only as one of the edits measured on the camera
 """
 
 import struct
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import floor
@@ -66,6 +66,17 @@ from math import floor
 from . import commands
 from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
 from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
+from .exec import (
+    Term,
+    Unknown,
+    UnknownTerm,
+    Window,
+    accumulate,
+    out_of,
+    rhe,
+    run_window,
+    weight,
+)
 from .fields import FIELDS, Confidence
 from .program import Program, stock_programs
 from .resample_edits import (
@@ -87,6 +98,7 @@ from .resample_edits import (
     Substitute,
     TapLoad,
 )
+from .resample_window import anchors as window_anchors
 from .semantics import (
     IDLE_CLASS,
     OpaqueClass,
@@ -123,17 +135,6 @@ EDITED_TAPS_RAN = (-1840, 2048)
 
 def chroma(p: int) -> tuple[int, int, int, int]:
     return (0, 256 - 16 * p, 16 * p, 0)
-
-
-def rhe(n: int, d: int) -> int:
-    """n / d rounded to nearest, ties to even."""
-    q, r = divmod(n, d)
-    return q + (1 if 2 * r > d or (2 * r == d and q & 1) else 0)
-
-
-def out_of(s: int) -> int:
-    """The output byte of a sum of tap x pixel."""
-    return max(0, min(255, rhe(rhe(s, 4), 64)))
 
 
 def footprint(h: int) -> int:
@@ -230,6 +231,10 @@ _WHY = {
 }
 
 
+Acc = Mapping[int, Sequence[Term]] | Unknown
+"""The window's term lists per accumulator, or why they are unknown."""
+
+
 class Resample13Model:
     """The model of program 13, built from the stock program (`from_image` reads it from a
     stock E-M10 II `.BIN`). Its classes are the idle word, one class per distinct stock word and
@@ -261,6 +266,10 @@ class Resample13Model:
             for at in positions.values()
         ]
         self.edits = _measured_edits(program, facts)
+        self.anchors = window_anchors(program, facts)
+        stock = run_window(self.anchors, program.words, program.words, None)
+        assert isinstance(stock, Window) and not isinstance(stock.acc, Unknown)
+        self.stock: Acc = stock.acc
         words = program.words
         self.mover = {(i, k.apply(words[i]).value) for i, k in (SUBSTITUTE_MOVER,)}
         self.keepers = {(i, k.apply(words[i]).value) for i, k in SUBSTITUTE_KEEPERS}
@@ -324,8 +333,10 @@ class Resample13Model:
         table_taint = min(table_b.taint) if all(table_b.known) else V
         px = _Pixels(boot.read(req.src, PLANES * STRIDE * h), h)
         probe = _probe(px, entries, w) if edited else None
-        effects = (
-            self._effects(emu, job, edited, probe, result) if edited else STOCK_PLANES
+        effects, window = (
+            self._effects(emu, job, edited, probe, result)
+            if edited
+            else (STOCK_PLANES, self.stock)
         )
         self._move_substitute(boot, job, edited, probe)
         cap = result.taint = H if effects is None else min(I, trace.taint)
@@ -360,7 +371,9 @@ class Resample13Model:
                     try:
                         if entry is None or (c == 0 and taps is None):
                             raise _Miss("input")
-                        v, t = self._pixel(px, taps, c, entry, x, w, effect, ran)
+                        v, t = self._pixel(
+                            px, taps, c, entry, x, w, effect, ran, window
+                        )
                     except _Miss as m:
                         line.src[x] = why[m.why]
                         continue
@@ -414,10 +427,11 @@ class Resample13Model:
         edited: list[int],
         probe: Probe | None,
         result: JobResult,
-    ) -> Planes | None:
-        """What each plane does in a job with these edited words: one measured edit on a class
-        it ran on gives its planes [verified]; anything else is unknown in strict mode and None
-        in lenient mode (the stock law, as a hypothesis)."""
+    ) -> tuple[Planes | None, Acc | None]:
+        """What each plane does in a job with these edited words, and the window's term lists
+        where the window covers the job: one measured edit on a class it ran on gives its
+        planes [verified]; anything else is unknown in strict mode and None in lenient mode
+        (the stock law, as a hypothesis)."""
         words = job.program.words
         edits = [
             self.edits.get((i, words[i].value)) if i < len(words) else None
@@ -436,9 +450,10 @@ class Resample13Model:
                 (f"word {edited[0]}, {e.kind.name}, on {probe}: {e.fact}", V)
             )
             p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
-            return p0, p1, p2
+            w = run_window(self.anchors, self.program.words, words, probe)
+            return (p0, p1, p2), w.acc if isinstance(w, Window) else None
         result.notes.append(why)
-        return (Changed(why),) * PLANES if emu.strict else None
+        return ((Changed(why),) * PLANES if emu.strict else None), None
 
     def _move_substitute(
         self, boot: Boot, job: Job, edited: list[int], probe: Probe | None
@@ -470,9 +485,11 @@ class Resample13Model:
         w: int,
         effect: Effect,
         ran: tuple[int, int],
+        window: Acc | None,
     ) -> tuple[int, Confidence]:
         """The output byte at pixel x of plane c for table entry (a, b) under an edit's
-        `effect` on the plane, and its taint; at b = 1 taps outside `ran` taint it."""
+        `effect` on the plane, and its taint; at b = 1 from the `window`'s term lists where
+        the window covers the job, and taps outside `ran` taint it."""
         a, b = entry
         h = px.h
         if not 0 <= a <= (h - 1) << 16 or not B_RANGE[0] <= b <= B_RANGE[1]:
@@ -480,18 +497,24 @@ class Resample13Model:
         base = a >> 16
         taint = V
 
-        def get(y: int, xx: int) -> int:
+        def read(plane: int, y: int, xx: int) -> int:
             nonlocal taint
             if y > h - 1:
                 raise _Miss("bottom")
             if xx > STRIDE - 1:
                 raise _Miss("right")
-            p = px.at(c, max(0, y), xx)
+            p = px.at(plane, max(0, y), xx)
             if p is None:
                 raise _Miss("input")
             taint = min(taint, p[1])
             return p[0]
 
+        def get(y: int, xx: int) -> int:
+            return read(c, y, xx)
+
+        if b == ONE and window is not None:
+            v, t = self._terms(read, taps, c, a, x, ran, window)
+            return v, min(Confidence(taint), t)
         if b == ONE:
             v, t = self._vertical(get, taps, c, a, x, effect, ran)
             return v, min(Confidence(taint), t)
@@ -525,6 +548,35 @@ class Resample13Model:
             s += t * rhe(v, 4)
         return max(0, min(255, rhe(s, 1 << 14))), Confidence(taint)
 
+    def _terms(
+        self,
+        read: Callable[[int, int, int], int],
+        taps: tuple[tuple[int, ...], ...] | None,
+        c: int,
+        a: int,
+        x: int,
+        ran: tuple[int, int],
+        window: Acc,
+    ) -> tuple[int, Confidence]:
+        """The b = 1 byte of plane c at pixel x for source line a (16.16) from the window's
+        term lists, through the plane's output stage, and the taint of its terms; `read(plane,
+        y, x)` reads a source pixel of any plane."""
+        if isinstance(window, Unknown):
+            raise _Miss("operand")
+        taint = H if a & 0xFFF else V  # a phase between the 16 never ran
+        base, p = a >> 16, (a & 0xFFFF) >> 12
+        kernel = taps[p] if taps is not None else None
+        terms = window.get(c, ())
+        weights = [weight(t.weight, kernel, p) for t in terms]
+        taint = min(taint, _gain_taint(tuple(w for w in weights if w is not None), ran))
+        try:
+            s, conf = accumulate(
+                terms, kernel, p, lambda row: read(row.plane, base + row.dy, x)
+            )
+        except UnknownTerm:
+            raise _Miss("operand") from None
+        return self.anchors.stages[c](s), min(taint, conf)
+
     def _vertical(
         self,
         get: Callable[[int, int], int],
@@ -535,8 +587,9 @@ class Resample13Model:
         effect: Effect,
         ran: tuple[int, int],
     ) -> tuple[int, Confidence]:
-        """The b = 1 byte of plane c at pixel x for source line a (16.16) and the taint of its
-        kernel; `get(y, x)` reads a source pixel and raises _Miss where the law gives none."""
+        """The b = 1 byte of plane c at pixel x for source line a (16.16) under a row's
+        `effect` the window does not cover, and the taint of its kernel; `get(y, x)` reads a
+        source pixel and raises _Miss where the law gives none."""
         taint = H if a & 0xFFF else V  # a phase between the 16 never ran
         base = a >> 16
         p = (a & 0xFFFF) >> 12

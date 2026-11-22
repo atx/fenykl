@@ -13,48 +13,38 @@ writes and the eight S2 term words. What it takes from the stock region (the anc
 - the tap base register (the base register of the stock tap reads) and the coefficient
   registers C0 = p and C1 = 16 - p at the window's entry (their writer is not located).
 
-`WindowModel` runs the window next to `Resample13Model` in shadow: it takes the b = 1 bytes
-from the window's term lists for the stock program and for the measured edits the window
-covers, and everything else from the model; on recorded jobs both must give the same bytes,
-masks, taints and reasons.
+`Resample13Model` takes its b = 1 bytes from the window's term lists.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
-from .emu import Emulator, Job, JobResult
 from .exec import (
     COEFFICIENT_WRITE,
+    HELD,
     PORT_WRITES,
     Anchors,
     FieldSemantic,
     PhaseWeight,
     Row,
-    Unknown,
-    UnknownTerm,
-    Window,
-    accumulate,
     chroma_out,
+    cover,
     field_is,
     is_load,
     luma_out,
-    run_window,
-    weight,
+    owner,
 )
 from .fields import Confidence, lookup
 from .program import Program
-from .resample import Resample13Model, _gain_taint, _Miss
 from .resample_edits import (
     COEFFICIENT_SELECT,
     FACTS,
     FLAT,
     ONE,
-    Effect,
     Fact,
     Idle,
-    Probe,
     Stock,
 )
-from .semantics import Trace
+from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -201,75 +191,33 @@ def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:
     )
 
 
-class WindowModel(Resample13Model):
-    """`Resample13Model` with its b = 1 bytes from the window's term lists, wherever the job is
-    the stock program or a measured edit (a row applies) that the window covers; the rows
-    decide which planes the job gives. `computed` counts the jobs of which the window computed
-    a byte."""
+def free(anchors: Anchors, stock: Word) -> frozenset[str]:
+    """The fields of a window word that the coverage rule may find changed: those of the
+    semantics whose context holds in the stock word and the held fields whose owner is idle."""
+    out = {
+        lookup(k).id
+        for sem in anchors.semantics
+        if sem.context(stock)
+        for k in sem.fields
+    }
+    for fid in HELD:
+        own = owner(lookup(fid))
+        if own is not None and own.get(stock.value) == own.idle:
+            out.add(fid)
+    return frozenset(out)
 
-    def __init__(self, program: Program, facts: Sequence[Fact] = FACTS) -> None:
-        super().__init__(program, facts)
-        self.anchors = anchors(program, facts)
-        stock = run_window(self.anchors, program.words, program.words, None)
-        assert isinstance(stock, Window)
-        self.stock = stock
-        self.window: Window | None = None
-        self.computed = 0
-        self._used = False
 
-    def apply(self, emu: Emulator, job: Job, trace: Trace) -> JobResult:
-        stock = job.program.words == self.program.words
-        self.window = self.stock if stock else None
-        self._used = False
-        result = super().apply(emu, job, trace)
-        self.computed += self._used
-        return result
-
-    def _effects(
-        self,
-        emu: Emulator,
-        job: Job,
-        edited: list[int],
-        probe: Probe | None,
-        result: JobResult,
-    ) -> tuple[Effect, Effect, Effect] | None:
-        planes = super()._effects(emu, job, edited, probe, result)
-        if result.edits:
-            w = run_window(self.anchors, self.program.words, job.program.words, probe)
-            if isinstance(w, Window):
-                self.window = w
-        return planes
-
-    def _vertical(
-        self,
-        get: Callable[[int, int], int],
-        taps: tuple[tuple[int, ...], ...] | None,
-        c: int,
-        a: int,
-        x: int,
-        effect: Effect,
-        ran: tuple[int, int],
-    ) -> tuple[int, Confidence]:
-        if self.window is None:
-            return super()._vertical(get, taps, c, a, x, effect, ran)
-        self._used = True
-        acc = self.window.acc
-        if isinstance(acc, Unknown):
-            raise _Miss("operand")
-        terms = acc.get(c, ())
-        taint = H if a & 0xFFF else V  # a phase between the 16 never ran
-        base, p = a >> 16, (a & 0xFFFF) >> 12
-        kernel = taps[p] if taps is not None else None
-        weights = [weight(t.weight, kernel, p) for t in terms]
-        taint = min(taint, _gain_taint(tuple(w for w in weights if w is not None), ran))
-
-        def read(row: Row) -> int:
-            if row.plane != c:
-                raise _Miss("operand")  # the frame reads plane c only
-            return get(base + row.dy, x)
-
-        try:
-            s, conf = accumulate(terms, kernel, p, read)
-        except UnknownTerm:
-            raise _Miss("operand") from None
-        return self.anchors.stages[c](s), min(taint, conf)
+def uncovered(anchors: Anchors, stock: Word, word: Word, index: int) -> str:
+    """Why a changed field of `word` at `index` is covered on no measured job class; "" if
+    every one is."""
+    why = ""
+    for probe in anchors.classes:
+        whys = [
+            c.why
+            for c in cover(anchors, stock, word, index, probe)
+            if c.confidence is None
+        ]
+        if not whys:
+            return ""
+        why = whys[0]
+    return why

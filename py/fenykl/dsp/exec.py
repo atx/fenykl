@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .fields import GRID_A, GRID_B, PORTS, Confidence, Field, lookup
-from .resample import out_of, rhe
 from .resample_edits import Probe
 from .semantics import FLAG_BITS, UnknownSemantics, local_offset
 from .units import UNITS
@@ -426,9 +425,11 @@ class Uncovered:
 
 @dataclass(frozen=True)
 class Window:
-    """The window's term lists per accumulator, or why every accumulator is unknown."""
+    """The window's term lists per accumulator, or why every accumulator is unknown, and the
+    covers of the job's changed fields by word index."""
 
     acc: Mapping[int, Sequence[Term]] | Unknown
+    edits: tuple[tuple[int, Cover], ...] = ()
 
 
 def run_window(
@@ -441,6 +442,7 @@ def run_window(
     overwritten in the window or after it, makes every accumulator unknown; words in
     `anchors.inert` do not count."""
     tiers: dict[tuple[int, str], Confidence] = {}
+    edits: list[tuple[int, Cover]] = []
     measured = True
     for index, (s, w) in enumerate(zip(stock, words, strict=True)):
         if s == w:
@@ -450,6 +452,7 @@ def run_window(
         for c in cover(anchors, s, w, index, probe):
             if c.confidence is None:
                 return Uncovered(c.why)
+            edits.append((index, c))
         for sem in anchors.semantics:
             if not (sem.context(w) and sem.context(s)) or sem.key(w) == sem.key(s):
                 continue
@@ -460,7 +463,7 @@ def run_window(
     edited = Machine(anchors, tiers)
     acc = edited.run(words)
     if measured:
-        return Window(acc)
+        return Window(acc, tuple(edits))
     base = Machine(anchors)
     base.run(stock)
     reads = readers(anchors, stock)
@@ -474,9 +477,10 @@ def run_window(
                 old, new = base.items.get(item), edited.items.get(item)
             if (old and old.value) != (new and new.value):
                 return Window(
-                    Unknown(f"an edited value of {_name(item)} reaches word {index}")
+                    Unknown(f"an edited value of {_name(item)} reaches word {index}"),
+                    tuple(edits),
                 )
-    return Window(acc)
+    return Window(acc, tuple(edits))
 
 
 # -- the output stage
@@ -522,6 +526,17 @@ def accumulate(
         s += w * read(t.operand)
         conf = min(conf, t.confidence)
     return s, conf
+
+
+def rhe(n: int, d: int) -> int:
+    """n / d rounded to nearest, ties to even."""
+    q, r = divmod(n, d)
+    return q + (1 if 2 * r > d or (2 * r == d and q & 1) else 0)
+
+
+def out_of(s: int) -> int:
+    """The output byte of a sum of tap x pixel."""
+    return max(0, min(255, rhe(rhe(s, 4), 64)))
 
 
 def luma_out(s: int) -> int:
