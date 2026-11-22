@@ -151,7 +151,10 @@ pairs, which as writes would be dead). Two ops have camera-measured meanings, ru
 core (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
 quartered at imm 1 and 2), and 0x38, an AND of ra with its sign-extended imm16 (one cleared mask
 bit moved a copy's store by 16 B). Where 0x3f's result goes is open: the core writes ra at
-hypothesis taint. `word.operands` decodes a data op's operands (`Operands`), and
+hypothesis taint. 0x16 and 0x10 are loads of a halfword and a byte at ra + imm in units of
+their width (`OP_SEMANTICS`, inferred): in the resampler the word that reads tap 1 is a 0x16 with
+imm 1; on the camera imm 0 gave tap 1 tap 0's coefficient byte for byte, and op 0x10 gave it c0's
+bits 8..15 zero-extended. Like 0x1a, the core records the read only. `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
 

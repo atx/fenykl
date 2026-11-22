@@ -371,22 +371,34 @@ class OpSemantics:
     run: Callable[[Word, RegisterFile, Space], Effect | None]
 
 
-def _local_read(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-    args = word.operands
-    assert args is not None and args.imm is not None
-    if word["f120_122"] != 7:
-        return None
-    base = slot[args.ra]
-    where = f"local word r{args.ra} + {args.imm:#x}"
-    if base is None or base.exact is None:
-        return Effect(note=f"reads {where}, r{args.ra} unknown")
-    k = base.exact + args.imm
-    addr = local.base + 4 * k
-    if not local.contains(addr, 4):
-        return Effect(note=f"reads {where} = {k:#x}, outside the modelled local memory")
-    b = local.read(addr, 4)
-    value = f"{int.from_bytes(b.data, 'little'):#x}" if all(b.known) else "unknown"
-    return Effect(note=f"reads local word {k:#x}: {value}")
+LOAD_UNITS = {4: "word", 2: "halfword", 1: "byte"}
+
+
+def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
+    """A read of `width` bytes of local memory at byte 4 ra + width imm: ra a word index, the
+    immediate in units of the width. ra is a base it does not write; the read is recorded only."""
+    unit = LOAD_UNITS[width]
+
+    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+        args = word.operands
+        assert args is not None and args.imm is not None
+        if word["f120_122"] != 7:
+            return None
+        base = slot[args.ra]
+        where = f"local {unit} r{args.ra} + {args.imm:#x}"
+        if base is None or base.exact is None:
+            return Effect(note=f"reads {where}, r{args.ra} unknown")
+        k = 4 * base.exact // width + args.imm
+        addr = local.base + width * k
+        if not local.contains(addr, width):
+            return Effect(
+                note=f"reads {where} = {k:#x}, outside the modelled local memory"
+            )
+        b = local.read(addr, width)
+        value = f"{int.from_bytes(b.data, 'little'):#x}" if all(b.known) else "unknown"
+        return Effect(note=f"reads local {unit} {k:#x}: {value}")
+
+    return run
 
 
 def _computed(
@@ -456,7 +468,29 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "naming of that register is this op again, with another immediate in 95 % of those "
         "pairs, which as writes would be dead); where the datum goes is open, so the "
         "core records the read only; covered at f120_122 = 7, the value of those three words",
-        _local_read,
+        _local_load(4),
+    ),
+    0x16: OpSemantics(
+        I,
+        "reads the local halfword at ra + imm halfwords, ra a base register it does not write, "
+        "as 0x1a's (verified on the camera at one word that the immediate selects the tap: in "
+        "the resampler, the word that reads tap 1 of the line's phase holds imm 1, and imm 0 "
+        "gave tap 1 tap 0's coefficient, byte for byte; the halfword unit is inferred from "
+        "that and from the request's halfwords, and ra a word index as 0x1a's is a hypothesis); "
+        "where the datum goes is open, so the core records the read only; covered at f120_122 "
+        "= 7, the value of that word",
+        _local_load(2),
+    ),
+    0x10: OpSemantics(
+        I,
+        "reads the local byte at ra + imm bytes, zero-extended, ra a base register it does not "
+        "write (inferred: on the camera, 0x10 in place of the resampler's tap-1 read, imm 1 and "
+        "ra kept, gave tap 1 the coefficient c0's bits 8..15 zero-extended, the byte at offset 1 "
+        "of the phase's taps, on every line; a sign-extended byte is refuted; that the "
+        "immediate counts bytes and not another unit that lands on byte 1 rests on that one "
+        "word and immediate); where the datum goes is open, so the core records the read only; "
+        "covered at f120_122 = 7, the value of that word",
+        _local_load(1),
     ),
     0x38: OpSemantics(
         I,

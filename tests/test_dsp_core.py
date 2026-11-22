@@ -116,6 +116,30 @@ def test_local_read_uses_ra_as_a_base():
         Core(Boot()).run(commands.copy(Program((other, HALT)), SRC, DST, 0x400))
 
 
+def load(op: int, imm: int) -> Word:
+    return Word.from_fields(
+        {"f120_122": 7}, base=Word.data(op, Operands(ra=4, imm=imm))
+    )
+
+
+def test_word_halfword_and_byte_loads_share_one_base():
+    # Local word 0 holds src: 0x1a reads it whole, 0x16 its halfwords, 0x10 its bytes.
+    words = (load(0x1A, 0), load(0x16, 1), load(0x10, 1), load(0x16, 2), load(0x10, -1))
+    boot, flow = run_slot(words, r4=given(0))
+    assert [s.note for s in flow.steps[:5]] == [
+        f"reads local word 0x0: {SRC:#x}",
+        f"reads local halfword 0x1: {SRC >> 16:#x}",
+        f"reads local byte 0x1: {SRC >> 8 & 0xFF:#x}",
+        f"reads local halfword 0x2: {DST & 0xFFFF:#x}",
+        "reads local byte r4 + -0x1 = -0x1, outside the modelled local memory",
+    ]
+    assert boot.slot[4] == given(0)  # ra is the base, not written
+    # A base of word 1 (dst) moves both by 4 bytes.
+    _, flow = run_slot((load(0x16, 1), load(0x10, 1)), r4=given(1))
+    assert flow.steps[0].note == f"reads local halfword 0x3: {DST >> 16:#x}"
+    assert flow.steps[1].note == f"reads local byte 0x5: {DST >> 8 & 0xFF:#x}"
+
+
 def test_loop_end_count_hypotheses():
     # 0: loop body 1..7 (back-edge at 3, slots 4..7), halt at 8.
     program = Program(

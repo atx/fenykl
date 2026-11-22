@@ -1037,12 +1037,15 @@ MEANINGS = {
     "the local words that the camera shows 0x1a reading",
     0x0C: "its immediates 0x1fxx read as small negative numbers (inferred)",
     0x10: "its immediates 0x1fxx read as small negative numbers (inferred); in program 13 every "
-    "non-zero immediate lies in its tap block 0x00..0x1f: reads a coefficient or line by index "
-    "(hypothesis)",
+    "non-zero immediate lies in its tap block 0x00..0x1f; on the camera, 0x10 in place of the "
+    "resampler's 0x16 tap-1 read (imm 1, ra kept) gave tap 1 c0's bits 8..15 zero-extended: a "
+    "byte load at ra + imm bytes (inferred)",
     0x12: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f: reads a "
     "coefficient or line by index (hypothesis)",
     0x16: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f, in runs that "
-    "step 0, 1, 2, 3 with one ra per run: reads a coefficient or line by index (hypothesis)",
+    "step 0, 1, 2, 3 with one ra per run; on the camera, imm 1 -> 0 in the resampler's tap-1 "
+    "read gave tap 1 tap 0's coefficient byte for byte (verified at that word): a halfword "
+    "load at ra + imm halfwords, the imm the tap index (the unit inferred)",
     0x18: "its immediates spread over the four regions as 0x1a's do: a local-memory access at its "
     "immediate (hypothesis)",
     0x1A: "reads the local word at its immediate (inferred, strong): program 16's three 0x1a words "
