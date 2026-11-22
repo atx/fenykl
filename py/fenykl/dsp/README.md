@@ -70,6 +70,12 @@ the ownership); f274_275 / f276 by their values. The S0, S1 and S3 heads merge a
 never active without the high part, which is active alone in 5, 5 and 26 % of its words; f232_233
 merges a bit that is never clear without the other.
 
+On the camera, ownership predicts use in one direction (`fields.UNIT_FACTS`, program 13 words
+433 and 439): idling the nibbles whose owner is active in the word gives the effect of idling the
+whole grid, byte for byte, and idling the held nibbles of idle owners has none (32 nibbles, in
+three sets, at their idle values). An active owner is not sufficient: port f202_205 and X0's
+f69_71 are inert there.
+
 ## Fields
 
 Each field has a permanent positional id from its bits (`f115_119`, `f229`)
@@ -381,8 +387,8 @@ flow.
   outcome and the fact); a swept field goes in `operand`, by value, with its key in
   `operand_field` (xreg by default; word 60's f76_79 copies at 0 only); single edits of other
   fields go in `flips`, by the bits flipped against the stock value (45's target, 65's
-  immediate), so that no stock value is part of the code. A word edited together with another
-  field of the same word has no semantics.
+  immediate), so that no stock value is part of the code. An edit of two fields of one word has
+  no semantics.
 - **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
   `masks` (the bits of each matched field it fixes, default all), `operands` (fields it reads
   or ignores) and `act`, which records into the job's `Trace`; add it to the model's

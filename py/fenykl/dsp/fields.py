@@ -22,7 +22,7 @@ operands compose from the positional fields.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
 
 WORD_BITS = 320
@@ -475,7 +475,9 @@ GRID_B_FACT = (
     "grid B follows grid A at +110 in which words are active, but its values equal the +110 "
     "partner's mostly only at 145, 179, 190, 194, 198 and 202, and its nibbles have one enable "
     "each where grid A's are operands of the S heads (verified in the bytes across later firmware "
-    "versions of the same family): not a mirror bank (inferred)"
+    "versions of the same family): not a mirror bank (inferred); a held nibble under an idle "
+    "enable is don't care at its idle value (verified on the camera at program 13 words 433 and "
+    "439, 25 nibbles idled in two sets; at other values inferred)"
 )
 QUAD = (
     "Q, a section mode of the grid (hypothesis): f35_36 and f145_146 are set only in some "
@@ -835,6 +837,51 @@ FIELDS: tuple[Field, ...] = (
         values={value: meaning.name for value, meaning in OPS.items()},
     ),
 )
+
+
+_CAMERA = "verified on the camera, a source varying by line at b = 1"
+_HELD_439 = (
+    "program 13 word 439, its head idle there: idling it with the other six held grid A nibbles "
+    f"of idle heads has no effect ({_CAMERA}, as one set at the idle value)"
+)
+UNIT_FACTS = {
+    "f198_201": "program 13 word 433, its enable f261_262 active: idling it alone equals idling "
+    f"all of grid B there, byte for byte ({_CAMERA}); what it routes is open, not the loaded "
+    "tap coefficient itself (inferred: the lines it changes are not those where that tap is "
+    "non-zero)",
+    "f261_262": f"its port f198_201 carries grid B's effect at program 13 word 433 ({_CAMERA})",
+    "f202_205": "program 13 word 433, its enable f263_264 active: idling it has no effect "
+    f"({_CAMERA}), so an active enable is not sufficient for an effect",
+    "f263_264": "active at program 13 word 433, where idling its port f202_205 has no effect "
+    f"({_CAMERA})",
+    "f163_166": "program 13 word 439, its enable f244_245 active: idling it alone equals idling "
+    f"all of grid B there, the second plane's path ({_CAMERA})",
+    "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA})",
+    **{
+        k: "program 13 word 439, S2's head active: idling f53_56, f57_60 and f88_91 together "
+        "equals idling all of grid A there, which drops tap 0's term of the sum "
+        f"({_CAMERA}); which of the three carries it is not separated"
+        for k in ("f53_56", "f57_60", "f88_91")
+    },
+    "f292_295": "its operands f53_56, f57_60 and f88_91 carry program 13 word 439's tap 0 term "
+    f"({_CAMERA}; the head itself not idled)",
+    "f69_71": f"program 13 word 439, X0 active: idling it has no effect ({_CAMERA}), so an "
+    "active owner is not sufficient for an effect",
+    **{
+        k: _HELD_439
+        for k in ("f37_40", "f41_44", "f45_48", "f49_52", "f65_68", "f76_79", "f80_83")
+    },
+}
+"""Camera facts of single fields on the units (`units.py`): ownership predicts use."""
+FIELDS = tuple(
+    replace(f, fact=f"{f.fact}. {UNIT_FACTS[f.id][0].upper()}{UNIT_FACTS[f.id][1:]}")
+    if f.id in UNIT_FACTS
+    else f
+    for f in FIELDS
+)
+_unfacted = set(UNIT_FACTS) - {f.id for f in FIELDS}
+if _unfacted:
+    raise ValueError(f"unit facts without a field: {sorted(_unfacted)}")
 
 
 def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
