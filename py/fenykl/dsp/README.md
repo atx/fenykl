@@ -226,8 +226,8 @@ is weaker:
   at its stock register too, and never stronger than the register's fact; word 76's use at
   another register is a hypothesis beyond the lengths it ran at.
 - **Combinations.** A job that differs from the stock program in two or more words is at most
-  inferred, but for the compositions of program 13's loop-head window seen together on the
-  camera ("The loop-head window").
+  inferred, but for the exact field values of program 13's loop-head window that ran together
+  on the camera ("The loop-head window").
 - **Lenient mode.** An ignored field, or a route nibble off the stock transfers' values, makes
   the job a hypothesis: its loaded, stored and zero-filled bytes alike.
 
@@ -389,11 +389,13 @@ the job classes it ran on. Unless the job edits one semantic at a measured cell,
 register value that reaches a word reading it without a semantic (`exec.readers`; words shown
 inert at b = 1 aside) makes the window unknown.
 
-Composition (`resample_window.composition_cap`): two compositions ran and gave the composed
-bytes [verified], f57_60 with f88_91 in one tap word (the tap takes the selected coefficient
-times the selected operand) and f88_91 at two words (two plane-0 taps, or one plane-0 tap and
-one chroma term: each acts in its accumulation as it does alone). Jobs of exactly those kinds
-keep their fields' tiers; any other job that edits two or more semantics is at most inferred.
+Composition (`resample_window.composition_cap`): five compositions ran and gave the composed
+bytes [verified] (`COMPOSED`): f57_60 with f88_91 in one tap word, 57 = 4 with 88 = 5 at 439
+and 57 = 5 with 88 = 5 at 441 (the tap takes the selected coefficient times the selected
+operand), and f88_91 at two words, 88 = 2 at 439 with 88 = 3 at 440, 88 = 5 at 441 with 88 = 4
+at 442 and 88 = 3 at 440 with 88 = 2 at 444 (each acts in its accumulation as it does alone).
+Jobs with exactly those (word, field, value) sets keep their fields' tiers; any other job that
+edits two or more semantics is at most inferred.
 
 ### The stepping core
 
@@ -452,9 +454,9 @@ flow.
   no semantics.
 - **A field fact of program 13's loop-head window**: a `FieldSemantic` in
   `resample_window.SEMANTICS` (the fields read as one value, the context, the tier off its
-  cells), its measured cells in `_cells` with their tier, and a composition kind in
-  `composition_cap` only once it ran; a fact no semantic gives (an idle, a value with no
-  mechanism) stays a row in `resample_edits.FACTS`.
+  cells), its measured cells in `_cells` with their tier, and a composition's (word, field,
+  value) set in `COMPOSED` only once it ran; a fact no semantic gives (an idle, a value with
+  no mechanism) stays a row in `resample_edits.FACTS`.
 - **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
   `masks` (the bits of each matched field it fixes, default all), `operands` (fields it reads
   or ignores) and `act`, which records into the job's `Trace`; add it to the model's

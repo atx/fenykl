@@ -243,27 +243,27 @@ def uncovered(anchors: Anchors, stock: Word, word: Word, index: int) -> str:
     return why
 
 
-def composition_cap(edits: Sequence[tuple[int, Cover]]) -> Confidence:
-    """The cap on the tiers of a job's edited fields: none for one semantic and for the two
-    compositions that ran [verified]: f57_60 with f88_91 in one tap term word (the tap's
-    coefficient times its operand), and f88_91 at two term words, both taps of plane 0 or one
-    tap and one chroma term (each acts in its accumulation as it does alone); inferred for any
-    other composition."""
+COMPOSED = (
+    frozenset({(439, "f57_60", 4), (439, "f88_91", 5)}),
+    frozenset({(441, "f57_60", 5), (441, "f88_91", 5)}),
+    frozenset({(439, "f88_91", 2), (440, "f88_91", 3)}),
+    frozenset({(441, "f88_91", 5), (442, "f88_91", 4)}),
+    frozenset({(440, "f88_91", 3), (444, "f88_91", 2)}),
+)
+"""The compositions that ran, as (word, field, value) sets, and gave the composed bytes
+[verified]: f57_60 with f88_91 in one tap word (the selected coefficient times the selected
+operand); f88_91 at two words, two plane-0 taps swapping their coefficients or a plane-0 tap with
+a chroma term (each acts in its accumulation as it does alone)."""
+
+
+def composition_cap(
+    edits: Sequence[tuple[int, Cover]], words: Sequence[Word]
+) -> Confidence:
+    """The cap on the tiers of a job's edited fields of `words`: none for one semantic and for
+    the compositions that ran (`COMPOSED`), inferred for any other composition."""
     if any(c.coverage is not Coverage.SEMANTIC for _, c in edits):
         return V if len(edits) < 2 else I
-    parts = sorted({(i, c.semantic) for i, c in edits})
-    if len(parts) < 2:
+    if len({(i, c.semantic) for i, c in edits}) < 2:
         return V
-    if len(parts) > 2:
-        return I
-    (i, f), (j, g) = parts
-    if i == j and i in TAP_WORDS and {f, g} == {"f57_60", "f88_91"}:
-        return V
-    if (
-        i != j
-        and f == g == "f88_91"
-        and i in TAP_WORDS
-        and j in (*TAP_WORDS, *CHROMA_WORDS)
-    ):
-        return V
-    return I
+    ran = frozenset((i, c.field.id, c.field.get(words[i].value)) for i, c in edits)
+    return V if ran in COMPOSED else I

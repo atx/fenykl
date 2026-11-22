@@ -283,17 +283,24 @@ def test_edits_of_two_window_fields_compose_as_the_camera_showed():
     taps = Taps.of(COMPOSE)
     # 88 = 2 at 439 and 88 = 3 at 440: taps 0 and 1 swap their coefficients.
     swapped = Taps.of([(c1, c0, c2, c3) for c0, c1, c2, c3 in COMPOSE])
-    # 57 = 4 with 88 = 4 at 439: tap 0 takes c2 and multiplies tap 1's line.
-    merged = Taps.of([(0, c1 + c2, c2, c3) for _, c1, c2, c3 in COMPOSE])
+    # 57 = 4 with 88 = 5 at 439: tap 0 takes c3 and multiplies tap 1's line.
+    merged = Taps.of([(0, c1 + c3, c2, c3) for _, c1, c2, c3 in COMPOSE])
+    # 88 = 5 at 441 and 88 = 4 at 442: taps 2 and 3 swap their coefficients.
+    swapped23 = Taps.of([(c0, c1, c3, c2) for c0, c1, c2, c3 in COMPOSE])
     for edits, want_taps in (
         ([(439, FieldValue("f88_91", 2)), (440, FieldValue("f88_91", 3))], swapped),
-        ([(439, set_fields(f57_60=4, f88_91=4))], merged),
+        ([(441, FieldValue("f88_91", 5)), (442, FieldValue("f88_91", 4))], swapped23),
+        ([(439, set_fields(f57_60=4, f88_91=5))], merged),
     ):
         got = predict(model(), taps, FLAT_SRC, TABLE, edits=edits)
         want = predict(model(), want_taps, FLAT_SRC, TABLE)
         assert [c for _, c in got.result.edits] == [V, V], edits
         assert got.dst.known == want.dst.known
         assert got.dst.data == want.dst.data
+    # A plane-0 tap and a chroma term: 88 = 3 at 440 with 88 = 2 at 444.
+    edits = [(440, FieldValue("f88_91", 3)), (444, FieldValue("f88_91", 2))]
+    got = predict(model(), taps, FLAT_SRC, TABLE, edits=edits)
+    assert [c for _, c in got.result.edits] == [V, V]
 
 
 def test_a_tap_term_reads_another_planes_line():
@@ -349,7 +356,21 @@ def test_a_tap_term_reads_another_planes_line():
 
 def test_other_compositions_are_at_most_inferred():
     taps = Taps.of(COMPOSE)
+    # 57 = 4 with 88 = 4 at 439 never ran: tap 0 takes c2 and multiplies tap 1's line.
+    got = predict(
+        model(), taps, FLAT_SRC, TABLE, edits=[(439, set_fields(f57_60=4, f88_91=4))]
+    )
+    want = predict(
+        model(),
+        Taps.of([(0, c1 + c2, c2, c3) for _, c1, c2, c3 in COMPOSE]),
+        FLAT_SRC,
+        TABLE,
+    )
+    assert [c for _, c in got.result.edits] == [I, I]
+    assert got.dst.known == want.dst.known and got.dst.data == want.dst.data
     for edits in (
+        [(439, FieldValue("f88_91", 4)), (440, FieldValue("f88_91", 3))],
+        [(440, FieldValue("f88_91", 3)), (443, FieldValue("f88_91", 2))],
         [
             (439, FieldValue("f88_91", 2)),
             (440, FieldValue("f88_91", 3)),

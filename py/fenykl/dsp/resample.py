@@ -495,7 +495,7 @@ class Resample13Model:
             p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
             return (p0, p1, p2), w.acc if isinstance(w, Window) else None
         if isinstance(w, Window):
-            cap = composition_cap(w.edits)
+            cap = composition_cap(w.edits, words)
             for i, c in w.edits:
                 assert c.confidence is not None
                 value = c.field.get(words[i].value)
