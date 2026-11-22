@@ -216,9 +216,10 @@ register fact. What was seen on the camera exactly is verified; what the model e
 is weaker:
 
 - **Positions.** A semantic at its stock position is at most inferred, at any other position a
-  hypothesis: an undecoded stock word runs as its class, inferred at its stock indices and a
-  hypothesis elsewhere; a transfer whose role the sequencer assigns away from the role's stock
-  word is a hypothesis; the idle word is verified anywhere.
+  hypothesis: an undecoded stock word is a row at its stock index only (inferred), and at
+  another index it is no row (strict mode raises, lenient mode runs the stock word there); a
+  transfer whose role the sequencer assigns away from the role's stock word is a hypothesis;
+  the idle word is verified anywhere.
 - **Outcome tables.** What a role's table (or a part's swept register, or an idled part) gives
   is verified at the job lengths it ran at on the camera (`seen`, 1 KiB unless stated) and
   inferred at others.
