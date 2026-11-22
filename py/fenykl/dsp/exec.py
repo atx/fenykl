@@ -437,10 +437,10 @@ def run_window(
 ) -> Window | Uncovered:
     """The window of `words` (the stock program `stock`, edited) on job class `probe`.
 
-    Every changed field must be covered (a semantic or a don't-care). An edited value off its
-    measured cells that reaches a word reading it without a semantic (`readers`), before it is
-    overwritten in the window or after it, makes every accumulator unknown; words in
-    `anchors.inert` do not count."""
+    Every changed field must be covered (a semantic or a don't-care), in any number of words.
+    Unless the job edits one semantic at a measured cell, an edited value that reaches a word
+    reading it without a semantic (`readers`), before it is overwritten in the window or after
+    it, makes every accumulator unknown; words in `anchors.inert` do not count."""
     tiers: dict[tuple[int, str], Confidence] = {}
     edits: list[tuple[int, Cover]] = []
     measured = True
@@ -462,7 +462,7 @@ def run_window(
             measured &= (sem.name, index, sem.key(w)) in anchors.cells
     edited = Machine(anchors, tiers)
     acc = edited.run(words)
-    if measured:
+    if measured and len(tiers) <= 1:
         return Window(acc, tuple(edits))
     base = Machine(anchors)
     base.run(stock)

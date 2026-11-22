@@ -20,7 +20,7 @@ from fenykl.dsp.exec import (
     weight,
 )
 from fenykl.dsp.fields import FIELDS, Confidence
-from fenykl.dsp.resample import Resample13Model
+from fenykl.dsp.resample import Resample13Model, predict
 from fenykl.dsp.resample_edits import (
     FACTS,
     FLAT,
@@ -34,8 +34,9 @@ from fenykl.dsp.resample_edits import (
 )
 from fenykl.dsp.resample_window import WINDOW
 from fenykl.dsp.semantics import UnknownSemantics
+from fenykl.dsp.taps import Taps
 
-I = Confidence.INFERRED
+I, V = Confidence.INFERRED, Confidence.VERIFIED
 
 
 @cache
@@ -243,3 +244,73 @@ def test_a_zero_weight_term_reads_no_operand():
     lines = {0: 10, 1: 20}
     terms = [Term(TapBytes(2 * k, "<h"), Row(0, k), I) for k in range(2)]
     assert accumulate(terms, (3, -1, 0, 0), 0, lambda r: lines[r.dy]) == (10, I)
+
+
+# A flat source: line k of the three planes' 48 lines holds 7 k + 3; line i < 15 at phase i.
+FLAT_SRC = bytes((7 * (k // 64) + 3) & 0xFF for k in range(3 * 64 * 16))
+TABLE = [(i << 16 | i << 12, 0x10000) for i in range(15)] + [(15 << 16, 0x10000)]
+COMPOSE = [(-8, 264, 0, 0)] * 16
+COMPOSE[3] = (0, 0, 0, 256)
+COMPOSE[5] = (40, 100, 70, 46)
+
+
+def test_edits_of_two_window_fields_compose_as_the_camera_showed():
+    taps = Taps.of(COMPOSE)
+    # 88 = 2 at 439 and 88 = 3 at 440: taps 0 and 1 swap their coefficients.
+    swapped = Taps.of([(c1, c0, c2, c3) for c0, c1, c2, c3 in COMPOSE])
+    # 57 = 4 with 88 = 4 at 439: tap 0 takes c2 and multiplies tap 1's line.
+    merged = Taps.of([(0, c1 + c2, c2, c3) for _, c1, c2, c3 in COMPOSE])
+    for edits, want_taps in (
+        ([(439, FieldValue("f88_91", 2)), (440, FieldValue("f88_91", 3))], swapped),
+        ([(439, set_fields(f57_60=4, f88_91=4))], merged),
+    ):
+        got = predict(model(), taps, FLAT_SRC, TABLE, edits=edits)
+        want = predict(model(), want_taps, FLAT_SRC, TABLE)
+        assert [c for _, c in got.result.edits] == [V, V], edits
+        assert got.dst.known == want.dst.known
+        assert got.dst.data == want.dst.data
+
+
+def test_a_tap_term_reads_another_planes_line():
+    # 57 = 5 with 88 = 5 at 441: tap 2 takes c3 and multiplies plane 1's line a + 1.
+    edits = [(441, set_fields(f57_60=5, f88_91=5))]
+    got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+
+    def line(c: int, k: int) -> int:
+        return (7 * (16 * c + max(k, 0)) + 3) & 0xFF
+
+    for i, (a, _) in enumerate(TABLE):
+        y, p = a >> 16, (a >> 12) & 15
+        c0, c1, _, c3 = COMPOSE[p]
+        s = (
+            c0 * line(0, y - 1)
+            + c1 * line(0, y)
+            + c3 * (line(1, y + 1) + line(0, y + 2))
+        )
+        want = max(0, min(255, rne(rne(s, 4), 64)))
+        assert got.dst.data[64 * i : 64 * i + 64] == bytes([want]) * 64, i
+    assert all(got.dst.known[: 64 * 16])
+    # 57 = 15 has no semantic: the job is unmodelled.
+    with pytest.raises(UnknownSemantics, match="word 441"):
+        predict(
+            model(),
+            Taps.of(COMPOSE),
+            FLAT_SRC,
+            TABLE,
+            edits=[(441, FieldValue("f57_60", 15))],
+        )
+
+
+def test_other_compositions_are_at_most_inferred():
+    taps = Taps.of(COMPOSE)
+    for edits in (
+        [
+            (439, FieldValue("f88_91", 2)),
+            (440, FieldValue("f88_91", 3)),
+            (441, FieldValue("f88_91", 2)),
+        ],
+        [(443, FieldValue("f88_91", 2)), (445, FieldValue("f88_91", 4))],
+        [(439, FieldValue("f57_60", 4)), (440, FieldValue("f88_91", 3))],
+    ):
+        got = predict(model(), taps, FLAT_SRC, TABLE, edits=edits)
+        assert {c for _, c in got.result.edits} == {I}, edits

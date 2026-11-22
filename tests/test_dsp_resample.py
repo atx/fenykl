@@ -431,7 +431,7 @@ def test_a_measured_edit_outside_its_classes_gives_no_prediction():
         model(), Taps.of(PHASES), FLAT, table, edits=[(439, GRID_C2)], strict=False
     )
     assert set(got.confidence()) - {None} == {Confidence.HYPOTHESIS}
-    # Two measured edits never ran together.
+    # Two measured edits that the window does not cover never ran together.
     got = predict(
         model(), Taps.of(PHASES), FLAT, TABLE13, edits=[(439, GRID_C2), (490, GRID_C2)]
     )

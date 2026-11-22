@@ -99,6 +99,7 @@ from .resample_edits import (
     TapLoad,
 )
 from .resample_window import anchors as window_anchors
+from .resample_window import composition_cap, free, uncovered
 from .semantics import (
     IDLE_CLASS,
     OpaqueClass,
@@ -285,7 +286,25 @@ class Resample13Model:
             )
             for (i, value), e in self.edits.items()
         ]
-        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *edited, *self.opaque)
+        window = [
+            OpaqueClass(
+                f"word {i}, window",
+                "a window word of the resampler: the coverage rule decides its changed fields",
+                {f.id: f.get(words[i].value) for f in FIELDS},
+                frozenset(),
+                masks=dict.fromkeys(free(self.anchors, words[i]), 0),
+                confidence=I,
+                part=part,
+                positions=frozenset({i}),
+            )
+            for i in self.anchors.words
+        ]
+        self.classes: tuple[WordClass, ...] = (
+            IDLE_CLASS,
+            *edited,
+            *self.opaque,
+            *window,
+        )
 
     @classmethod
     def from_image(
@@ -401,7 +420,8 @@ class Resample13Model:
 
     def _edited(self, emu: Emulator, job: Job) -> list[int]:
         """The indices of the words that differ from the stock program. In strict mode a word
-        that is no measured edit raises UnknownSemantics."""
+        that is no measured edit and whose changed fields the window does not cover raises
+        UnknownSemantics."""
         stock, words = self.program.words, job.program.words
         both = min(len(stock), len(words))
         edited = [
@@ -410,7 +430,14 @@ class Resample13Model:
             if i >= both or words[i] != stock[i]
         ]
         for at in edited:
-            if not emu.strict or at < both and (at, words[at].value) in self.edits:
+            if (
+                not emu.strict
+                or at < both
+                and (
+                    (at, words[at].value) in self.edits
+                    or not uncovered(self.anchors, stock[at], words[at], at)
+                )
+            ):
                 continue
             raise UnknownSemantics(
                 at,
@@ -429,17 +456,25 @@ class Resample13Model:
         result: JobResult,
     ) -> tuple[Planes | None, Acc | None]:
         """What each plane does in a job with these edited words, and the window's term lists
-        where the window covers the job: one measured edit on a class it ran on gives its
-        planes [verified]; anything else is unknown in strict mode and None in lenient mode
-        (the stock law, as a hypothesis)."""
+        where the window covers the job: one edited word that is a measured edit on a class it
+        ran on gives its planes [verified]; else a job whose every changed field the window
+        covers runs the window, its edited fields at their scoped tiers under the composition
+        cap; anything else is unknown in strict mode and None in lenient mode (the stock law,
+        as a hypothesis)."""
         words = job.program.words
+        stock = self.program.words
+        w = (
+            run_window(self.anchors, stock, words, probe)
+            if len(words) == len(stock)
+            else None
+        )
         edits = [
             self.edits.get((i, words[i].value)) if i < len(words) else None
             for i in edited
         ]
         e = edits[0]
         if len(edited) > 1:
-            why = "edits of two or more words never ran together"
+            why = "edits of two or more words that the window does not cover"
         elif e is None:
             why = "no measured edit gives this word"
         elif probe not in e.planes:
@@ -450,8 +485,17 @@ class Resample13Model:
                 (f"word {edited[0]}, {e.kind.name}, on {probe}: {e.fact}", V)
             )
             p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
-            w = run_window(self.anchors, self.program.words, words, probe)
             return (p0, p1, p2), w.acc if isinstance(w, Window) else None
+        if isinstance(w, Window):
+            cap = composition_cap(w.edits)
+            for i, c in w.edits:
+                assert c.confidence is not None
+                value = c.field.get(words[i].value)
+                text = (
+                    f"word {i}, {c.field.id} = {value}, on {probe}: {c.coverage.value}"
+                )
+                result.edits.append((text, min(c.confidence, cap)))
+            return STOCK_PLANES, w.acc
         result.notes.append(why)
         return ((Changed(why),) * PLANES if emu.strict else None), None
 

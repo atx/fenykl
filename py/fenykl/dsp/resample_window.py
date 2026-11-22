@@ -23,6 +23,8 @@ from .exec import (
     HELD,
     PORT_WRITES,
     Anchors,
+    Cover,
+    Coverage,
     FieldSemantic,
     PhaseWeight,
     Row,
@@ -221,3 +223,26 @@ def uncovered(anchors: Anchors, stock: Word, word: Word, index: int) -> str:
             return ""
         why = whys[0]
     return why
+
+
+def composition_cap(edits: Sequence[tuple[int, Cover]]) -> Confidence:
+    """The cap on the tiers of a job's edited fields: none for one field and for the two
+    compositions that ran [verified]: f57_60 with f88_91 in one tap term word (the tap's
+    coefficient times its operand), and f88_91 at two term words, both taps of plane 0 or one
+    tap and one chroma term (each acts in its accumulation as it does alone); inferred for any
+    other composition."""
+    if len(edits) < 2:
+        return V
+    if len(edits) > 2 or any(c.coverage is not Coverage.SEMANTIC for _, c in edits):
+        return I
+    (i, f), (j, g) = sorted((i, c.field.id) for i, c in edits)
+    if i == j and i in TAP_WORDS and {f, g} == {"f57_60", "f88_91"}:
+        return V
+    if (
+        i != j
+        and f == g == "f88_91"
+        and i in TAP_WORDS
+        and j in (*TAP_WORDS, *CHROMA_WORDS)
+    ):
+        return V
+    return I
