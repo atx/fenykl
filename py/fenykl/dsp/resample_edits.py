@@ -373,13 +373,13 @@ FACTS: tuple[Fact, ...] = (
         FieldValue("imm", 0),
         (433,),
         {FLAT: _planes("l..", TAP1_FROM_C0)},
-        "tap 1 takes tap 0's coefficient: the immediate is the tap index",
+        "tap 1 takes tap 0's coefficient: the immediate is the tap index (one run)",
     ),
     Fact(
         FieldValue("op", 0x10),
         (433,),
         {FLAT: _planes("l..", TAP1_FROM_C0_HIGH)},
-        "tap 1 takes c0's bits 8..15, zero-extended: a byte load at the same address",
+        "tap 1 takes c0's bits 8..15, zero-extended: a byte load at the same address (one run)",
     ),
     # Single bits of word 504's C2.
     Fact(bit(237), (504,), {VARY: _planes("...")}, ""),

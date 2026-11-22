@@ -147,14 +147,15 @@ of the local word at its immediate (inferred, strong): program 16's three 0x1a w
 local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
 destination (inferred: across later firmware versions of the same family, in 59 % of its words
 the next naming of that register is this op again, with another immediate in 95 % of those
-pairs, which as writes would be dead). Two ops have camera-measured meanings, run by the stepping
+pairs, which as writes would be dead). Four ops have camera-measured meanings, run by the stepping
 core (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
 quartered at imm 1 and 2), and 0x38, an AND of ra with its sign-extended imm16 (one cleared mask
 bit moved a copy's store by 16 B). Where 0x3f's result goes is open: the core writes ra at
-hypothesis taint. 0x16 and 0x10 are loads of a halfword and a byte at ra + imm in units of
-their width (`OP_SEMANTICS`, inferred): in the resampler the word that reads tap 1 is a 0x16 with
-imm 1; on the camera imm 0 gave tap 1 tap 0's coefficient byte for byte, and op 0x10 gave it c0's
-bits 8..15 zero-extended. Like 0x1a, the core records the read only. `word.operands` decodes a data op's operands (`Operands`), and
+hypothesis taint. 0x16 and 0x10 load a halfword and a byte at ra + imm in units of their width:
+in the resampler the word that reads tap 1 is a 0x16 with imm 1; on the camera imm 0 gave tap 1
+tap 0's coefficient byte for byte, and op 0x10 gave it c0's bits 8..15 zero-extended (one run
+each; ra as a word index is a hypothesis). Like 0x1a, the core records the read only.
+`word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
 
@@ -293,11 +294,13 @@ dst segments).
 
 `resample_edits.FACTS` holds the edits measured on the camera: a stock word with some bits set to
 the idle word's (`Idle`: the grid and C2's free bits, the grid, C2's free bits, the op bits, one
-bit) or one field set to a value (`FieldValue("f211_215", 4)`: a register renamed), and per
+bit) or one field set to a value (`FieldValue("f211_215", 4)`: a register renamed;
+`FieldValue("imm", 0)` at the tap-1 read 433), and per
 job class (`Probe`: a flat source or not, the step b, W; H 16) what each plane does: the stock law
 (`Stock`), unknown (`Changed`), or a law (`Operands`: plane 0 with each tap multiplying another
 tap's line, nothing or a bounded value; `Phase`: a chroma plane sampled at another horizontal
-phase). The model matches an edited word by its value, so the classes hold the measured edited
+phase; `TapLoad`: plane 0 with one tap's coefficient loaded from another place in the phase's
+taps, as 433's imm 0 (c1 := c0) and op 0x10 (c1 := c0's bits 8..15, zero-extended) do). The model matches an edited word by its value, so the classes hold the measured edited
 words too. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
 `Resample13Model(program, facts)` takes another outcome table.
 
