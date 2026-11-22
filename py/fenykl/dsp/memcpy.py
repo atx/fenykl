@@ -390,8 +390,9 @@ def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
     cls = TransferClass(
         "transfer",
         "register transfer: hands the register named in 115..119 to the stream "
-        "configuration; its role (address, offset, count, enable, format) is set by its "
-        "position [inferred, strong]",
+        "configuration; its role (address, offset, count, enable, format) is given by the "
+        "sequencer, by transfer order or by word index [hypothesis: the camera runs fit neither "
+        "rule alone, see `Sequencer`]",
         {f.id: f.idle for f in FIELDS if f.id not in TRANSFER_OPERANDS},
         TRANSFER_OPERANDS,
     )

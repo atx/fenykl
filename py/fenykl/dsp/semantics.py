@@ -250,9 +250,13 @@ class Sequencer:
     74 and 78 (bit 308 set) have no effect. The pointers start at slot 0 with every job.
 
     POSITION (the alternative considered): the role is the stock word index's role; a transfer
-    at another index has none. It gives the same results on every edit run so far (field sweeps
-    and idled words), so the camera has not told the two apart; an inserted or moved transfer
-    would.
+    at another index has none. Both give the same results on the field sweeps and idled words.
+    Moved transfers fit neither alone [verified on the camera, one run each]: exchanging the
+    count transfer 73 with the holding word 74 moves the count role to 74, with 74's register
+    (POINTER; POSITION predicts a timeout); exchanging 77 with the holding word 78 times the job
+    out (POSITION; POINTER predicts a copy). POINTER, which misses only the 77 / 78 exchange,
+    stays the default because nothing decides against it, at hypothesis taint wherever a
+    transfer is off its stock index.
     """
 
     def __init__(self, mode: Mode = Mode.POINTER) -> None:
