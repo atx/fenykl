@@ -291,8 +291,9 @@ that differ from what covers the stock word at its index, and for a role at a re
 registered semantics, and for a transfer whose route nibbles differ from the stock transfers'
 values. `Executor(boot, model, strict=False)` runs the stock word at such a word's index,
 ignores every field that differs from it and taints every byte the job loads or stores
-"hypothesis"; a stock transfer run so yields to the transfers of its channel that the job
-carries, where they would overfill it (a transfer moved onto another word's index).
+"hypothesis"; stock transfers run so yield to the transfers of their channel that the job
+carries, where they would overfill it (a transfer moved onto another word's index): as many as
+overfill it, the last ones in program order (the slot pointer's overflow).
 
 ### The resampler
 

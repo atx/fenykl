@@ -629,6 +629,35 @@ def test_a_stock_transfer_run_in_lenient_mode_yields_to_a_moved_one():
     assert result.taint is Confidence.HYPOTHESIS
 
 
+def two_stand_ins(*at: int) -> Program:
+    """Transfer 42 copied to the idle word 3 and word 0's value at `at`: four transfers for
+    completion A's three slots, two of them stand-ins in lenient mode."""
+    words = list(stock().words)
+    assert words[3] == IDLE
+    words[3] = words[42]
+    for i in at:
+        words[i] = words[0]
+    return Program(tuple(words))
+
+
+def test_only_the_stand_ins_that_overfill_a_channel_yield():
+    """Of the stand-ins for 42 and 43 only the last yields: 3, 42 and 44 fill the channel in
+    that order and the copy runs."""
+    program = two_stand_ins(42, 43)
+    with pytest.raises(UnknownSemantics):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert result.status is Status.OK and result.stored is not None
+    assert [i for i, _ in result.ignored] == [42, 43]
+    dst = boot.read(DST, LEN)
+    assert bytes(dst.data) == bytes(range(256)) * (LEN // 256)
+    assert dst.weakest() is Confidence.HYPOTHESIS
+    # Stand-ins for 43 and 44: 44 yields, and the stock word 43 in slot 2 (word 44's role)
+    # has no semantics at its register there; no slot stays unset.
+    with pytest.raises(UnknownSemantics, match="word 43: .*completion"):
+        run(two_stand_ins(43, 44), strict=False)
+
+
 def test_registers_persist_but_a_fact_without_a_value_forgets():
     boot = Boot()
     run(stock(), boot=boot)

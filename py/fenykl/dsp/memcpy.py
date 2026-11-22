@@ -753,13 +753,17 @@ class Copy16Model:
                     o, at = edit
                     why = f"{part.token} at {at}: {o.value}"
                     plan.outcomes.append((o, why, part.at(length)))
-        # A stand-in transfer yields to the transfers the job carries where they overfill its
-        # channel (a transfer moved onto another word's index).
+        # Stand-in transfers yield to the transfers the job carries where they overfill its
+        # channel (a transfer moved onto another word's index): as many as overfill it, the
+        # last ones in program order, as the slot pointer leaves the last ones without a slot.
         transfers = dict(trace.channels)
         for c in self.channels:
             slots = transfers.get(c.name, [])
-            if len(slots) > len(c.roles):
-                transfers[c.name] = [t for t in slots if t.index not in trace.standins]
+            over = len(slots) - len(c.roles)
+            if over <= 0:
+                continue
+            drop = sorted(t.index for t in slots if t.index in trace.standins)[-over:]
+            transfers[c.name] = [t for t in slots if t.index not in drop]
         filled, stalls = sequencer.assign(self.channels, transfers)
         for why, conf in stalls:
             plan.outcomes.append(
