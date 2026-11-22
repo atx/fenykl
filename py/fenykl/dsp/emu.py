@@ -1,7 +1,8 @@
 """The word-level emulator: a `Job` (a program and its request in local memory) run on a `Boot`.
 
-The words run in order; each gets the semantics of its class (`semantics.classify`), which
-record what it contributes to the job's `Trace`. At the end the model of the program
+The words run in order; the model covers each at its index (the stock word's row, a field
+semantic such as X2's register transfer, or the coverage rule of a window), which records what it
+contributes to the job's `Trace`. At the end the model of the program
 (`memcpy.Copy16Model`, `resample.Resample13Model`) applies the trace: it reads the command's
 request from local memory, resolves the job and writes its result to the boot's state.
 
@@ -29,8 +30,6 @@ from .semantics import (
     Sequencer,
     Trace,
     UnknownSemantics,
-    WordClass,
-    classify,
 )
 from .state import (
     BootParams,
@@ -165,10 +164,13 @@ def start_copy(boot: Boot) -> JobView:
 
 
 class Model(Protocol):
-    """The model of one program: its word classes, and what a job's trace does."""
+    """The model of one program: what covers each word of a job at its index (`cover`, which
+    records into the job's trace, or raises `UnknownSemantics` in strict mode), and what the
+    trace does."""
 
     program: Program
-    classes: tuple[WordClass, ...]
+
+    def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None: ...
 
     def apply(self, emu: "Executor", job: Job, trace: Trace) -> JobResult: ...
 
@@ -288,10 +290,8 @@ class Executor:
             raise ValueError("run needs a model; step runs a job without one")
         self.boot.setup(job)
         trace = Trace()
-        classes = self.model.classes
         for index, word in enumerate(job.program.words):
-            c = classify(classes, word, index, trace, self.strict)
-            c.act(trace, word, index, self.strict)
+            self.model.cover(trace, index, word, self.strict)
         return self.model.apply(self, job, trace)
 
     def step(self, job: Job, start: Callable[[Boot], object] | None = None) -> Flow:

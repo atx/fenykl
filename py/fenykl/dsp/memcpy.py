@@ -10,10 +10,11 @@ index:
   each slot (load address, offsets, count, store format, ...);
 - `_FORMATS`: word 47's store formats by register.
 
-`Copy16Model` takes the stock program (from the user's firmware, `from_image`) and derives the
-word classes from it: each undecoded stock word is a class matched by its value, the register
-transfers one class matched by their signature, with the register contexts and the register
-group B and route values of the stock transfers as the reference. No stock word is part of this
+`Copy16Model` takes the stock program (from the user's firmware, `from_image`) and derives what
+covers a job's words from it: each undecoded stock word is the row of its stock index, the
+register transfers are X2's semantic at any index, matched by their signature, with the
+register contexts and the register group B and route values of the stock transfers as the
+reference. No stock word is part of this
 code. The model resolves a job's trace into its one load and one store (`resolve`) and applies
 them to the boot (`apply`):
 
@@ -49,7 +50,6 @@ from .emu import (
 from .fields import FIELDS, STAIRCASE, TARGET_OPS, Confidence, Kind, lookup
 from .program import Program, stock_programs
 from .semantics import (
-    IDLE_CLASS,
     KIB,
     Channel,
     Given,
@@ -372,8 +372,9 @@ class Reference:
 
 
 @dataclass(frozen=True, eq=False)
-class TransferClass(WordClass):
-    """The register transfers: they hand the register named in 115..119 to the sequencer."""
+class TransferSemantic(WordClass):
+    """X2's semantic, the register transfers at any index: they hand the register named in
+    115..119 to the sequencer."""
 
     channel_of: dict[tuple[int, ...], str] = field(default_factory=dict)
     reference: dict[tuple[int, ...], Reference] = field(default_factory=dict)
@@ -428,9 +429,9 @@ class TransferClass(WordClass):
         )
 
 
-def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
-    """The transfer class, with the contexts and reference values of the stock transfers."""
-    cls = TransferClass(
+def _transfer_semantic(words: tuple[Word, ...]) -> TransferSemantic:
+    """The transfer semantic, with the contexts and reference values of the stock transfers."""
+    cls = TransferSemantic(
         "transfer",
         "register transfer: hands the register named in 115..119 to the stream "
         "configuration; its role (address, offset, count, enable, format) is given by the "
@@ -466,7 +467,7 @@ def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
     holding = frozenset(
         i for i, w in enumerate(words) if cls.matches(w) and w["f308_309"] == 1
     )
-    return TransferClass(
+    return TransferSemantic(
         cls.name,
         cls.fact,
         cls.match,
@@ -479,7 +480,7 @@ def _transfer_class(words: tuple[Word, ...]) -> TransferClass:
 
 
 def _opaque_classes(
-    words: tuple[Word, ...], transfer: TransferClass
+    words: tuple[Word, ...], transfer: TransferSemantic
 ) -> list[OpaqueClass]:
     """One class per distinct undecoded stock word, matched by its full value."""
     positions: dict[int, list[int]] = {}
@@ -613,15 +614,51 @@ class Copy16Model:
     def __init__(self, program: Program) -> None:
         self.program = program
         words = program.words
-        self.transfer = _transfer_class(words)
+        self.transfer = _transfer_semantic(words)
         self.opaque = _opaque_classes(words, self.transfer)
-        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *self.opaque, self.transfer)
+        self.rows = {i: c for c in self.opaque for i in c.positions}
+        """The row of each undecoded stock word, by its stock index."""
+        self.halt = next(w for w in words if w.op == HALT_OP)
         self.channels = _CHANNELS
         self.formats = _FORMATS
 
     @classmethod
     def from_image(cls, image: bytes) -> "Copy16Model":
         return cls(stock_programs(image)[ITEM])
+
+    def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
+        """Run the job's word at `index` by what covers it: the idle word; X2's semantic, a
+        register transfer at any index; the row of the stock word at its stock index, which
+        matches the word on its fields besides its operands; the stock halt word at another
+        index, which ends the job where stepping reaches it (`_halt`) and else is a hypothesis.
+        Any other word raises UnknownSemantics, naming the fields that differ from what covers
+        the stock word there (strict); lenient mode ignores them, runs it as that and taints."""
+        if word == IDLE:
+            return
+        if self.transfer.matches(word):
+            trace.classes = min(trace.classes, self.transfer.confidence)
+            self.transfer.act(trace, word, index, strict)
+            return
+        row = self.rows.get(index)
+        if row is not None and row.matches(word):
+            trace.classes = min(trace.classes, row.confidence)
+            row.act(trace, word, index, strict)
+            return
+        if word == self.halt:
+            trace.classes = trace.taint = H
+            trace.notes.append(f"word {index}: the halt off its stock position")
+            return
+        stock = self.program.words[index] if index < len(self.program.words) else IDLE
+        nearest = row or (self.transfer if self.transfer.matches(stock) else None)
+        miss = word.changed(IDLE) if nearest is None else nearest.mismatches(word)
+        name = "idle" if nearest is None else nearest.name
+        if strict:
+            raise UnknownSemantics(index, name, miss)
+        trace.ignored.append((index, [f.id for f, _ in miss]))
+        trace.taint = H
+        if nearest is not None:
+            trace.classes = min(trace.classes, nearest.confidence)
+            nearest.act(trace, word, index, strict)
 
     def apply(self, emu: Executor, job: Job, trace: Trace) -> JobResult:
         """Resolve the job and apply its one load and one store to the boot."""
@@ -636,8 +673,7 @@ class Copy16Model:
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
         """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
         dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
-        weaker through the branches before it); None when no such halt runs. The halt word
-        itself is classified as any word: word 5's value runs as its class anywhere."""
+        weaker through the branches before it); None when no such halt runs."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):

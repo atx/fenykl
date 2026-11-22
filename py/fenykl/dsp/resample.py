@@ -80,7 +80,7 @@ from .exec import (
     run_window,
     weight,
 )
-from .fields import FIELDS, Confidence
+from .fields import Confidence
 from .program import Program, stock_programs
 from .resample_edits import (
     FACTS,
@@ -101,19 +101,14 @@ from .resample_edits import (
     Substitute,
 )
 from .resample_window import anchors as window_anchors
-from .resample_window import composition_cap, free, uncovered
+from .resample_window import composition_cap, uncovered
 from .semantics import (
-    IDLE_CLASS,
-    OpaqueClass,
-    Outcome,
-    Part,
     Trace,
     UnknownSemantics,
-    WordClass,
 )
 from .state import Bytes, Source
 from .taps import Taps
-from .word import IDLE
+from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -244,34 +239,13 @@ Acc = Mapping[int, Sequence[Term]] | Unknown
 
 class Resample13Model:
     """The model of program 13, built from the stock program (`from_image` reads it from a
-    stock E-M10 II `.BIN`). Its classes are the idle word, one class per distinct stock word and
-    one per measured edited word, matched by value; the law applies to the stock program run as
-    it is, and to the measured edits (`facts`, default the camera's) on the job classes they
-    ran on."""
+    stock E-M10 II `.BIN`). A job's word is covered at its index by the stock word, a measured
+    edit of it, or the loop-head window's coverage rule; the law applies to the stock program
+    run as it is, and to the measured edits (`facts`, default the camera's) on the job classes
+    they ran on."""
 
     def __init__(self, program: Program, facts: Sequence[Fact] = FACTS) -> None:
         self.program = program
-        positions: dict[int, list[int]] = {}
-        for index, word in enumerate(program.words):
-            if word != IDLE:
-                positions.setdefault(word.value, []).append(index)
-        part = Part(
-            "program 13 word",
-            Outcome.DATA_UNKNOWN,
-            "not decoded: what the job does without it is not known",
-        )
-        self.opaque = [
-            OpaqueClass(
-                f"word {at[0]}",
-                "an undecoded stock word of the resampler",
-                {f.id: f.get(program.words[at[0]].value) for f in FIELDS},
-                frozenset(),
-                confidence=I,
-                part=part,
-                positions=frozenset(at),
-            )
-            for at in positions.values()
-        ]
         self.edits = _measured_edits(program, facts)
         self.anchors = window_anchors(program, facts)
         match run_window(self.anchors, program.words, program.words, None):
@@ -282,37 +256,6 @@ class Resample13Model:
         words = program.words
         self.mover = {(i, k.apply(words[i]).value) for i, k in (SUBSTITUTE_MOVER,)}
         self.keepers = {(i, k.apply(words[i]).value) for i, k in SUBSTITUTE_KEEPERS}
-        edited = [
-            OpaqueClass(
-                f"word {i}, {e.kind.name}",
-                "an edited stock word of the resampler, measured on the camera",
-                {f.id: f.get(value) for f in FIELDS},
-                frozenset(),
-                confidence=I,
-                part=part,
-                positions=frozenset({i}),
-            )
-            for (i, value), e in self.edits.items()
-        ]
-        window = [
-            OpaqueClass(
-                f"word {i}, window",
-                "a window word of the resampler: the coverage rule decides its changed fields",
-                {f.id: f.get(words[i].value) for f in FIELDS},
-                frozenset(),
-                masks=dict.fromkeys(free(self.anchors, words[i]), 0),
-                confidence=I,
-                part=part,
-                positions=frozenset({i}),
-            )
-            for i in self.anchors.words
-        ]
-        self.classes: tuple[WordClass, ...] = (
-            IDLE_CLASS,
-            *edited,
-            *self.opaque,
-            *window,
-        )
 
     @classmethod
     def from_image(
@@ -430,34 +373,51 @@ class Resample13Model:
             self._hold(boot, req, entries, taps, px, full)
         return result
 
+    def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
+        """A job's word at `index` is covered when it is the stock word, a measured edit of it
+        or a word whose changed fields the window covers; any other word raises
+        UnknownSemantics (strict) or has its changed fields ignored, tainting the job."""
+        unknown = self._unknown(index, word)
+        if unknown is None:
+            return
+        if strict:
+            raise unknown
+        trace.ignored.append((index, [f.id for f, _ in unknown.fields]))
+        trace.taint = H
+
+    def _unknown(self, index: int, word: Word | None) -> UnknownSemantics | None:
+        """Why the job's word at `index` (None: the job has no word there) is not covered;
+        None when it is."""
+        stock = self.program.words
+        if word is None or index >= len(stock):
+            changed = []
+        elif (
+            word == stock[index]
+            or (index, word.value) in self.edits
+            or not uncovered(self.anchors, stock[index], word, index)
+        ):
+            return None
+        else:
+            changed = word.changed(stock[index])
+        return UnknownSemantics(
+            index,
+            f"stock word {index}",
+            changed,
+            "no word of program 13 is decoded and no measured edit gives this word",
+        )
+
     def _edited(self, emu: Executor, job: Job) -> list[int]:
-        """The indices of the words that differ from the stock program. In strict mode a word
-        that is no measured edit and whose changed fields the window does not cover raises
-        UnknownSemantics."""
+        """The indices of the words that differ from the stock program. In strict mode a job
+        shorter than the stock program raises UnknownSemantics at its first missing word."""
         stock, words = self.program.words, job.program.words
         both = min(len(stock), len(words))
-        edited = [
+        if emu.strict and len(words) < len(stock):
+            raise self._unknown(len(words), None)
+        return [
             i
             for i in range(max(len(stock), len(words)))
             if i >= both or words[i] != stock[i]
         ]
-        for at in edited:
-            if (
-                not emu.strict
-                or at < both
-                and (
-                    (at, words[at].value) in self.edits
-                    or not uncovered(self.anchors, stock[at], words[at], at)
-                )
-            ):
-                continue
-            raise UnknownSemantics(
-                at,
-                f"stock word {at}",
-                words[at].changed(stock[at]) if at < both else [],
-                "no word of program 13 is decoded and no measured edit gives this word",
-            )
-        return edited
 
     def _effects(
         self,

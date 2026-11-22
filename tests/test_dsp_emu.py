@@ -580,6 +580,20 @@ def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int]):
     assert dst.weakest() is Confidence.HYPOTHESIS or bytes(dst.data) == b"\xa5" * LEN
 
 
+def test_a_stock_word_at_another_index_is_no_row():
+    """A row covers the stock word at its own index only: 31's value at 30 is no edit of 30
+    that ran, so it raises, and lenient mode ignores what differs from 30's stock word."""
+    words = list(stock().words)
+    words[30] = words[31]
+    moved = Program(tuple(words))
+    with pytest.raises(UnknownSemantics, match="word 30: no semantics .*nearest class"):
+        run(moved)
+    result, boot = run(moved, strict=False)
+    differ = [f.id for f, _ in words[31].changed(stock().words[30])]
+    assert result.ignored == [(30, differ)] and differ
+    assert boot.read(DST, LEN).weakest() is Confidence.HYPOTHESIS
+
+
 def test_registers_persist_but_a_fact_without_a_value_forgets():
     boot = Boot()
     run(stock(), boot=boot)

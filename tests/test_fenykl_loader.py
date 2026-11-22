@@ -336,7 +336,10 @@ def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
     bad_tst = _with_header(tst, sum=payload.parse_header(tst).sum ^ 1)
     relay = {"gate": 0, "factor": FACTOR_RELAY}
     return {
-        **{name: Em10iiScenario(file) for name, (file, _) in file_cases(test_payload, EM10II).items()},
+        **{
+            name: Em10iiScenario(file)
+            for name, (file, _) in file_cases(test_payload, EM10II).items()
+        },
         "another camera's image": Em10iiScenario(other),
         # Boot kinds.
         "gate 0 (wake boot)": Em10iiScenario(good, gate=0),
@@ -347,25 +350,37 @@ def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
         "relay": Em10iiScenario(good, **relay),
         "relay, battery level 50": Em10iiScenario(good, **relay, batsrc=0, batlvl=50),
         "relay, battery level 49": Em10iiScenario(good, **relay, batsrc=0, batlvl=49),
-        "relay, battery source 0x101": Em10iiScenario(good, **relay, batsrc=0x101, batlvl=0),
+        "relay, battery source 0x101": Em10iiScenario(
+            good, **relay, batsrc=0x101, batlvl=0
+        ),
         "relay, switch off": Em10iiScenario(good, **relay, levels=0x11),
         "relay, cable in": Em10iiScenario(good, **relay, usb_key=USB_CABLE),
-        "relay, unknown cable state": Em10iiScenario(good, **relay, usb_key=USB_UNKNOWN),
-        "relay, card mounted after 250 sleeps": Em10iiScenario(good, **relay, mount_after=250),
+        "relay, unknown cable state": Em10iiScenario(
+            good, **relay, usb_key=USB_UNKNOWN
+        ),
+        "relay, card mounted after 250 sleeps": Em10iiScenario(
+            good, **relay, mount_after=250
+        ),
         "relay, no card": Em10iiScenario(good, **relay, mount_after=10000),
         "relay, TST": Em10iiScenario(good, tst, **relay),
         "watchdog factor 0x1000002": Em10iiScenario(good, gate=0, factor=0x1000002),
         "cable boot factor 0x400": Em10iiScenario(good, gate=0, factor=0x400),
         "card insertion factor 0x1506": Em10iiScenario(good, gate=0, factor=0x1506),
-        "factor 12 without the gate": Em10iiScenario(good, gate=0, factor=FACTOR_SWITCH),
+        "factor 12 without the gate": Em10iiScenario(
+            good, gate=0, factor=FACTOR_SWITCH
+        ),
         "factor 0x1000003": Em10iiScenario(good, gate=0, factor=0x1000003),
         # Sections and card.
-        "sec4 and sec5 loaded after 5 sleeps": Em10iiScenario(good, loaded0=0x07, sec_after=5),
+        "sec4 and sec5 loaded after 5 sleeps": Em10iiScenario(
+            good, loaded0=0x07, sec_after=5
+        ),
         "sec5 loaded on the last try": Em10iiScenario(
             good, loaded0=0x0F, sec_after=SECTRIES - 1
         ),
         "sec5 never loaded": Em10iiScenario(good, loaded0=0x0F, sec_after=10000),
-        "sec4 not loaded, sec5 bit set": Em10iiScenario(good, loaded0=0x17, sec_after=10000),
+        "sec4 not loaded, sec5 bit set": Em10iiScenario(
+            good, loaded0=0x17, sec_after=10000
+        ),
         "valid after 5 sleeps for the mount": Em10iiScenario(good, mount_after=5),
         "valid, mounted on the last try": Em10iiScenario(good, mount_after=TRIES - 1),
         "DCF mount running until the last try": Em10iiScenario(
@@ -386,15 +401,23 @@ def em10ii_scenarios(test_payload: bytes) -> dict[str, Em10iiScenario]:
         "another camera's TST, BIN": Em10iiScenario(good, other),
         "TST not removed, BIN": Em10iiScenario(good, tst, remove_result=-1),
         "TST not removed, no BIN": Em10iiScenario(None, tst, remove_result=-1),
-        "TST still there after the remove, BIN": Em10iiScenario(good, tst, exists_after=1),
+        "TST still there after the remove, BIN": Em10iiScenario(
+            good, tst, exists_after=1
+        ),
         "TST and bad BIN": Em10iiScenario(_with_header(good, magic=0), tst),
         "bad TST and bad BIN": Em10iiScenario(_with_header(good, magic=0), bad_tst),
         "TST, no card": Em10iiScenario(good, tst, mount_after=10000),
         "TST on a wake boot": Em10iiScenario(good, tst, gate=0),
-        "TST, relay with a cable": Em10iiScenario(good, tst, **relay, usb_key=USB_CABLE),
+        "TST, relay with a cable": Em10iiScenario(
+            good, tst, **relay, usb_key=USB_CABLE
+        ),
         "TST, switch boot with a cable": Em10iiScenario(good, tst, usb_key=USB_CABLE),
-        "TST only, switch boot with a cable": Em10iiScenario(None, tst, usb_key=USB_CABLE),
-        "TST, switch boot, unknown cable state": Em10iiScenario(good, tst, usb_key=USB_UNKNOWN),
+        "TST only, switch boot with a cable": Em10iiScenario(
+            None, tst, usb_key=USB_CABLE
+        ),
+        "TST, switch boot, unknown cable state": Em10iiScenario(
+            good, tst, usb_key=USB_UNKNOWN
+        ),
     }
 
 
@@ -436,7 +459,9 @@ def em10ii_expected(s: Em10iiScenario) -> Em10iiExpected:
     boot = Em10iiExpected(1, stub_sleeps, levels)
     if s.mount_after >= TRIES:
         return replace(boot, task_sleeps=TRIES, status_calls=TRIES)
-    boot = replace(boot, task_sleeps=s.mount_after, status_calls=s.mount_after + 1, keys=1)
+    boot = replace(
+        boot, task_sleeps=s.mount_after, status_calls=s.mount_after + 1, keys=1
+    )
     cable = s.usb_key != USB_NONE
     if cable and relay:
         return boot
@@ -446,7 +471,9 @@ def em10ii_expected(s: Em10iiScenario) -> Em10iiExpected:
         if s.remove_result == 0:
             exists = 1
             if s.exists_after == 0 and _accepted(s.tst):
-                return replace(boot, paths=("TST",), opened=1, removes=1, exists=1, ran=s.tst)
+                return replace(
+                    boot, paths=("TST",), opened=1, removes=1, exists=1, ran=s.tst
+                )
     paths.append("BIN")
     opened += s.bin is not None
     ran = s.bin if _accepted(s.bin) else None

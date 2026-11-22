@@ -1,17 +1,18 @@
 """Semantics: word classes, parts, roles and the hidden sequencer, independent of one program.
 
 A word class is matched by field values under per-field masks (`match`, `masks`) and names the
-fields it reads or ignores (`operands`). A word gets the semantics of the first class it
-matches. Every field a class neither matches nor names as an operand must be idle; a word that
-matches no class raises `UnknownSemantics`, naming the fields that differ from the nearest class
-(strict mode). In the lenient mode the word runs as its nearest class, the differing fields are
-ignored and the job is tainted "hypothesis".
+fields it reads or ignores (`operands`); every field a class neither matches nor names as an
+operand must be idle. A program's model covers a job's word at its index: by a field semantic
+(program 16's register transfers), by the row of the stock word there (`OpaqueClass`), or by its
+window's coverage rule (program 13). A word nothing covers raises `UnknownSemantics`, naming the
+fields that differ from what covers the stock word there (strict mode); in the lenient mode the
+differing fields are ignored and the job is tainted "hypothesis".
 
 "Undecoded" means "no registered semantics", not "below verified": semantics registered at
 hypothesis confidence run and taint what they touch.
 
 The classes and tables of one program are held by its model (`memcpy.Copy16Model` for program
-16, `resample.Resample13Model` for program 13), which the emulator takes.
+16, `resample.Resample13Model` for program 13), which the executor takes.
 
 Stepping (`emu.Executor.step`) takes the op semantics `OP_SEMANTICS` (what a data op does,
 each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
 
-from .fields import FIELDS, IDLE_OP, Confidence, Field, lookup
+from .fields import IDLE_OP, Confidence, Field, lookup
 from .state import Reg, RegisterFile, Space
 from .word import Word
 
@@ -94,7 +95,7 @@ class WordClass:
 
     `match` holds field values and `masks` the bits of each field that `match` fixes (default:
     all of them); the other bits of a masked field are don't-care. `confidence` is that of the
-    class's semantics where it was seen (`confidence_at`).
+    class's semantics where it was seen.
     """
 
     name: str
@@ -127,25 +128,8 @@ class WordClass:
                 out.append((f, word[key]))
         return out
 
-    def confidence_at(self, index: int) -> Confidence:
-        return self.confidence
-
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         raise NotImplementedError
-
-
-class IdleClass(WordClass):
-    def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
-        pass
-
-
-IDLE_CLASS = IdleClass(
-    "idle",
-    "the no-op of the stock programs (program 16 holds it at 3, 4, 6..9) [verified]",
-    {f.id: f.idle for f in FIELDS},
-    frozenset(),
-    confidence=V,
-)
 
 
 @dataclass(frozen=True)
@@ -172,15 +156,12 @@ class Part:
 
 @dataclass(frozen=True, eq=False)
 class OpaqueClass(WordClass):
-    """Undecoded stock words matched by value: they run as their `part`."""
+    """Undecoded stock words, the row of each of their stock indices: a job's word there that
+    matches it runs as its `part`."""
 
     part: Part | None = None
     positions: frozenset[int] = frozenset()
     """The indices of the stock words of this class."""
-
-    def confidence_at(self, index: int) -> Confidence:
-        """Its confidence at its stock positions, hypothesis anywhere else."""
-        return self.confidence if index in self.positions else H
 
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         trace.parts[self] += 1
@@ -331,41 +312,6 @@ class Sequencer:
             if not why:
                 filled += by_channel[c.name]
         return filled, stalls
-
-
-def classify(
-    classes: Sequence[WordClass],
-    word: Word,
-    index: int,
-    trace: Trace,
-    strict: bool = True,
-) -> WordClass:
-    """The class of `word`; raises UnknownSemantics, or in lenient mode ignores the fields that
-    differ from the nearest class (recorded in `trace`, which is tainted)."""
-    for c in classes:
-        if c.matches(word):
-            _ran(trace, c, index)
-            return c
-    best, best_miss = None, None
-    for c in classes:
-        miss = c.mismatches(word)
-        if best_miss is None or len(miss) < len(best_miss):
-            best, best_miss = c, miss
-    assert best is not None and best_miss is not None
-    if strict:
-        raise UnknownSemantics(index, best.name, best_miss)
-    trace.ignored.append((index, [f.id for f, _ in best_miss]))
-    trace.taint = H
-    _ran(trace, best, index)
-    return best
-
-
-def _ran(trace: Trace, c: WordClass, index: int) -> None:
-    conf = c.confidence_at(index)
-    trace.classes = min(trace.classes, conf)
-    if conf < c.confidence:
-        trace.taint = H
-        trace.notes.append(f"word {index}: {c.name} off its stock position")
 
 
 # -- stepping (`emu.Executor.step`): op semantics and the branch hypotheses

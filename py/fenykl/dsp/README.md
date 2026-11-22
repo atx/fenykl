@@ -231,8 +231,8 @@ is weaker:
 - **Lenient mode.** An ignored field, or a route nibble off the stock transfers' values, makes
   the job a hypothesis: its loaded, stored and zero-filled bytes alike.
 
-Per output byte the emulator takes the minimum: the loaded bytes get the weakest of the classes
-that ran, the parts' outcomes, the caps above and the load's roles (66, 67, 68); the stored bytes
+Per output byte the emulator takes the minimum: the loaded bytes get the weakest of the semantics
+that ran (rows and transfers), the parts' outcomes, the caps above and the load's roles (66, 67, 68); the stored bytes
 the weakest of the buffer bytes they come from and the same with the store's roles. Since no word
 of program 16 is decoded, every byte it copies is at most inferred, the stock copy's too.
 `JobResult.taint` qualifies what this job did: the weakest of the outcomes that decided its
@@ -261,16 +261,21 @@ index 0), the resampler's held line pairs, the register file and the DRAM view. 
 of a stock `.BIN` for loads from firmware text. A byte is known or UNKNOWN, and its source says
 where it came from or why it is unknown; the emulator never guesses a byte.
 
-Each word gets the semantics of its class (`model.classes`): the idle word, the register
-transfer (matched by its signature, every field idle but the register groups, the route nibbles
-and f308_309) or an undecoded stock word of program 16 matched by its value. The model derives
-these classes, the transfers' register contexts and their reference values from the stock
-program it is built from, so no stock word is part of the code. At the end the sequencer gives
-the transfers their roles (the stock word 66 loads, 67 addresses, 68 offsets, 73 counts, 76
-offsets the store, 47 formats it, ...) in the order of the transfers (`Sequencer`, inferred: the
-roles followed counted transfers moved by one index on the camera, and a counted transfer at
-word 78, the word before the return, stalls the job) and the job resolves into a status, one
-load and one store.
+The model covers each word of a job at its index (`model.cover`): the idle word; X2's semantic,
+a register transfer at any index (matched by its signature, every field idle but the register
+groups, the route nibbles and f308_309); the row of the undecoded stock word at its stock index
+(`OpaqueClass`, which leaves the measured operand fields free); and the stock halt at another
+index, which acts where stepping reaches it (below) and is a hypothesis elsewhere. A stock word
+at another index than its own is no row. The model derives the rows, the transfers' register
+contexts and their reference values from the stock program it is built from, so no stock word
+is part of the code. At the end the sequencer gives the transfers their roles (the stock word
+66 loads, 67 addresses, 68 offsets, 73 counts, 76 offsets the store, 47 formats it, ...) in the
+order of the transfers (`Sequencer`, inferred: the roles followed counted transfers moved by one
+index on the camera, and a counted transfer at word 78, the word before the return, stalls the
+job) and the job resolves into a status, one load and one store. The rows are outcomes of whole
+jobs measured with every other word stock, so they are resolved by index, not along the control
+flow: an idled control word (0, 5, 45, 79) has its row's outcome, and the words of the loop
+50..57, which no stock job runs, keep their rows too.
 An op 7 off the stock halt ends the job where stepping reaches it (`Copy16Model._halt`):
 before the stream words 58..79 with status 0 and dst not written; after the stream started it
 raises `UnknownSemantics`. Some timeouts come after the store (`Outcome.STORE_TIMEOUT`: idled
@@ -280,11 +285,11 @@ so the loop's words are known only with the loop skipped: an edit of 28 or 45 to
 of 50..57 has the measured outcome of `memcpy._LOOP_ENTRIES` (45 and 53 idled: dst not written,
 status 0) and no semantics otherwise.
 
-Strict mode (the default) raises `UnknownSemantics` for a word that matches no class, naming the
-fields that differ from the nearest class, and for a role at a register without registered
-semantics, and for a transfer whose route nibbles differ from the stock transfers' values.
-`Executor(boot, model, strict=False)` runs such a word as its nearest class, ignores the fields
-and taints every byte the job loads or stores "hypothesis".
+Strict mode (the default) raises `UnknownSemantics` for a word nothing covers, naming the fields
+that differ from what covers the stock word at its index, and for a role at a register without
+registered semantics, and for a transfer whose route nibbles differ from the stock transfers'
+values. `Executor(boot, model, strict=False)` runs such a word as what covers the stock word
+there, ignores the fields and taints every byte the job loads or stores "hypothesis".
 
 ### The resampler
 
@@ -313,8 +318,8 @@ words the setup copies from DRAM 0xA324BC00, the item's constants) to local word
 the request to 0x742..0x747; the table stays in DRAM. Own taps are a program with other constants
 (`model.job` builds it from the stock words). Word 2p of the tap words is phase p's tap 0 | tap 1
 << 16, word 2p + 1 tap 2 | tap 3 << 16. `Taps.from_floats` rounds each tap on its own and does not
-renormalise a phase to 256. No word of program 13 is decoded: its classes are the idle word and the
-stock words matched by value, and the law (`resample.py`'s docstring) applies to the stock program
+renormalise a phase to 256. No word of program 13 is decoded: a job's word is covered at its index by
+the stock word, a measured edit of it or the window's coverage rule, and the law (`resample.py`'s docstring) applies to the stock program
 as it is. Every byte the law computes is at most inferred, a law measured from outside;
 hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, at b != 1 a tap outside
 -637..2048 and in an edited program a tap outside -1840..2048 (the taps that ran there; with the
@@ -337,7 +342,7 @@ step b, W; H 16) what each plane does: the stock law (`Stock`), unknown (`Change
 product replaced by the boot's tap-0 substitute, below). These rows hold what the loop-head
 window (below) does not run; a field edit the window runs has no row.
 `FieldValues` sets several fields of one word at once (`set_fields(op=0x10, imm=0)`). The model
-matches an edited word by its value, so the classes hold the measured edited words too.
+covers an edited word at its index by its value: a measured edit there, or the window.
 
 Words 439..442 hold one S2 operand set per tap, 0..3. f88_91 selects the tap's coefficient
 with one map in all four words (3, 2, 4, 5: c0, c1, c2, c3; each word's stock value is its own
@@ -459,10 +464,10 @@ flow.
   cells), its measured cells in `_cells` with their tier, and a composition's (word, field,
   value) set in `COMPOSED` only once it ran; a fact no semantic gives (an idle, a value with
   no mechanism) stays a row in `resample_edits.FACTS`.
-- **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
-  `masks` (the bits of each matched field it fixes, default all), `operands` (fields it reads
-  or ignores) and `act`, which records into the job's `Trace`; add it to the model's
-  `classes`. Every field outside `match` and `operands` must be idle.
+- **A new field semantic of program 16**: a `WordClass` subclass with `match` (field values
+  that identify it), `masks` (the bits of each matched field it fixes, default all), `operands`
+  (fields it reads or ignores) and `act`, which records into the job's `Trace`; have the model's
+  `cover` run it. Every field outside `match` and `operands` must be idle.
 
 Each semantic carries its confidence, and a test vector should come with it: the curated camera
 vectors live in `tests/data/dsp/` (jobs, expected status and dst with UNKNOWN regions).
