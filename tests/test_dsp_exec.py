@@ -23,6 +23,7 @@ from fenykl.dsp.fields import FIELDS, Confidence
 from fenykl.dsp.resample import Resample13Model, predict
 from fenykl.dsp.resample_edits import (
     FLAT,
+    GRID_A_ONLY,
     VARY,
     FieldValue,
     set_fields,
@@ -334,3 +335,11 @@ def test_other_compositions_are_at_most_inferred():
     ):
         got = predict(model(), taps, FLAT_SRC, TABLE, edits=edits)
         assert {c for _, c in got.result.edits} == {I}, edits
+
+
+def test_a_row_word_with_a_window_edit_is_unknown():
+    # Word 439's grid A idle has a row and no window cover; with 88 = 3 at 440 the job is unknown.
+    edits = [(439, GRID_A_ONLY), (440, FieldValue("f88_91", 3))]
+    got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+    assert not any(got.dst.known) and got.result.edits == []
+    assert set(got.unknown()) == {"resampler edit"}
