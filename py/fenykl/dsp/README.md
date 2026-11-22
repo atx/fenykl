@@ -288,8 +288,10 @@ status 0) and no semantics otherwise.
 Strict mode (the default) raises `UnknownSemantics` for a word nothing covers, naming the fields
 that differ from what covers the stock word at its index, and for a role at a register without
 registered semantics, and for a transfer whose route nibbles differ from the stock transfers'
-values. `Executor(boot, model, strict=False)` runs such a word as what covers the stock word
-there, ignores the fields and taints every byte the job loads or stores "hypothesis".
+values. `Executor(boot, model, strict=False)` runs the stock word at such a word's index,
+ignores every field that differs from it and taints every byte the job loads or stores
+"hypothesis"; a stock transfer run so yields to the transfers of its channel that the job
+carries, where they would overfill it (a transfer moved onto another word's index).
 
 ### The resampler
 

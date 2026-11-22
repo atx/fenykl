@@ -594,6 +594,41 @@ def test_a_stock_word_at_another_index_is_no_row():
     assert boot.read(DST, LEN).weakest() is Confidence.HYPOTHESIS
 
 
+def swapped(a: int, b: int) -> Program:
+    words = list(stock().words)
+    words[a], words[b] = words[b], words[a]
+    return Program(tuple(words))
+
+
+def test_lenient_mode_runs_the_stock_word_where_nothing_covers():
+    """Words 0 and 27 swapped: no row covers either at the other's index, so lenient mode runs
+    the stock word at both and the job is the stock copy as a hypothesis."""
+    program = swapped(0, 27)
+    with pytest.raises(UnknownSemantics):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert result.status is Status.OK and result.stored is not None
+    assert [i for i, _ in result.ignored] == [0, 27]
+    dst = boot.read(DST, LEN)
+    assert bytes(dst.data) == bytes(range(256)) * (LEN // 256)
+    assert dst.weakest() is Confidence.HYPOTHESIS
+
+
+def test_a_stock_transfer_run_in_lenient_mode_yields_to_a_moved_one():
+    """The load transfer 66 moved to 0 is a transfer there and takes 66's slot; the stock
+    transfer that lenient mode runs for word 0's value at 66 yields to it instead of
+    overfilling the channel, and word 0's row is missing (dst not written)."""
+    program = swapped(0, 66)
+    with pytest.raises(UnknownSemantics):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert result.status is Status.OK and result.stored is None
+    assert [i for i, _ in result.ignored] == [66]
+    assert any("stock word 0) missing" in why for why in result.why)
+    assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
+    assert result.taint is Confidence.HYPOTHESIS
+
+
 def test_registers_persist_but_a_fact_without_a_value_forgets():
     boot = Boot()
     run(stock(), boot=boot)

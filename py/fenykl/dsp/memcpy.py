@@ -632,7 +632,9 @@ class Copy16Model:
         matches the word on its fields besides its operands; the stock halt word at another
         index, which ends the job where stepping reaches it (`_halt`) and else is a hypothesis.
         Any other word raises UnknownSemantics, naming the fields that differ from what covers
-        the stock word there (strict); lenient mode ignores them, runs it as that and taints."""
+        the stock word there (strict); lenient mode ignores every field that differs from the
+        stock word, runs the stock word and taints (a stock transfer run so yields to the
+        transfers of its channel that the job carries, `resolve`)."""
         if word == IDLE:
             return
         if self.transfer.matches(word):
@@ -650,15 +652,17 @@ class Copy16Model:
             return
         stock = self.program.words[index] if index < len(self.program.words) else IDLE
         nearest = row or (self.transfer if self.transfer.matches(stock) else None)
-        miss = word.changed(IDLE) if nearest is None else nearest.mismatches(word)
-        name = "idle" if nearest is None else nearest.name
         if strict:
+            miss = word.changed(IDLE) if nearest is None else nearest.mismatches(word)
+            name = "idle" if nearest is None else nearest.name
             raise UnknownSemantics(index, name, miss)
-        trace.ignored.append((index, [f.id for f, _ in miss]))
+        trace.ignored.append((index, [f.id for f, _ in word.changed(stock)]))
         trace.taint = H
+        if nearest is self.transfer:
+            trace.standins.add(index)
         if nearest is not None:
             trace.classes = min(trace.classes, nearest.confidence)
-            nearest.act(trace, word, index, strict)
+            nearest.act(trace, stock, index, strict)
 
     def apply(self, emu: Executor, job: Job, trace: Trace) -> JobResult:
         """Resolve the job and apply its one load and one store to the boot."""
@@ -749,7 +753,14 @@ class Copy16Model:
                     o, at = edit
                     why = f"{part.token} at {at}: {o.value}"
                     plan.outcomes.append((o, why, part.at(length)))
-        filled, stalls = sequencer.assign(self.channels, trace.channels)
+        # A stand-in transfer yields to the transfers the job carries where they overfill its
+        # channel (a transfer moved onto another word's index).
+        transfers = dict(trace.channels)
+        for c in self.channels:
+            slots = transfers.get(c.name, [])
+            if len(slots) > len(c.roles):
+                transfers[c.name] = [t for t in slots if t.index not in trace.standins]
+        filled, stalls = sequencer.assign(self.channels, transfers)
         for why, conf in stalls:
             plan.outcomes.append(
                 (Outcome.TIMEOUT, f"{why}: the stream never completes", conf)

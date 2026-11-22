@@ -81,6 +81,8 @@ class Trace:
     )
     """(index, {field id: value}) of the opaque classes with operand fields."""
     channels: dict[str, list[Transfer]] = field(default_factory=dict)
+    standins: set[int] = field(default_factory=set)
+    """Indices where lenient mode ran the stock transfer for a word nothing covers."""
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
     classes: Confidence = V
     """The weakest confidence of the classes that ran, at the positions they ran at."""
