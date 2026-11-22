@@ -109,13 +109,13 @@ class Field:
             raise ValueError(f"{self.label}: {value:#x} not in {self.allowed}")
 
 
-def _const(lo: int, hi: int, unit: str) -> Field:
+def _const(lo: int, hi: int) -> Field:
     ones = (1 << (hi - lo + 1)) - 1
     return Field(
         lo,
         hi,
         Kind.CONST,
-        unit,
+        "const",
         ones,
         V,
         "always all-ones in every word of the five stock programs, and across later firmware "
@@ -152,13 +152,16 @@ GRID_PAIR = (
 )
 
 
-def _grid(lo: int, hi: int, unit: str) -> Field:
+def _grid(lo: int, hi: int, unit: str, extra: str) -> Field:
     fact = GRID_PAIR if hi - lo == 1 else GRID_FACT
     if lo in STAIRCASE:
         fact += (
             f"; program 16 sets it to 0 from word {STAIRCASE[lo]} on, held to the end "
             "(the plain pass-through a copy needs, hypothesis)"
         )
+    if lo == 76:
+        fact += f"; {F76_FACT}"
+    fact += f". {extra[0].upper()}{extra[1:]}"
     return Field(
         lo,
         hi,
@@ -194,16 +197,6 @@ def _reg(
         )
     fact = f"{base}. {fact}" if fact else base
     return Field(lo, lo + 4, Kind.REG, unit, idle, confidence, fact, name=name)
-
-
-def _op(lo: int, hi: int, idle: int, fact: str = "") -> Field:
-    base = (
-        "per-word op or enable code candidate; 2-8 values per subfield, mostly one or two bits "
-        "cleared out of the idle value; boundary from segmentation"
-    )
-    return Field(
-        lo, hi, Kind.OPCODE, "c2", idle, H, f"{base}. {fact}" if fact else base
-    )
 
 
 # Program 16 never moves the C2 bits outside this set.
@@ -271,6 +264,12 @@ RA_FACT = (
     "carries an op writes it, a data op or a control op 0..2, while a call holds it (verified "
     "in the bytes); whether it is a destination, a source or a base is open; in ops 0..2 the "
     "candidate for the branch or loop condition (hypothesis)"
+)
+XREG_FACT = (
+    "In program 16 the register-transfer words name the register they use here: as a load "
+    "address (word 67), a buffer offset (68 load side, 76 store side), a store count (73), "
+    "an enable (42, 66, 69, 70) or the store element format (47) (verified on the camera "
+    "per word); r3 holds the job source address"
 )
 FLAGS_FACT = (
     "3 bits between the register specifiers; bits 120..121 are 0 in every op 0..3 word and bit 122 "
@@ -418,45 +417,61 @@ def _c2_fact(lo: int, hi: int) -> str:
     )
 
 
-_C2 = [
-    (236, 239, 0xF),
-    (240, 243, 0xF),
-    (244, 247, 0xF),
-    (248, 251, 0xF),
-    (252, 255, 0xF),
-    (256, 258, 0x7),
-    (259, 260, 0x3),
-    (261, 262, 0x3),
-    (263, 264, 0x3),
-    (265, 268, 0xF),
-    (269, 269, 0x1),
-    (270, 271, 0x3),
-    (272, 273, 0x3),
-    (274, 276, 0x4),
-    (278, 280, 0x7),
-    (281, 284, 0xF),
-    (285, 287, 0x7),
-    (288, 291, 0xF),
-    (292, 295, 0xF),
-    (296, 297, 0x3),
-    (298, 301, 0xF),
-]
+# The units (`units.UNITS`) come from which strobe is active in the words where a held field
+# changes, counted over every word of the programs across later firmware versions of the same
+# family: a field's owner is the strobe most often active there, P the share of its changes
+# in which it is. The C2 strobes 232..312 change about as often as they are active (pulses);
+# the grid and register fields keep their value for runs of words (held).
+OWNERSHIP = "across later firmware versions of the same family (verified in the bytes)"
 
 
-def _c2() -> list[Field]:
-    out = []
-    for lo, hi, idle in _C2:
-        fact = _c2_fact(lo, hi)
-        if lo in (296, 298):
-            fact += f"; {WORD504}"
-        if lo in (236, 252):
-            fact += f"; {WORD504_NONE}"
-        if lo in (270, 272):
-            fact += f"; {SELECTOR}"
-        out.append(_op(lo, hi, idle, fact))
-        if hi == 276:
-            out.append(_const(277, 277, "c2"))
-    return out
+def _only(where: str) -> str:
+    return (
+        f"active only in words where {where} active, across later firmware versions of the same "
+        "family (verified in the bytes)"
+    )
+
+
+X0_REGS = "a register operand of X0 (hypothesis)"
+X0_PATH = (
+    "The residual changes of its nibble fall in data-op words with f302_307 active: the nibble is "
+    "also written on the X0 path (hypothesis)"
+)
+X0_FACT = (
+    "the strobe of X0: f1 and f2_6 are active only where it is; f69_71 and f100_104 change only "
+    f"where it is active, f105_109 in 0.71 of its changes, {OWNERSHIP}"
+)
+X1_FACT = (
+    "the strobe of X1: f7_8 and f9_14 are active only where it is; f110_114 changes where it is "
+    f"active in 0.78 of its changes, {OWNERSHIP}"
+)
+X2_FACT = (
+    f"{XFER}; in program 16 words 58..79, bit 308 clear marks the words that stall the job when "
+    "idled. The strobe of X2, a value rather than an on/off strobe: xreg changes in 0.81 of the "
+    f"words at 0, 0.58 at 1 and 0.61 at 2 against 0.27 overall, {OWNERSHIP} (inferred, weak)"
+)
+GRID_B_FACT = (
+    "grid B follows grid A at +110 in which words are active, but its values equal the +110 "
+    "partner's mostly only at 145, 179, 190, 194, 198 and 202, and its nibbles have one enable "
+    "each where grid A's are operands of the S heads (verified in the bytes across later firmware "
+    "versions of the same family): not a mirror bank (inferred)"
+)
+QUAD = (
+    "Q, a section mode of the grid (hypothesis): f35_36 and f145_146 are set only in some "
+    "programs across later firmware versions of the same family, never on the E-M10 II, equal "
+    "in all words where both are set but 14, set over long runs and changed only where X0 is "
+    "active; where set, f65_68, f69_71 and f179_181 are active and f80_87 / f190_197 mostly idle"
+)
+F76_FACT = (
+    "in program 16 word 60, the one word where S0 is active, the copy needs it at 0: each of "
+    "1..15 times the job out before any store (verified on the camera, one run each)"
+)
+PARTNER_FACT = (
+    "It changes to the op slot's ra register in the same word (0.157 of its changes) or one word "
+    "ahead (0.116), more often than one word behind (0.062), unlike the other register fields "
+    "(verified in the bytes across later firmware versions of the same family): an operand "
+    "select of the op slot (hypothesis)"
+)
 
 
 GRID_A = [
@@ -470,91 +485,328 @@ GRID_A = [
 # Grid B repeats grid A's 31..95 at +110.
 GRID_B = [(lo + 110, hi + 110) for lo, hi in GRID_A if 31 <= lo and hi <= 95]
 
+HEADS = {
+    "s0": (278, 284),
+    "s1": (285, 291),
+    "s2": (292, 295),
+    "s3": (296, 301),
+    "x0": (302, 307),
+    "x1": (310, 312),
+    "x2": (308, 309),
+}
+"""The strobe of each compute slot S0..S3 and transfer unit X0..X2: the C2 head or control
+field whose activity the unit's operands change under."""
+
+# Grid A: the unit of each field, and the share of its changes in words where the unit's head
+# is active.
+GRID_A_UNITS: dict[int, tuple[str, float]] = {
+    23: ("s0", 0.74),
+    31: ("s3", 0.87),
+    37: ("s0", 0.91),
+    41: ("s0", 0.98),
+    45: ("s1", 0.98),
+    49: ("s1", 0.98),
+    53: ("s2", 0.78),
+    57: ("s2", 0.97),
+    61: ("s3", 0.96),
+    65: ("s3", 0.96),
+    69: ("x0", 1.00),
+    72: ("s0", 0.95),
+    76: ("s0", 0.78),
+    80: ("s1", 0.79),
+    84: ("s1", 0.69),
+    88: ("s2", 0.78),
+    92: ("s3", 0.85),
+    96: ("s3", 0.86),
+}
+WEAK_OWNER = 0.9
+"""Below this share the field's unit is inferred: its other changes fall in words where
+another unit is active too."""
+
+# The PB ports: (enable lo, hi, the grid B field it owns, P); the enable is active only where
+# its nibble is not idle (in 99..100 % of its active words).
+B_PORTS = (
+    (232, 233, 141, 0.96),
+    (236, 237, 147, 0.98),
+    (238, 239, 151, 0.98),
+    (240, 241, 155, 0.97),
+    (242, 243, 159, 0.98),
+    (244, 245, 163, 0.94),
+    (246, 247, 167, 0.93),
+    (248, 249, 171, 0.96),
+    (250, 251, 175, 0.96),
+    (252, 254, 179, 0.92),
+    (255, 255, 182, 0.91),
+    (256, 257, 186, 0.93),
+    (258, 258, 190, 0.79),
+    (259, 260, 194, 0.75),
+    (261, 262, 198, 0.88),
+    (263, 264, 202, 0.94),
+)
+# The PR ports: (enable lo, hi, the register group B field it owns, P).
+R_PORTS = (
+    (265, 266, 206, 1.00),
+    (267, 268, 211, 1.00),
+    (269, 269, 216, 0.96),
+    (270, 271, 221, 0.96),
+    (272, 273, 224, 0.99),
+)
+
+
+def _fid(lo: int, hi: int) -> str:
+    return f"f{lo}" if lo == hi else f"f{lo}_{hi}"
+
+
+def _width_id(lo: int) -> str:
+    """The id of the grid or register field that starts at bit `lo`."""
+    for a, b in GRID_A + GRID_B:
+        if a == lo:
+            return _fid(a, b)
+    hi = 223 if lo == 221 else lo + 4
+    return _fid(lo, hi)
+
+
+PORTS: dict[str, str] = {
+    _fid(lo, hi): _width_id(owned) for lo, hi, owned, _ in (*B_PORTS, *R_PORTS)
+}
+"""The PB and PR enables and the field each one owns: the field changes mostly in words where
+its enable is active."""
+_PORT_P = {_width_id(owned): p for _, _, owned, p in (*B_PORTS, *R_PORTS)}
+_OWNER = {owned: enable for enable, owned in PORTS.items()}
+
+
+def _enable(lo: int, hi: int, unit: str, idle: int, fact: str = "") -> Field:
+    owned = PORTS[_fid(lo, hi)]
+    base = (
+        f"enable of {owned}: {owned} changes in words where it is active in "
+        f"{_PORT_P[owned]:.2f} of its changes, and it is active only where {owned} is not idle, "
+        f"{OWNERSHIP}; {_c2_fact(lo, hi)}"
+    )
+    return Field(
+        lo, hi, Kind.OPCODE, unit, idle, I, f"{base}. {fact}" if fact else base
+    )
+
+
+def _head(unit: str, idle: int, fact: str) -> Field:
+    lo, hi = HEADS[unit]
+    base = (
+        f"head of compute slot {unit.upper()}: its grid A operands change mostly in words "
+        f"where it is active, {OWNERSHIP}; {_c2_fact(lo, hi)}"
+    )
+    return Field(lo, hi, Kind.OPCODE, unit, idle, I, f"{base}. {fact}")
+
+
+def _grid_a(lo: int, hi: int) -> Field:
+    if (lo, hi) == (35, 36):
+        return _grid(lo, hi, "q", QUAD)
+    unit, p = GRID_A_UNITS[lo]
+    head = _fid(*HEADS[unit])
+    tag = "verified in the bytes" if p >= WEAK_OWNER else "inferred"
+    fact = (
+        f"operand of {unit.upper()}: it changes in words where {head} is active in {p:.2f} "
+        f"of its changes ({tag}); don't care while {head} is idle (hypothesis)"
+    )
+    return _grid(lo, hi, unit, fact)
+
+
+def _grid_b(lo: int, hi: int) -> Field:
+    fid = _fid(lo, hi)
+    if fid == "f145_146":
+        return _grid(lo, hi, "q", QUAD)
+    return _grid(lo, hi, "pb", f"the port of enable {_OWNER[fid]}; {GRID_B_FACT}")
+
+
+def _port_reg(lo: int, idle: int, fact: str = "") -> Field:
+    owned = _width_id(lo)
+    port = f"Written under enable {_OWNER[owned]} (hypothesis: a register write port)"
+    return _reg(lo, "pr", idle, f"{port}. {fact}" if fact else port)
+
+
 FIELDS: tuple[Field, ...] = (
-    # ctl_lo: control bits 0..22, all clear in the idle word.
-    _ctl(0, 0, "ctl_lo", 0, "program 16 never sets it"),
-    _ctl(1, 1, "ctl_lo", 0),
-    _ctl(2, 6, "ctl_lo", 0),
-    _ctl(7, 8, "ctl_lo", 0),
-    _ctl(9, 14, "ctl_lo", 0, "program 16 never sets bits 11 and 14"),
-    Field(15, 22, Kind.IMM, "ctl_lo", 0, V, IMM_FACT, name="imm"),
-    # grid_a: bits 23..99.
-    *(_grid(lo, hi, "grid_a") for lo, hi in GRID_A),
-    # regs_a: bits 100..132 and the 133..140 constant.
-    _reg(100, "regs_a", 31),
-    _reg(105, "regs_a", 31),
-    _reg(110, "regs_a", 31),
+    _ctl(
+        0, 0, "s1", 0, f"program 16 never sets it; {_only('f285_291 and f49_52 are')}"
+    ),
+    _ctl(1, 1, "x0", 0, f"{_only('f302_307 is')}"),
+    _ctl(2, 6, "x0", 0, f"{_only('f302_307 is')}; an immediate of X0 (hypothesis)"),
+    _ctl(7, 8, "x1", 0, f"{_only('f310_312 is')}"),
+    _ctl(
+        9,
+        14,
+        "x1",
+        0,
+        f"program 16 never sets bits 11 and 14; {_only('f310_312 is')}; an immediate of X1 "
+        "(hypothesis)",
+    ),
+    Field(15, 22, Kind.IMM, "op_slot", 0, V, IMM_FACT, name="imm"),
+    *(_grid_a(lo, hi) for lo, hi in GRID_A),
+    _reg(100, "x0", 31, f"{X0_REGS}; it changes only where f302_307 is active"),
     _reg(
-        115,
-        "regs_a",
+        105,
+        "x0",
         31,
-        "In program 16 the register-transfer words name the register they use here: as a load "
-        "address (word 67), a buffer offset (68 load side, 76 store side), a store count (73), "
-        "an enable (42, 66, 69, 70) or the store element format (47) (verified on the camera "
-        "per word); r3 holds the job source address",
-        name="xreg",
-        confidence=I,
+        f"{X0_REGS}; it changes where f302_307 is active in 0.71 of its changes",
     ),
-    Field(120, 122, Kind.RAW, "regs_a", 7, H, FLAGS_FACT),
-    _reg(123, "regs_a", 31, RA_FACT, name="ra", confidence=V),
-    _reg(128, "regs_a", 31, T_HIGH),
-    _const(133, 140, "regs_a"),
-    # grid_b: grid A + 110.
-    *(_grid(lo, hi, "grid_b") for lo, hi in GRID_B),
-    # regs_b: bits 206..228.
     _reg(
+        110,
+        "x1",
+        31,
+        "it changes where f310_312 is active in 0.78 of its changes, f308_309 0.67 (inferred, "
+        "weak: the X1 / X2 split of f110_114 and xreg)",
+    ),
+    _reg(115, "x2", 31, XREG_FACT, name="xreg", confidence=I),
+    Field(120, 122, Kind.RAW, "op_slot", 7, H, FLAGS_FACT),
+    _reg(123, "op_slot", 31, RA_FACT, name="ra", confidence=V),
+    _reg(128, "op_slot", 31, T_HIGH),
+    _const(133, 140),
+    *(_grid_b(lo, hi) for lo, hi in GRID_B),
+    _port_reg(
         206,
-        "regs_b",
         0,
-        "Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged (verified on the camera)",
+        "Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged (verified on "
+        "the camera)",
     ),
-    _reg(
+    _port_reg(
         211,
-        "regs_b",
         0,
-        "Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged (verified on the camera); the only difference between words 66..68",
+        "Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged (verified on "
+        "the camera); the only difference between words 66..68",
     ),
-    _reg(216, "regs_b", 31),
-    Field(221, 223, Kind.RAW, "regs_b", 7, H, "3 bits between the register specifiers"),
-    _reg(224, "regs_b", 0),
-    # c2: the control-word flag 229, the 230..231 constant, bit 232, then C2 233..301.
+    _port_reg(216, 31),
+    Field(
+        221,
+        223,
+        Kind.RAW,
+        "pr",
+        7,
+        H,
+        "3 bits between the register specifiers; written under enable f270_271; equal to f120_122 "
+        f"in 66 % of all words, {OWNERSHIP}",
+    ),
+    _port_reg(224, 0, PARTNER_FACT),
     Field(
         229,
         229,
         Kind.FLAG,
-        "c2",
+        "op_slot",
         1,
         V,
         CONTROL_FACT,
         name="ctl_n",
         values={0: "control word", 1: "other word"},
     ),
-    _const(230, 231, "c2"),
-    Field(232, 232, Kind.FLAG, "c2", 1, H, RARE),
-    _op(
+    _const(230, 231),
+    _enable(
+        232,
         233,
-        233,
+        "pb",
+        3,
+        "f232 is never clear without f233; active together with S3 (f296_301) in 1928 of its "
+        "1940 active words, so its port cannot be told apart from S3 in the bytes",
+    ),
+    Field(
+        234,
+        235,
+        Kind.OPCODE,
+        "pb",
+        3,
+        H,
+        f"{RARE}; the candidate enable of f145_146: active in 18 words, all with f145_146 set, "
+        "and in 10 of its 17 changes (hypothesis)",
+    ),
+    _enable(236, 237, "pb", 3, WORD504_NONE),
+    _enable(238, 239, "pb", 3, WORD504_NONE),
+    *(_enable(lo, lo + 1, "pb", 3) for lo in range(240, 252, 2)),
+    _enable(252, 254, "pb", 7, f"values 0..4 and the idle 7 only; {WORD504_NONE}"),
+    _enable(255, 255, "pb", 1),
+    _enable(256, 257, "pb", 3),
+    _enable(258, 258, "pb", 1),
+    _enable(259, 260, "pb", 3, X0_PATH),
+    _enable(261, 262, "pb", 3, X0_PATH),
+    _enable(263, 264, "pb", 3),
+    _enable(
+        265,
+        266,
+        "pr",
+        3,
+        "Not the end op: idling it in program 16 word 79 (bit 229 clear) copied; idling it with "
+        "bit 268 in word 60 times the job out (verified on the camera, one run each)",
+    ),
+    _enable(
+        267,
+        268,
+        "pr",
+        3,
+        "Bit 268 is needed in program 16 words 63 and 65: setting it alone times the job out in "
+        "63 and wedged the job (status -5) in 65, whose whole idle times out (verified on the "
+        "camera, one run each); bit 267 is set in the stock words 60, 63, 65 and 79",
+    ),
+    _enable(269, 269, "pr", 1),
+    _enable(270, 271, "pr", 3, SELECTOR),
+    _enable(
+        272,
+        273,
+        "pr",
+        3,
+        f"{SELECTOR}; in op 0 words with value 1, f224_228 names ra (307 of 336) {OWNERSHIP}: "
+        "the enable of the port that writes the loop counter back (hypothesis); not needed in "
+        "program 16 words 60 and 63, where idling it (272 alone in 63) copied (verified on the "
+        "camera, one run each)",
+    ),
+    Field(
+        274,
+        275,
+        Kind.RAW,
+        "m",
+        0,
+        I,
+        "the value under the active-low strobe f276: f274_276 takes 4 (idle) and 0..3, 7 in 38 "
+        f"words, never 5 or 6, {OWNERSHIP}; held, in runs of median 8 words, and no field "
+        f"changes under it: a mode of the compute group (hypothesis); {_c2_fact(274, 275)}",
+    ),
+    Field(
+        276,
+        276,
+        Kind.FLAG,
+        "m",
         1,
-        "program 16 never moves it; clear in some words of every compute program",
+        I,
+        f"the active-low strobe of f274_275 (0 = active); {_c2_fact(276, 276)}",
     ),
-    Field(234, 235, Kind.RAW, "c2", 3, H, RARE),
-    *_c2(),
-    # ctl_hi: control bits 302..319, all set in the idle word.
-    _ctl(302, 307, "ctl_hi", 0x3F),
-    _ctl(
-        308,
-        309,
-        "ctl_hi",
-        0x3,
-        f"{XFER}; in program 16 words 58..79, bit 308 clear marks the words that stall the job when idled",
-        basis=XFER_BASIS,
+    _const(277, 277),
+    _head(
+        "s0",
+        0x7F,
+        "Merged from 278..280 and 281..284: the low part is never active without the high part, "
+        "which is active alone in 5 % of its words, and both track f41_44 (inferred: one op "
+        "field, possibly an op and a modifier); f23_30 is active only where it is",
     ),
-    _ctl(310, 312, "ctl_hi", 0x7, basis=XFER_BASIS),
+    _head(
+        "s1",
+        0x7F,
+        "Merged from 285..287 and 288..291: the low part is never active without the high part, "
+        "which is active alone in 5 % of its words, and both track f49_52 (inferred: one op "
+        "field, possibly an op and a modifier)",
+    ),
+    _head(
+        "s2",
+        0xF,
+        "f53_56 and f88_91 also change under S3 (hypothesis: shared operands)",
+    ),
+    _head(
+        "s3",
+        0x3F,
+        "Merged from 296..297 and 298..301: the low part is never active without the high part, "
+        "which is active alone in 26 % of its words, and both track f65_68 (inferred: one op "
+        f"field, possibly an op and a modifier); {WORD504}",
+    ),
+    _ctl(302, 307, "x0", 0x3F, X0_FACT),
+    _ctl(308, 309, "x2", 0x3, X2_FACT, basis=XFER_BASIS),
+    _ctl(310, 312, "x1", 0x7, X1_FACT, basis=XFER_BASIS),
     Field(
         313,
         319,
         Kind.OPCODE,
-        "ctl_hi",
+        "op_slot",
         IDLE_OP,
         V,
         OP_FACT,

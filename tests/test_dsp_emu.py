@@ -14,7 +14,7 @@ from fenykl.dsp.memcpy import Copy16Model
 from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
-from fenykl.dsp.units import C2, CtlLo
+from fenykl.dsp.units import PR, S1
 from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
@@ -275,7 +275,7 @@ def test_the_transfer_class_holds_exactly_the_register_transfer_words():
 
 def test_strict_mode_raises_on_a_field_without_semantics():
     # The idle word with one control bit set matches no class.
-    synthetic = Word(ctl_lo=CtlLo(f0=1))
+    synthetic = Word(s1=S1(f0=1))
     program = Program((*stock().words[:3], synthetic, *stock().words[4:]))
     with pytest.raises(
         UnknownSemantics,
@@ -285,17 +285,17 @@ def test_strict_mode_raises_on_a_field_without_semantics():
 
 
 def test_strict_mode_raises_on_a_transfer_with_an_opcode_field_set():
-    word = Word(stock().words[73], c2=C2(f265_268=0x3))
+    word = Word(stock().words[73], pr=PR(f265_266=0))
     program = Program((*stock().words[:73], word, *stock().words[74:]))
     with pytest.raises(
         UnknownSemantics,
-        match=r"word 73: no semantics for f265_268=0x3 \(nearest class: transfer\)",
+        match=r"word 73: no semantics for f265_266=0x0 \(nearest class: transfer\)",
     ):
         copy(Boot(), program, bytes(LEN))
 
 
 def test_lenient_mode_ignores_it_and_taints():
-    synthetic = Word(ctl_lo=CtlLo(f0=1))
+    synthetic = Word(s1=S1(f0=1))
     program = Program((*stock().words[:3], synthetic, *stock().words[4:]))
     data = bytes(range(256)) * 4
     result, dst = copy(Boot(), program, data, strict=False)
@@ -380,7 +380,7 @@ def test_table_outcomes_seen_at_1k_are_inferred_at_other_lengths():
 def lenient_program(*words: int) -> Program:
     """The stock copy without `words`, and idle word 3 with control bit 0 set."""
     program = idled(*words) if words else stock()
-    synthetic = Word(ctl_lo=CtlLo(f0=1))
+    synthetic = Word(s1=S1(f0=1))
     return Program((*program.words[:3], synthetic, *program.words[4:]))
 
 
@@ -400,7 +400,9 @@ def test_lenient_mode_taints_the_zero_fill():
 @pytest.mark.parametrize("strict", [True, False])
 def test_word_60_copies_only_with_f76_79_at_0(strict: bool):
     for value in (1, 8, 0xF):
-        result, boot = run(edited([{"at": 60, "set": {"f76_79": value}}]), strict=strict)
+        result, boot = run(
+            edited([{"at": 60, "set": {"f76_79": value}}]), strict=strict
+        )
         assert result.status is Status.TIMEOUT and result.stored is None
         assert result.taint is Confidence.VERIFIED and result.ignored == []
         assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN

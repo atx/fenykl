@@ -1,55 +1,123 @@
-"""Units: provisional groups of fields, and their slot classes for the DSL.
+"""Units: the fields grouped by the strobe they change under, and their slot classes for the DSL.
 
-The units are contiguous bit blocks of the word, named by position rather than by function: no
-field's function is known well enough yet to call a block an ALU or a load/store unit. They are
-cut from the table, so re-cutting one is an edit of the `unit` of its fields.
+A unit is one strobe, a C2 head or control field that leaves idle on its own, with the fields
+whose values change in the words where it is active: counted over every word of the programs
+across later firmware versions of the same family, each held field changes almost only under
+one strobe (verified in the bytes for the counts; that these groups are execution units is
+inferred). The op slot is the op with its operands; PB and PR are banks of ports, each enable
+owning one field (`fields.PORTS`); M and Q are modes. The constant bits form no unit. A unit's
+fields need not be contiguous; re-cutting one is an edit of the `unit` of its fields.
 
 A slot holds the values of some fields of one unit, keyed by id or semantic name::
 
-    RegsA(xreg=3, f123_127=2)
+    X2(xreg=3, f308_309=0)
 """
 
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import ClassVar
 
-from .fields import FIELDS, Field, lookup
+from .fields import FIELDS, HEADS, PORTS, Confidence, Field, lookup
+
+H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 
 @dataclass(frozen=True)
 class Unit:
     name: str
     cls_name: str
+    confidence: Confidence
+    """That these fields act as one unit under its strobes."""
     fact: str
+    strobes: tuple[Field, ...]
     fields: tuple[Field, ...]
-
-    @property
-    def lo(self) -> int:
-        return self.fields[0].lo
-
-    @property
-    def hi(self) -> int:
-        return self.fields[-1].hi
+    """The strobes first, then the operands in bit order."""
 
 
+_HEAD = (
+    "the compute slot {}: its head f{}_{} and the grid A nibbles that change under it"
+)
+_XFER = "the transfer unit {}: its strobe f{}_{} and the fields that change under it"
 _UNITS = (
-    ("ctl_lo", "CtlLo", "control bits 0..22, clear when idle"),
-    ("grid_a", "GridA", "the first grid of route nibbles, all-ones when idle"),
     (
-        "regs_a",
-        "RegsA",
-        "the first register group, holding the register-transfer operand",
+        "op_slot",
+        "OpSlot",
+        V,
+        (
+            "the op (f313_319) with its immediate, ra, rb, f120_122 and the control flag f229: "
+            "scalar and control ops, their formats verified in the bytes"
+        ),
+        ("op",),
     ),
-    ("grid_b", "GridB", "the second grid, grid A's layout at +110"),
-    ("regs_b", "RegsB", "the second register group"),
-    ("c2", "C2", "the control-word flag 229 and the op-code candidates of 230..301"),
-    ("ctl_hi", "CtlHi", "control bits 302..319, set when idle"),
+    *(
+        (
+            u,
+            u.upper(),
+            I,
+            _HEAD.format(u.upper(), *HEADS[u]),
+            (f"f{HEADS[u][0]}_{HEADS[u][1]}",),
+        )
+        for u in ("s0", "s1", "s2", "s3")
+    ),
+    *(
+        (
+            u,
+            u.upper(),
+            I,
+            _XFER.format(u.upper(), *HEADS[u]),
+            (f"f{HEADS[u][0]}_{HEADS[u][1]}",),
+        )
+        for u in ("x0", "x1", "x2")
+    ),
+    (
+        "pb",
+        "PB",
+        I,
+        (
+            "17 ports, one enable in 232..264 for each grid B nibble (f234_235 for f145_146 a "
+            "hypothesis); with the S heads and M the compute group (hypothesis)"
+        ),
+        (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
+    ),
+    (
+        "pr",
+        "PR",
+        I,
+        (
+            "5 ports, one enable in 265..273 for each field of register group B 206..228: "
+            "register write ports (hypothesis); with X0..X2 the transfer group"
+        ),
+        tuple(e for e in PORTS if lookup(e).unit == "pr"),
+    ),
+    (
+        "m",
+        "M",
+        H,
+        "the held 2-bit value f274_275 under the active-low strobe f276: a compute-group mode",
+        ("f276",),
+    ),
+    (
+        "q",
+        "Q",
+        H,
+        "f35_36 and f145_146, never set on the E-M10 II: a section mode of the grid",
+        ("f35_36", "f145_146"),
+    ),
+    ("const", "Const", V, "the constant bits, all-ones in every word", ()),
 )
 
-UNITS: dict[str, Unit] = {
-    name: Unit(name, cls_name, fact, tuple(f for f in FIELDS if f.unit == name))
-    for name, cls_name, fact in _UNITS
-}
+
+def _unit(
+    name: str, cls_name: str, conf: Confidence, fact: str, strobes: tuple[str, ...]
+) -> Unit:
+    heads = tuple(sorted((lookup(k) for k in strobes), key=lambda f: f.lo))
+    rest = tuple(f for f in FIELDS if f.unit == name and f not in heads)
+    if any(f.unit != name for f in heads):
+        raise ValueError(f"{name}: a strobe of another unit")
+    return Unit(name, cls_name, conf, fact, heads, heads + rest)
+
+
+UNITS: dict[str, Unit] = {u[0]: _unit(*u) for u in _UNITS}
 _orphans = {f.id for f in FIELDS if f.unit not in UNITS}
 if _orphans:
     raise ValueError(f"fields without a unit: {sorted(_orphans)}")
@@ -113,16 +181,23 @@ def slot_class(name: str) -> type[Slot]:
     return type(unit.cls_name, (Slot,), {"unit": unit, "__slots__": ()})
 
 
-CtlLo = slot_class("ctl_lo")
-GridA = slot_class("grid_a")
-RegsA = slot_class("regs_a")
-GridB = slot_class("grid_b")
-RegsB = slot_class("regs_b")
-C2 = slot_class("c2")
-CtlHi = slot_class("ctl_hi")
+OpSlot = slot_class("op_slot")
+S0 = slot_class("s0")
+S1 = slot_class("s1")
+S2 = slot_class("s2")
+S3 = slot_class("s3")
+X0 = slot_class("x0")
+X1 = slot_class("x1")
+X2 = slot_class("x2")
+PB = slot_class("pb")
+PR = slot_class("pr")
+M = slot_class("m")
+Q = slot_class("q")
+Const = slot_class("const")
 
 SLOTS: dict[str, type[Slot]] = {
-    cls.unit.name: cls for cls in (CtlLo, GridA, RegsA, GridB, RegsB, C2, CtlHi)
+    cls.unit.name: cls
+    for cls in (OpSlot, S0, S1, S2, S3, X0, X1, X2, PB, PR, M, Q, Const)
 }
 _missing = set(UNITS) - set(SLOTS)
 if _missing:

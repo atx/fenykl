@@ -46,10 +46,10 @@ from .fields import FIELDS, STAIRCASE, Confidence, Kind, lookup
 from .program import Program, stock_programs
 from .semantics import (
     IDLE_CLASS,
-    IdleClass,
     KIB,
     Channel,
     Given,
+    IdleClass,
     OpaqueClass,
     Outcome,
     Part,
@@ -151,7 +151,7 @@ _PARTS: dict[int, Part] = {
 ROUTES = tuple(f.id for f in FIELDS if f.lo in STAIRCASE)
 CONTEXT = ("f100_104", "f105_109", "f110_114", "f123_127", "f128_132")
 """The register group A fields besides xreg: they select the transfer's channel."""
-REGS_B = tuple(f.id for f in UNITS["regs_b"].fields if f.kind == "reg")
+REGS_B = tuple(f.id for f in UNITS["pr"].fields if f.kind == "reg")
 TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_309"})
 
 T_SET = (7, 9, 16, 18, 19, 20, 24, 27, 28, 30)

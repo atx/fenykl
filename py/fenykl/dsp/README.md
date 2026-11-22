@@ -9,7 +9,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | module | contents |
 |---|---|
 | `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the op meanings `OPS`, the target `TARGET`, the delay slots `DELAY_SLOTS` |
-| `units.py` | units (contiguous groups of fields) and their slot classes, derived from the table |
+| `units.py` | the units (a strobe and the fields that change under it) and their slot classes, derived from the table |
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
 | `disasm.py` | listings and DSL source of a program |
@@ -31,11 +31,42 @@ The DSL builds a word from slot objects; unset fields keep the idle word's value
 composed from the table's idle values:
 
 ```python
-from fenykl.dsp.units import CtlHi, RegsA
+from fenykl.dsp.units import X2, OpSlot
 from fenykl.dsp.word import Word
 
-Word(regs_a=RegsA(xreg=3, f123_127=2), ctl_hi=CtlHi(f308_309=0))
+Word(x2=X2(xreg=3, f308_309=0), op_slot=OpSlot(f123_127=2))
 ```
+
+### Units
+
+Every field belongs to one unit. A unit is a strobe (a C2 head or control field that leaves idle
+on its own) with the fields whose values change in the words where it is active: over every word
+of the programs across later firmware versions of the same family, each held grid or register
+field changes almost only under one strobe [verified in the bytes for the counts; the reading as
+execution units inferred]. Listings group a word's fields by unit, strobes first.
+
+| unit | strobe | fields | reading | confidence |
+|---|---|---|---|---|
+| `op_slot` | op f313_319 | imm, ra, rb (f128_132), f120_122, f229 | scalar and control ops | verified |
+| `s0` | f278_284 | grid A 37, 41, 72, 76; f23_30 | compute slot | inferred |
+| `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot | inferred |
+| `s2` | f292_295 | grid A 53, 57, 88 | compute slot | inferred |
+| `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot | inferred |
+| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | transfer or address unit | inferred |
+| `x1` | f310_312 | f7_8, f9_14, f110_114 | transfer or address unit | inferred |
+| `x2` | f308_309 (a value, 0 in the transfers) | xreg | register transfer | inferred |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports | inferred |
+| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports | inferred |
+| `m` | f276 (active low) | f274_275 | a held mode of the compute group | hypothesis |
+| `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
+| `const` | - | f133_140, f230_231, f277 | constant bits | verified |
+
+S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0..X2 and PR (the
+transfer group) with the data ops, early in a routine. Grid B follows grid A at +110 in which
+words are active, but not in its values or control: not a mirror bank. The S heads and the
+2-bit PB enables, f252_254 / f255, f256_257 / f258, f265_266 / f267_268 and f274_275 / f276 are
+cut where the two bits across a boundary share little information and each side owns another
+field; the heads merge parts that are never active apart.
 
 ## Fields
 
@@ -47,7 +78,7 @@ To add or refine a field, edit `FIELDS`: split or merge entries so that the bits
 exactly once (the import raises otherwise), and give the new entries their idle value, kind,
 confidence and a one-line fact. An id names both ends of the field, so it changes exactly when the
 bits change: DSL source naming the old id fails loudly. Moving a field to another unit is an edit
-of its `unit`.
+of its `unit` (and of `fields.HEADS` / `PORTS` where it is a strobe).
 
 Kinds: `reg` (register specifier r0..r31), `opcode`, `route` (source or path select), `flag`
 (one control bit), `const` (the same value in every stock word), `imm` (an immediate operand),

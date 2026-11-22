@@ -26,7 +26,7 @@ from .units import SLOTS, UNITS, Slot
 class Word:
     """One instruction. Built from slots, unset fields keep `base` (default: the idle word)::
 
-    Word(regs_a=RegsA(xreg=3), ctl_hi=CtlHi(f308_309=0))
+    Word(x2=X2(xreg=3, f308_309=0), op_slot=OpSlot(op=0x0B))
     """
 
     __slots__ = ("value",)
@@ -122,11 +122,15 @@ class Word:
         return [(f, f.get(self.value)) for f in FIELDS if f.get(diff)]
 
     def slots(self, base: "Word | None" = None) -> dict[str, Slot]:
-        """The fields that differ from `base` as slots, by unit; `Word(base, **slots) == self`."""
-        by_unit: dict[str, dict[str, int]] = {}
-        for f, v in self.changed(base):
-            by_unit.setdefault(f.unit, {})[f.id] = v
-        return {unit: SLOTS[unit](**values) for unit, values in by_unit.items()}
+        """The fields that differ from `base` as slots, in unit order; `Word(base, **slots) ==
+        self`."""
+        changed = {f.id: v for f, v in self.changed(base)}
+        slots = {}
+        for name, unit in UNITS.items():
+            values = {f.id: changed[f.id] for f in unit.fields if f.id in changed}
+            if values:
+                slots[name] = SLOTS[name](**values)
+        return slots
 
     def check(self) -> None:
         """Raise ValueError if a field holds a value no assembled word may hold."""

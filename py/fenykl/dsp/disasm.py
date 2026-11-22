@@ -1,8 +1,8 @@
 """Listings of programs, and DSL source for them.
 
-A listing shows per word the fields that differ from the idle word, grouped by unit, under their
-semantic names or ids; a mark after the value gives the field's confidence (`!` verified,
-`~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
+A listing shows per word the fields that differ from the idle word, grouped by unit (strobes
+first), under their semantic names or ids; a mark after the value gives the field's confidence
+(`!` verified, `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
 Every word but the idle word starts with its op's name (`fields.op`) in place of f313_319; a
 control op 0..3 follows it with `-> T`, its target word index, in place of T's fields. A data op
@@ -65,13 +65,15 @@ def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
 
 def word_parts(word: Word, base: Word = IDLE) -> list[str]:
     """The op, a control op's target, then the fields that differ from `base` as
-    "unit: field=value ..." groups in bit order."""
+    "unit: field=value ..." groups in unit order, each with its strobes first."""
     head, shown = _head(word)
-    by_unit: dict[str, list[str]] = {}
-    for f, v in word.changed(base):
-        if f.id not in shown:
-            by_unit.setdefault(f.unit, []).append(_value(f, v))
-    return [head] + [f"{unit}: {' '.join(items)}" for unit, items in by_unit.items()]
+    changed = {f.id: v for f, v in word.changed(base) if f.id not in shown}
+    parts = [head]
+    for name, unit in UNITS.items():
+        items = [_value(f, changed[f.id]) for f in unit.fields if f.id in changed]
+        if items:
+            parts.append(f"{name}: {' '.join(items)}")
+    return parts
 
 
 def _runs(words: tuple[Word, ...], slots: set[int]) -> Iterator[tuple[int, int]]:

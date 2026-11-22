@@ -19,7 +19,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from .fields import FIELDS, P16_C2_BITS, Field, Kind, lookup
+from .fields import GRID_A as GRID_A_FIELDS
+from .fields import GRID_B as GRID_B_FIELDS
+from .fields import P16_C2_BITS, Field, lookup
 from .word import IDLE, Word
 
 ONE = 0x10000
@@ -37,19 +39,15 @@ class Idle:
 
 
 # The 2-bit grid pairs: idle in every stock word, and the bench harness never writes them.
-GRID_PAIRS = ("f35_36", "f145_146")
+GRID_PAIRS = ((35, 36), (145, 146))
 
 
-def _grid(unit: str) -> int:
-    return sum(
-        f.mask << f.lo
-        for f in FIELDS
-        if f.unit == unit and f.kind is Kind.ROUTE and f.id not in GRID_PAIRS
-    )
+def _bits(ranges: list[tuple[int, int]]) -> int:
+    return sum(((1 << (hi - lo + 1)) - 1) << lo for lo, hi in ranges)
 
 
-GRID_A = _grid("grid_a")
-GRID_B = _grid("grid_b")
+GRID_A = _bits([r for r in GRID_A_FIELDS if r not in GRID_PAIRS])
+GRID_B = _bits([r for r in GRID_B_FIELDS if r not in GRID_PAIRS])
 GRID = GRID_A | GRID_B
 C2_FREE = sum(
     1 << b for b in range(233, 302) if b not in P16_C2_BITS and not 274 <= b <= 295
@@ -57,11 +55,7 @@ C2_FREE = sum(
 """C2's free bits: 233..301 without the bits program 16 moves and the subfields 274..295 that
 hold one."""
 
-OP = sum(
-    f.mask << f.lo
-    for f in FIELDS
-    if f.id in ("f265_268", "f272_273") or f.unit == "ctl_hi"
-)
+OP = _bits([(265, 268), (272, 273), (302, 319)])
 """The op bits: C2's 265..268 and 272..273 and the control bits 302..319, all set in the idle
 word."""
 
