@@ -70,7 +70,11 @@ class PhaseWeight:
 
 @dataclass(frozen=True)
 class Unknown:
+    """A value that is not known; `key` tells apart unknowns of one reason that may differ (a
+    load's op, base register and offset)."""
+
     why: str
+    key: tuple[int, ...] = ()
 
 
 Value = Row | TapBytes | PhaseWeight | Unknown
@@ -375,10 +379,11 @@ class Machine:
         width, fmt = LOADS[word["op"]]
         imm13 = word["imm"] | word["f128_132"] << 8
         offset = local_offset(width, imm13)
+        key = (word["op"], word["ra"], offset)
         if word["ra"] != self.anchors.phase_base:
-            return Unknown(f"r{word['ra']} holds no known base in the window")
+            return Unknown(f"r{word['ra']} holds no known base in the window", key)
         if not 0 <= offset <= 8 - width:
-            return Unknown("a load beyond the phase's 8 tap bytes")
+            return Unknown("a load beyond the phase's 8 tap bytes", key)
         return TapBytes(offset, fmt)
 
     def _advance(self) -> None:
@@ -469,6 +474,8 @@ def run_window(
     base = Machine(anchors)
     base.run(stock)
     reads = readers(anchors, stock)
+    # One pass suffices across the loop's back edge: 433 / 434 rewrite C4 / C5 and 434 / 435
+    # rewrite R4 / R1 before 437 / 438 read them, so no earlier iteration's value reaches them.
     for item, at in reads.items():
         for index in at:
             if index in anchors.inert:

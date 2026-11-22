@@ -213,6 +213,19 @@ def test_an_edited_value_that_reaches_a_word_without_semantics_makes_the_window_
     assert w.acc[0][1].weight == TapBytes(4, "<h")
 
 
+def test_an_edited_load_off_the_tap_base_reaches_the_head_8_words():
+    # The loads of 430 / 431 read off the tap base; 433 / 434 write their data to C4 / C5,
+    # which 437 / 438 read without a semantic. An edit that changes what they load is unknown.
+    for at, kind in (
+        (430, FieldValue("imm", 5)),
+        (431, FieldValue("imm", 6)),
+        (430, FieldValue("op", 0x16)),
+        (431, FieldValue("ra", 6)),
+    ):
+        got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=[(at, kind)])
+        assert not any(got.dst.known), (at, kind)
+
+
 def test_two_writes_to_one_register_in_one_step_raise():
     m = model()
     words = edited(438, FieldValue("f167_170", 2))
