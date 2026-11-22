@@ -276,6 +276,7 @@ class Executor:
         model: "Model | None" = None,
         strict: bool = True,
         sequencer: Sequencer | None = None,
+        *,
         branching: Branching | None = None,
         ops: dict[int, OpSemantics] | None = None,
         limit: int = 100_000,
