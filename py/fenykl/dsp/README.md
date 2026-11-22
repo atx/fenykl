@@ -377,7 +377,7 @@ An edited job forgets the held lines, and its partial column block is unknown.
 `Resample13Model` takes its b = 1 bytes from the field-level executor (`exec.run_window`) over
 words 430..447 (`resample_window`): the stock program's term lists for a stock job, the edited
 window's for a job it covers; a row's own law (`Operands`, `Phase`, `Substitute`) runs on the
-stock kernel where the window does not cover the row. Each term reads its source line in any
+stock kernel. Each term reads its source line in any
 plane. The window runs once per job on symbolic values: the tap loads put `TapBytes` of the line's phase into the
 load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register,
 the operand write ports put each word's anchored source line (`Row`) into a register, and each

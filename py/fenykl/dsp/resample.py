@@ -473,15 +473,6 @@ class Resample13Model:
         as a hypothesis)."""
         words = job.program.words
         stock = self.program.words
-        w = None
-        if len(words) == len(stock):
-            try:
-                w = run_window(self.anchors, stock, words, probe)
-            except UnknownSemantics as exc:
-                # A write conflict: strict mode stops, lenient mode takes the stock law.
-                if emu.strict:
-                    raise
-                result.notes.append(str(exc))
         edits = [
             self.edits.get((i, words[i].value)) if i < len(words) else None
             for i in edited
@@ -499,7 +490,16 @@ class Resample13Model:
                 (f"word {edited[0]}, {e.kind.name}, on {probe}: {e.fact}", V)
             )
             p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
-            return (p0, p1, p2), w.acc if isinstance(w, Window) else None
+            return (p0, p1, p2), None
+        w = None
+        if len(words) == len(stock):
+            try:
+                w = run_window(self.anchors, stock, words, probe)
+            except UnknownSemantics as exc:
+                # A write conflict: strict mode stops, lenient mode takes the stock law.
+                if emu.strict:
+                    raise
+                result.notes.append(str(exc))
         if isinstance(w, Uncovered):
             why = f"{why}; {w.why}"
         if isinstance(w, Window) and isinstance(w.acc, Unknown):
@@ -653,7 +653,7 @@ class Resample13Model:
         ran: tuple[int, int],
     ) -> tuple[int, Confidence]:
         """The b = 1 byte of plane c at pixel x for source line a (16.16) under a row's
-        `effect` the window does not cover, and the taint of its kernel; `get(y, x)` reads a
+        `effect`, and the taint of its kernel; `get(y, x)` reads a
         source pixel and raises _Miss where the law gives none."""
         taint = H if a & 0xFFF else V  # a phase between the 16 never ran
         base = a >> 16
