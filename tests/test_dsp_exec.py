@@ -271,24 +271,45 @@ def test_edits_of_two_window_fields_compose_as_the_camera_showed():
 
 
 def test_a_tap_term_reads_another_planes_line():
-    # 57 = 5 with 88 = 5 at 441: tap 2 takes c3 and multiplies plane 1's line a + 1.
-    edits = [(441, set_fields(f57_60=5, f88_91=5))]
-    got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
-
     def line(c: int, k: int) -> int:
         return (7 * (16 * c + max(k, 0)) + 3) & 0xFF
 
-    for i, (a, _) in enumerate(TABLE):
-        y, p = a >> 16, (a >> 12) & 15
-        c0, c1, _, c3 = COMPOSE[p]
-        s = (
-            c0 * line(0, y - 1)
-            + c1 * line(0, y)
-            + c3 * (line(1, y + 1) + line(0, y + 2))
-        )
-        want = max(0, min(255, rne(rne(s, 4), 64)))
-        assert got.dst.data[64 * i : 64 * i + 64] == bytes([want]) * 64, i
-    assert all(got.dst.known[: 64 * 16])
+    # 57 = 5 with 88 = 5 at 441: tap 2 takes c3 and multiplies plane 1's line a + 1; 57 = 5
+    # at 440 (a post hoc fit): tap 1 multiplies it, past the bottom on line 15.
+    cases = (
+        (
+            [(441, set_fields(f57_60=5, f88_91=5))],
+            lambda c, y: (
+                c[0] * line(0, y - 1)
+                + c[1] * line(0, y)
+                + c[3] * (line(1, y + 1) + line(0, y + 2))
+            ),
+            [V, V],
+            set(),
+        ),
+        (
+            [(440, FieldValue("f57_60", 5))],
+            lambda c, y: (
+                c[0] * line(0, y - 1)
+                + c[1] * line(1, y + 1)
+                + c[2] * line(0, y + 1)
+                + c[3] * line(0, y + 2)
+            ),
+            [I],
+            {15},
+        ),
+    )
+    for edits, law_of, tiers, bottom in cases:
+        got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+        assert [c for _, c in got.result.edits] == tiers
+        for i, (a, _) in enumerate(TABLE):
+            known = got.dst.known[64 * i : 64 * i + 64]
+            assert all(known) if i not in bottom else not any(known)
+            if i in bottom:
+                continue
+            s = law_of(COMPOSE[(a >> 12) & 15], a >> 16)
+            want = max(0, min(255, rne(rne(s, 4), 64)))
+            assert got.dst.data[64 * i : 64 * i + 64] == bytes([want]) * 64, (edits, i)
     # 57 = 15 has no semantic: the job is unmodelled.
     with pytest.raises(UnknownSemantics, match="word 441"):
         predict(

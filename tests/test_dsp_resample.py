@@ -551,11 +551,10 @@ def test_words_439_to_442s_s2_operands_select_their_taps_line_and_coefficient():
         assert got.dst.known[:1024] == want.dst.known[:1024]
         assert got.dst.data[:1024] == want.dst.data[:1024] != stock.dst.data[:1024]
         assert got.dst.data[1024:] == stock.dst.data[1024:]
-    # 0 and 1 at 439 select no coefficient, and 57 = 5 at 440 no line: plane 0 is unknown.
+    # 0 and 1 at 439 select no coefficient: plane 0 is unknown.
     for at, edit in (
         (439, FieldValue("f88_91", 0)),
         (439, FieldValue("f88_91", 1)),
-        (440, FieldValue("f57_60", 5)),
     ):
         got = predict(model(), taps, FLAT, TABLE13, edits=[(at, edit)])
         assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], (at, edit)

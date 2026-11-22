@@ -508,15 +508,7 @@ FACTS: tuple[Fact, ...] = (
         "tap 1 takes c2: the word at imm 1 words, its low 16 bits reaching the coefficient "
         "(one run)",
     ),
-    # Words 439..442's S2 operands (their coefficient selects run on the loop-head window):
-    # f57_60 at 439 tap 0's source line.
-    Fact(
-        FieldValue("f57_60", 4),
-        (439,),
-        {FLAT: _planes("l..", Operands((1, 1, 2, 3)))},
-        "tap 0 multiplies tap 1's line, with its own coefficient (5, the stock value, is its "
-        "own line)",
-    ),
+    # Words 439..442's S2 operands run on the loop-head window, but for these two values.
     *(
         Fact(
             FieldValue("f88_91", v),
@@ -528,14 +520,6 @@ FACTS: tuple[Fact, ...] = (
         )
         for v, weight in ((0, "p"), (1, "16 - p"))
     ),
-    Fact(
-        FieldValue("f57_60", 5),
-        (440,),
-        {FLAT: _planes("o..")},
-        "tap 1 does not read tap 0's line (pre-registered, refuted); what it reads is not "
-        "modelled",
-    ),
-    Fact(FieldValue("f53_56", 1), (439,), {FLAT: _planes("...")}, "a don't-care here"),
     Fact(S2_439, (439,), {FLAT: _planes("l..", SUBSTITUTE)}, "as grid A idle"),
     # Word 437's S2 operands act at the edge lines only.
     Fact(
