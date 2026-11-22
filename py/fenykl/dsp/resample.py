@@ -53,8 +53,10 @@ read of table entry 1: the run cannot tell, so line 1 is a hypothesis), then pla
 64 bytes past 3 x 64 x H [verified: one run]; an odd H above 1 never ran, so its dst is
 unknown.
 
-Edits: an edited program runs only as one of the edits measured on the camera
-(`resample_edits`), on the job classes it ran on; see `Resample13Model._effects`.
+The b = 1 kernel is the loop-head window's (`resample_window`): term lists of the field-level
+executor, evaluated per pixel. Edits: an edited program runs as one of the edits measured on
+the camera (`resample_edits`), or on the window where it covers every changed field, on the
+job classes they ran on; see `Resample13Model._effects`.
 """
 
 import struct

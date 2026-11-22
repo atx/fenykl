@@ -20,7 +20,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
-| `resample_window.py` | program 13's loop-head window on the executor: its anchors and measured cells, and `WindowModel`, the model with its b = 1 bytes from the window, run in shadow |
+| `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
 | `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields`, `fenykl dsp flow` |
@@ -226,7 +226,8 @@ is weaker:
   at its stock register too, and never stronger than the register's fact; word 76's use at
   another register is a hypothesis beyond the lengths it ran at.
 - **Combinations.** A job that differs from the stock program in two or more words is at most
-  inferred: no combination of edits is registered as seen together.
+  inferred, but for the compositions of program 13's loop-head window seen together on the
+  camera ("The loop-head window").
 - **Lenient mode.** An ignored field, or a route nibble off the stock transfers' values, makes
   the job a hypothesis: its loaded, stored and zero-filled bytes alike.
 
@@ -329,24 +330,22 @@ dst segments).
 `resample_edits.FACTS` holds the edits measured on the camera: a stock word with some bits set to
 the idle word's (`Idle`: the grid and C2's free bits, the grid, C2's free bits, the op bits, one
 bit) or one field set to a value (`FieldValue("f211_215", 4)`: a register renamed;
-`FieldValue("imm", 0)` at the tap-1 read 433), and per
-job class (`Probe`: a flat source or not, the step b, W; H 16) what each plane does: the stock law
-(`Stock`), unknown (`Changed`), or a law (`Operands`: plane 0 with each tap multiplying another
-tap's line, nothing or a bounded value; `Phase`: a chroma plane sampled at another horizontal
-phase; `TapLoad`: plane 0 with one tap's coefficient loaded from another place in the phase's
-taps, as 433's imm 0 (c1 := c0) and op 0x10 (c1 := c0's bits 8..15, zero-extended) do;
-`Substitute`: plane 0 with a tap's product replaced by the boot's tap-0 substitute, below).
+`FieldValue("f57_60", 15)` at 439), and per job class (`Probe`: a flat source or not, the
+step b, W; H 16) what each plane does: the stock law (`Stock`), unknown (`Changed`), or a law
+(`Operands`: plane 0 with each tap multiplying another tap's line, nothing or a bounded value;
+`Phase`: a chroma plane sampled at another horizontal phase; `Substitute`: plane 0 with a tap's
+product replaced by the boot's tap-0 substitute, below). These rows hold what the loop-head
+window (below) does not run; a field edit the window runs has no row.
 `FieldValues` sets several fields of one word at once (`set_fields(op=0x10, imm=0)`). The model
 matches an edited word by its value, so the classes hold the measured edited words too.
 
 Words 439..442 hold one S2 operand set per tap, 0..3. f88_91 selects the tap's coefficient
 with one map in all four words (3, 2, 4, 5: c0, c1, c2, c3; each word's stock value is its own
-tap's; pre-registered and verified at each word, `tap_from`). At 439, f57_60 selects tap 0's
-source line (5, stock, its own; 4 tap 1's), and f88_91's 0 and 1 select none of the four:
-post hoc tap 0's coefficient reads as p and 16 - p (p the phase in 16ths, the chroma planes'
-weights; inferred, not modelled), so their plane 0 is unknown. At 440, f57_60 = 5 does not
-give tap 1 tap 0's line (pre-registered, refuted) and its plane 0 is unknown; that the value
-names an operand register written by grid B is a hypothesis the model does not use. Idling
+tap's; pre-registered and verified at each word). At 439, f57_60 selects tap 0's source line
+(5, stock, its own; 4 tap 1's), and f88_91's 0 and 1 select none of the four: post hoc tap 0's
+coefficient reads as p and 16 - p (p the phase in 16ths, the chroma planes' weights; inferred,
+not modelled), so their plane 0 is unknown (rows). f57_60 = 5 at 441 and 442 reads plane 1's
+line a + 1 (verified), at 440 too (post hoc, inferred). Idling
 439's grid A (or the S2 triple) replaces tap 0's product by a per-lane value added without the
 multiply, the **tap-0 substitute** (`Boot.substitute`). Idling 440's or 441's grid A drops tap
 1's or tap 2's product; it ran only on boots where the substitute was 0, so the model gives
@@ -360,30 +359,41 @@ raised, and from there the grid B idle does not bring it back to a known value: 
 contain it left a non-zero moved value in place. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
 `Resample13Model(program, facts)` takes another outcome table.
 
-- one measured edit on a class it ran on: its planes; `JobResult.edits` names it, verified (the
-  bytes stay at most inferred, through the law);
-- the same edit on another class, or two edits together: dst unknown ("resampler edit") in strict
-  mode, the stock law as a hypothesis in lenient mode;
-- any other edited word: `UnknownSemantics` (strict), the stock law as a hypothesis (lenient).
+- one edited word that is a measured row, on a class it ran on: its planes; `JobResult.edits`
+  names it, verified (the bytes stay at most inferred, through the law);
+- else a job whose every changed field the window covers, in any number of words: the window's
+  bytes; `JobResult.edits` has one entry per changed field at its scoped tier, under the
+  composition cap (below);
+- anything else on a class or with words the rows and the window do not cover together (a row
+  word with another edited word among them): dst unknown ("resampler edit") in strict mode, the
+  stock law as a hypothesis in lenient mode;
+- a word that is no row and whose changed fields the window does not cover: `UnknownSemantics`
+  (strict), the stock law as a hypothesis (lenient).
 
 An edited job forgets the held lines, and its partial column block is unknown.
 
 #### The loop-head window
 
-`resample_window.WindowModel` is `Resample13Model` with its b = 1 bytes taken from the
-field-level executor (`exec.run_window`) over words 430..447, for the stock program and for the
-measured edits the window covers; the rows still decide which planes a job gives, so it gives
-the same bytes, masks, taints and reasons as the model (a shadow, not the default). The window
-runs once per job on symbolic values: the tap loads put `TapBytes` of the line's phase into the
+`Resample13Model` takes its b = 1 bytes from the field-level executor (`exec.run_window`) over
+words 430..447 (`resample_window`): the stock program's term lists for a stock job, the edited
+window's for a job it covers; a row's own law (`Operands`, `Phase`, `Substitute`) runs on the
+stock kernel where the window does not cover the row. Each term reads its source line in any
+plane. The window runs once per job on symbolic values: the tap loads put `TapBytes` of the line's phase into the
 load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register,
 the operand write ports put each word's anchored source line (`Row`) into a register, and each
 S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator. Every changed field must
 be a semantic or a don't-care (a held field under an idle owner), else the executor gives no
 terms (`Uncovered`). A stock value at its stock index has the law's tier on every job class;
 an edited value its measured cell's tier, the mechanism's off its cells, and no semantic off
-the job classes it ran on. Off a measured cell, an edited register value that reaches a word
-reading it without a semantic (`exec.readers`; words shown inert at b = 1 aside) makes the
-window unknown.
+the job classes it ran on. Unless the job edits one semantic at a measured cell, an edited
+register value that reaches a word reading it without a semantic (`exec.readers`; words shown
+inert at b = 1 aside) makes the window unknown.
+
+Composition (`resample_window.composition_cap`): two compositions ran and gave the composed
+bytes [verified], f57_60 with f88_91 in one tap word (the tap takes the selected coefficient
+times the selected operand) and f88_91 at two words (two plane-0 taps, or one plane-0 tap and
+one chroma term: each acts in its accumulation as it does alone). Jobs of exactly those kinds
+keep their fields' tiers; any other job that edits two or more semantics is at most inferred.
 
 ### The stepping core
 
@@ -440,6 +450,11 @@ flow.
   fields go in `flips`, by the bits flipped against the stock value (45's target, 65's
   immediate), so that no stock value is part of the code. An edit of two fields of one word has
   no semantics.
+- **A field fact of program 13's loop-head window**: a `FieldSemantic` in
+  `resample_window.SEMANTICS` (the fields read as one value, the context, the tier off its
+  cells), its measured cells in `_cells` with their tier, and a composition kind in
+  `composition_cap` only once it ran; a fact no semantic gives (an idle, a value with no
+  mechanism) stays a row in `resample_edits.FACTS`.
 - **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
   `masks` (the bits of each matched field it fixes, default all), `operands` (fields it reads
   or ignores) and `act`, which records into the job's `Trace`; add it to the model's
