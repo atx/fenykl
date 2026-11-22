@@ -70,6 +70,7 @@ from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
 from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
 from .exec import (
     Term,
+    Uncovered,
     Unknown,
     UnknownTerm,
     Window,
@@ -217,10 +218,11 @@ class _Pixels:
 
 
 class _Miss(Exception):
-    """A byte the law does not give; `why` names the unknown source."""
+    """A byte the law does not give; `why` names the unknown source, `fact` (if given) replaces
+    its text."""
 
-    def __init__(self, why: str) -> None:
-        self.why = why
+    def __init__(self, why: str, fact: str = "") -> None:
+        self.why, self.fact = why, fact
 
 
 _WHY = {
@@ -398,7 +400,11 @@ class Resample13Model:
                             px, taps, c, entry, x, w, effect, ran, window
                         )
                     except _Miss as m:
-                        line.src[x] = why[m.why]
+                        line.src[x] = (
+                            boot.source(f"resampler {m.why}", m.fact)
+                            if m.fact
+                            else why[m.why]
+                        )
                         continue
                     line.data[x], line.known[x] = v, 1
                     if i >= h:
@@ -494,6 +500,11 @@ class Resample13Model:
             )
             p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
             return (p0, p1, p2), w.acc if isinstance(w, Window) else None
+        if isinstance(w, Uncovered):
+            why = f"{why}; {w.why}"
+        if isinstance(w, Window) and isinstance(w.acc, Unknown):
+            result.notes.append(w.acc.why)
+            return STOCK_PLANES, w.acc
         if isinstance(w, Window):
             cap = composition_cap(w.edits, words)
             for i, c in w.edits:
@@ -615,7 +626,7 @@ class Resample13Model:
         term lists, through the plane's output stage, and the taint of its terms; `read(plane,
         y, x)` reads a source pixel of any plane."""
         if isinstance(window, Unknown):
-            raise _Miss("operand")
+            raise _Miss("operand", window.why)
         taint = H if a & 0xFFF else V  # a phase between the 16 never ran
         base, p = a >> 16, (a & 0xFFFF) >> 12
         kernel = taps[p] if taps is not None else None
@@ -627,8 +638,8 @@ class Resample13Model:
             s, conf = accumulate(
                 terms, kernel, p, lambda row: read(row.plane, base + row.dy, x)
             )
-        except UnknownTerm:
-            raise _Miss("operand") from None
+        except UnknownTerm as e:
+            raise _Miss("operand", e.why) from None
         return self.anchors.stages[c](s), min(taint, conf)
 
     def _vertical(

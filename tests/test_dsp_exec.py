@@ -219,14 +219,31 @@ def test_an_edited_value_that_reaches_a_word_without_semantics_makes_the_window_
 def test_an_edited_load_off_the_tap_base_reaches_the_head_8_words():
     # The loads of 430 / 431 read off the tap base; 433 / 434 write their data to C4 / C5,
     # which 437 / 438 read without a semantic. An edit that changes what they load is unknown.
-    for at, kind in (
-        (430, FieldValue("imm", 5)),
-        (431, FieldValue("imm", 6)),
-        (430, FieldValue("op", 0x16)),
-        (431, FieldValue("ra", 6)),
+    for at, kind, reaches in (
+        (430, FieldValue("imm", 5), "C4 reaches word 437"),
+        (431, FieldValue("imm", 6), "C5 reaches word 438"),
+        (430, FieldValue("op", 0x16), "C4 reaches word 437"),
+        (431, FieldValue("ra", 6), "C5 reaches word 438"),
     ):
         got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=[(at, kind)])
         assert not any(got.dst.known), (at, kind)
+        assert got.result.edits == []
+        assert reasons(got) == {("resampler operand", f"an edited value of {reaches}")}
+
+
+def test_an_unknown_terms_bytes_name_its_reason():
+    edits = [(439, FieldValue("f57_60", 7))]
+    got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+    assert reasons(got) == {("resampler operand", "R7 holds no value in the window")}
+
+
+def reasons(got) -> set[tuple[str, str]]:
+    """(name, fact) of the sources of the unknown bytes."""
+    return {
+        (got.sources[s].name, got.sources[s].fact)
+        for s, k in zip(got.dst.src, got.dst.known)
+        if not k
+    }
 
 
 def test_two_writes_to_one_register_in_one_step_raise():
