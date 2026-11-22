@@ -256,20 +256,34 @@ T_HIGH = (
     "7), meaning open. In a data op it is the register rb of the register forms (families A', C, "
     "E) or bits 8..12 of the immediate (families A, B, D, F) (verified in the bytes across later "
     "firmware versions of the same family: in 31878 of 32911 idle-op words it holds the last "
-    "register-form word's value, which survives the immediate forms in between)"
+    "register-form word's value, which survives the immediate forms in between). In families "
+    "A', C and E a source that stays fixed across consecutive register-form ops while ra changes "
+    "(same rb with another ra in 59 % of such pairs, 10 % by chance), live into the routine more "
+    "often than chance; a register named as ra reaches a later rb no more often than chance "
+    "(verified in the bytes across later firmware versions of the same family)"
 )
 RA_FACT = (
     "the op slot's register ra: it changes in 1 of 33175 idle-op words and in 19884 of 33290 "
     "data-op words across later firmware versions of the same family, so only a word that "
     "carries an op writes it, a data op or a control op 0..2, while a call holds it (verified "
-    "in the bytes); whether it is a destination, a source or a base is open; in ops 0..2 the "
-    "candidate for the branch or loop condition (hypothesis)"
+    "in the bytes). Its role by family: in A (0x0c..0x1a even) an address base the op reads, "
+    "imm13 the offset (inferred: in 58..74 % of A's namings the next reference to the register "
+    "is the same op naming it again with another immediate, which as writes would be dead); "
+    "0x0b names it just before family A uses it (24 % against 7 % by chance), whether as a "
+    "write or a read is open (hypothesis); in C and E the op's result or accumulator "
+    "(hypothesis); in ops 0..2 a loop or condition operand, the same register in a guard and "
+    "its loop end in 47 % of the pairs against 13 % by chance (verified in the bytes for the "
+    "count, the reading inferred). Counted across later firmware versions of the same family"
 )
 XREG_FACT = (
     "In program 16 the register-transfer words name the register they use here: as a load "
     "address (word 67), a buffer offset (68 load side, 76 store side), a store count (73), "
     "an enable (42, 66, 69, 70) or the store element format (47) (verified on the camera "
-    "per word); r3 holds the job source address"
+    "per word); r3 holds the job source address. Whether xreg and the op slot's ra and rb "
+    "name one register file is open: per routine the registers xreg changes to and those the "
+    "op slot names overlap only slightly more than chance (Jaccard 0.51 against 0.44 across "
+    "later firmware versions of the same family), and program 16's r1 = len is never named in "
+    "the op slot. The emulator keeps the two apart (`Boot.regs`, `Boot.slot`)"
 )
 FLAGS_FACT = (
     "3 bits between the register specifiers; bits 120..121 are 0 in every op 0..3 word and bit 122 "
@@ -307,8 +321,10 @@ XFER = (
 
 
 CONDITION = (
-    "the condition is no field of its own; the candidate is the register ra (f123_127), which "
-    "ops 0..2 write and calls hold (hypothesis)"
+    "the condition is no field of its own; the candidate is the register ra (f123_127), a loop "
+    "or condition operand that a guard and its loop end share in about half the guarded loops, "
+    "named in its own loop body less often than chance: a count held or decremented outside "
+    "the op slot (hypothesis)"
 )
 
 
@@ -1013,8 +1029,11 @@ MEANINGS = {
     0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
     "from its position), what it does open",
     0x0A: "periodic immediates such as 0x5555 and 0x3333: a lane or phase mask set-up (hypothesis)",
-    0x0B: "the most varied immediates, often in a call's delay slots: sets ra from the immediate "
-    "(hypothesis, strong)",
+    0x0B: "the most varied immediates, often in a call's delay slots: sets ra from the immediate, "
+    "or uses it as a base as family A does (hypothesis); it names a register just before family "
+    "A uses it as a base (24 % against 7 % by chance across later firmware versions of the same "
+    "family), but in program 16 base plus immediate addressing with 0x0b writing ra would move "
+    "the local words that the camera shows 0x1a reading",
     0x0C: "its immediates 0x1fxx read as small negative numbers (inferred)",
     0x10: "its immediates 0x1fxx read as small negative numbers (inferred); in program 13 every "
     "non-zero immediate lies in its tap block 0x00..0x1f: reads a coefficient or line by index "

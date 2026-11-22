@@ -109,8 +109,12 @@ f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 
 target word wherever code moved across later firmware versions of the same family, and lies inside
 its program in every op 0..3 word (verified in the bytes). In those words `imm` is T's low byte and
 f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` have no field of
-their own; the candidate is the register ra (f123_127), which ops 0..2 write and calls hold
-(hypothesis).
+their own; the candidate is the register ra (f123_127), a loop or condition operand that a guard
+and its loop end share in about half the guarded loops (hypothesis). By family, ra is an address
+base the op reads in family A (inferred), the result or accumulator in C and E (hypothesis);
+f224_228 changes to it with or one word ahead of the op, an operand select (hypothesis). Whether
+xreg and the op slot name one register file is open; the emulator keeps the transfer registers
+(`Boot.regs`) and the op slot's (`Boot.slot`) apart.
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.
