@@ -266,6 +266,14 @@ def test_taps_outside_those_that_ran_are_a_hypothesis():
     got = predict(model(), Taps.of(phases), FLAT, TABLE13, edits=[(437, GRID_C2)])
     conf = got.confidence()
     assert set(conf[64:128]) == {H} and set(conf[192:256]) == {I}
+    # b != 1 ran taps in -637..2048 only: plane 0's vertical pass at phase 0 reaches every pixel.
+    phases = [(0, 256, 0, 0)] * 16
+    phases[0] = (0, 4096, 0, 0)
+    image = bytes(x % 16 for x in range(64)) * 3 * 16
+    table = [(i << 16, 0x11000) for i in range(16)]
+    conf = predict(model(), Taps.of(phases), image, table).confidence()
+    assert set(conf[:1024]) == {H, None}
+    assert H not in conf[1024:]
 
 
 # b = 1 + 1/16 at H 2: output pixel 16 sits at horizontal phase 0 on source pixel 15, pixel 20

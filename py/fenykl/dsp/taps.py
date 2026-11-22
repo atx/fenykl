@@ -2,8 +2,8 @@
 
 Word 2p holds phase p's tap 0 in its low half and tap 1 in its high half, word 2p + 1 taps 2
 and 3 [verified on the camera]. Every tap of the s16 range acts as its value with the stock
-program [verified on the camera]; with an edited program only taps from -637 to 2048 (gains
--2.49 .. 8.0) ran.
+program at b = 1 [verified on the camera]; at b != 1 and with an edited program only taps from
+-637 to 2048 (gains -2.49 .. 8.0) ran.
 """
 
 import struct
