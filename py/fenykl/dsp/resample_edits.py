@@ -4,7 +4,7 @@ plane of the output does.
 An edit kind sets some bits of one stock word to the idle word's (`Idle`): the grid and C2's
 free bits, the grid alone, grid A or grid B alone, C2's free bits alone, the op bits, or one
 bit; or sets one field of the field table to a value (`FieldValue`, such as a register
-specifier renamed). Every edit below ran on the camera, one per job, at H 16 with stride 64,
+specifier renamed, or the immediate or op of a tap read). Every edit below ran on the camera, one per job, at H 16 with stride 64,
 and each plane of its output was compared byte for byte with the stock program's output of the
 same job on the same boot. The outcomes hold on the job classes (`Probe`) they ran on,
 whatever the source's values and the taps: a plane is `STOCK` only if no byte changed in any
@@ -15,6 +15,7 @@ gives no prediction.
 The classes that ran: sources whose lines are constant along x ("flat") or not, at b = 1, 1 +
 1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48."""
 
+import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -155,7 +156,22 @@ class Phase:
     q: int
 
 
-Effect = Stock | Changed | Operands | Phase
+@dataclass(frozen=True)
+class TapLoad:
+    """Plane 0 at b = 1 with tap `tap`'s coefficient loaded from the phase's taps as the tap
+    words hold them (c0..c3, s16 little-endian): the value of struct format `fmt` at byte
+    `offset`; the tap still multiplies its own source line."""
+
+    tap: int
+    offset: int
+    fmt: str
+
+    def kernel(self, kernel: tuple[int, ...]) -> tuple[int, ...]:
+        (c,) = struct.unpack_from(self.fmt, struct.pack("<4h", *kernel), self.offset)
+        return (*kernel[: self.tap], c, *kernel[self.tap + 1 :])
+
+
+Effect = Stock | Changed | Operands | Phase | TapLoad
 Planes = tuple[Effect, Effect, Effect]
 
 STOCK = S = Stock()
@@ -189,6 +205,9 @@ B1 = {FLAT: _planes("..."), VARY: _planes("...")}
 DROP0 = Operands((None, 1, 2, 3))
 TAP1_LOW = Operands((Operand.UNKNOWN, Operand.LOW, Operand.UNKNOWN, Operand.UNKNOWN))
 PHASE14 = Phase(14)
+TAP1_FROM_C0 = TapLoad(1, 0, "<h")
+TAP1_FROM_C0_HIGH = TapLoad(1, 1, "B")
+"""Tap 1 := c0's bits 8..15, zero-extended: the byte at offset 1 of the phase's taps."""
 
 
 def _copies(up: str, half: str) -> dict[Probe, Planes]:
@@ -348,6 +367,19 @@ FACTS: tuple[Fact, ...] = (
         (445, *_r(447, 450)),
         {FLAT: _planes("ooo"), VARY: _planes("ooo"), VARY_UP: _planes("ooo")},
         "every plane changes: pass set-up (accumulator, scale or output format)",
+    ),
+    # Word 433 reads tap 1 of the line's phase (a halfword load, imm 1).
+    Fact(
+        FieldValue("imm", 0),
+        (433,),
+        {FLAT: _planes("l..", TAP1_FROM_C0)},
+        "tap 1 takes tap 0's coefficient: the immediate is the tap index",
+    ),
+    Fact(
+        FieldValue("op", 0x10),
+        (433,),
+        {FLAT: _planes("l..", TAP1_FROM_C0_HIGH)},
+        "tap 1 takes c0's bits 8..15, zero-extended: a byte load at the same address",
     ),
     # Single bits of word 504's C2.
     Fact(bit(237), (504,), {VARY: _planes("...")}, ""),

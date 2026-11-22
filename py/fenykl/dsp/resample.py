@@ -80,6 +80,7 @@ from .resample_edits import (
     Planes,
     Probe,
     Stock,
+    TapLoad,
 )
 from .semantics import (
     IDLE_CLASS,
@@ -465,6 +466,8 @@ class Resample13Model:
                 taint = H  # a phase between the 16 never ran
             p = (a & 0xFFFF) >> 12
             kernel = taps[p] if c == 0 else chroma(p)
+            if isinstance(effect, TapLoad):
+                kernel = effect.kernel(kernel)
             taint = min(Confidence(taint), _gain_taint(kernel, ran))
             if isinstance(effect, Phase):
                 return _phase(get, base, kernel, x, effect.q), taint

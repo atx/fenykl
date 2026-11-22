@@ -411,3 +411,24 @@ def test_a_field_value_edit_is_scored_on_its_classes_only():
     # Another value is no measured edit.
     with pytest.raises(UnknownSemantics, match="word 437"):
         predict(m, taps, FLAT, TABLE13, edits=[(437, FieldValue("f211_215", 9))])
+
+
+def test_an_edited_tap_read_loads_another_coefficient():
+    # Word 433 reads tap 1. Its imm 0 loads c0 instead (c1 := c0), op 0x10 the byte at offset 1
+    # of the phase's taps, zero-extended (c1 := c0's bits 8..15): -8 gives 255, 384 gives 1.
+    phases = [(-8, 264, 0, 0)] * 16
+    phases[3] = (0, 0, 0, 256)
+    phases[5] = (384, -128, 0, 0)
+    imm0 = [(-8, -8, 0, 0)] * 16
+    imm0[3], imm0[5] = (0, 0, 0, 256), (384, 384, 0, 0)
+    byte1 = [(-8, 255, 0, 0)] * 16
+    byte1[3], byte1[5] = (0, 0, 0, 256), (384, 1, 0, 0)
+    stock = predict(model(), Taps.of(phases), FLAT, TABLE13)
+    for edit, loaded in ((FieldValue("imm", 0), imm0), (FieldValue("op", 0x10), byte1)):
+        got = predict(model(), Taps.of(phases), FLAT, TABLE13, edits=[(433, edit)])
+        want = predict(model(), Taps.of(loaded), FLAT, TABLE13)
+        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED]
+        assert got.dst.known[:1024] == want.dst.known[:1024]
+        assert got.dst.data[:1024] == want.dst.data[:1024] != stock.dst.data[:1024]
+        assert set(got.confidence()[:1024]) - {None} == {Confidence.INFERRED}
+        assert got.dst.data[1024:] == stock.dst.data[1024:]
