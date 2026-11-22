@@ -17,8 +17,10 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
 
 - the kernel: plane 0 uses the job's taps, phase p = taps (p, 0..3), s16 with 256 = 1.0, word
   2p = tap 0 | tap 1 << 16, word 2p + 1 = tap 2 | tap 3 << 16; planes 1 and 2 ignore the taps
-  and use the fixed (0, 256 - 16p, 16p, 0) [verified: tap patches reach plane 0 only]; taps
-  outside -637..2048 (gains -2.49 .. 8.0) never ran, so the bytes they reach are a hypothesis;
+  and use the fixed (0, 256 - 16p, 16p, 0) [verified: tap patches reach plane 0 only]; every
+  tap of the s16 range acts as its value, one-tap gains to 32767 exact and partial sums of
+  +-2 x 32767 x 252 unsaturated [verified]; with an edited program only taps in -637..2048 ran,
+  so there the bytes a tap outside it reaches are a hypothesis;
 - b = 1: the kernel acts down the lines, phase p = frac(a) x 16, tap k on source line
   floor(a) - 1 + k, line -1 read as line 0 [verified: impulse responses];
 - b != 1 (integer a only): the kernel acts along the line at u(x) = u0 + b x, u0 = 31.5 (1 - b)
@@ -105,8 +107,10 @@ B_RANGE = (0x4000, 0x20000)
 """The steps that ran lie in this range (0.25 .. 2)."""
 HELD = H_MAX
 """The height at which the held line pairs were seen."""
-TAPS_RAN = (-637, 2048)
-"""The taps that ran on plane 0: gains -2.49 .. 8.0."""
+TAPS_RAN = (-0x8000, 0x7FFF)
+"""The taps that ran on plane 0 with the stock program: the whole s16 range."""
+EDIT_TAPS_RAN = (-637, 2048)
+"""The taps that ran on plane 0 with an edited program: gains -2.49 .. 8.0."""
 
 
 def chroma(p: int) -> tuple[int, int, int, int]:
@@ -133,8 +137,8 @@ def _unit(kernel: tuple[int, ...]) -> bool:
     return tuple(kernel) == chroma(0)
 
 
-def _gain_taint(kernel: tuple[int, ...]) -> Confidence:
-    lo, hi = TAPS_RAN
+def _gain_taint(kernel: tuple[int, ...], ran: tuple[int, int]) -> Confidence:
+    lo, hi = ran
     return H if any(not lo <= t <= hi for t in kernel) else V
 
 
@@ -329,6 +333,7 @@ class Resample13Model:
         # H 1: plane 0 is a line pair, the chroma planes follow it. Line 1 as a copy of line 0
         # and as a read of table entry 1 gave the same bytes: a hypothesis.
         lines0 = max(h, 2)
+        ran = EDIT_TAPS_RAN if edited else TAPS_RAN
         for c in range(PLANES):
             plane = 0 if c == 0 else STRIDE * (lines0 + (c - 1) * h)
             effect = effects[c]
@@ -344,7 +349,7 @@ class Resample13Model:
                     try:
                         if entry is None or (c == 0 and taps is None):
                             raise _Miss("input")
-                        v, t = self._pixel(px, taps, c, entry, x, w, effect)
+                        v, t = self._pixel(px, taps, c, entry, x, w, effect, ran)
                     except _Miss as m:
                         line.src[x] = why[m.why]
                         continue
@@ -432,9 +437,10 @@ class Resample13Model:
         x: int,
         w: int,
         effect: Effect,
+        ran: tuple[int, int],
     ) -> tuple[int, Confidence]:
         """The output byte at pixel x of plane c for table entry (a, b) under an edit's
-        `effect` on the plane, and its taint."""
+        `effect` on the plane, and its taint; taps outside `ran` taint it."""
         a, b = entry
         h = px.h
         if not 0 <= a <= (h - 1) << 16 or not B_RANGE[0] <= b <= B_RANGE[1]:
@@ -459,7 +465,7 @@ class Resample13Model:
                 taint = H  # a phase between the 16 never ran
             p = (a & 0xFFFF) >> 12
             kernel = taps[p] if c == 0 else chroma(p)
-            taint = min(Confidence(taint), _gain_taint(kernel))
+            taint = min(Confidence(taint), _gain_taint(kernel, ran))
             if isinstance(effect, Phase):
                 return _phase(get, base, kernel, x, effect.q), taint
             if isinstance(effect, Operands):
@@ -484,7 +490,7 @@ class Resample13Model:
             return out_of(s), Confidence(taint)
         assert taps is not None
         kernel = taps[q] if q else chroma(0)
-        taint = min(taint, _gain_taint(kernel), _gain_taint(taps[0]))
+        taint = min(taint, _gain_taint(kernel, ran), _gain_taint(taps[0], ran))
         s = 0
         for k, t in enumerate(kernel):
             if not t:

@@ -251,24 +251,21 @@ def test_the_prediction_meets_the_own_tap_vectors(name: str):
 
 
 def test_taps_outside_those_that_ran_are_a_hypothesis():
-    # b 1, line i at phase i % 4: unit, 4096, the lowest tap that ran (-637), one below it.
+    # b 1, line i at phase i % 4. The stock program ran the whole s16 range: unit, the two s16
+    # limits, one above the highest tap that ran with an edited program (2048).
     phases = [(0, 256, 0, 0)] * 16
-    phases[1:4] = [(0, 4096, 0, 0), (0, 893, -637, 0), (0, 894, -638, 0)]
+    phases[1:4] = [(0, 0x7FFF, 0, 0), (0, 893, -0x8000, 0), (0, 2049, 0, 0)]
     image = bytes(range(64)) * 3 * 16
     table = [(i << 16 | i % 4 << 12, 0x10000) for i in range(16)]
     conf = predict(model(), Taps.of(phases), image, table).confidence()
-    line = [set(conf[64 * i : 64 * i + 64]) for i in range(4)]
     I, H = Confidence.INFERRED, Confidence.HYPOTHESIS
-    assert line == [{I}, {H}, {I}, {H}]
-    assert Confidence.HYPOTHESIS not in conf[1024:]
-    # b != 1: plane 0's vertical pass at phase 0 reaches every pixel.
-    phases = [(0, 256, 0, 0)] * 16
-    phases[0] = (0, 4096, 0, 0)
-    image = bytes(x % 16 for x in range(64)) * 3 * 16
-    table = [(i << 16, 0x11000) for i in range(16)]
-    conf = predict(model(), Taps.of(phases), image, table).confidence()
-    assert set(conf[:1024]) == {Confidence.HYPOTHESIS, None}
-    assert Confidence.HYPOTHESIS not in conf[1024:]
+    assert H not in conf
+    # An edited program ran taps in -637..2048 only (a measured edit on its class).
+    phases = list(PHASES)
+    phases[1] = (0, 2049, 0, 0)
+    got = predict(model(), Taps.of(phases), FLAT, TABLE13, edits=[(437, GRID_C2)])
+    conf = got.confidence()
+    assert set(conf[64:128]) == {H} and set(conf[192:256]) == {I}
 
 
 # b = 1 + 1/16 at H 2: output pixel 16 sits at horizontal phase 0 on source pixel 15, pixel 20
