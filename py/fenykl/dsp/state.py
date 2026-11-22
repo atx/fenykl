@@ -9,6 +9,7 @@ The spaces of one boot, all persistent across its jobs:
 - `local`: DSP local memory at 0x9D000000, where the CPU setup of a command writes its request;
 - `buffer`: the internal buffer between the load and the store, position-addressed;
 - `lines`: the resampler's held line pair per plane and column (its partial column blocks);
+- `substitute`: the resampler's tap-0 substitute, a per-lane value, kept as 0 or unknown;
 - `dram`: a sparse view of DRAM, unknown except where written or backed by an image;
 - the op slot's registers (ra, rb), kept apart from the transfer registers: nothing shows the
   two to be one file;

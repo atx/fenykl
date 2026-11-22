@@ -7,8 +7,9 @@ bit; or sets one field of the field table to a value (`FieldValue`, such as a re
 specifier renamed, or the immediate or op of a tap read). Every edit below ran on the camera, one per job, at H 16 with stride 64,
 and each plane of its output was compared byte for byte with the stock program's output of the
 same job on the same boot. The outcomes hold on the job classes (`Probe`) they ran on,
-whatever the source's values and the taps: a plane is `STOCK` only if no byte changed in any
-run of that class (bytes the stock law leaves unknown, such as the right edge, aside), and
+whatever the source's values and the taps, except where they read the boot's tap-0
+substitute (`Substitute`), a state that earlier edits on the boot move: a plane is `STOCK`
+only if no byte changed in any run of that class (bytes the stock law leaves unknown, such as the right edge, aside), and
 gets a law only where the law gives every changed byte exactly. Outside its classes an edit
 gives no prediction.
 
@@ -93,7 +94,27 @@ class FieldValue:
         return Word.from_int(self.field.put(stock.value, self.value))
 
 
-Edit = Idle | FieldValue
+@dataclass(frozen=True)
+class FieldValues:
+    """An edit kind: several fields of one word set at once, in order."""
+
+    values: tuple[FieldValue, ...]
+
+    @property
+    def name(self) -> str:
+        return ", ".join(v.name for v in self.values)
+
+    def apply(self, stock: Word) -> Word:
+        for v in self.values:
+            stock = v.apply(stock)
+        return stock
+
+
+def set_fields(**values: int) -> FieldValues:
+    return FieldValues(tuple(FieldValue(k, v) for k, v in values.items()))
+
+
+Edit = Idle | FieldValue | FieldValues
 
 
 @dataclass(frozen=True)
@@ -171,12 +192,23 @@ class TapLoad:
         return (*kernel[: self.tap], c, *kernel[self.tap + 1 :])
 
 
-Effect = Stock | Changed | Operands | Phase | TapLoad
+@dataclass(frozen=True)
+class Substitute:
+    """Plane 0 at b = 1 with tap 0's product replaced by the boot's tap-0 substitute
+    (`Boot.substitute`), a per-lane value added without the multiply: the drop of tap 0's
+    product (`Operands((None, 1, 2, 3))`) where the substitute is known to be 0, unknown where it
+    is not known."""
+
+
+Effect = Stock | Changed | Operands | Phase | TapLoad | Substitute
 Planes = tuple[Effect, Effect, Effect]
 
 STOCK = S = Stock()
 BLOCK = Changed("bytes changed, per 32-pixel column block; no law gives them")
-LANE = Changed("bytes changed, W-dependent (a per-lane offset); no law gives them")
+SUBSTITUTED = Changed(
+    "tap 0's product replaced by the boot's tap-0 substitute; at this width it never ran where "
+    "the substitute is known"
+)
 
 
 def _planes(spec: str, *laws: Effect) -> Planes:
@@ -208,6 +240,56 @@ PHASE14 = Phase(14)
 TAP1_FROM_C0 = TapLoad(1, 0, "<h")
 TAP1_FROM_C0_HIGH = TapLoad(1, 1, "B")
 """Tap 1 := c0's bits 8..15, zero-extended: the byte at offset 1 of the phase's taps."""
+SUBSTITUTE = Substitute()
+TAP0_FROM = {v: TapLoad(0, 2 * k, "<h") for k, v in enumerate((3, 2, 4, 5))}
+"""Word 439's f88_91 value -> tap 0 := c_k (3, 2, 4, 5: c0..c3)."""
+HELD_433 = set_fields(
+    f147_150=15,
+    f151_154=15,
+    f155_158=15,
+    f159_162=15,
+    f163_166=15,
+    f167_170=15,
+    f171_174=15,
+    f175_178=15,
+    f179_181=7,
+    f182_185=15,
+    f186_189=15,
+    f190_193=15,
+)
+"""Word 433's held grid B nibbles of idle enables, at their idle values."""
+HELD_B_439 = set_fields(
+    f147_150=15,
+    f151_154=15,
+    f155_158=15,
+    f159_162=15,
+    f167_170=15,
+    f171_174=15,
+    f175_178=15,
+    f179_181=7,
+    f182_185=15,
+    f186_189=15,
+    f190_193=15,
+    f198_201=15,
+    f202_205=15,
+)
+"""Word 439's held grid B nibbles of idle enables, at their idle values."""
+HELD_A_439 = set_fields(
+    f37_40=15, f41_44=15, f45_48=15, f49_52=15, f65_68=15, f76_79=15, f80_83=15
+)
+"""Word 439's held grid A nibbles of idle heads, at their idle values."""
+HELD_A_439_X0 = set_fields(
+    f37_40=15,
+    f41_44=15,
+    f45_48=15,
+    f49_52=15,
+    f65_68=15,
+    f69_71=7,
+    f76_79=15,
+    f80_83=15,
+)
+S2_439 = set_fields(f53_56=15, f57_60=15, f88_91=15)
+"""Word 439's S2 operand triple, at the idle values."""
 
 
 def _copies(up: str, half: str) -> dict[Probe, Planes]:
@@ -336,13 +418,13 @@ FACTS: tuple[Fact, ...] = (
         GRID_C2,
         (439,),
         {
-            FLAT_W32: (LANE, Changed(), S),
-            FLAT_W48: (LANE, Changed(), S),
-            FLAT: _planes("lo.", DROP0),
+            FLAT_W32: (SUBSTITUTED, Changed(), S),
+            FLAT_W48: (SUBSTITUTED, Changed(), S),
+            FLAT: _planes("lo.", SUBSTITUTE),
             VARY: _planes("oo."),
             VARY_UP: _planes("o.."),
         },
-        "tap 0's product is dropped and a per-lane offset added, 0 at W 64 on flat sources",
+        "tap 0's product is replaced by the boot's tap-0 substitute",
     ),
     Fact(
         GRID_C2,
@@ -381,6 +463,91 @@ FACTS: tuple[Fact, ...] = (
         {FLAT: _planes("l..", TAP1_FROM_C0_HIGH)},
         "tap 1 takes c0's bits 8..15, zero-extended: a byte load at the same address (one run)",
     ),
+    Fact(
+        set_fields(op=0x10, imm=0),
+        (433,),
+        {FLAT: _planes("l..", TapLoad(1, 0, "B"))},
+        "tap 1 takes c0's bits 0..7, zero-extended: op 0x10's immediate counts bytes (one run)",
+    ),
+    Fact(
+        FieldValue("op", 0x0E),
+        (433,),
+        {FLAT: _planes("l..", TapLoad(1, 1, "b"))},
+        "tap 1 takes c0's bits 8..15, sign-extended (one run each on two tap sets); a byte "
+        "load at the same address and byte 1 of the datum the word before delivers are not "
+        "separated",
+    ),
+    Fact(
+        set_fields(op=0x0E, imm=0),
+        (433,),
+        {FLAT: _planes("l..", TapLoad(1, 0, "b"))},
+        "tap 1 takes c0's bits 0..7, sign-extended (one run); load or datum select as at imm 1",
+    ),
+    Fact(
+        FieldValue("op", 0x14),
+        (433,),
+        {FLAT: _planes("...")},
+        "op 0x14 at imm 1 reads the stock coefficient c1: a halfword at imm halfwords (one run)",
+    ),
+    Fact(
+        set_fields(op=0x14, imm=0),
+        (433,),
+        {FLAT: _planes("l..", TAP1_FROM_C0)},
+        "tap 1 takes c0, as 0x16 at imm 0 (one run)",
+    ),
+    Fact(
+        FieldValue("op", 0x1A),
+        (433,),
+        {FLAT: _planes("l..", TapLoad(1, 4, "<h"))},
+        "tap 1 takes c2: the word at imm 1 words, its low 16 bits reaching the coefficient "
+        "(one run)",
+    ),
+    # Word 439's S2 operands: f57_60 tap 0's source line, f88_91 tap 0's coefficient.
+    Fact(
+        FieldValue("f57_60", 4),
+        (439,),
+        {FLAT: _planes("l..", Operands((1, 1, 2, 3)))},
+        "tap 0 multiplies tap 1's line, with its own coefficient (5, the stock value, is its "
+        "own line)",
+    ),
+    *(
+        Fact(
+            FieldValue("f88_91", v),
+            (439,),
+            {FLAT: _planes("l..", TAP0_FROM[v])},
+            f"tap 0 takes c{TAP0_FROM[v].offset // 2} (pre-registered, one run each); "
+            f'"tap 0 takes c_k", "tap 0\'s product under tap k\'s coefficient" and "tap k '
+            "multiplies tap 0's line too\" give the same bytes",
+        )
+        for v in (2, 4, 5)
+    ),
+    Fact(
+        FieldValue("f88_91", 0),
+        (439,),
+        {FLAT: _planes("o..")},
+        "no coefficient select fits; what 0 selects is open",
+    ),
+    Fact(
+        FieldValue("f88_91", 1),
+        (439,),
+        {FLAT: _planes("o..")},
+        "no coefficient select fits; what 1 selects is open",
+    ),
+    Fact(FieldValue("f53_56", 1), (439,), {FLAT: _planes("...")}, "a don't-care here"),
+    Fact(S2_439, (439,), {FLAT: _planes("l..", SUBSTITUTE)}, "as grid A idle"),
+    # Word 437's S2 operands act at the edge lines only.
+    Fact(
+        FieldValue("f57_60", 1),
+        (437,),
+        {FLAT: _planes("o..")},
+        "the top line changes only (tap 0's line at the top edge)",
+    ),
+    Fact(
+        FieldValue("f88_91", 5),
+        (437,),
+        {FLAT: _planes("o..")},
+        "the top and bottom lines change only (tap 0's line at the edges)",
+    ),
     # Single bits of word 504's C2.
     Fact(bit(237), (504,), {VARY: _planes("...")}, ""),
     Fact(bit(239), (504,), {VARY: _planes("...")}, ""),
@@ -408,6 +575,7 @@ FACTS: tuple[Fact, ...] = (
     # Grid idle.
     Fact(GRID_ONLY, (504,), {FLAT: _planes("...")}, ""),
     Fact(GRID_ONLY, (433, 435, 442), {FLAT: _planes("o..")}, ""),
+    Fact(GRID_ONLY, (433,), {FLAT_W32: _planes("o..")}, ""),
     Fact(GRID_ONLY, (436,), {FLAT: (TAP1_LOW, S, S)}, "as the whole edit"),
     Fact(
         GRID_ONLY,
@@ -418,12 +586,70 @@ FACTS: tuple[Fact, ...] = (
     Fact(
         GRID_ONLY,
         (439,),
-        {FLAT_W32: _planes("oo."), FLAT_W48: _planes("oo."), FLAT: _planes("oo.")},
-        "",
+        {
+            FLAT_W32: _planes("oo."),
+            FLAT_W48: _planes("oo."),
+            FLAT: _planes("lo.", SUBSTITUTE),
+        },
+        "tap 0's product is replaced by the boot's tap-0 substitute",
     ),
     Fact(GRID_ONLY, (440, 441, 446), {FLAT: _planes("o.o")}, ""),
     Fact(GRID_ONLY, (443, 444), {FLAT: _planes("oo.")}, ""),
     Fact(GRID_ONLY, (445, 447, 449, 450), {FLAT: _planes("ooo")}, ""),
     Fact(GRID_ONLY, (448,), {FLAT: _planes(".oo")}, ""),
     Fact(GRID_ONLY, (490,), {VARY_UP: _planes("o..")}, ""),
+    # Grid A or grid B idle.
+    Fact(GRID_A_ONLY, (433,), {FLAT: _planes("..."), FLAT_W32: _planes("...")}, ""),
+    Fact(GRID_B_ONLY, (433,), {FLAT: _planes("o.."), FLAT_W32: _planes("o..")}, ""),
+    Fact(GRID_A_ONLY, (437,), {FLAT: _planes("o..")}, "tap 0 reads a per-boot value"),
+    Fact(GRID_B_ONLY, (437,), {FLAT: _planes("o..")}, ""),
+    Fact(
+        GRID_A_ONLY,
+        (439,),
+        {FLAT: _planes("l..", SUBSTITUTE)},
+        "tap 0's product is replaced by the boot's tap-0 substitute",
+    ),
+    Fact(GRID_B_ONLY, (439,), {FLAT: _planes(".o.")}, "the second plane's path"),
+    # Single grid nibbles, at their idle values.
+    Fact(FieldValue("f198_201", 15), (433,), {FLAT: _planes("o..")}, "as grid B idle"),
+    Fact(FieldValue("f202_205", 15), (433,), {FLAT: _planes("...")}, ""),
+    Fact(
+        set_fields(f198_201=15, f202_205=15),
+        (433,),
+        {FLAT: _planes("o..")},
+        "as grid B idle",
+    ),
+    Fact(HELD_433, (433,), {FLAT: _planes("...")}, ""),
+    Fact(FieldValue("f163_166", 15), (439,), {FLAT: _planes(".o.")}, "as grid B idle"),
+    Fact(HELD_B_439, (439,), {FLAT: _planes("...")}, ""),
+    Fact(HELD_A_439, (439,), {FLAT: _planes("...")}, ""),
+    Fact(HELD_A_439_X0, (439,), {FLAT: _planes("...")}, ""),
+    Fact(FieldValue("f69_71", 7), (439,), {FLAT: _planes("...")}, ""),
 )
+
+SUBSTITUTE_MOVER = (433, GRID_B_ONLY)
+"""The edit that sets the tap-0 substitute to 0 on a flat source at W 64, whatever it held
+before (inferred: on every boot where it ran, word 439's grid A idle gave the drop of tap 0's
+product after it, and a per-lane pattern before it where that ran)."""
+SUBSTITUTE_KEEPERS: tuple[tuple[int, Edit], ...] = (
+    (433, GRID_A_ONLY),
+    *((437, k) for k in (GRID_ONLY, GRID_A_ONLY, GRID_B_ONLY)),
+    *((439, k) for k in (GRID_ONLY, GRID_A_ONLY, GRID_B_ONLY)),
+    *(
+        (439, k)
+        for k in (
+            FieldValue("f163_166", 15),
+            HELD_B_439,
+            HELD_A_439,
+            HELD_A_439_X0,
+            FieldValue("f69_71", 7),
+            S2_439,
+            FieldValue("f57_60", 4),
+            FieldValue("f53_56", 1),
+        )
+    ),
+    *((439, FieldValue("f88_91", v)) for v in (0, 1, 2, 4, 5)),
+)
+"""The edits seen to leave a substitute of 0 in place, on a flat source at W 64 (verified: a
+grid A idle of word 439 after them still gave the drop of tap 0's product). Every other edited
+job makes it unknown; a stock job keeps it."""

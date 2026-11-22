@@ -157,18 +157,28 @@ pairs, which as writes would be dead). Four ops have camera-measured meanings, r
 core (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
 quartered at imm 1 and 2), and 0x38, an AND of ra with its sign-extended imm16 (one cleared mask
 bit moved a copy's store by 16 B). Where 0x3f's result goes is open: the core writes ra at
-hypothesis taint. 0x16 and 0x10 load a halfword and a byte at ra + imm in units of their width:
-in the resampler the word that reads tap 1 is a 0x16 with imm 1; on the camera imm 0 gave tap 1
-tap 0's coefficient byte for byte, and op 0x10 gave it c0's bits 8..15 zero-extended (one run
-each; ra as a word index is a hypothesis). Like 0x1a, the core records the read only. Family A
+hypothesis taint. The resampler's word that reads tap 1 is a 0x16 with imm 1; on the camera,
+with ra kept (one run each; ra as a word index is a hypothesis):
+
+| op in its place | imm 0 | imm 1 | reading (inferred) |
+|---|---|---|---|
+| 0x16 (stock) | c0 | c1 | halfword, imm in halfwords |
+| 0x14 | c0 | c1 | halfword, imm in halfwords; no pass-on of the datum before it |
+| 0x10 | c0's byte 0, zero-extended | byte 1, zero-extended | byte, imm in bytes |
+| 0x0e | c0's byte 0, sign-extended | byte 1, sign-extended (two tap sets) | byte, imm in bytes; a load and a byte select of the datum before it not separated |
+| 0x1a | - | c2, the low 16 bits of the word | word, imm in words |
+
+So the coefficient port keeps between 9 and 16 bits of what reaches it (a zero-extended 0xff
+arrives as 255, a word as its low half). The halfword loads' sign extension is open. Like 0x1a, the
+core records the read only. Family A
 as a whole reads as loads and stores of width w (inferred from the static access patterns:
 every read of an r0-based slot follows a store to the same bytes): the byte address is 4 ra
 plus the low 13 bits of w x imm13 as a signed offset, and imm13's bits above them (11..12 in
 the word ops, 12 in the halfword ops) are a flag that does not move the address on r0, its
 meaning open. The core also runs 0x14 as a halfword load and 0x12 and 0x18 as halfword and word
 stores (inferred); a store's datum is open, so its bytes become unknown, and at an unknown base
-all of local memory does. Words with the flag set, the byte ops 0x0c and 0x0e and the register
-forms have no semantics.
+all of local memory does. Words with the flag set, the byte store 0x0c and the register forms
+have no semantics.
 `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
@@ -303,9 +313,9 @@ the request to 0x742..0x747; the table stays in DRAM. Own taps are a program wit
 renormalise a phase to 256. No word of program 13 is decoded: its classes are the idle word and the
 stock words matched by value, and the law (`resample.py`'s docstring) applies to the stock program
 as it is. Every byte the law computes is at most inferred, a law measured from outside;
-hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, at b != 1 or in an edited program
-a tap outside -637..2048 (the taps that ran there; with the stock program at b = 1 the whole s16
-range ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
+hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, at b != 1 a tap outside
+-637..2048 and in an edited program a tap outside -1840..2048 (the taps that ran there; with the
+stock program at b = 1 the whole s16 range ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
 A partial column block is unknown unless the job is an H 16 identity with a unit phase-0 kernel.
 Bytes the law does not give (the bottom and right edges, a fractional a with b != 1, W < 64 with
 b != 1, an odd H above 1) are UNKNOWN with a source that says why. The curated camera vectors are in
@@ -322,8 +332,21 @@ job class (`Probe`: a flat source or not, the step b, W; H 16) what each plane d
 (`Stock`), unknown (`Changed`), or a law (`Operands`: plane 0 with each tap multiplying another
 tap's line, nothing or a bounded value; `Phase`: a chroma plane sampled at another horizontal
 phase; `TapLoad`: plane 0 with one tap's coefficient loaded from another place in the phase's
-taps, as 433's imm 0 (c1 := c0) and op 0x10 (c1 := c0's bits 8..15, zero-extended) do). The model matches an edited word by its value, so the classes hold the measured edited
-words too. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
+taps, as 433's imm 0 (c1 := c0) and op 0x10 (c1 := c0's bits 8..15, zero-extended) do;
+`Substitute`: plane 0 with tap 0's product replaced by the boot's tap-0 substitute, below).
+`FieldValues` sets several fields of one word at once (`set_fields(op=0x10, imm=0)`). The model
+matches an edited word by its value, so the classes hold the measured edited words too.
+
+Word 439's S2 operands select tap 0's term: f57_60 its source line (5, stock, its own; 4 tap 1's)
+and f88_91 its coefficient (3, stock, 2, 4, 5: c0, c1, c2, c3, pre-registered and verified at
+that word; 0 and 1 select none of the four and are unknown). Idling 439's grid A (or the S2
+triple) replaces tap 0's product by a per-lane value added without the multiply, the **tap-0
+substitute** (`Boot.substitute`). Its value at boot varies per boot, so it is unknown on a fresh
+boot and every such prediction there is unknown. A grid B idle of word 433 on a flat source at
+W 64 sets it to 0 whatever it held (`SUBSTITUTE_MOVER`, inferred: five boots), where the idle
+gives the drop of tap 0's product; the edits seen to keep it (`SUBSTITUTE_KEEPERS`) and stock jobs
+keep it, and any other edited job makes it unknown again, as does `Boot.forget_held` after a job
+that raised. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
 `Resample13Model(program, facts)` takes another outcome table.
 
 - one measured edit on a class it ran on: its planes; `JobResult.edits` names it, verified (the
@@ -361,7 +384,7 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   registers at job start it reproduces the camera's path, but nothing shows those to be the
   registers the control ops name.
 - **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): the family A loads 0x1a,
-  0x16, 0x14 and 0x10 record their read (where the datum goes is open), the stores 0x18 and
+  0x16, 0x14, 0x10 and 0x0e record their read (where the datum goes is open), the stores 0x18 and
   0x12 make their bytes unknown, 0x38 and 0x3f compute ra, and the idle op does nothing in the
   slot. Every other op has no semantics: strict mode raises `UnknownSemantics`,
   lenient mode records it in its step and makes its ra unknown. An undecided branch raises in

@@ -857,14 +857,19 @@ UNIT_FACTS = {
     "f163_166": "program 13 word 439, its enable f244_245 active: idling it alone equals idling "
     f"all of grid B there, the second plane's path ({_CAMERA})",
     "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA})",
-    **{
-        k: "program 13 word 439, S2's head active: idling f53_56, f57_60 and f88_91 together "
-        "equals idling all of grid A there, which drops tap 0's term of the sum "
-        f"({_CAMERA}); which of the three carries it is not separated"
-        for k in ("f53_56", "f57_60", "f88_91")
-    },
-    "f292_295": "its operands f53_56, f57_60 and f88_91 carry program 13 word 439's tap 0 term "
-    f"({_CAMERA}; the head itself not idled)",
+    "f53_56": "program 13 word 439, S2's head active: idling it with f57_60 and f88_91 equals "
+    f"idling all of grid A there ({_CAMERA}); 1 in place of the stock 2 has no effect",
+    "f57_60": "program 13 word 439, S2's head active: tap 0's source line, 5 (stock) its own "
+    f"line, 4 tap 1's ({_CAMERA}); idled with f53_56 and f88_91 it equals idling all of grid A "
+    "there, which replaces tap 0's product by a per-boot value (`Boot.substitute`); at word 437, "
+    "4 -> 1 changes tap 0's line at the top edge only",
+    "f88_91": "program 13 word 439, S2's head active: tap 0's coefficient, 3 (stock), 2, 4, 5 "
+    f"selecting c0, c1, c2, c3 ({_CAMERA}, pre-registered); 0 and 1 select none of them, what "
+    "they select is open; that tap 0 takes c_k and that its product moves under tap k's "
+    "coefficient give the same bytes; at word 437, 4 -> 5 changes tap 0's line at the edge "
+    "lines only",
+    "f292_295": "its operands f57_60 and f88_91 select program 13 word 439's tap 0 line and "
+    f"coefficient ({_CAMERA}; the head itself not idled)",
     "f69_71": f"program 13 word 439, X0 active: idling it has no effect ({_CAMERA}), so an "
     "active owner is not sufficient for an effect",
     **{
@@ -1098,18 +1103,21 @@ MEANINGS = {
     "place before the byte loads 0x0e and 0x10 (hypothesis: no anchor; 7 of its 10 accesses of "
     "r0-based slots are their first touch, but 21 of 24 later accesses at its address are 0x0c "
     "again, as a load's would be)",
-    0x0E: "a byte load by its place between 0x0c and 0x10 (hypothesis: every one of its 8 reads "
-    "of r0-based slots follows a store to them, its width only from its place)",
+    0x0E: "every one of its 8 reads of r0-based slots follows a store to them; on the camera, 0x0e "
+    "in place of the resampler's 0x16 tap-1 read (ra kept) gave tap 1 c0's byte imm "
+    "sign-extended at imm 0 and 1: a byte at ra + imm bytes, sign-extended (inferred); a load "
+    "from local memory or a byte select of the datum read just before it (not separated)",
     0x10: "its immediates 0x1fxx read as small negative numbers (inferred); in program 13 every "
     "non-zero immediate lies in its tap block 0x00..0x1f; on the camera, 0x10 in place of the "
-    "resampler's 0x16 tap-1 read (imm 1, ra kept) gave tap 1 c0's bits 8..15 zero-extended: a "
-    "byte load at ra + imm bytes (inferred)",
+    "resampler's 0x16 tap-1 read (ra kept) gave tap 1 c0's byte imm zero-extended at imm 0 and "
+    "1: a byte load at ra + imm bytes, zero-extended (inferred)",
     0x12: "a halfword store (inferred: across later firmware versions of the same family, the "
     "first touch of r0-based slots in 108 of its 114 accesses of them, and entry spills at "
     "-64..-1 B)",
     0x14: "a halfword load (inferred: every one of its 31 reads of r0-based slots follows a store "
-    "to the same bytes across later firmware versions of the same family); its sign extension "
-    "against 0x16's is open",
+    "to the same bytes across later firmware versions of the same family; on the camera, 0x14 "
+    "in place of the resampler's 0x16 tap-1 read gave tap 1 c0 at imm 0 and c1 at imm 1, imm "
+    "in halfwords); its sign extension against 0x16's is open",
     0x16: "in program 13 every non-zero immediate lies in its tap block 0x00..0x1f, in runs that "
     "step 0, 1, 2, 3 with one ra per run; on the camera, imm 1 -> 0 in the resampler's tap-1 "
     "read gave tap 1 tap 0's coefficient byte for byte (verified at that word): a halfword "
@@ -1123,7 +1131,8 @@ MEANINGS = {
     "a base register it reads, not a destination (inferred: across later firmware versions of "
     "the same family, in 59 % of its words the next naming of that register is this op again, "
     "with another immediate in 95 % of those pairs; as writes they would be dead), so the word "
-    "is ra + imm",
+    "is ra + imm; on the camera, 0x1a in place of the resampler's 0x16 tap-1 read (imm 1) gave "
+    "tap 1 c2, the low 16 bits of the word at ra + 1 word (inferred)",
     0x1E: "at a routine's entry + 1 in 67 routines: adds or subtracts a small immediate, a frame or "
     "pointer adjust (hypothesis)",
     0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: adds or subtracts a "

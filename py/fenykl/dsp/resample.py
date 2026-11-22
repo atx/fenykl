@@ -19,8 +19,9 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
   2p = tap 0 | tap 1 << 16, word 2p + 1 = tap 2 | tap 3 << 16; planes 1 and 2 ignore the taps
   and use the fixed (0, 256 - 16p, 16p, 0) [verified: tap patches reach plane 0 only]; every
   tap of the s16 range acts as its value at b = 1, one-tap gains to 32767 exact and partial
-  sums of +-2 x 32767 x 252 unsaturated [verified]; at b != 1 and with an edited program only
-  taps in -637..2048 ran, so there the bytes a tap outside it reaches are a hypothesis;
+  sums of +-2 x 32767 x 252 unsaturated [verified]; at b != 1 only taps in -637..2048 ran and
+  with an edited program at b = 1 only taps in -1840..2048, so there the bytes a tap outside
+  them reaches are a hypothesis;
 - b = 1: the kernel acts down the lines, phase p = frac(a) x 16, tap k on source line
   floor(a) - 1 + k, line -1 read as line 0 [verified: impulse responses];
 - b != 1 (integer a only): the kernel acts along the line at u(x) = u0 + b x, u0 = 31.5 (1 - b)
@@ -68,8 +69,12 @@ from .emu import LOCAL_BASE, Boot, Emulator, Job, JobResult, Status, dram_alias
 from .fields import FIELDS, Confidence
 from .program import Program, stock_programs
 from .resample_edits import (
+    DROP0,
     FACTS,
+    FLAT,
     STOCK,
+    SUBSTITUTE_KEEPERS,
+    SUBSTITUTE_MOVER,
     Changed,
     Edit,
     Effect,
@@ -80,6 +85,7 @@ from .resample_edits import (
     Planes,
     Probe,
     Stock,
+    Substitute,
     TapLoad,
 )
 from .semantics import (
@@ -111,7 +117,9 @@ HELD = H_MAX
 TAPS_RAN = (-0x8000, 0x7FFF)
 """The taps that ran on plane 0 with the stock program at b = 1: the whole s16 range."""
 NARROW_TAPS_RAN = (-637, 2048)
-"""The taps that ran on plane 0 at b != 1 and with an edited program: gains -2.49 .. 8.0."""
+"""The taps that ran on plane 0 at b != 1: gains -2.49 .. 8.0."""
+EDITED_TAPS_RAN = (-1840, 2048)
+"""The taps that ran on plane 0 at b = 1 with an edited program: gains -7.19 .. 8.0."""
 
 
 def chroma(p: int) -> tuple[int, int, int, int]:
@@ -254,6 +262,9 @@ class Resample13Model:
             for at in positions.values()
         ]
         self.edits = _measured_edits(program, facts)
+        words = program.words
+        self.mover = {(i, k.apply(words[i]).value) for i, k in (SUBSTITUTE_MOVER,)}
+        self.keepers = {(i, k.apply(words[i]).value) for i, k in SUBSTITUTE_KEEPERS}
         edited = [
             OpaqueClass(
                 f"word {i}, {e.kind.name}",
@@ -313,11 +324,11 @@ class Resample13Model:
         ]
         table_taint = min(table_b.taint) if all(table_b.known) else V
         px = _Pixels(boot.read(req.src, PLANES * STRIDE * h), h)
+        probe = _probe(px, entries, w) if edited else None
         effects = (
-            self._effects(emu, job, edited, _probe(px, entries, w), result)
-            if edited
-            else STOCK_PLANES
+            self._effects(emu, job, edited, probe, result) if edited else STOCK_PLANES
         )
+        self._move_substitute(boot, job, edited, probe)
         cap = result.taint = H if effects is None else min(I, trace.taint)
         effects = effects or STOCK_PLANES
         if h % 2 and h > 1:
@@ -334,7 +345,7 @@ class Resample13Model:
         # H 1: plane 0 is a line pair, the chroma planes follow it. Line 1 as a copy of line 0
         # and as a read of table entry 1 gave the same bytes: a hypothesis.
         lines0 = max(h, 2)
-        ran = NARROW_TAPS_RAN if edited else TAPS_RAN
+        ran = EDITED_TAPS_RAN if edited else TAPS_RAN
         for c in range(PLANES):
             plane = 0 if c == 0 else STRIDE * (lines0 + (c - 1) * h)
             effect = effects[c]
@@ -425,9 +436,25 @@ class Resample13Model:
             result.edits.append(
                 (f"word {edited[0]}, {e.kind.name}, on {probe}: {e.fact}", V)
             )
-            return e.planes[probe]
+            p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
+            return p0, p1, p2
         result.notes.append(why)
         return (Changed(why),) * PLANES if emu.strict else None
+
+    def _move_substitute(
+        self, boot: Boot, job: Job, edited: list[int], probe: Probe | None
+    ) -> None:
+        """A stock job keeps the tap-0 substitute; on a flat source at W 64 the mover sets it
+        to 0 and a keeper keeps it; any other edited job makes it unknown."""
+        if not edited:
+            return
+        words = job.program.words
+        i = edited[0]
+        key = (i, words[i].value) if len(edited) == 1 and i < len(words) else None
+        if probe == FLAT and key in self.mover:
+            boot.substitute = 0
+        elif probe != FLAT or key not in self.keepers:
+            boot.substitute = None
 
     def _pixel(
         self,
@@ -539,6 +566,19 @@ class Resample13Model:
 
 
 STOCK_PLANES: Planes = (STOCK, STOCK, STOCK)
+
+
+def _substituted(boot: Boot, effect: Effect) -> Effect:
+    """`effect` with the boot's tap-0 substitute resolved: the drop of tap 0's product where it
+    is 0, unknown bytes where it is not known."""
+    if not isinstance(effect, Substitute):
+        return effect
+    if boot.substitute == 0:
+        return DROP0
+    return Changed(
+        "tap 0's product replaced by the boot's tap-0 substitute, which is not known on this "
+        "boot: its boot value varies per boot"
+    )
 
 
 def _measured_edits(

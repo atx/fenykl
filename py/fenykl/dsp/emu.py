@@ -104,6 +104,10 @@ class Boot:
         self.local = Space("local", LOCAL_BASE, LOCAL_SIZE, never)
         self.buffer = Space("buffer", BUFFER_LO, BUFFER_HI - BUFFER_LO, never)
         self.lines = Space("line pairs", 0, LINE_PAIRS, never)
+        self.substitute: int | None = None
+        """The resampler's tap-0 substitute, a per-lane value that program 13 adds in place of tap
+        0's product when word 439's grid A is idled; None while it is not known: its value at boot
+        varies per boot and other edits move it (`resample_edits.SUBSTITUTE_MOVER`)."""
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
 
     def source(self, name: str, fact: str = "") -> int:
@@ -133,6 +137,13 @@ class Boot:
     def u32(self, offset: int) -> int | None:
         b = self.local.read(LOCAL_BASE + offset, 4)
         return int.from_bytes(b.data, "little") if all(b.known) else None
+
+    def forget_held(self, why: int) -> None:
+        """What jobs hold across the boot, the held line pairs and the tap-0 substitute, becomes
+        unknown (source `why`): after a job that raised `UnknownSemantics`, whose effect on them
+        is not known."""
+        self.lines.forget(why)
+        self.substitute = None
 
     def setup(self, job: Job) -> None:
         """Write the job's request to local memory, as its command's CPU setup does."""

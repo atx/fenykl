@@ -23,6 +23,7 @@ from fenykl.dsp.resample_edits import (
     FieldValue,
     Idle,
     bit,
+    set_fields,
 )
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.taps import Taps
@@ -260,7 +261,7 @@ def test_taps_outside_those_that_ran_are_a_hypothesis():
     conf = predict(model(), Taps.of(phases), image, table).confidence()
     I, H = Confidence.INFERRED, Confidence.HYPOTHESIS
     assert H not in conf
-    # An edited program ran taps in -637..2048 only (a measured edit on its class).
+    # An edited program ran taps in -1840..2048 only (a measured edit on its class).
     phases = list(PHASES)
     phases[1] = (0, 2049, 0, 0)
     got = predict(model(), Taps.of(phases), FLAT, TABLE13, edits=[(437, GRID_C2)])
@@ -331,17 +332,62 @@ def names(p, a: int, z: int) -> set[str]:
     return {p.sources[s].name for s in p.dst.src[a:z]}
 
 
+def run_on(boot: Boot, taps: Taps, edits=()) -> bytes:
+    """One flat job of TABLE13 on `boot`; its dst footprint with 0x100 for unknown bytes."""
+    boot.put(SRC, FLAT, "src")
+    boot.put(TABLE, b"".join(struct.pack("<iI", a, b) for a, b in TABLE13), "table")
+    job = model().job(taps, SRC, DST, TABLE, 64, 16, edits)
+    try:
+        Emulator(boot, model()).run(job)
+    except UnknownSemantics:
+        boot.forget_held(boot.source("unmodelled job"))
+    got = boot.read(DST, footprint(16))
+    return bytes(v if k else 0 for v, k in zip(got.data, got.known)) + bytes(
+        not k for k in got.known
+    )
+
+
+def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
+    taps = Taps.of(PHASES)
+    n = footprint(16)
+    drop = run_on(Boot(), Taps.of([(0, *p[1:]) for p in PHASES]))
+    stock = run_on(Boot(), taps)
+
+    def plane0(dst: bytes) -> bytes | None:
+        return None if any(dst[n : n + 1024]) else dst[:1024]
+
+    boot = Boot()
+    # Not known on a fresh boot; 433's grid B idle sets it to 0, which drops tap 0's product.
+    assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
+    run_on(boot, taps, [(433, GRID_B_ONLY)])
+    for kind in (GRID_A_ONLY, GRID_ONLY, GRID_C2):
+        got = run_on(boot, taps, [(439, kind)])
+        assert plane0(got) == plane0(drop) != plane0(stock)
+    run_on(boot, taps, [(433, GRID_B_ONLY)])
+    # A keeper and a stock job leave it at 0; another edit, measured or not, makes it unknown.
+    for edits in ([(439, FieldValue("f88_91", 2))], []):
+        run_on(boot, taps, edits)
+        assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) == plane0(drop)
+    for edits in ([(433, GRID_C2)], [(433, OP_IDLE)]):
+        run_on(boot, taps, [(433, GRID_B_ONLY)])
+        run_on(boot, taps, edits)
+        assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
+    # The mover acts on its class only: on a source varying along x it makes it unknown.
+    run_on(boot, taps, [(433, GRID_B_ONLY)])
+    vary = bytes(range(64)) * 48
+    boot.put(SRC, vary, "src")
+    Emulator(boot, model()).run(
+        model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
+    )
+    assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
+
+
 def test_a_measured_edit_runs_its_law_on_the_class_it_ran_on():
     taps = Taps.of(PHASES)
     got = predict(model(), taps, FLAT, TABLE13, edits=[(439, GRID_C2)])
-    drop = predict(model(), Taps.of([(0, *p[1:]) for p in PHASES]), FLAT, TABLE13)
     stock = predict(model(), taps, FLAT, TABLE13)
     assert [c for _, c in got.result.edits] == [Confidence.VERIFIED]
-    assert got.dst.known[:1024] == drop.dst.known[:1024]
-    assert got.dst.data[:1024] == drop.dst.data[:1024] != stock.dst.data[:1024]
-    assert not any(got.dst.known[1024:2048]) and names(got, 1024, 2048) == {
-        "resampler edit"
-    }
+    assert not any(got.dst.known[:2048]) and names(got, 0, 2048) == {"resampler edit"}
     assert got.dst.data[2048:] == stock.dst.data[2048:]
     # Word 437: line 3 has tap 3 only, which reads tap 0's line, a - 1.
     got = predict(model(), taps, FLAT, TABLE13, edits=[(437, GRID_C2)])
@@ -424,7 +470,26 @@ def test_an_edited_tap_read_loads_another_coefficient():
     byte1 = [(-8, 255, 0, 0)] * 16
     byte1[3], byte1[5] = (0, 0, 0, 256), (384, 1, 0, 0)
     stock = predict(model(), Taps.of(phases), FLAT, TABLE13)
-    for edit, loaded in ((FieldValue("imm", 0), imm0), (FieldValue("op", 0x10), byte1)):
+    # Op 0x0e sign-extends that byte (-8 gives -1); with imm 0 0x10 and 0x0e take byte 0 (-8
+    # gives 248 and -8, 384 gives 128 and -128), 0x14 the halfword c0; 0x1a takes c2's word.
+    sext1 = [(-8, -1, 0, 0)] * 16
+    sext1[3], sext1[5] = (0, 0, 0, 256), (384, 1, 0, 0)
+    byte0 = [(-8, 248, 0, 0)] * 16
+    byte0[3], byte0[5] = (0, 0, 0, 256), (384, 128, 0, 0)
+    sext0 = [(-8, -8, 0, 0)] * 16
+    sext0[3], sext0[5] = (0, 0, 0, 256), (384, -128, 0, 0)
+    word1 = [(-8, 0, 0, 0)] * 16
+    word1[3], word1[5] = (0, 0, 0, 256), (384, 0, 0, 0)
+    loads = (
+        (FieldValue("imm", 0), imm0),
+        (FieldValue("op", 0x10), byte1),
+        (FieldValue("op", 0x0E), sext1),
+        (set_fields(op=0x10, imm=0), byte0),
+        (set_fields(op=0x0E, imm=0), sext0),
+        (set_fields(op=0x14, imm=0), imm0),
+        (FieldValue("op", 0x1A), word1),
+    )
+    for edit, loaded in loads:
         got = predict(model(), Taps.of(phases), FLAT, TABLE13, edits=[(433, edit)])
         want = predict(model(), Taps.of(loaded), FLAT, TABLE13)
         assert [c for _, c in got.result.edits] == [Confidence.VERIFIED]
@@ -432,3 +497,28 @@ def test_an_edited_tap_read_loads_another_coefficient():
         assert got.dst.data[:1024] == want.dst.data[:1024] != stock.dst.data[:1024]
         assert set(got.confidence()[:1024]) - {None} == {Confidence.INFERRED}
         assert got.dst.data[1024:] == stock.dst.data[1024:]
+
+
+def test_word_439s_s2_operands_select_tap_0s_line_and_coefficient():
+    phases = [(-8, 264, 0, 0)] * 16
+    phases[3] = (0, 0, 0, 256)
+    phases[5] = (40, 100, 70, 46)
+    taps = Taps.of(phases)
+    stock = predict(model(), taps, FLAT, TABLE13)
+    # f57_60 4: tap 0 multiplies tap 1's line with its own coefficient.
+    merged = Taps.of([(0, c0 + c1, c2, c3) for c0, c1, c2, c3 in phases])
+    # f88_91 2, 4, 5: tap 0 takes c1, c2, c3.
+    loads = [(FieldValue("f57_60", 4), merged)] + [
+        (FieldValue("f88_91", v), Taps.of([(p[k], *p[1:]) for p in phases]))
+        for v, k in ((2, 1), (4, 2), (5, 3))
+    ]
+    for edit, want_taps in loads:
+        got = predict(model(), taps, FLAT, TABLE13, edits=[(439, edit)])
+        want = predict(model(), want_taps, FLAT, TABLE13)
+        assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], edit
+        assert got.dst.known[:1024] == want.dst.known[:1024]
+        assert got.dst.data[:1024] == want.dst.data[:1024] != stock.dst.data[:1024]
+        assert got.dst.data[1024:] == stock.dst.data[1024:]
+    # 0 and 1 select no coefficient: plane 0 is unknown.
+    got = predict(model(), taps, FLAT, TABLE13, edits=[(439, FieldValue("f88_91", 0))])
+    assert not any(got.dst.known[:1024])

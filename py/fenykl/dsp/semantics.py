@@ -548,9 +548,11 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "16's three 0x1a words name local words 0, 1 and 2 (src, dst, len) with one ra, and "
         "across later firmware versions of the same family, in 59 % of its words the next "
         "naming of that register is this op again, with another immediate in 95 % of those "
-        f"pairs, which as writes would be dead); {_ADDRESS}; where the datum goes is open, so "
-        "the core records the read only; covered at f120_122 = 7, the value of those three "
-        "words",
+        "pairs, which as writes would be dead; on the camera, 0x1a in place of the resampler's "
+        "tap-1 read, imm 1 and ra kept, gave tap 1 the coefficient c2, the low 16 bits of the "
+        f"word at 4 bytes: the immediate counts words); {_ADDRESS}; where the datum goes is "
+        "open, so the core records the read only; covered at f120_122 = 7, the value of those "
+        "three words",
         _local_load(4),
     ),
     0x16: OpSemantics(
@@ -567,21 +569,32 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x14: OpSemantics(
         I,
         "reads the local halfword at ra + imm halfwords, ra a base register it does not write "
-        f"(inferred: {_R0_READS}, 31 of 31 for 0x14, and its displacements fit a halfword "
-        "unit; the second halfword load beside 0x16, the two plausibly differing in sign "
-        f"extension, which is open); {_ADDRESS}; the core records the read only; covered at "
-        "f120_122 = 7",
+        f"(inferred: {_R0_READS}, 31 of 31 for 0x14; on the camera, 0x14 in place of the "
+        "resampler's tap-1 read gave tap 1 c0 at imm 0 and the stock c1 at imm 1, so the "
+        "immediate counts halfwords and the word does not pass on the datum read before it; "
+        f"its sign extension against 0x16's is open); {_ADDRESS}; the core records the read "
+        "only; covered at f120_122 = 7",
         _local_load(2),
     ),
     0x10: OpSemantics(
         I,
         "reads the local byte at ra + imm bytes, zero-extended, ra a base register it does not "
-        "write (inferred: on the camera, 0x10 in place of the resampler's tap-1 read, imm 1 and "
-        "ra kept, gave tap 1 the coefficient c0's bits 8..15 zero-extended, the byte at offset 1 "
-        "of the phase's taps, on every line; a sign-extended byte is refuted; that the "
-        "immediate counts bytes and not another unit that lands on byte 1 rests on that one "
-        f"word and immediate); {_ADDRESS}; where the datum goes is open, so the core records "
-        "the read only; covered at f120_122 = 7, the value of that word",
+        "write (inferred: on the camera, 0x10 in place of the resampler's tap-1 read, ra kept, "
+        "gave tap 1 c0's bits 8..15 zero-extended at imm 1 and its bits 0..7 at imm 0, the "
+        "bytes at offsets 1 and 0 of the phase's taps, on every line; a sign-extended byte is "
+        f"refuted); {_ADDRESS}; where the datum goes is open, so the core records the read "
+        "only; covered at f120_122 = 7",
+        _local_load(1),
+    ),
+    0x0E: OpSemantics(
+        I,
+        "reads the local byte at ra + imm bytes, sign-extended, ra a base register it does not "
+        "write (inferred: on the camera, 0x0e in place of the resampler's tap-1 read, ra kept, "
+        "gave tap 1 c0's bits 0..7 at imm 0 and its bits 8..15 at imm 1, sign-extended, on "
+        "every line of two tap sets; nothing delivered and a zero-extended byte are refuted; "
+        "a load from local memory and a select of byte imm of the datum the word before it "
+        "delivered give the same bytes there, so the direction is open); "
+        f"{_ADDRESS}; the core records the read only; covered at f120_122 = 7",
         _local_load(1),
     ),
     0x12: OpSemantics(
