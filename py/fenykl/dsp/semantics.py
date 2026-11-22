@@ -390,17 +390,22 @@ def _local_read(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
 
 
 def _computed(
-    word: Word, src: Reg | None, name: str, bounds: tuple[int, int] | None
+    word: Word,
+    src: Reg | None,
+    name: str,
+    bounds: tuple[int, int] | None,
+    taint: Confidence = I,
 ) -> Effect:
-    """ra := `name`, in `bounds` computed from register `src`; None bounds: the input lies
-    outside what the operation covers. Either way an unknown input leaves ra unknown."""
+    """ra := `name`, in `bounds` computed from register `src`, at most at `taint` (that of the
+    destination); None bounds: the input lies outside what the operation covers. Either way an
+    unknown input leaves ra unknown."""
     args = word.operands
     assert args is not None
     if src is None or bounds is None:
         why = "an unknown input" if src is None else "a negative input"
         return Effect(((args.ra, None),), f"r{args.ra} := {name}: {why}, unknown")
     lo, hi = bounds
-    reg = Reg(lo, hi, min(src.taint, I), f"{name} (op {word.op:#x})")
+    reg = Reg(lo, hi, min(src.taint, taint), f"{name} (op {word.op:#x})")
     value = f"{lo:#x}" if lo == hi else f"{lo:#x}..{hi:#x}"
     return Effect(((args.ra, reg),), f"r{args.ra} := {name} = {value}")
 
@@ -414,7 +419,8 @@ def _shift_right(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     name = f"r{args.rb} >> {args.imm}"
     if src is None or src.lo < 0:
         return _computed(word, src, name, None)
-    return _computed(word, src, name, (src.lo >> args.imm, src.hi >> args.imm))
+    bounds = (src.lo >> args.imm, src.hi >> args.imm)
+    return _computed(word, src, name, bounds, H)  # the destination ra is a hypothesis
 
 
 def sign_extend16(imm: int) -> int:
@@ -429,11 +435,10 @@ def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     name = f"r{args.ra} & {mask & 0xFFFFFFFF:#x}"
     if src is None or src.lo < 0:
         return _computed(word, src, name, None)
-    if (
-        src.exact is not None or mask < 0
-    ):  # a mask that clears low bits only is monotonic
+    clears_low = mask < 0 and (-mask) & (-mask - 1) == 0  # ~(2^k - 1): monotonic
+    if src.exact is not None or clears_low:
         return _computed(word, src, name, (src.lo & mask, src.hi & mask))
-    return _computed(word, src, name, (0, min(src.hi, mask)))
+    return _computed(word, src, name, (0, min(src.hi, mask) if mask >= 0 else src.hi))
 
 
 OP_SEMANTICS: dict[int, OpSemantics] = {
@@ -469,8 +474,10 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "and 2 halved and quartered the count a later transfer reads, on a positive value, so "
         "logical and arithmetic shifts are not separated and a negative rb gives an unknown "
         "result; the measured word names one register in ra and rb, so their roles come from "
-        "the format; the count was read through the register its xreg field names, not ra, so "
-        "where the result is written is open); covered at f120_122 = 7, the value of that word",
+        "the format); the destination ra is a hypothesis that the camera does not support, and "
+        "the written register carries hypothesis taint: the count was read through the register "
+        "the word's xreg field names, and in that copy no later data op names it in ra; covered "
+        "at f120_122 = 7, the value of that word",
         _shift_right,
     ),
 }

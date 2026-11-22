@@ -151,7 +151,7 @@ def test_shift_right_reads_rb_and_writes_ra():
     shift = Word.data(0x3F, Operands(ra=7, rb=2, imm=1))
     boot, flow = run_slot((shift,), r2=given(0x200, 0x201), r7=given(5))
     assert boot.slot[7] is not None and boot.slot[7].exact == 0x100
-    assert boot.slot[7].taint is Confidence.INFERRED
+    assert boot.slot[7].taint is Confidence.HYPOTHESIS  # the destination ra
     assert boot.slot[2] == given(0x200, 0x201)
     assert flow.steps[0].note == "r7 := r2 >> 1 = 0x100"
     # A negative rb (logical and arithmetic shifts differ) leaves ra unknown, not stale.
@@ -176,6 +176,10 @@ def test_and_mask_sign_extends_imm16():
     assert (boot.slot[4].lo, boot.slot[4].hi) == (0, 0xF)
     boot, _ = run_slot((low,), r4=given(0x13))
     assert boot.slot[4].exact == 3
+    # A negative mask with low bits set is not monotonic: bounded by the input only.
+    mixed = Word.data(0x38, Operands(ra=4, imm=0x8001))
+    boot, _ = run_slot((mixed,), r4=given(0x10, 0x11))
+    assert (boot.slot[4].lo, boot.slot[4].hi) == (0, 0x11)
 
 
 def test_measured_ops_chain_through_the_slot():

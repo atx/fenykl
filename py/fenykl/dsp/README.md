@@ -147,7 +147,11 @@ of the local word at its immediate (inferred, strong): program 16's three 0x1a w
 local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
 destination (inferred: across later firmware versions of the same family, in 59 % of its words
 the next naming of that register is this op again, with another immediate in 95 % of those
-pairs, which as writes would be dead). `word.operands` decodes a data op's operands (`Operands`), and
+pairs, which as writes would be dead). Two ops have camera-measured meanings, run by the stepping
+core (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
+quartered at imm 1 and 2), and 0x38, an AND of ra with its sign-extended imm16 (one cleared mask
+bit moved a copy's store by 16 B). Where 0x3f's result goes is open: the core writes ra at
+hypothesis taint. `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
 
