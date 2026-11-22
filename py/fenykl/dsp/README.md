@@ -67,7 +67,7 @@ confidence and fact; `fields.op(value)` is total:
 | 2 | `br` | conditional branch either way | inferred |
 | 3 | `call` | call (when a return lies before T; the other op 3 words are open) | inferred, strong |
 | 4 | `ret` | return to the word after the call's delay slots | inferred, strong |
-| 7 | `halt` | ends the job; word 5 of every program, where the call at word 0 returns | inferred |
+| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); word 5 of every stock program, where the call at word 0 returns | inferred |
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
 | 127 | `idle` | no op | inferred |
 
@@ -196,6 +196,9 @@ these classes, the transfers' register contexts and their reference values from 
 program it is built from, so no stock word is part of the code. At the end the sequencer gives
 the transfers their roles (the stock word 66 loads, 67 addresses, 68 offsets, 73 counts, 76
 offsets the store, 47 formats it, ...) and the job resolves into a status, one load and one store.
+An op 7 off the stock halt (`memcpy.HALT_CLASS`) ends the job where the stepping core reaches it:
+before the stream words 58..79 with status 0 and dst not written; after the stream started it
+raises `UnknownSemantics`.
 
 Strict mode (the default) raises `UnknownSemantics` for a word that matches no class, naming the
 fields that differ from the nearest class, and for a role at a register without registered
@@ -275,7 +278,7 @@ print(flow.runs())  # 0, |1..4, 10..27, |28..31, 32..45, |46..49, 58..79, |80..8
 ```
 
 `Core` follows the program counter from word 0: a call at i goes to T and returns to i + 5, a
-return goes back there, brf, br and a loop end go to T when taken, op 7 halts; the four delay
+return goes back there, brf, br and a loop end go to T when taken, op 7 halts at any depth; the four delay
 slots of every control op run before its transfer (`DELAY_SLOTS`). Each executed word is a
 `Step` (index, op, operands, delay slot, decision or effect, confidence); `Flow` holds them in
 order, with how the run stopped: halt, an undecided branch, or the step limit.
@@ -311,7 +314,8 @@ flow.
   `memcpy._FORMATS` for word 47.
 - **A new use of the register value**: a new `semantics.Use`, handled in `Copy16Model._role`.
 - **What a stock word does without it**: its `Part` in `memcpy._PARTS` (`token`, `missing`
-  outcome and the fact); a swept register field goes in `operand`.
+  outcome and the fact); a swept field goes in `operand`, by value, with its key in
+  `operand_field` (xreg by default; word 60's f76_79 copies at 0 only).
 - **A new word class**: a `WordClass` subclass with `match` (field values that identify it),
   `masks` (the bits of each matched field it fixes, default all), `operands` (fields it reads
   or ignores) and `act`, which records into the job's `Trace`; add it to the model's

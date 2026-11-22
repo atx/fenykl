@@ -263,7 +263,9 @@ class Core:
 
     The control ops (`fields.OPS`, inferred): a call at i goes to T and returns to i + 5, a
     return goes back there, brf / br / a loop end go to T when `branching` takes them; every
-    control op has four delay slots that run before its transfer takes effect, and op 7 halts.
+    control op has four delay slots that run before its transfer takes effect, and op 7 halts
+    at once at any word and call depth, the return stack unchecked (whether a halt has delay
+    slots of its own is open).
     `branching` decides ops 0..2; the default `Given()` decides none of them. A loop end whose
     T lies in its own delay slots, a control op in another's delay slots and a return without a
     call raise `UnknownSemantics`: what they do is open.

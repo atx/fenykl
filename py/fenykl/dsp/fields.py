@@ -360,8 +360,11 @@ OPS: dict[int, Op] = {
     7: Op(
         "halt",
         I,
-        "ends the job: word 5 of every program and no other word, where the call at word 0 "
-        "returns (inferred)",
+        "ends the job: word 5 of every stock program and no other word, where the call at word "
+        "0 returns (inferred); at any word and call depth: program 16 with word 5 in place of "
+        "word 11, inside the routine with the call's return pending, ended with status 0 and "
+        "dst not written (verified on the camera, one run), so a halt needs no return and the "
+        "return stack is not checked (inferred); whether it has delay slots is open",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"

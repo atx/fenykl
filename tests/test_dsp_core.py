@@ -51,6 +51,15 @@ def test_copy_flow_through_call_slots_and_halt():
     )  # no run had this length
 
 
+def test_a_halt_inside_a_called_routine_ends_the_job():
+    # Word 5 in place of 11: the routine called at 0 halts with its return pending.
+    words = list(copy_program().words)
+    words[11] = words[5]
+    job = commands.copy(Program(tuple(words)), SRC, DST, 0x400)
+    flow = Core(Boot(), copy_branches(0x400), strict=False).run(job, start_copy)
+    assert flow.stop is Stop.HALT and flow.order() == span((0, 4), (10, 11))
+
+
 def test_guard_45_switches_the_path_into_the_loop():
     once = Given({27: False, 45: False, 53: [True, False]})
     flow = run_copy(0x400, once)

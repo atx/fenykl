@@ -2,7 +2,8 @@
 
 The driver passes src, dst and len in DSP local memory words 0..2. No word of the program is
 decoded; what is known comes from camera runs that replaced a word by the idle word ("idled") or
-swept its register field 115..119, and is stated here by word index:
+swept one of its fields (the register field 115..119, word 60's f76_79), and is stated here by word
+index:
 
 - `_PARTS`: what the job does without each undecoded stock word;
 - `_CHANNELS`: the register-transfer words, grouped by their register context, and the role of
@@ -29,11 +30,23 @@ Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the jo
 
 from dataclasses import dataclass, field
 
-from .emu import Boot, Emulator, Job, JobResult, Status, dram_alias, start_copy
-from .fields import FIELDS, STAIRCASE, Confidence, lookup
+from .emu import (
+    HALT_OP,
+    Boot,
+    Core,
+    Emulator,
+    Job,
+    JobResult,
+    Status,
+    Stop,
+    dram_alias,
+    start_copy,
+)
+from .fields import FIELDS, STAIRCASE, Confidence, Kind, lookup
 from .program import Program, stock_programs
 from .semantics import (
     IDLE_CLASS,
+    IdleClass,
     KIB,
     Channel,
     Given,
@@ -101,7 +114,14 @@ _PARTS: dict[int, Part] = {
         Outcome.DATA_UNKNOWN,
         "idled, dst gets a fixed 1 KiB",
     ),
-    60: Part("stream completion", Outcome.TIMEOUT, _COMPLETION),
+    60: Part(
+        "stream completion",
+        Outcome.TIMEOUT,
+        f"{_COMPLETION}; its f76_79: a copy at 0 only, the job times out before any store at "
+        "each of 1..15, so every bit matters",
+        operand={v: Outcome.OK if v == 0 else Outcome.TIMEOUT for v in range(16)},
+        operand_field="f76_79",
+    ),
     61: Part(
         "src loader",
         Outcome.DATA_UNKNOWN,
@@ -451,7 +471,9 @@ def _opaque_classes(
         part = _PARTS[at[0]]
         if any(_PARTS[i] != part for i in at):
             raise ValueError(f"stock words {at} are equal but have different parts")
-        operands = frozenset({"f115_119"}) if part.operand else frozenset()
+        operands = (
+            frozenset({lookup(part.operand_field).id}) if part.operand else frozenset()
+        )
         word = words[at[0]]
         match = {f.id: f.get(word.value) for f in FIELDS if f.id not in operands}
         classes.append(
@@ -470,6 +492,19 @@ def _opaque_classes(
         raise ValueError(f"parts without a stock word: {sorted(extra)}")
     return classes
 
+
+HALT_CLASS = IdleClass(
+    "halt",
+    "op 7 off the stock halt: it ends the job where it runs, whatever its other fields "
+    "[inferred]; `Copy16Model` finds where with the stepping core",
+    {"op": HALT_OP},
+    frozenset(),
+    confidence=I,
+)
+STREAM = range(58, 80)
+"""The stream words: a halt before them stores nothing."""
+HALTS_SEEN = (11,)
+"""The indices a halt ran at on the camera, besides the stock halt 5 (word 5 in place of 11)."""
 
 # -- resolution
 
@@ -531,7 +566,12 @@ class Copy16Model:
         words = program.words
         self.transfer = _transfer_class(words)
         self.opaque = _opaque_classes(words, self.transfer)
-        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *self.opaque, self.transfer)
+        self.classes: tuple[WordClass, ...] = (
+            IDLE_CLASS,
+            *self.opaque,
+            self.transfer,
+            HALT_CLASS,
+        )
         self.channels = _CHANNELS
         self.formats = _FORMATS
 
@@ -546,8 +586,47 @@ class Copy16Model:
         stock = self.program.words
         words = job.program.words
         edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
+        halted = self._halt(job, trace, view)
+        if halted is not None:
+            return halted
         plan = self.resolve(trace, boot.regs, view, emu.sequencer, edits)
         return self._apply(boot, plan, trace, view)
+
+    def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
+        """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
+        dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred);
+        None when no such halt runs."""
+        stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
+        words = job.program.words
+        if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
+            return None
+        length = view.length
+        assert length is not None
+        flow = Core(Boot(), copy_branches(length), strict=False).run(job, start_copy)
+        if flow.stop is not Stop.HALT:
+            raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
+        at = flow.steps[-1].index
+        if at in stock:
+            return None
+        if any(s.index in STREAM for s in flow.steps):
+            raise UnknownSemantics(
+                at,
+                "halt",
+                [],
+                "a halt after the stream started: whether the stream drains first is open",
+            )
+        # Words after the halt do not run; edited words before it are not modelled.
+        stock_words = self.program.words
+        edited = any(
+            s.index >= len(stock_words) or words[s.index] != stock_words[s.index]
+            for s in flow.steps[:-1]
+        )
+        seen = at in HALTS_SEEN and length == KIB
+        conf = H if trace.ignored or edited else V if seen else I
+        why = f"op 7 at word {at} halts the job before the stream: {Outcome.NO_STORE.value}"
+        result = JobResult(Status.OK, [why], ignored=trace.ignored, notes=trace.notes)
+        result.taint = conf
+        return result
 
     def resolve(
         self,
@@ -575,13 +654,15 @@ class Copy16Model:
                     )
                 )
             elif part.operand is not None:
-                index, reg = trace.operands[c]
-                o = part.operand.get(reg)
+                index, value = trace.operands[c]
+                f = lookup(part.operand_field)
+                o = part.operand.get(value)
                 if o is None:
-                    raise UnknownSemantics(index, c.name, [(lookup("xreg"), reg)])
-                if reg == self.program.words[min(c.positions)]["xreg"]:
+                    raise UnknownSemantics(index, c.name, [(f, value)])
+                if value == f.get(self.program.words[min(c.positions)].value):
                     continue
-                why = f"{part.token} at r{reg}: {o.value}"
+                at = f"r{value}" if f.kind is Kind.REG else f"{f.label}={value:#x}"
+                why = f"{part.token} at {at}: {o.value}"
                 plan.outcomes.append((o, why, part.at(length)))
         filled, unset = sequencer.assign(self.channels, trace.channels)
         for slot in unset:

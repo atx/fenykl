@@ -154,7 +154,8 @@ class Part:
     missing: Outcome
     fact: str
     operand: Mapping[int, Outcome] | None = None
-    """Outcomes by the value of its register field 115..119, where that field was swept."""
+    """Outcomes by the value of its field `operand_field`, where that field was swept."""
+    operand_field: str = "xreg"
     seen: tuple[int, ...] = (KIB,)
     """The job lengths at which `missing` and `operand` were seen on the camera [verified];
     at other lengths they are inferred."""
@@ -177,8 +178,8 @@ class OpaqueClass(WordClass):
 
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         trace.parts[self] += 1
-        if self.operands:
-            trace.operands[self] = (index, word["xreg"])
+        if self.part is not None and self.part.operand is not None:
+            trace.operands[self] = (index, word[self.part.operand_field])
 
 
 # -- roles of the register transfers

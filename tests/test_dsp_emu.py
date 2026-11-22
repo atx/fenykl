@@ -397,6 +397,32 @@ def test_lenient_mode_taints_the_zero_fill():
     assert zeros.weakest() is Confidence.HYPOTHESIS
 
 
+@pytest.mark.parametrize("strict", [True, False])
+def test_word_60_copies_only_with_f76_79_at_0(strict: bool):
+    for value in (1, 8, 0xF):
+        result, boot = run(edited([{"at": 60, "set": {"f76_79": value}}]), strict=strict)
+        assert result.status is Status.TIMEOUT and result.stored is None
+        assert result.taint is Confidence.VERIFIED and result.ignored == []
+        assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
+    result, _ = run(stock(), strict=strict)
+    assert result.status is Status.OK and result.stored == (DST, DST + LEN)
+
+
+def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
+    words = list(stock().words)
+    words[11] = words[5]
+    result, boot = run(Program(tuple(words)))
+    assert result.status is Status.OK and result.stored is None
+    assert result.taint is Confidence.VERIFIED
+    assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
+    # Elsewhere before the stream, with other fields than word 5's: inferred.
+    result, _ = run(edited([{"at": 20, "set": {"op": 7}}]))
+    assert result.status is Status.OK and result.stored is None
+    assert result.taint is Confidence.INFERRED
+    with pytest.raises(UnknownSemantics, match="after the stream started"):
+        run(edited([{"at": 70, "set": {"op": 7}}]))
+
+
 def test_route_nibbles_must_hold_the_stock_values():
     word = Word.from_fields({"f76_79": 1}, base=stock().words[73])
     program = Program((*stock().words[:73], word, *stock().words[74:]))
