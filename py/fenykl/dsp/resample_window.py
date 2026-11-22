@@ -20,7 +20,6 @@ from collections.abc import Sequence
 
 from .exec import (
     COEFFICIENT_WRITE,
-    HELD,
     PORT_WRITES,
     Anchors,
     Cover,
@@ -33,7 +32,6 @@ from .exec import (
     field_is,
     is_load,
     out_of,
-    owner,
 )
 from .fields import Confidence, lookup
 from .program import Program
@@ -209,22 +207,6 @@ def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:
         dont_cares=_dont_cares(program),
         inert=inert(facts),
     )
-
-
-def free(anchors: Anchors, stock: Word) -> frozenset[str]:
-    """The fields of a window word that the coverage rule may find changed: those of the
-    semantics whose context holds in the stock word and the held fields whose owner is idle."""
-    out = {
-        lookup(k).id
-        for sem in anchors.semantics
-        if sem.context(stock)
-        for k in sem.fields
-    }
-    for fid in HELD:
-        own = owner(lookup(fid))
-        if own is not None and own.get(stock.value) == own.idle:
-            out.add(fid)
-    return frozenset(out)
 
 
 def uncovered(anchors: Anchors, stock: Word, word: Word, index: int) -> str:

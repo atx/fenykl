@@ -1,6 +1,6 @@
 """Semantics: word classes, parts, roles and the hidden sequencer, independent of one program.
 
-A word class is matched by field values under per-field masks (`match`, `masks`) and names the
+A word class is matched by field values (`match`) and names the
 fields it reads or ignores (`operands`); every field a class neither matches nor names as an
 operand must be idle. A program's model covers a job's word at its index: by a field semantic
 (program 16's register transfers), by the row of the stock word there (`OpaqueClass`), or by its
@@ -93,16 +93,14 @@ class Trace:
 class WordClass:
     """A class of words; compared by identity.
 
-    `match` holds field values and `masks` the bits of each field that `match` fixes (default:
-    all of them); the other bits of a masked field are don't-care. `confidence` is that of the
-    class's semantics where it was seen.
+    `match` holds field values the word must have. `confidence` is that of the class's
+    semantics where it was seen.
     """
 
     name: str
     fact: str
     match: Mapping[str, int]
     operands: frozenset[str]
-    masks: Mapping[str, int] = field(default_factory=dict)
     confidence: Confidence = H
     mask: int = field(init=False, repr=False)
     bits: int = field(init=False, repr=False)
@@ -111,8 +109,7 @@ class WordClass:
         mask = bits = 0
         for key, value in self.match.items():
             f = lookup(key)
-            m = self.masks.get(key, f.mask)
-            mask, bits = f.put(mask, m), f.put(bits, value & m)
+            mask, bits = f.put(mask, f.mask), f.put(bits, value & f.mask)
         object.__setattr__(self, "mask", mask)
         object.__setattr__(self, "bits", bits)
 
@@ -120,13 +117,11 @@ class WordClass:
         return word.value & self.mask == self.bits
 
     def mismatches(self, word: Word) -> list[tuple[Field, int]]:
-        out = []
-        for key, value in self.match.items():
-            f = lookup(key)
-            m = self.masks.get(key, f.mask)
-            if word[key] & m != value & m:
-                out.append((f, word[key]))
-        return out
+        return [
+            (lookup(key), word[key])
+            for key, value in self.match.items()
+            if word[key] != value & lookup(key).mask
+        ]
 
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         raise NotImplementedError

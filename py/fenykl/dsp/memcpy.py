@@ -701,8 +701,7 @@ class Copy16Model:
             s.index >= len(stock_words) or words[s.index] != stock_words[s.index]
             for s in flow.steps[:-1]
         )
-        halt_word = self.program.words[min(stock)]
-        seen = at in HALTS_SEEN and length == KIB and words[at] == halt_word
+        seen = at in HALTS_SEEN and length == KIB and words[at] == self.halt
         conf = H if trace.ignored or edited else V if seen else I
         for s in flow.steps:
             if s.op in TARGET_OPS[:3] and s.confidence is not None:

@@ -465,9 +465,8 @@ flow.
   value) set in `COMPOSED` only once it ran; a fact no semantic gives (an idle, a value with
   no mechanism) stays a row in `resample_edits.FACTS`.
 - **A new field semantic of program 16**: a `WordClass` subclass with `match` (field values
-  that identify it), `masks` (the bits of each matched field it fixes, default all), `operands`
-  (fields it reads or ignores) and `act`, which records into the job's `Trace`; have the model's
-  `cover` run it. Every field outside `match` and `operands` must be idle.
+  that identify it), `operands` (fields it reads or ignores) and `act`, which records into the
+  job's `Trace`; have the model's `cover` run it. Every field outside `match` and `operands` must be idle.
 
 Each semantic carries its confidence, and a test vector should come with it: the curated camera
 vectors live in `tests/data/dsp/` (jobs, expected status and dst with UNKNOWN regions).
