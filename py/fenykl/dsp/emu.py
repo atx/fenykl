@@ -308,7 +308,8 @@ class Executor:
         pc, slots, pending = 0, 0, None
         for _ in range(self.limit):
             if pc >= len(words):
-                # On the camera a program without a halt keeps running: the job times out.
+                # On the camera the stock copy with its return word idled ran on and the job
+                # timed out; the stepper does not model what runs past the end, so it raises.
                 raise UnknownSemantics(
                     pc, "end", [], f"past the program end ({len(words)} words)"
                 )
