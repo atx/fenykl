@@ -464,11 +464,15 @@ class Resample13Model:
         as a hypothesis)."""
         words = job.program.words
         stock = self.program.words
-        w = (
-            run_window(self.anchors, stock, words, probe)
-            if len(words) == len(stock)
-            else None
-        )
+        w = None
+        if len(words) == len(stock):
+            try:
+                w = run_window(self.anchors, stock, words, probe)
+            except UnknownSemantics as exc:
+                # A write conflict: strict mode stops, lenient mode takes the stock law.
+                if emu.strict:
+                    raise
+                result.notes.append(str(exc))
         edits = [
             self.edits.get((i, words[i].value)) if i < len(words) else None
             for i in edited

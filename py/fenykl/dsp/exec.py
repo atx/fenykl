@@ -297,6 +297,18 @@ def _name(item: Item) -> str:
     return "the load latch" if item == LATCH else f"{item[0]}{item[1]}"
 
 
+@dataclass(frozen=True)
+class Write:
+    """A scheduled write: due at `step`, issued by field `by` of word `index`."""
+
+    step: int
+    index: int
+    by: tuple[Field, int]
+    target: Item | int
+    """A state item, or an accumulator."""
+    value: Held | Term
+
+
 @dataclass
 class Machine:
     """The window's state: the operand registers R0..R15 (per lane), the coefficient
@@ -308,8 +320,7 @@ class Machine:
     tiers: Mapping[tuple[int, str], Confidence] = field(default_factory=dict)
     items: dict[Item, Held] = field(default_factory=dict)
     acc: dict[int, list[Term]] = field(default_factory=dict)
-    queue: list[tuple[int, int, Item | int, Held | Term]] = field(default_factory=list)
-    """(due step, issuing word, target (an item, or an accumulator), value)."""
+    queue: list[Write] = field(default_factory=list)
     step: int = 0
     seen: dict[int, dict[Item, Held]] = field(default_factory=dict)
     """Per word index, the state its units read."""
@@ -337,12 +348,11 @@ class Machine:
     def execute(self, word: Word, index: int) -> None:
         """One step: every unit reads the state as it is now, then the step's writes retire."""
         self.seen[index] = dict(self.items)
-        writes: list[tuple[int, Item | int, Held | Term]] = []
+        writes: list[tuple[int, str, Item | int, Held | Term]] = []
         if is_load(word):
             datum = self._datum(word)
-            writes.append(
-                (LATENCY["load"], LATCH, Held(datum, self.tier(index, "load")))
-            )
+            held = Held(datum, self.tier(index, "load"))
+            writes.append((LATENCY["load"], "op", LATCH, held))
         if word[S2_HEAD] == S2_TERM:
             if index not in self.anchors.routing:
                 raise UnknownSemantics(
@@ -351,7 +361,7 @@ class Machine:
             r, c = self.read(("R", word["f57_60"])), self.read(("C", word["f88_91"]))
             tier = min(self.tier(index, n) for n in ("f53_56", "f57_60", "f88_91"))
             term = Term(c.value, r.value, min(r.confidence, c.confidence, tier))
-            writes.append((LATENCY["term"], self.anchors.routing[index], term))
+            writes.append((LATENCY["term"], S2_HEAD, self.anchors.routing[index], term))
         for fid, enable, active in PORT_WRITES:
             if word[enable] != active or word[fid] == 15:
                 continue
@@ -359,19 +369,17 @@ class Machine:
                 (index, fid),
                 Unknown(f"the element of word {index}'s port {fid} is not located"),
             )
-            writes.append(
-                (
-                    LATENCY["port"],
-                    ("R", word[fid]),
-                    Held(element, self.tier(index, fid)),
-                )
-            )
+            held = Held(element, self.tier(index, fid))
+            writes.append((LATENCY["port"], fid, ("R", word[fid]), held))
         fid, enable, active = COEFFICIENT_WRITE
         if word[enable] == active and word[fid] != 15:
             latch = self.read(LATCH)
             held = Held(latch.value, min(latch.confidence, self.tier(index, fid)))
-            writes.append((LATENCY["coefficient"], ("C", word[fid]), held))
-        self.queue += [(self.step + lat, index, target, v) for lat, target, v in writes]
+            writes.append((LATENCY["coefficient"], fid, ("C", word[fid]), held))
+        self.queue += [
+            Write(self.step + lat, index, (lookup(f), word[f]), target, v)
+            for lat, f, target, v in writes
+        ]
         self._advance()
 
     def _datum(self, word: Word) -> Value:
@@ -388,21 +396,25 @@ class Machine:
 
     def _advance(self) -> None:
         self.step += 1
-        due = [q for q in self.queue if q[0] == self.step]
-        self.queue = [q for q in self.queue if q[0] != self.step]
-        written: set[Item] = set()
-        for _, index, target, value in due:
-            if isinstance(target, int):
-                assert isinstance(value, Term)
-                self.acc.setdefault(target, []).append(value)
+        due = [q for q in self.queue if q.step == self.step]
+        self.queue = [q for q in self.queue if q.step != self.step]
+        written: dict[Item, Write] = {}
+        for q in due:
+            if isinstance(q.target, int):
+                assert isinstance(q.value, Term)
+                self.acc.setdefault(q.target, []).append(q.value)
                 continue
-            if target in written:
+            first = written.get(q.target)
+            if first is not None:
                 raise UnknownSemantics(
-                    index, "window", [], f"write conflict on {_name(target)}"
+                    q.index,
+                    "window",
+                    [first.by, q.by],
+                    f"write conflict on {_name(q.target)} (words {first.index}, {q.index})",
                 )
-            assert isinstance(value, Held)
-            written.add(target)
-            self.items[target] = value
+            assert isinstance(q.value, Held)
+            written[q.target] = q
+            self.items[q.target] = q.value
 
 
 def readers(anchors: Anchors, words: Sequence[Word]) -> dict[Item, list[int]]:

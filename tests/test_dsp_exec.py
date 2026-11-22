@@ -229,8 +229,17 @@ def test_an_edited_load_off_the_tap_base_reaches_the_head_8_words():
 def test_two_writes_to_one_register_in_one_step_raise():
     m = model()
     words = edited(438, FieldValue("f167_170", 2))
-    with pytest.raises(UnknownSemantics, match="write conflict on R2"):
+    with pytest.raises(UnknownSemantics, match="f163_166=0x2, f167_170=0x2 .*R2"):
         run_window(m.anchors, m.program.words, words, FLAT)
+    # Lenient mode takes the stock law, as a hypothesis.
+    edits = [(438, FieldValue("f167_170", 2))]
+    with pytest.raises(UnknownSemantics, match="write conflict"):
+        predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
+    got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits, strict=False)
+    want = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE)
+    assert any(got.dst.known) and got.dst.known == want.dst.known
+    assert got.dst.data == want.dst.data
+    assert set(got.confidence()) - {None} == {Confidence.HYPOTHESIS}
 
 
 def test_the_chroma_stage_equals_the_law_on_every_weight_and_pixel_pair():
