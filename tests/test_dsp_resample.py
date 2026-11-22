@@ -219,7 +219,7 @@ def test_an_odd_height_above_1_is_unknown():
 REASONS = {
     "own-gains": set(),
     "own-phases": {"resampler bottom"},
-    "own-scale-2d": {"resampler 2d", "resampler bottom", "resampler right"},
+    "own-scale-2d": {"resampler bottom", "resampler right"},
     "own-scale-flat": {"resampler bottom", "resampler right"},
     "own-ties": set(),
 }
@@ -261,8 +261,7 @@ def test_taps_outside_those_that_ran_are_a_hypothesis():
     I, H = Confidence.INFERRED, Confidence.HYPOTHESIS
     assert line == [{I}, {H}, {I}, {H}]
     assert Confidence.HYPOTHESIS not in conf[1024:]
-    # b != 1: plane 0's vertical pass at phase 0 reaches every pixel; a gain of 16 on values
-    # below 16 keeps it exact.
+    # b != 1: plane 0's vertical pass at phase 0 reaches every pixel.
     phases = [(0, 256, 0, 0)] * 16
     phases[0] = (0, 4096, 0, 0)
     image = bytes(x % 16 for x in range(64)) * 3 * 16
@@ -270,6 +269,48 @@ def test_taps_outside_those_that_ran_are_a_hypothesis():
     conf = predict(model(), Taps.of(phases), image, table).confidence()
     assert set(conf[:1024]) == {Confidence.HYPOTHESIS, None}
     assert Confidence.HYPOTHESIS not in conf[1024:]
+
+
+# b = 1 + 1/16 at H 2: output pixel 16 sits at horizontal phase 0 on source pixel 15, pixel 20
+# at phase 4 on pixels 19 and 20, pixel 24 at phase 8 on pixels 23 and 24. Phase 0 (-2, 258) also
+# runs down the lines.
+LAW_TAPS = [(0, 256, 0, 0)] * 16
+LAW_TAPS[0] = (-2, 258, 0, 0)
+LAW_TAPS[4] = (0, 130, 126, 0)
+LAW_TAPS[8] = (0, 128, 128, 0)
+LAW_TABLE = [(0, 0x11000), (1 << 16, 0x11000)]
+
+
+def law_image(line0: dict[int, int], line1: dict[int, int]) -> bytes:
+    """Plane 0's two lines from {pixel: value}, the rest 0."""
+    image = bytearray(3 * 64 * 2)
+    for y, line in enumerate((line0, line1)):
+        for x, v in line.items():
+            image[64 * y + x] = v
+    return bytes(image)
+
+
+def test_the_two_pass_law_at_b_not_1():
+    # A source constant down the lines, so the vertical pass gives 64 x pixel exactly (measured
+    # on the camera at b = 1 + 1/16 with such sources and a non-unit phase 0).
+    pixels = {14: 200, 15: 10, 19: 101, 20: 102, 23: 100, 24: 101}
+    got = predict(model(), Taps.of(LAW_TAPS), law_image(pixels, pixels), LAW_TABLE)
+    line = got.dst.data[64 + 16], got.dst.data[64 + 20], got.dst.data[64 + 24]
+    # Horizontal phase 0 is the unit: pixel 15, not -2 x 200 + 258 x 10.
+    # Phase 4: 130 x 101 + 126 x 102 = 25982 = 101.49 x 256 rounds once to 101 (R4 then R64:
+    # 6495.5 -> 6496, 101.5 -> 102).
+    # Phase 8: 128 x 100 + 128 x 101 = 100.5 x 256, a tie to even: 100.
+    assert line == (10, 101, 100)
+    assert got.confidence()[64 + 16] is Confidence.INFERRED
+
+
+def test_plane_0_at_b_not_1_on_a_source_varying_down_the_lines():
+    # Line 1, pixel 15: -2 x 38 + 258 x 101 = 25982; R4 gives 6496 (6495.5, ties to even), the
+    # unit phase 0 then 6496 / 64 = 101.5 -> 102. This rounding of the vertical pass is a fit to
+    # camera runs on such sources, not a designed measurement.
+    got = predict(model(), Taps.of(LAW_TAPS), law_image({15: 38}, {15: 101}), LAW_TABLE)
+    assert (got.dst.data[16], got.dst.data[64 + 16]) == (38, 102)
+    assert got.confidence()[64 + 16] is Confidence.INFERRED
 
 
 # A flat source (every line constant along x) with lines 7 i + 3, at b 1: line i at phase i.

@@ -24,12 +24,16 @@ W 16, 48, 64, H 1, 16), 0 off; the tags below are those of the measurements behi
 - b != 1 (integer a only): the kernel acts along the line at u(x) = u0 + b x, u0 = 31.5 (1 - b)
   held in [-16, 16) (beyond that range a hypothesis: one run at b = 2), phase p = frac(u) x 16,
   tap k on pixel floor(u) - 1 + k, a window starting left of pixel 0 reads 32 pixels further
-  right. On plane 0 a vertical pass at phase 0 comes first: the model knows a byte only where
-  that pass is exact (each pixel's sum a multiple of 256 inside 0..255, as with the stock phase
-  0 kernel or a source constant down the lines), since no rounding of its intermediate fits
-  every byte of a source that varies down the lines;
-- the sum S of tap x pixel becomes clamp(R64(R4(S)), 0, 255), R_n = divide by n to nearest,
-  ties to even: a Q6 intermediate, then 8 bits;
+  right. Plane 0 is two passes: down the lines at phase 0 (taps[0]) to I = R4(sum of tap x
+  pixel), unclamped, then along the line T = sum of tap x I, where horizontal phase 0 is the
+  unit (0, 256, 0, 0) and not taps[0], and the byte is clamp(R16384(T), 0, 255): one rounding
+  [verified: designed runs at b = 1 + 1/16 and 0.5 on sources constant down the lines, with a
+  non-unit taps[0] and sums that separate one rounding from two, and ties]. I's rounding is
+  [inferred: it fits every byte of earlier b != 1 runs on sources varying down the lines; no
+  designed run separated it];
+- b = 1: the sum S of tap x pixel becomes clamp(R64(R4(S)), 0, 255), R_n = divide by n to
+  nearest, ties to even: a Q6 intermediate, then 8 bits (the b != 1 arithmetic with a unit
+  horizontal pass, R16384(256 I) = R64(I));
 - unknown: a nonzero tap on a line past H - 1 (the bottom edge reads irregularly: the next
   plane, or other lines) or on a pixel past 63 (the right edge reads stale content at b != 1),
   a fractional a with b != 1 and W < 64 with b != 1 (never ran).
@@ -204,7 +208,6 @@ class _Miss(Exception):
 _WHY = {
     "bottom": "a nonzero tap on a line past H - 1: the bottom edge reads irregularly",
     "right": "a nonzero tap on a pixel past 63: the right edge reads stale content",
-    "2d": "plane 0 at b != 1: the vertical pass is not exact here, its rounding not known",
     "frac": "a fractional a with b != 1 never ran",
     "narrow": "W < 64 with b != 1 never ran",
     "range": "a table entry outside the range that ran",
@@ -476,24 +479,21 @@ class Resample13Model:
         q = floor((u - fu) * 16)
         if fu - 1 < 0:
             fu += 32
-        kernel = taps[q] if c == 0 else chroma(q)
-        if c == 0:
-            assert taps is not None
-            taint = min(taint, _gain_taint(kernel), _gain_taint(taps[0]))
+        if c != 0:
+            s = sum(t * get(base, fu - 1 + k) for k, t in enumerate(chroma(q)) if t)
+            return out_of(s), Confidence(taint)
+        assert taps is not None
+        kernel = taps[q] if q else chroma(0)
+        taint = min(taint, _gain_taint(kernel), _gain_taint(taps[0]))
         s = 0
         for k, t in enumerate(kernel):
             if not t:
                 continue
             xx = fu - 1 + k
-            if c != 0:
-                s += t * get(base, xx)
-                continue
-            assert taps is not None
             v = sum(tv * get(base - 1 + j, xx) for j, tv in enumerate(taps[0]) if tv)
-            if v % 256 or not 0 <= v <= 255 * 256:
-                raise _Miss("2d")
-            s += t * (v // 256)
-        return out_of(s), Confidence(taint)
+            # R4 fits the runs that vary down the lines; the designed runs did not test it.
+            s += t * rhe(v, 4)
+        return max(0, min(255, rhe(s, 1 << 14))), Confidence(taint)
 
     def _hold(
         self,
@@ -620,7 +620,7 @@ class Prediction:
         ]
 
     def unknown(self) -> dict[str, bytes]:
-        """Per reason (its source's name, e.g. "resampler 2d"; the source's fact says why) the
+        """Per reason (its source's name, e.g. "resampler right"; the source's fact says why) the
         mask of the unknown bytes it explains."""
         masks: dict[str, bytearray] = {}
         for i, (k, s) in enumerate(zip(self.dst.known, self.dst.src)):

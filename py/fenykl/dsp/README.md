@@ -222,8 +222,8 @@ result = Emulator(boot, model).run(job)
 
 `predict(model, taps, image, [(a, b), ...], w)` runs that job on a fresh boot and returns a
 `Prediction`: `dst` (the footprint as `Bytes`), `confidence()` per byte (None if unknown) and
-`unknown()`, a mask per reason (the source's name: `resampler 2d`, `resampler bottom`,
-`resampler right`, `not written`, ...; the source's fact says why).
+`unknown()`, a mask per reason (the source's name: `resampler bottom`, `resampler right`,
+`not written`, ...; the source's fact says why).
 
 `commands.resample` writes what cmd 0xC's setup writes: the program's constant block (the 32 tap
 words the setup copies from DRAM 0xA324BC00, the item's constants) to local words 0x00..0x1F and
@@ -236,10 +236,10 @@ as it is. Every byte the law computes is at most inferred, a law measured from o
 hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, a tap outside -637..2048 (the taps
 that ran) on the plane-0 bytes it reaches, the held lines after a job that is not an H 16 identity.
 A partial column block is unknown unless the job is an H 16 identity with a unit phase-0 kernel.
-Bytes the law does not give (the bottom and right edges, plane 0 at b != 1 where the vertical pass
-is not exact, a fractional a with b != 1, W < 64 with b != 1, an odd H above 1) are UNKNOWN with a
-source that says why. The curated camera vectors are in `tests/data/dsp/resample/` (jobs with their
-taps, table and source image, an edit as {word, kind}; dst segments).
+Bytes the law does not give (the bottom and right edges, a fractional a with b != 1, W < 64 with
+b != 1, an odd H above 1) are UNKNOWN with a source that says why. The curated camera vectors are in
+`tests/data/dsp/resample/` (jobs with their taps, table and source image, an edit as {word, kind};
+dst segments).
 
 #### Edits
 

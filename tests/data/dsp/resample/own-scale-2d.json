@@ -1,6 +1,6 @@
 {
  "name": "own-scale-2d",
- "fact": "own taps at b = 1 + 1/16 on a source varying down the lines: plane 0 unknown",
+ "fact": "own taps at b = 1 + 1/16 on a source varying down the lines: planes 1 and 2",
  "jobs": [
   {
    "w": 64,
@@ -180,11 +180,6 @@
    "expect": {
     "status": "ok",
     "dst": [
-     {
-      "at": 0,
-      "end": 1024,
-      "kind": "unknown"
-     },
      {
       "at": 1024,
       "end": 1086,
