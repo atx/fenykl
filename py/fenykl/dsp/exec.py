@@ -178,8 +178,8 @@ class Anchors:
     """What a window takes from its stock region: its words, the element each write port
     delivers per (word, port field), the accumulator of each S2 term word, the op-slot register
     that holds the phase's tap base, the coefficient registers at the window's entry, the
-    semantics with their measured cells and the job classes the cells ran on, the words where
-    the held fields' don't-cares were measured and the stock words shown inert in the job's
+    semantics with their measured cells and the job classes the cells ran on, per word the sets
+    of held fields measured don't-care together, and the stock words shown inert in the job's
     class (their reads do not count for the def-use rule); the output stage per
     accumulator."""
 
@@ -192,7 +192,7 @@ class Anchors:
     semantics: tuple[FieldSemantic, ...]
     cells: Mapping[tuple[str, int, tuple[int, ...]], Confidence]
     classes: frozenset[Probe]
-    dont_care_words: frozenset[int]
+    dont_cares: Mapping[int, tuple[frozenset[str], ...]]
     inert: frozenset[int]
 
 
@@ -234,12 +234,25 @@ def cover(
         for sem in anchors.semantics:
             if sem.context(word) and sem.context(stock):
                 claimed.update({lookup(k).id: sem for k in sem.fields})
+    held = [
+        f
+        for f, _ in word.changed(stock)
+        if f.id not in claimed and _owner_idle(f, word)
+    ]
+    together = frozenset(f.id for f in held if f.get(word.value) == f.idle)
+    if len(together) < len(held):
+        together = frozenset()
     if fields is None:
         fields = [f for f, _ in word.changed(stock)]
     return [
-        _cover_field(anchors, f, stock, word, index, probe, claimed, changed)
+        _cover_field(anchors, f, stock, word, index, probe, claimed, changed, together)
         for f in fields
     ]
+
+
+def _owner_idle(f: Field, word: Word) -> bool:
+    own = owner(f)
+    return own is not None and own.get(word.value) == own.idle
 
 
 def _cover_field(
@@ -251,20 +264,24 @@ def _cover_field(
     probe: Probe | None,
     claimed: Mapping[str, FieldSemantic],
     changed: set[str],
+    together: frozenset[str],
 ) -> Cover:
+    """`together`: the word's changed held fields under idle owners if all are at their idle
+    values, else empty. They are verified don't-care only as a set measured at the word."""
     sem = claimed.get(f.id)
     if sem is not None:
         tier, why = scoped(anchors, sem, index, sem.key(word), sem.key(stock), probe)
         kind = Coverage.UNKNOWN if tier is None else Coverage.SEMANTIC
         return Cover(f, kind, tier, why, sem.name)
-    own = owner(f)
-    if own is not None and own.get(word.value) == own.idle:
+    if _owner_idle(f, word):
         if f.id not in changed:
             return Cover(f, Coverage.DONT_CARE, LAW)
         if probe not in anchors.classes:
             return Cover(f, Coverage.UNKNOWN, None, "outside the measured job classes")
-        at = index in anchors.dont_care_words
-        tier = (V if f.get(word.value) == f.idle else I) if at else H
+        sets = anchors.dont_cares.get(index, ())
+        if together in sets:
+            return Cover(f, Coverage.DONT_CARE, V)
+        tier = I if any(f.id in s for s in sets) else H
         return Cover(f, Coverage.DONT_CARE, tier)
     if f.id not in changed:
         return Cover(f, Coverage.ANCHORED, LAW)

@@ -41,6 +41,9 @@ from .resample_edits import (
     COEFFICIENT_SELECT,
     FACTS,
     FLAT,
+    HELD_433,
+    HELD_A_439,
+    HELD_B_439,
     ONE,
     Fact,
     Idle,
@@ -56,6 +59,7 @@ TAP_READ = 433
 TAP_WORDS = range(439, 443)
 """The S2 term words of taps 0..3."""
 CHROMA_WORDS = (443, 444, 445, 447)
+HELD_439 = (HELD_B_439, HELD_A_439)
 ELEMENTS = {
     (434, "f163_166"): Row(0, 0),
     (435, "f163_166"): Row(0, 1),
@@ -162,6 +166,20 @@ def _cells(program: Program) -> dict[tuple[str, int, tuple[int, ...]], Confidenc
     return cells
 
 
+def _dont_cares(program: Program) -> dict[int, tuple[frozenset[str], ...]]:
+    """The held fields each set of measured don't-cares changes in its stock word [verified:
+    every plane stock, flat source, b = 1]: word 433's grid B set, word 439's grid B and grid A
+    sets."""
+    out: dict[int, tuple[frozenset[str], ...]] = {}
+    for index, kinds in ((TAP_READ, (HELD_433,)), (439, HELD_439)):
+        stock = program.words[index]
+        out[index] = tuple(
+            frozenset(f.id for f, _ in kind.apply(stock).changed(stock))
+            for kind in kinds
+        )
+    return out
+
+
 def inert(facts: Sequence[Fact]) -> frozenset[int]:
     """The words whose S2 reads are inert at b = 1: idling bits that include f57_60 and f88_91
     changed no byte on any b = 1 class it ran on, flat sources among them."""
@@ -188,7 +206,7 @@ def anchors(program: Program, facts: Sequence[Fact] = FACTS) -> Anchors:
         semantics=SEMANTICS,
         cells=_cells(program),
         classes=frozenset({FLAT}),
-        dont_care_words=frozenset({TAP_READ, 439}),
+        dont_cares=_dont_cares(program),
         inert=inert(facts),
     )
 

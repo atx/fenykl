@@ -24,6 +24,9 @@ from fenykl.dsp.resample import Resample13Model, predict
 from fenykl.dsp.resample_edits import (
     FLAT,
     GRID_A_ONLY,
+    HELD_433,
+    HELD_A_439,
+    HELD_B_439,
     VARY,
     FieldValue,
     set_fields,
@@ -377,3 +380,27 @@ def test_a_chroma_weight_beyond_the_ones_that_ran_is_a_hypothesis():
     plane0, plane1 = conf[: 16 * 64], conf[16 * 64 : 32 * 64]
     assert set(plane0) == {I}
     assert set(plane1) == {Confidence.HYPOTHESIS}
+
+
+def test_held_fields_are_verified_dont_cares_only_as_the_sets_that_ran():
+    m = model()
+    words = m.program.words
+
+    def tiers(at: int, kind) -> set:
+        word = kind.apply(words[at])
+        covers = cover(m.anchors, words[at], word, at, FLAT)
+        assert {c.coverage for c in covers} == {Coverage.DONT_CARE}, (at, kind)
+        return {c.confidence for c in covers}
+
+    for at, kind in (
+        (433, HELD_433),
+        (439, HELD_B_439),
+        (439, HELD_A_439),
+    ):
+        assert tiers(at, kind) == {V}, (at, kind)
+    # Part of a set that ran is inferred; a held field in no set that ran at the word, a
+    # hypothesis.
+    assert tiers(433, set_fields(f147_150=15, f151_154=15)) == {I}
+    assert tiers(439, set_fields(f37_40=15)) == {I}
+    for fid in ("f37_40", "f53_56", "f57_60", "f65_68", "f76_79", "f88_91"):
+        assert tiers(433, FieldValue(fid, 15)) == {Confidence.HYPOTHESIS}, fid
