@@ -442,3 +442,56 @@ def test_held_fields_are_verified_dont_cares_only_as_the_sets_that_ran():
     assert tiers(439, set_fields(f37_40=15)) == {I}
     for fid in ("f37_40", "f53_56", "f57_60", "f65_68", "f76_79", "f88_91"):
         assert tiers(433, FieldValue(fid, 15)) == {Confidence.HYPOTHESIS}, fid
+
+
+# Chroma taps inside the weights that ran in a chroma sum; c0 and c2 make the sums leave 0..255.
+CHROMA_TAPS = [(256 - 3 * p, -43 + p, 269 - 2 * p, 40) for p in range(16)]
+SLOTS = {443: (1, 0), 444: (1, 1), 445: (2, 0), 447: (2, 1)}
+"""The chroma term words: (plane, slot), slot 0 weighting line a, slot 1 line a + 1."""
+MEASURED = {443: 3, 444: 2, 445: 5, 447: 4}
+"""The map value measured at each chroma word, beside the 0 / 1 swap."""
+
+
+def chroma_weight(v: int, taps: tuple[int, ...], p: int) -> int:
+    """f88_91's weight: 0 = p, 1 = 16 - p, 3 / 2 / 4 / 5 = c0 / c1 / c2 / c3."""
+    return {0: p, 1: 16 - p, 3: taps[0], 2: taps[1], 4: taps[2], 5: taps[3]}[v]
+
+
+def test_chroma_word_weight_selects_give_the_wrapping_chroma_law():
+    taps = Taps.of(CHROMA_TAPS)
+    stock = predict(model(), taps, FLAT_SRC, TABLE)
+    wrapped = False
+    for at, (c, slot) in SLOTS.items():
+        swap = 0 if slot == 0 else 1
+        for v in (0, 1, 2, 3, 4, 5):
+            if v == 1 - swap:
+                continue  # the word's stock value
+            got = predict(
+                model(), taps, FLAT_SRC, TABLE, edits=[(at, FieldValue("f88_91", v))]
+            )
+            tier = V if v in (swap, MEASURED[at]) else I
+            assert [t for _, t in got.result.edits] == [tier], (at, v)
+            for plane in range(3):
+                span = slice(64 * 16 * plane, 64 * 16 * (plane + 1))
+                if plane == c:
+                    continue
+                assert got.dst.data[span] == stock.dst.data[span], (at, v, plane)
+                assert got.dst.known[span] == stock.dst.known[span], (at, v, plane)
+            for i, (a, _) in enumerate(TABLE):
+                y, p = a >> 16, a >> 12 & 15
+                w = [16 - p, p]
+                w[slot] = chroma_weight(v, CHROMA_TAPS[p], p)
+                line = 64 * (16 * c + i)
+                known = got.dst.known[line : line + 64]
+                if y == 15 and w[1]:
+                    assert not any(known), (at, v, i)  # line a + 1 past the bottom
+                    continue
+                pixels = [(7 * (16 * c + min(y + k, 15)) + 3) & 0xFF for k in (0, 1)]
+                s = w[0] * pixels[0] + w[1] * pixels[1]
+                want = rne(s, 16) & 0xFF
+                wrapped |= want != max(0, min(255, rne(s, 16)))
+                assert all(known)
+                assert got.dst.data[line : line + 64] == bytes([want]) * 64, (at, v, i)
+                assert set(got.confidence()[line : line + 64]) == {I}
+    # The sums left 0..255: a clamping stage would give other bytes.
+    assert wrapped
