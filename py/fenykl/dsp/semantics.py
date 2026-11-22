@@ -389,6 +389,53 @@ def _local_read(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     return Effect(note=f"reads local word {k:#x}: {value}")
 
 
+def _computed(
+    word: Word, src: Reg | None, name: str, bounds: tuple[int, int] | None
+) -> Effect:
+    """ra := `name`, in `bounds` computed from register `src`; None bounds: the input lies
+    outside what the operation covers. Either way an unknown input leaves ra unknown."""
+    args = word.operands
+    assert args is not None
+    if src is None or bounds is None:
+        why = "an unknown input" if src is None else "a negative input"
+        return Effect(((args.ra, None),), f"r{args.ra} := {name}: {why}, unknown")
+    lo, hi = bounds
+    reg = Reg(lo, hi, min(src.taint, I), f"{name} (op {word.op:#x})")
+    value = f"{lo:#x}" if lo == hi else f"{lo:#x}..{hi:#x}"
+    return Effect(((args.ra, reg),), f"r{args.ra} := {name} = {value}")
+
+
+def _shift_right(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    args = word.operands
+    assert args is not None and args.rb is not None and args.imm is not None
+    if word["f120_122"] != 7:
+        return None
+    src = slot[args.rb]
+    name = f"r{args.rb} >> {args.imm}"
+    if src is None or src.lo < 0:
+        return _computed(word, src, name, None)
+    return _computed(word, src, name, (src.lo >> args.imm, src.hi >> args.imm))
+
+
+def sign_extend16(imm: int) -> int:
+    return imm - 0x10000 if imm & 0x8000 else imm
+
+
+def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    args = word.operands
+    assert args is not None and args.imm is not None
+    mask = sign_extend16(args.imm)
+    src = slot[args.ra]
+    name = f"r{args.ra} & {mask & 0xFFFFFFFF:#x}"
+    if src is None or src.lo < 0:
+        return _computed(word, src, name, None)
+    if (
+        src.exact is not None or mask < 0
+    ):  # a mask that clears low bits only is monotonic
+        return _computed(word, src, name, (src.lo & mask, src.hi & mask))
+    return _computed(word, src, name, (0, min(src.hi, mask)))
+
+
 OP_SEMANTICS: dict[int, OpSemantics] = {
     IDLE_OP: OpSemantics(
         I,
@@ -405,6 +452,26 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "pairs, which as writes would be dead); where the datum goes is open, so the "
         "core records the read only; covered at f120_122 = 7, the value of those three words",
         _local_read,
+    ),
+    0x38: OpSemantics(
+        I,
+        "ra := ra & imm16 sign-extended (inferred: on the camera, clearing bit 4 of the "
+        "immediate 0xfff0 in a copy's store-side 0x38 word moved the whole store 16 B down at a "
+        "dst 16 mod 32 and left it in place at a 32-aligned dst, an AND of an address-derived "
+        "value; the sign extension rests on the encoding (f120_122 = 7 exactly when f128_132 = "
+        "31), since the masked value there is small; that ra is both source and destination is "
+        "inferred from the format, the measured word naming one register)",
+        _and_mask,
+    ),
+    0x3F: OpSemantics(
+        I,
+        "ra := rb >> imm (inferred: on the camera, the immediate of a copy's 0x3f word set to 1 "
+        "and 2 halved and quartered the count a later transfer reads, on a positive value, so "
+        "logical and arithmetic shifts are not separated and a negative rb gives an unknown "
+        "result; the measured word names one register in ra and rb, so their roles come from "
+        "the format; the count was read through the register its xreg field names, not ra, so "
+        "where the result is written is open); covered at f120_122 = 7, the value of that word",
+        _shift_right,
     ),
 }
 """The data ops the core runs; every other op has no semantics (`Core`'s strict switch)."""

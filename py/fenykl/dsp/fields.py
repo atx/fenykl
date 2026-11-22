@@ -981,7 +981,8 @@ FAMILIES = (
         True,
         5,
         "ra, rb and an immediate 0..31 in every word; f120_122 an operand; shifts or bit-field ops "
-        "by a 5-bit count (hypothesis), 16 the most common count of all three",
+        "by a 5-bit count, 16 the most common count of all three: 0x3f a right shift (inferred "
+        "from the camera), 0x3e and 0x40 open (hypothesis)",
     ),
     Family(
         "D",
@@ -1057,7 +1058,13 @@ MEANINGS = {
     "small immediate, a frame or pointer adjust (hypothesis)",
     0x36: "imm 1, f128_132 and f120_122 0 in all 53 words: an increment (hypothesis)",
     0x37: "periodic immediates such as 0x5555 and 0x2222: a lane or phase mask set-up (hypothesis)",
-    0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: an AND with a mask (hypothesis)",
+    0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: an AND with a mask; on the camera "
+    "clearing bit 4 of a copy's store-side mask 0xfff0 moved the store 16 B down at a dst 16 mod 32 "
+    "only (inferred: an AND with the sign-extended imm16)",
+    0x3F: "on the camera, the immediate of a copy's 0x3f word set to 1 and 2 gave a count of len / 2 "
+    "and len / 4 (inferred: a right shift by imm)",
+    0x40: "on the camera, 0x40 in place of a copy's 0x3f word (imm 1, the same input) gave a count "
+    "larger than its input, so not a right shift; what it computes is open",
 }
 
 

@@ -132,3 +132,65 @@ def test_loop_end_count_hypotheses():
     assert flow.stop is Stop.HALT
     assert flow.order() == [0] + span((1, 7)) * 3 + [8]
     assert run(Count.TEST, limit=100).stop is Stop.STEP_LIMIT
+
+
+def run_slot(words: tuple[Word, ...], **regs: Reg) -> tuple[Boot, Flow]:
+    """Run `words` and a halt on a boot whose op-slot registers r<n> are `regs`."""
+    boot = Boot()
+    for name, reg in regs.items():
+        boot.slot[int(name[1:])] = reg
+    job = commands.copy(Program((*words, HALT)), SRC, DST, 0x400)
+    return boot, Core(boot).run(job)
+
+
+def given(lo: int, hi: int | None = None) -> Reg:
+    return Reg(lo, lo if hi is None else hi, Confidence.VERIFIED, "set by the test")
+
+
+def test_shift_right_reads_rb_and_writes_ra():
+    shift = Word.data(0x3F, Operands(ra=7, rb=2, imm=1))
+    boot, flow = run_slot((shift,), r2=given(0x200, 0x201), r7=given(5))
+    assert boot.slot[7] is not None and boot.slot[7].exact == 0x100
+    assert boot.slot[7].taint is Confidence.INFERRED
+    assert boot.slot[2] == given(0x200, 0x201)
+    assert flow.steps[0].note == "r7 := r2 >> 1 = 0x100"
+    # A negative rb (logical and arithmetic shifts differ) leaves ra unknown, not stale.
+    boot, _ = run_slot((shift,), r2=given(-4), r7=given(5))
+    assert boot.slot[7] is None
+    other = Word.from_fields({"f120_122": 3}, base=shift)
+    with pytest.raises(UnknownSemantics, match="outside what its semantics covers"):
+        run_slot((other,))
+
+
+def test_and_mask_sign_extends_imm16():
+    line = Word.data(0x38, Operands(ra=4, imm=0xFFE0))
+    boot, _ = run_slot((line,), r4=given(0xA1113610))
+    assert boot.slot[4] == Reg(
+        0xA1113600, 0xA1113600, Confidence.INFERRED, "r4 & 0xffffffe0 (op 0x38)"
+    )
+    # Clearing low bits keeps the order of the bounds; a low mask bounds the result by itself.
+    boot, _ = run_slot((line,), r4=given(0x30, 0x5F))
+    assert (boot.slot[4].lo, boot.slot[4].hi) == (0x20, 0x40)
+    low = Word.data(0x38, Operands(ra=4, imm=0xF))
+    boot, _ = run_slot((low,), r4=given(0x13, 0x40))
+    assert (boot.slot[4].lo, boot.slot[4].hi) == (0, 0xF)
+    boot, _ = run_slot((low,), r4=given(0x13))
+    assert boot.slot[4].exact == 3
+
+
+def test_measured_ops_chain_through_the_slot():
+    """A mask, then a shift of its result; an op without semantics breaks the chain (lenient)."""
+    words = (
+        Word.data(0x38, Operands(ra=2, imm=0xFFF0)),
+        Word.data(0x3F, Operands(ra=7, rb=2, imm=2)),
+        Word.data(0x40, Operands(ra=2, rb=2, imm=1)),
+        Word.data(0x3F, Operands(ra=8, rb=2, imm=1)),
+    )
+    boot = Boot()
+    boot.slot[2] = given(0x40F)
+    job = commands.copy(Program((*words, HALT)), SRC, DST, 0x400)
+    flow = Core(boot, strict=False).run(job)
+    assert boot.slot[7].exact == 0x100
+    assert flow.steps[2].unknown and boot.slot[2] is None
+    assert boot.slot[8] is None
+    assert flow.steps[3].note == "r8 := r2 >> 1: an unknown input, unknown"
