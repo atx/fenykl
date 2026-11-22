@@ -75,7 +75,9 @@ class Trace:
 
     parts: Counter["OpaqueClass"] = field(default_factory=Counter)
     """How often each opaque class ran."""
-    operands: dict["OpaqueClass", tuple[int, dict[str, int]]] = field(default_factory=dict)
+    operands: dict["OpaqueClass", tuple[int, dict[str, int]]] = field(
+        default_factory=dict
+    )
     """(index, {field id: value}) of the opaque classes with operand fields."""
     channels: dict[str, list[Transfer]] = field(default_factory=dict)
     ignored: list[tuple[int, list[str]]] = field(default_factory=list)
@@ -566,7 +568,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         I,
         "reads the local halfword at ra + imm halfwords, ra a base register it does not write "
         f"(inferred: {_R0_READS}, 31 of 31 for 0x14, and its displacements fit a halfword "
-        f"unit; the second halfword load beside 0x16, the two plausibly differing in sign "
+        "unit; the second halfword load beside 0x16, the two plausibly differing in sign "
         f"extension, which is open); {_ADDRESS}; the core records the read only; covered at "
         "f120_122 = 7",
         _local_load(2),

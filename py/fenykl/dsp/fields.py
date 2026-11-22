@@ -1091,7 +1091,9 @@ MEANINGS = {
     "or uses it as a base as family A does (hypothesis); it names a register just before family "
     "A uses it as a base (24 % against 7 % by chance across later firmware versions of the same "
     "family), but in program 16 base plus immediate addressing with 0x0b writing ra would move "
-    "the local words that the camera shows 0x1a reading",
+    "the local words that the camera shows 0x1a reading; its immediate's value is consumed on "
+    "the end side: on the camera, bit 6 of program 16 word 65's immediate cleared gave a full "
+    "copy, then a timeout (inferred: not the store's count, data or address)",
     0x0C: "its immediates 0x1fxx read as small negative numbers (inferred); a byte store by its "
     "place before the byte loads 0x0e and 0x10 (hypothesis: no anchor; 7 of its 10 accesses of "
     "r0-based slots are their first touch, but 21 of 24 later accesses at its address are 0x0c "

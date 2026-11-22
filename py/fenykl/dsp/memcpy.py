@@ -547,8 +547,7 @@ _LOOP_ENTRIES: dict[frozenset[tuple[int, str]], tuple[Outcome, str]] = {
     ),
     frozenset({(GUARD, f"imm ^ {58 ^ 50:#x}"), (53, "idle")}): (
         Outcome.STORE_TIMEOUT,
-        "45's target moved to 50 and 53 idled: as with 53 stock, so 53 does not cause that "
-        "timeout",
+        "45's target moved to 50 and 53 idled: as with 53 stock, 53 not its cause",
     ),
     frozenset({(28, "idle"), (53, "idle")}): (
         Outcome.STORE_TIMEOUT,
@@ -741,7 +740,9 @@ class Copy16Model:
         if not changed:
             return None
         if len(changed) > 1:
-            raise UnknownSemantics(index, c.name, changed, "edits of two fields of one word")
+            raise UnknownSemantics(
+                index, c.name, changed, "edits of two fields of one word"
+            )
         f, value = changed[0]
         if part.operand is not None and f is lookup(part.operand_field):
             o = part.operand.get(value)

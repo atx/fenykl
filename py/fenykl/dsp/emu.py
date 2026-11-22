@@ -385,7 +385,9 @@ class Core:
             for r, v in effect.writes:
                 self.boot.slot[r] = v
             for addr, n in effect.stores:
-                src = self.boot.source("local store", f"op {word.op:#x}: its datum is open")
+                src = self.boot.source(
+                    "local store", f"op {word.op:#x}: its datum is open"
+                )
                 if addr is None:
                     self.boot.local.forget(src)
                 else:

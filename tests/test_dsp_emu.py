@@ -175,7 +175,7 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
             bad.append(
                 f"job {k}: result taint {result.taint.name}, expected {taint[1]}"
             )
-        if status is Status.TIMEOUT:
+        if status is Status.TIMEOUT and result.stored is None:
             got = boot.read(job["dst"], job["fill_len"])
             if (
                 bytes(got.data) != fill
@@ -345,35 +345,31 @@ def test_the_spare_channel_is_not_needed():
         assert bytes(dst.data) == bytes(range(256)) * 4
 
 
-def moved(**at: int) -> Program:
-    """The stock copy with word `to` holding stock word `src`, given as w<to>=src."""
+def moved(at: dict[int, int]) -> Program:
+    """The stock copy with word `to` holding stock word `src`, for each to: src of `at`."""
     words = list(stock().words)
     for to, src in at.items():
-        words[int(to[1:])] = stock().words[src]
+        words[to] = stock().words[src]
     return Program(tuple(words))
 
 
 @pytest.mark.parametrize(
-    "program",
-    [
-        moved(w73=74, w74=73),
-        moved(w74=75, w75=76, w76=74),
-        moved(w74=75, w75=76, w76=77, w77=78),
-    ],
+    "at",
+    [{73: 74, 74: 73}, {74: 75, 75: 76, 76: 74}, {74: 75, 75: 76, 76: 77, 77: 78}],
     ids=["count-later", "two-earlier", "three-earlier"],
 )
-def test_roles_follow_moved_counted_transfers(program: Program):
-    result, dst = copy(Boot(), program, bytes(range(256)) * 4)
+def test_roles_follow_moved_counted_transfers(at: dict[int, int]):
+    result, dst = copy(Boot(), moved(at), bytes(range(256)) * 4)
     assert result.status is Status.OK and bytes(dst.data) == bytes(range(256)) * 4
     assert result.taint is Confidence.HYPOTHESIS  # off their stock indices
 
 
 def test_a_counted_transfer_before_the_return_stalls_the_job():
-    result, dst = copy(Boot(), moved(w77=78, w78=77), bytes(range(256)) * 4)
+    result, dst = copy(Boot(), moved({77: 78, 78: 77}), bytes(range(256)) * 4)
     assert result.status is Status.TIMEOUT and bytes(dst.data) == b"\xa5" * LEN
     assert any("counted transfer at word 78" in why for why in result.why)
     # A holding word at 77 without the counted one leaves 77's slot unset instead.
-    result, _ = copy(Boot(), moved(w77=78), bytes(range(256)) * 4)
+    result, _ = copy(Boot(), moved({77: 78}), bytes(range(256)) * 4)
     assert result.status is Status.TIMEOUT
     assert any("unset stream slot" in why for why in result.why)
 
@@ -482,25 +478,26 @@ def without(program: Program, *at: int) -> Program:
 
 
 RAMP = bytes(range(256)) * 4
-TARGET_50, TARGET_51 = 58 ^ 50, 58 ^ 51  # 45's target 58 moved to the loop's top / one after
+# 45's target 58 moved to the loop's top 50, or to 51.
+TARGET_50, TARGET_51 = 58 ^ 50, 58 ^ 51
 
 
-@pytest.mark.parametrize(
-    "program, stores",
-    [
-        (flipped(45, "imm", TARGET_50), True),
-        (without(flipped(45, "imm", TARGET_50), 53), True),
-        (flipped(45, "imm", TARGET_51), False),
-        (idled(45), False),
-        (idled(28), True),
-        (idled(28, 53), True),
-        (idled(79), True),
-        (flipped(65, "imm", 0x40), True),
-    ],
-    ids=["to-50", "to-50-idle-53", "to-51", "idle-45", "idle-28", "idle-28-53", "idle-79", "imm65"],
-)
-def test_timeouts_with_and_without_the_store(program: Program, stores: bool):
-    result, dst = copy(Boot(), program, RAMP)
+TIMEOUTS = {
+    "to-50": (lambda: flipped(45, "imm", TARGET_50), True),
+    "to-50-idle-53": (lambda: without(flipped(45, "imm", TARGET_50), 53), True),
+    "to-51": (lambda: flipped(45, "imm", TARGET_51), False),
+    "idle-45": (lambda: idled(45), False),
+    "idle-28": (lambda: idled(28), True),
+    "idle-28-53": (lambda: idled(28, 53), True),
+    "idle-79": (lambda: idled(79), True),
+    "imm65": (lambda: flipped(65, "imm", 0x40), True),
+}
+
+
+@pytest.mark.parametrize("name", TIMEOUTS)
+def test_timeouts_with_and_without_the_store(name: str):
+    program, stores = TIMEOUTS[name]
+    result, dst = copy(Boot(), program(), RAMP)
     assert result.status is Status.TIMEOUT
     assert bytes(dst.data) == (RAMP if stores else b"\xa5" * LEN)
     assert (result.stored is not None) is stores
@@ -512,7 +509,11 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
     assert bytes(dst.data) == b"\xa5" * LEN
     assert result.taint is Confidence.INFERRED  # two edits
     # The loop's words were measured with the loop skipped: other pairs are open.
-    for program in (without(flipped(45, "imm", TARGET_50), 50), idled(45, 56), idled(28, 51)):
+    for program in (
+        without(flipped(45, "imm", TARGET_50), 50),
+        idled(45, 56),
+        idled(28, 51),
+    ):
         with pytest.raises(UnknownSemantics, match="measured with the loop skipped"):
             copy(Boot(), program, RAMP)
     # With the guard stock they still have no effect.
@@ -521,7 +522,8 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
 
 
 def test_operand_edits_are_measured_one_field_at_a_time():
-    result, dst = copy(Boot(), flipped(27, "imm", 79 ^ 32), RAMP)  # its own fall-through
+    # 27's target moved from 79 to its own fall-through.
+    result, dst = copy(Boot(), flipped(27, "imm", 79 ^ 32), RAMP)
     assert result.status is Status.OK and bytes(dst.data) == RAMP
     with pytest.raises(UnknownSemantics, match="word 45: no semantics for f15_22"):
         copy(Boot(), flipped(45, "imm", 0x10), RAMP)
@@ -529,12 +531,23 @@ def test_operand_edits_are_measured_one_field_at_a_time():
         copy(Boot(), flipped(45, "xreg", 1, flipped(45, "imm", TARGET_50)), RAMP)
 
 
-def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there():
+@pytest.mark.parametrize(
+    "src, dst, length",
+    [(SRC, DST, LEN), (SRC, DST + 1, 0x40F), (SRC + 1, DST + 1, LEN)],
+    ids=["aligned", "odd-dst-len", "odd-src-dst"],
+)
+def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
+    src: int, dst: int, length: int
+):
     words = list(without(stock(), *range(51, 58)).words)
     words[50] = stock().words[5]
     marker = Program(tuple(words))
-    result, dst = copy(Boot(), marker, RAMP)
-    assert result.status is Status.OK and bytes(dst.data) == RAMP
+    boot = Boot()
+    data = bytes(i & 0xFF for i in range(length))
+    boot.put(src, data, "src")
+    boot.put(dst, b"\xa5" * length, "prefill")
+    result = Emulator(boot, model()).run(commands.copy(marker, src, dst, length))
+    assert result.status is Status.OK and bytes(boot.read(dst, length).data) == data
     result, dst = copy(Boot(), flipped(45, "imm", TARGET_50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None
     assert bytes(dst.data) == b"\xa5" * LEN
