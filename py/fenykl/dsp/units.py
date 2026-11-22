@@ -27,7 +27,7 @@ class Unit:
     name: str
     cls_name: str
     confidence: Confidence
-    """That these fields act as one unit under its strobes."""
+    """That these fields group under its strobes; the role in `fact` carries its own tag."""
     fact: str
     strobes: tuple[Field, ...]
     fields: tuple[Field, ...]
@@ -72,20 +72,22 @@ _UNITS = (
     (
         "pb",
         "PB",
-        I,
+        V,
         (
-            "17 ports, one enable in 232..264 for each grid B nibble (f234_235 for f145_146 a "
-            "hypothesis); with the S heads and M the compute group (hypothesis)"
+            "17 ports, one enable in 232..264 for each grid B nibble, the pairing verified in "
+            "the bytes (f234_235 for f145_146 a hypothesis); ports, with the S heads and M the "
+            "compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
     ),
     (
         "pr",
         "PR",
-        I,
+        V,
         (
-            "5 ports, one enable in 265..273 for each field of register group B 206..228: "
-            "register write ports (hypothesis); with X0..X2 the transfer group"
+            "5 ports, one enable in 265..273 for each field of register group B 206..228, the "
+            "pairing verified in the bytes: register write ports, with X0..X2 the transfer group "
+            "(hypothesis)"
         ),
         tuple(e for e in PORTS if lookup(e).unit == "pr"),
     ),

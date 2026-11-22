@@ -55,18 +55,20 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | transfer or address unit | inferred |
 | `x1` | f310_312 | f7_8, f9_14, f110_114 | transfer or address unit | inferred |
 | `x2` | f308_309 (a value, 0 in the transfers) | xreg | register transfer | inferred |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports | inferred |
-| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports | inferred |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports (hypothesis) | verified (the pairing) |
+| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports (hypothesis) | verified (the pairing) |
 | `m` | f276 (active low) | f274_275 | a held mode of the compute group | hypothesis |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
 S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0..X2 and PR (the
 transfer group) with the data ops, early in a routine. Grid B follows grid A at +110 in which
-words are active, but not in its values or control: not a mirror bank. The S heads and the
-2-bit PB enables, f252_254 / f255, f256_257 / f258, f265_266 / f267_268 and f274_275 / f276 are
-cut where the two bits across a boundary share little information and each side owns another
-field; the heads merge parts that are never active apart.
+words are active, but not in its values or control: not a mirror bank. The 2-bit PB enables,
+f252_254 / f255, f256_257 / f258 and f265_266 / f267_268 are cut where the two bits across a
+boundary share little information and each side owns another field (between 241 and 242 mainly
+the ownership); f274_275 / f276 by their values. The S0, S1 and S3 heads merge a low part that is
+never active without the high part, which is active alone in 5, 5 and 26 % of its words; f232_233
+merges a bit that is never clear without the other.
 
 ## Fields
 
@@ -231,7 +233,7 @@ these classes, the transfers' register contexts and their reference values from 
 program it is built from, so no stock word is part of the code. At the end the sequencer gives
 the transfers their roles (the stock word 66 loads, 67 addresses, 68 offsets, 73 counts, 76
 offsets the store, 47 formats it, ...) and the job resolves into a status, one load and one store.
-An op 7 off the stock halt (`memcpy.HALT_CLASS`) ends the job where the stepping core reaches it:
+An op 7 off the stock halt ends the job where the stepping core reaches it (`Copy16Model._halt`):
 before the stream words 58..79 with status 0 and dst not written; after the stream started it
 raises `UnknownSemantics`.
 

@@ -417,12 +417,21 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     assert result.status is Status.OK and result.stored is None
     assert result.taint is Confidence.VERIFIED
     assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
-    # Elsewhere before the stream, with other fields than word 5's: inferred.
-    result, _ = run(edited([{"at": 20, "set": {"op": 7}}]))
-    assert result.status is Status.OK and result.stored is None
-    assert result.taint is Confidence.INFERRED
-    with pytest.raises(UnknownSemantics, match="after the stream started"):
-        run(edited([{"at": 70, "set": {"op": 7}}]))
+    # At another index before the stream: inferred; after the guard 45, as weak as its branch.
+    for at, taint in ((20, Confidence.INFERRED), (58, None)):
+        words = list(stock().words)
+        words[at] = words[5]
+        if taint is None:
+            with pytest.raises(UnknownSemantics, match="after the stream started"):
+                run(Program(tuple(words)))
+            continue
+        result, _ = run(Program(tuple(words)))
+        assert result.status is Status.OK and result.stored is None
+        assert result.taint is taint
+    words = list(stock().words)
+    words[50 - 4] = words[5]  # in 45's delay slots, after its decision
+    result, _ = run(Program(tuple(words)), length=0x408)
+    assert result.stored is None and result.taint is Confidence.HYPOTHESIS
 
 
 def test_route_nibbles_must_hold_the_stock_values():

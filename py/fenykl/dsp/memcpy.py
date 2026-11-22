@@ -42,14 +42,13 @@ from .emu import (
     dram_alias,
     start_copy,
 )
-from .fields import FIELDS, STAIRCASE, Confidence, Kind, lookup
+from .fields import FIELDS, STAIRCASE, TARGET_OPS, Confidence, Kind, lookup
 from .program import Program, stock_programs
 from .semantics import (
     IDLE_CLASS,
     KIB,
     Channel,
     Given,
-    IdleClass,
     OpaqueClass,
     Outcome,
     Part,
@@ -493,18 +492,10 @@ def _opaque_classes(
     return classes
 
 
-HALT_CLASS = IdleClass(
-    "halt",
-    "op 7 off the stock halt: it ends the job where it runs, whatever its other fields "
-    "[inferred]; `Copy16Model` finds where with the stepping core",
-    {"op": HALT_OP},
-    frozenset(),
-    confidence=I,
-)
 STREAM = range(58, 80)
 """The stream words: a halt before them stores nothing."""
 HALTS_SEEN = (11,)
-"""The indices a halt ran at on the camera, besides the stock halt 5 (word 5 in place of 11)."""
+"""The indices stock word 5, the halt, ran at on the camera besides its own (in place of 11)."""
 
 # -- resolution
 
@@ -566,12 +557,7 @@ class Copy16Model:
         words = program.words
         self.transfer = _transfer_class(words)
         self.opaque = _opaque_classes(words, self.transfer)
-        self.classes: tuple[WordClass, ...] = (
-            IDLE_CLASS,
-            *self.opaque,
-            self.transfer,
-            HALT_CLASS,
-        )
+        self.classes: tuple[WordClass, ...] = (IDLE_CLASS, *self.opaque, self.transfer)
         self.channels = _CHANNELS
         self.formats = _FORMATS
 
@@ -594,8 +580,9 @@ class Copy16Model:
 
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
         """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
-        dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred);
-        None when no such halt runs."""
+        dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
+        weaker through the branches before it); None when no such halt runs. The halt word
+        itself is classified as any word: word 5's value runs as its class anywhere."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
@@ -621,8 +608,12 @@ class Copy16Model:
             s.index >= len(stock_words) or words[s.index] != stock_words[s.index]
             for s in flow.steps[:-1]
         )
-        seen = at in HALTS_SEEN and length == KIB
+        halt_word = self.program.words[min(stock)]
+        seen = at in HALTS_SEEN and length == KIB and words[at] == halt_word
         conf = H if trace.ignored or edited else V if seen else I
+        for s in flow.steps:
+            if s.op in TARGET_OPS[:3] and s.confidence is not None:
+                conf = min(conf, s.confidence)
         why = f"op 7 at word {at} halts the job before the stream: {Outcome.NO_STORE.value}"
         result = JobResult(Status.OK, [why], ignored=trace.ignored, notes=trace.notes)
         result.taint = conf
