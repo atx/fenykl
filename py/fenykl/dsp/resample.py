@@ -133,6 +133,9 @@ NARROW_TAPS_RAN = (-637, 2048)
 """The taps that ran on plane 0 at b != 1: gains -2.49 .. 8.0."""
 EDITED_TAPS_RAN = (-1840, 2048)
 """The taps that ran on plane 0 at b = 1 with an edited program: gains -7.19 .. 8.0."""
+CHROMA_WEIGHTS_RAN = (-43, 269)
+"""The weights that ran in a chroma sum at b = 1: p and 16 - p, and the taps of the phases that
+ran where an edited weight select took a tap (Q8: -0.17 .. 1.05)."""
 
 
 def chroma(p: int) -> tuple[int, int, int, int]:
@@ -538,7 +541,8 @@ class Resample13Model:
     ) -> tuple[int, Confidence]:
         """The output byte at pixel x of plane c for table entry (a, b) under an edit's
         `effect` on the plane, and its taint; at b = 1 from the `window`'s term lists where
-        the window covers the job, and taps outside `ran` taint it."""
+        the window covers the job; plane-0 taps outside `ran` and chroma weights outside
+        `CHROMA_WEIGHTS_RAN` taint it."""
         a, b = entry
         h = px.h
         if not 0 <= a <= (h - 1) << 16 or not B_RANGE[0] <= b <= B_RANGE[1]:
@@ -617,6 +621,7 @@ class Resample13Model:
         kernel = taps[p] if taps is not None else None
         terms = window.get(c, ())
         weights = [weight(t.weight, kernel, p) for t in terms]
+        ran = ran if c == 0 else CHROMA_WEIGHTS_RAN
         taint = min(taint, _gain_taint(tuple(w for w in weights if w is not None), ran))
         try:
             s, conf = accumulate(

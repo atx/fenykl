@@ -365,3 +365,15 @@ def test_a_row_word_with_a_window_edit_is_unknown():
     got = predict(model(), Taps.of(COMPOSE), FLAT_SRC, TABLE, edits=edits)
     assert not any(got.dst.known) and got.result.edits == []
     assert set(got.unknown()) == {"resampler edit"}
+
+
+def test_a_chroma_weight_beyond_the_ones_that_ran_is_a_hypothesis():
+    # 88 = 3 at 443 weights plane 1's line a by c0: 2000 lies inside the plane-0 taps that ran
+    # with an edited program, beyond the chroma weights that ran.
+    src = bytes([255]) * (3 * 64 * 16)
+    taps = Taps.of([(2000, 0, 0, 0)] * 16)
+    got = predict(model(), taps, src, TABLE, edits=[(443, FieldValue("f88_91", 3))])
+    conf = got.confidence()
+    plane0, plane1 = conf[: 16 * 64], conf[16 * 64 : 32 * 64]
+    assert set(plane0) == {I}
+    assert set(plane1) == {Confidence.HYPOTHESIS}
