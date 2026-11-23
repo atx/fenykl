@@ -393,6 +393,16 @@ def test_a_port_that_writes_nothing_leaves_no_open_destination():
         ("x0", 0x05, -0x400, 0, 0x400, 0),
         ("x0", 0x06, -1, 0, 0x400, 0),  # a <= zK unsigned: 0xffffffff > 0x400
         ("x0", 0x07, 0x3FF, 0, 0x400, 1),
+        ("x1", 0x06, 5, 0, 5, 1),  # a == K: <= and < apart
+        ("x1", 0x07, 5, 0, 5, 0),
+        ("x0", 0x08, 5, 5, 0, 1),  # a == b: <= and < apart
+        ("x0", 0x09, 5, 5, 0, 0),
+        ("x1", 0x0A, -5, -5, 0, 1),
+        ("x1", 0x0B, -5, -5, 0, 0),
+        ("x0", 0x10, 7, 5, 0, 2),  # a - b, a + b
+        ("x0", 0x11, 7, 5, 0, 12),
+        ("x1", 0x18, 1, 1, 0, 0),  # a ^ b, a | b
+        ("x1", 0x19, 1, 1, 0, 1),
         ("x1", 0x02, 0, 0, 0x1000, 0xFFFFF000),  # a - zK
         ("x0", 0x03, 0xFFFFFFFF, 0, 0x7FF, 0x7FE),  # a + zK wraps
         ("x1", 0x08, -1, 1, 0, 0),  # a <= b unsigned

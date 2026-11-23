@@ -317,7 +317,8 @@ XREG_FACT = (
     "an enable (42, 66, 69, 70) or the store element format (47) (verified on the camera "
     "per word); r3 holds the job source address. B is apart from G, which ra and rb read: a "
     "data op's result written through PR port 267 (f211_215 under f267_268 = 1) reached the "
-    f"xreg of words 68 and 73 and never an operand ({EXACT} through X1, and in the copy), "
+    f"xreg of words 68 and 73 and never an operand ({EXACT} through X1; in the copy inferred, "
+    "strong), "
     f"and port 267 writes no G register ({EXACT}), while one written through port 272 (f224_228) "
     "reached a later op's ra and rb and not word 68's xreg (inferred, strong). Per routine the "
     "registers xreg changes to and those the op slot names overlap only slightly more than "
@@ -513,8 +514,8 @@ X_SHARED: dict[int, tuple[str, Confidence, str]] = {
     0x03: ("a + zK", V, ""),
     0x04: ("a <= sK signed", V, ""),
     0x05: ("a < sK signed", V, ""),
-    0x06: ("a <= zK unsigned", V, ""),
-    0x07: ("a < zK unsigned", V, ""),
+    0x06: ("a <= zK unsigned", V, "K's extension not separated by the measured points"),
+    0x07: ("a < zK unsigned", V, "K's extension not separated by the measured points"),
     0x08: ("a <= b unsigned", V, ""),
     0x09: ("a < b unsigned", V, ""),
     0x0A: ("a <= b signed", V, ""),
@@ -594,15 +595,16 @@ X1_HEAD_FACT = (
     "the camera by exact readout). Its values 0x1c, 0x1d and 0x1e, once read as a separate "
     "transfer unit X2, put no result on the ALU bus and change no R, G or B register (verified "
     "on the camera by exact readout, a stock copy clean after each): they hand something to the "
-    "stream engine that the scalar side does not see. xreg changes in 0.81 of the words at 0x1c, "
-    f"0.58 at 0x1d and 0.61 at 0x1e against 0.27 overall, {OWNERSHIP}. {XFER}; in program 16 "
+    "stream engine that the scalar side does not see. xreg changes in 0.81 of the words with "
+    "bits 308..309 at 0, 0.58 at 1 and 0.61 at 2 (at any value of 310..312) against 0.27 "
+    f"overall, {OWNERSHIP}. {XFER}; in program 16 "
     "words 58..79, the 0x1c words (bit 308 clear) stall the job when idled. X1 is X0's copy on "
     "the register file B, a = B[f110_114], b = B[f115_119], K = f115_119 << 8 | f9_14 << 2 | "
     "f7_8 (13 bits): logic functions at 0x16..0x1b where X0 has none, the transfers at "
     f"0x1c..0x1e (`X_FUNCTIONS`; {EXACT}). Its result goes to A through f265_266 = 1, to B "
     "through f267_268 = 0, to R through f270_271 = 0 and to G through f272_273 = 0, in the "
     f"head's own word ({EXACT}). {X_OPERANDS}. f7_8 and f9_14 are active only where it is; "
-    f"f110_114 changes where it is active in 0.78 of its changes, {OWNERSHIP}"
+    f"f110_114 changes where bits 310..312 are active in 0.78 of its changes, {OWNERSHIP}"
 )
 GRID_B_FACT = (
     "grid B follows grid A at +110 in which words are active, but its values equal the +110 "
@@ -902,8 +904,8 @@ FIELDS: tuple[Field, ...] = (
         110,
         "x1",
         31,
-        f"a, the B register X1 reads first ({EXACT}); it changes where f308_312 is active in "
-        "0.78 of its changes",
+        f"a, the B register X1 reads first ({EXACT}); it changes where bits 310..312 of "
+        "f308_312 are active in 0.78 of its changes",
         name="x1a",
         confidence=V,
     ),
@@ -931,8 +933,8 @@ FIELDS: tuple[Field, ...] = (
         f"operand file, that f267_268 writes, its source by value (`PR_SOURCES`; {EXACT}); in "
         "the copy, ops of families B, C, D and E inserted after program 16's word 64 with "
         "f267_268 = 1 set the register it names to their result, which word 68 or 73 then read "
-        "through its xreg, at pre-registered values (verified on the camera); program 16's word "
-        "64 writes its count r7 so",
+        "through its xreg, at pre-registered values (inferred, strong); program 16's word 64 "
+        "writes its count r7 so",
         confidence=V,
         name="bdst",
     ),
