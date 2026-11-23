@@ -383,9 +383,9 @@ Single C2 fields have rows too, plane-level outcomes. A port enable at its idle 
 changes one plane (verified): at 439 f244_245 gives the bytes of idling its port, at 440 and 448
 two enables give that plane of their word's whole idle (post hoc the port's register keeps its
 older content, inferred). Idling f248_249 is the whole idle of the store word 533, and of 529
-and 558 but for lanes of per-boot state. S0's f41_44 and f76_79 at 446 and 448 change plane 0
+and 558 but for single lanes (inferred). S0's f41_44 and f76_79 at 446 and 448 change plane 0
 only: f41_44 feeds a saturation select, f76_79 = v sets bytes to 255 by a per-lane mask that v
-selects (post hoc laws, inferred; not modelled). Where an edit exposes state that no program
+selects (post hoc laws, inferred; not modelled). Where an edit exposes state that no lab job
 writes and that differs between boots (439's S2 head idle or 8, 557's head or its port 175
 idle), that plane is unknown (`PER_BOOT`), never a value. Rows that ran in a copy of the program
 placed elsewhere count as in place: five field edits gave the same bytes there.

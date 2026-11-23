@@ -23,7 +23,7 @@ edit here [verified on the camera, one run each]: inserted before word 441 it gi
 planes and plane 0's first 32 lanes of idling 441's grid B in place; before 442 or 443 the
 chroma planes stay stock and plane 0 changes; before 440 plane 1 stays stock and plane 2 changes
 (post hoc R16((16 - p) P2[a + 1] + p P0[a + 1]), inferred). Reading: a port's write needs the
-word before it to run (hypothesis)."""
+word before it to run (hypothesis; it fits the insert before 441 only)."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -207,7 +207,7 @@ SUBSTITUTED = Changed(
     "the substitute is known"
 )
 PER_BOOT = Changed(
-    "reads per-lane state that no program writes and that differs between boots; not known"
+    "reads per-lane state that no lab job writes and that differs between boots; not known"
 )
 
 

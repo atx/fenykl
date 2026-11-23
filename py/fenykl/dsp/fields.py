@@ -880,7 +880,7 @@ UNIT_FACTS = {
     "f292_295": "its operands f57_60 and f88_91 select program 13 word 439's tap 0 line and "
     f"coefficient, and f88_91 at words 440..442 taps 1..3's coefficients ({_CAMERA}). At "
     "word 439, 15 (idle) and 8 give the same bytes: only the first plane changes, tap 0's term "
-    "replaced, not dropped, by per-lane state that no program writes and that differs between "
+    "replaced, not dropped, by per-lane state that no lab job writes and that differs between "
     f"boots ({_CAMERA}, one run each on three boots; the state reading inferred); at word 557, "
     "15 equals f250_251 = 3 there (verified on the camera)",
     "f69_71": f"program 13 word 439, X0 active: idling it has no effect ({_CAMERA}), so an "
@@ -893,14 +893,15 @@ UNIT_FACTS = {
     "operands, in the stock words range states of the taps 0 + 1 partial sum and of the full "
     "sum (inferred: a saturation select); what the values select is not the S2 operand "
     "registers (hypothesis)",
-    "f76_79": f"{_HELD_439}. Program 13 words 446 and 448, S0's head active (stock 0): every "
-    "value 1..15 changes only the first plane (verified on the camera); post hoc, on lines "
+    "f76_79": f"{_HELD_439}. Program 13 words 446 and 448, S0's head active (stock 0): each value "
+    "tried (1..4 and 15 at 446, 1..15 at 448) changes only the first plane (verified on the camera); post hoc, on lines "
     "whose kernel is one-hot a byte is 255 where bit x mod 32 of a 32-lane mask is set and the "
     "stock byte elsewhere, and on the other lines the mask enters the saturation select with "
     "the sign and carry of the taps 2 + 3 partial sum (inferred: one law fits every byte of "
-    "every value). The mask is fixed per value: the same at both words, after other values' "
-    "jobs, on flat and x-varying sources and across boots (verified on the camera), but for "
-    "lane 8 of value 1, fixed within a boot and different between boots; no function of the "
+    "every value). The mask is fixed per value: the same at both words for 1..4 and 15, after other "
+    "values' jobs, on flat and x-varying sources for 1 and 4, and across boots for 1 and 4 "
+    "(verified on the camera), but for lane 8 of value 1, fixed within a boot and different "
+    "between boots; no function of the "
     "value's bits and no input of the job gives the masks (inferred): a stored per-lane vector "
     "that the value selects (hypothesis)",
     "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA}); "
@@ -918,20 +919,20 @@ UNIT_FACTS = {
     "post hoc that plane is then the rounded older content of one operand register (inferred)",
     "f250_251": "idling it at program 13 word 448 changes only the second plane's first lane "
     "of each 32-lane block on a flat source; at word 557 only the second plane, whose "
-    "operands then stay at per-lane state that no program writes and that differs between "
+    "operands then stay at per-lane state that no lab job writes and that differs between "
     "boots, as idling 557's S2 head does, byte for byte (verified on the camera, one run each; "
     "the state reading inferred)",
     "f248_249": "the only C2 free bits off idle at program 13's store words 529, 533 and 558: "
     "idling it at 533 equals idling the word's C2 free bits and grid, byte for byte (verified "
-    "on the camera, pre-registered); at 529 and 558 too but for single lanes that hold "
-    "per-boot state (inferred)",
+    "on the camera, pre-registered); at 529 and 558 too but for single lanes (inferred): at 529 a "
+    "lane of per-boot state, at 558 per-boot state and a real difference not separated",
     "f261_262": f"its port f198_201 carries grid B's effect at program 13 word 433 ({_CAMERA}); "
     "idling it there equals idling f198_201 but in "
     "the job's first 32-lane block, where tap 0 reads outside the source (verified on the "
     "camera on a flat source; predicted from that and met on an x-varying one, one run each)",
 }
 """Camera facts of single fields on the units (`units.py`): ownership predicts use."""
-CAMERA_TIERS = {"f244_245": V, "f248_249": V, "f41_44": I, "f76_79": I}
+CAMERA_TIERS = {"f244_245": V, "f248_249": I, "f41_44": I, "f76_79": I}
 """Fields whose tier the camera raised above the bytes': an idled enable equal to idling its
 port or its word (verified), a nibble acting as one select value (inferred, post hoc)."""
 FIELDS = tuple(
