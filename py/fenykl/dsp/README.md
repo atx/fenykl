@@ -175,8 +175,9 @@ result (verified by exact readout).
 
 The data ops (`OP_SEMANTICS`, each with its tier) compute on plain 32-bit values, with 32-bit
 wrap; a compare gives 1 or 0. An earlier indirect readout, through the copy's load offset and
-store count, showed immediates and results scaled by 16: that scale belongs to the copy's
-transfers, which use a register value in units of 16 bytes (`memcpy.READOUT`), not to the ops.
+store count, showed immediates and results scaled by 16: that scale belongs to those two
+roles, which use a register value in units of 16 bytes (`memcpy.READOUT`; inferred: r2 & 0x1080
+through the count at len 0x1100 stored nothing, as a 16-byte unit predicts), not to the ops.
 Verified by exact readout: 0x08 / 0x09 rb, 0x3c ra & rb, 0x3a ra | rb, 0x34 ra - rb, 0x35 ra +
 rb, 0x33 -rb, 0x3d ~ra, 0x2f min signed, 0x2e max signed, 0x41 ra >> (rb & 31) arithmetic, 0x43
 ra << (rb & 31), 0x28 / 0x29 ra <= rb, ra < rb unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 !=,
@@ -529,7 +530,9 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   0x16, 0x14, 0x10 and 0x0e record their read (the datum's delivery three words on is not
   modelled), the stores 0x18, 0x12 and 0x0c make their bytes unknown (R is not modelled), the computing ops send their result through the word's PR
   ports (`semantics.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
-  the operands three words on, unknown until then), and the idle op does nothing in the slot. A
+  the operands three words on, unknown until then; exact readout shows the next word reading a
+  272 / 1 write, which these latencies do not model yet), and the idle op does nothing in the
+  slot. A
   result with an open destination (no port, or another enable value) raises in strict mode and
   makes the open ports' registers unknown in lenient mode. Every other op has no semantics:
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra

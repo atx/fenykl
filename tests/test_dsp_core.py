@@ -297,6 +297,9 @@ def test_and_mask_sign_extends_imm16():
         # E, on (r2, r3).
         (0x28, Operands(ra=2, rb=3), -0x10, 0x1010, 0, "V"),  # unsigned <=
         (0x2A, Operands(ra=2, rb=3), -0x10, 0x1010, 1, "V"),  # signed <=
+        (0x2A, Operands(ra=2, rb=3), 0xFFFFFFF0, 0x10, 1, "V"),  # a value held unsigned
+        (0x31, Operands(ra=2, rb=3), -1, 0xFFFFFFFF, 1, "V"),
+        (0x2E, Operands(ra=2, rb=3), 0xFFFFFFF0, 0x10, 0x10, "V"),
         (0x3D, Operands(ra=2, rb=3), 0x400, 0, -0x401, "V"),
         (0x32, Operands(ra=2, rb=3), 0, -5, 5, "I"),
         (0x2F, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "V"),

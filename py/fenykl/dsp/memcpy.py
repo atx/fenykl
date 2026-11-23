@@ -93,10 +93,11 @@ ENGINE_AFTER = 64
 """Inserted data ops right after this stock word (before 65) are the measured site: their
 operands and their results through the PR ports are modelled there only."""
 READOUT = 16
-"""The transfers read a register value in units of 16 bytes: the copy model holds the xreg
-set's values as the transfers use them, 16 times what an op computes (inferred: the scale that
-read as immediates and results scaled by 16 through these transfers, and that exact readout of
-own programs on the camera does not show)."""
+"""The load offset (word 68) and the count (word 73) use a register value in units of 16 bytes:
+the copy model holds an inserted op's result there as those roles use it, 16 times what the op
+computes (inferred: the scale that read as immediates and results scaled by 16 through these
+two roles, and that exact readout of own programs on the camera does not show). The address
+role takes plain byte addresses."""
 ENGINE_OPERANDS = (
     (
         2,
@@ -223,7 +224,10 @@ _PARTS: dict[int, Part] = {
 ROUTES = tuple(f.id for f in FIELDS if f.lo in STAIRCASE)
 CONTEXT = ("f100_104", "f105_109", "f110_114", "f123_127", "f128_132")
 """The register group A fields besides xreg: they select the transfer's channel."""
-REGS_B = tuple(f.id for f in UNITS["pr"].fields if f.kind == "reg")
+# f221_223, R's register, stays idle in a transfer.
+REGS_B = tuple(
+    f.id for f in UNITS["pr"].fields if f.kind == "reg" and f.id != "f221_223"
+)
 TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_309"})
 
 T_SET = (7, 9, 16, 18, 19, 20, 24, 27, 28, 30)

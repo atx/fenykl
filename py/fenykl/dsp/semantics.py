@@ -384,14 +384,18 @@ PR_ENABLES = {
     "f272_273": "f224_228",
 }
 """Each PR enable and the field of its port."""
+OTHER_FILES = {"f206_210": "A", "f221_223": "R"}
+"""Port registers of the register files the emulator does not model: a write there leaves G
+and B as they are."""
 
 
 def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], str]:
     """Where the word's data op result goes: (set, register, latency) per decoded enabled port,
     the port fields of the enabled ports whose destination is open, and why the destination is
     incomplete ("" when every enabled port is decoded and one is). An enable that takes another
-    unit's result (f272_273 = 0 or 2, f265_266 = 0) counts as open here; without an enabled
-    port a data op writes no register (verified on the camera by exact readout)."""
+    unit's result (f272_273 = 0 or 2, f265_266 = 0) or writes R or A counts as open here. Without
+    an enabled port a data op writes no register (verified on the camera by exact readout);
+    stepping still reports such a result as open rather than dropping it."""
     dests, open_, names = [], [], []
     for enable, reg in PR_ENABLES.items():
         v = word[enable]
@@ -503,6 +507,19 @@ def _const(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
 
 def _u32(v: int) -> int:
     return v & 0xFFFFFFFF
+
+
+def _s32(v: int) -> int:
+    """v read as a signed 32-bit value: a register may hold either reading."""
+    return ((v + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+
+
+def _min(a: int, b: int) -> int:
+    return a if _s32(a) <= _s32(b) else b
+
+
+def _max(a: int, b: int) -> int:
+    return a if _s32(a) >= _s32(b) else b
 
 
 def _flag(test: bool) -> int:
@@ -689,7 +706,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x3E: OpSemantics(
         I,
         "ra >> imm5, arithmetic; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra >> c", lambda a, c: a >> c, I),
+        _imm("ra >> c", lambda a, c: _s32(a) >> c, I),
     ),
     0x3F: OpSemantics(
         I,
@@ -724,7 +741,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         for code in (0x08, 0x09)
     },
     0x32: OpSemantics(
-        I, "abs(rb) (inferred, by exact readout)", _e("abs(rb)", lambda a, b: abs(b), I)
+        I,
+        "abs(rb) (inferred, by exact readout)",
+        _e("abs(rb)", lambda a, b: abs(_s32(b)), I),
     ),
     0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
     0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
@@ -732,8 +751,12 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x35: OpSemantics(V, f"ra + rb ({_EXACT_RULE})", _e("ra + rb", lambda a, b: a + b)),
     0x33: OpSemantics(V, f"-rb ({_EXACT_RULE})", _e("-rb", lambda a, b: -b)),
     0x3D: OpSemantics(V, f"~ra ({_EXACT_RULE})", _e("~ra", lambda a, b: ~a)),
-    0x2F: OpSemantics(V, f"min(ra, rb) signed ({_EXACT_RULE})", _e("min(ra, rb)", min)),
-    0x2E: OpSemantics(V, f"max(ra, rb) signed ({_EXACT_RULE})", _e("max(ra, rb)", max)),
+    0x2F: OpSemantics(
+        V, f"min(ra, rb) signed ({_EXACT_RULE})", _e("min(ra, rb)", _min)
+    ),
+    0x2E: OpSemantics(
+        V, f"max(ra, rb) signed ({_EXACT_RULE})", _e("max(ra, rb)", _max)
+    ),
     0x2C: OpSemantics(
         I,
         "max(ra, rb) unsigned (inferred, by exact readout)",
@@ -752,27 +775,27 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x2A: OpSemantics(
         V,
         f"1 if ra <= rb signed, else 0 ({EXACT})",
-        _e("ra <= rb", lambda a, b: _flag(a <= b)),
+        _e("ra <= rb", lambda a, b: _flag(_s32(a) <= _s32(b))),
     ),
     0x2B: OpSemantics(
         V,
         f"1 if ra < rb signed, else 0 ({EXACT})",
-        _e("ra < rb", lambda a, b: _flag(a < b)),
+        _e("ra < rb", lambda a, b: _flag(_s32(a) < _s32(b))),
     ),
     0x30: OpSemantics(
         V,
         f"1 if ra != rb, else 0 ({EXACT})",
-        _e("ra != rb", lambda a, b: _flag(a != b)),
+        _e("ra != rb", lambda a, b: _flag(_u32(a) != _u32(b))),
     ),
     0x31: OpSemantics(
         V,
         f"1 if ra == rb, else 0 ({EXACT})",
-        _e("ra == rb", lambda a, b: _flag(a == b)),
+        _e("ra == rb", lambda a, b: _flag(_u32(a) == _u32(b))),
     ),
     0x41: OpSemantics(
         V,
         f"ra >> (rb & 31), arithmetic ({EXACT})",
-        _e("ra >> rb", lambda a, b: a >> (b & 31)),
+        _e("ra >> rb", lambda a, b: _s32(a) >> (b & 31)),
     ),
     0x42: OpSemantics(
         I,
@@ -802,32 +825,32 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x24: OpSemantics(
         V,
         f"max(ra, c) signed, c = imm16 sign-extended ({EXACT})",
-        _imm("max(ra, c)", max, V),
+        _imm("max(ra, c)", _max, V),
     ),
     0x25: OpSemantics(
         V,
         f"min(ra, c) signed, c = imm16 sign-extended ({EXACT})",
-        _imm("min(ra, c)", min, V),
+        _imm("min(ra, c)", _min, V),
     ),
     0x1C: OpSemantics(
         V,
         f"1 if ra != c, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra != c", lambda a, c: _flag(a != c), V),
+        _imm("ra != c", lambda a, c: _flag(_u32(a) != _u32(c)), V),
     ),
     0x1D: OpSemantics(
         V,
         f"1 if ra == c, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra == c", lambda a, c: _flag(a == c), V),
+        _imm("ra == c", lambda a, c: _flag(_u32(a) == _u32(c)), V),
     ),
     0x20: OpSemantics(
         V,
         f"1 if ra <= c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra <= c", lambda a, c: _flag(a <= c), V),
+        _imm("ra <= c", lambda a, c: _flag(_s32(a) <= c), V),
     ),
     0x21: OpSemantics(
         V,
         f"1 if ra < c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra < c", lambda a, c: _flag(a < c), V),
+        _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
     ),
     0x23: OpSemantics(
         I,

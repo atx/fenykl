@@ -332,8 +332,8 @@ FLAGS_FACT = (
 SELECTOR = (
     "the loop-end selector pair f270_271 / f272_273: in every op 0 word of the five stock programs exactly "
     "one of f270_271 and f272_273 is 1, and in 386 of 395 across later firmware versions of the "
-    "same family; ops 1..3 mostly hold 3 in both. Op 0 computes ra - 1, which the enabled port "
-    f"writes back ({EXACT})"
+    "same family; ops 1..3 mostly hold 3 in both. Op 0 computes ra - 1 for the enabled port to "
+    f"write, back to ra under f272_273 = 1 on ra ({EXACT})"
 )
 OP_FACT = (
     "the op, one 7-bit field in every word (verified in the bytes of the five stock programs and "
@@ -552,8 +552,8 @@ F76_FACT = (
 PARTNER_FACT = (
     "It changes to the op slot's ra register in the same word (0.157 of its changes) or one word "
     "ahead (0.116), more often than one word behind (0.062), unlike the other register fields "
-    "(verified in the bytes across later firmware versions of the same family): an operand "
-    "select of the op slot (hypothesis)"
+    "(verified in the bytes across later firmware versions of the same family): the G "
+    "register a result is written to is often the next op's ra"
 )
 
 

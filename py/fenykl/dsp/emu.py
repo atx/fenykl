@@ -24,6 +24,7 @@ from .fields import DELAY_SLOTS, OP_FIELD, Confidence, Kind, Operands, lookup, o
 from .program import Program
 from .semantics import (
     OP_SEMANTICS,
+    OTHER_FILES,
     Branching,
     Given,
     OpSemantics,
@@ -452,7 +453,7 @@ class Executor:
             sets[to][r] = None
             self._landing.append((now + latency, sets[to], r, result))
         for fid in open_:
-            if lookup(fid).kind is Kind.REG:
+            if lookup(fid).kind is Kind.REG and fid not in OTHER_FILES:
                 for regs in sets.values():
                     regs[word[fid]] = None
         return why

@@ -865,8 +865,17 @@ def test_an_operand_chain_feeds_a_count():
     dst = boot.read(DST, 0x1000)
     assert result.status is Status.OK and all(dst.known)
     assert bytes(dst.data) == bytes(range(16)) + b"\xa5" * (0x1000 - 16)
-    with pytest.raises(UnknownSemantics, match="a count above len"):
-        engine((port(e_op(0x08, 2, 2), "f267_268", 12),), reader=73)
+    with pytest.raises(UnknownSemantics, match="no exact multiple of 16"):
+        engine((port(e_op(0x08, 7, 7), "f267_268", 12),), reader=73, length=0x2000)
+
+
+def test_a_mask_through_the_count_reads_in_16_byte_units():
+    """r2 & 0x1080 at len 0x1100: r2 = 0x111 masks to 0, so word 73 stores nothing, as on the
+    camera; read in bytes, r2 & 0x1080 would have stored 0x1000 bytes."""
+    mask = port(Word.data(0x38, Operands(ra=2, imm=0x1080)), "f267_268", 12)
+    result, boot = engine((mask,), reader=73, length=0x1100)
+    assert result.status is Status.OK
+    assert bytes(boot.read(DST, 0x1100).data) == b"\xa5" * 0x1100
 
 
 @pytest.mark.parametrize(
@@ -917,8 +926,10 @@ def test_an_engine_write_off_the_site_is_unknown():
 
 
 def test_an_op_on_one_register_reads_one_value():
-    """0x31 on (r2, r2): r2 is an interval, but equal to itself, so the flag is true."""
-    result, boot = engine((port(e_op(0x31, 2, 2), "f267_268", 12),), reader=73)
+    """0x31 on (r7, r7): r7 is an interval, but equal to itself, so the flag is true."""
+    result, boot = engine(
+        (port(e_op(0x31, 7, 7), "f267_268", 12),), reader=73, length=0x2000
+    )
     assert result.status is Status.OK
     assert bytes(boot.read(DST, 0x1000).data[:16]) == bytes(range(16))
 
