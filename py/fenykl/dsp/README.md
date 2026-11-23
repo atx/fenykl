@@ -33,10 +33,10 @@ The DSL builds a word from slot objects; unset fields keep the idle word's value
 composed from the table's idle values:
 
 ```python
-from fenykl.dsp.units import X2, OpSlot
+from fenykl.dsp.units import X1, OpSlot
 from fenykl.dsp.word import Word
 
-Word(x2=X2(xreg=3, f308_309=0), op_slot=OpSlot(f123_127=2))
+Word(x1=X1(xreg=3, x1op=0x1C), op_slot=OpSlot(f123_127=2))
 ```
 
 ### Units
@@ -54,16 +54,15 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot | inferred |
 | `s2` | f292_295 | grid A 53, 57, 88 | compute slot | inferred |
 | `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot | inferred |
-| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | a second ALU on the register file A | inferred |
-| `x1` | f310_312 | f7_8, f9_14, f110_114 | transfer or address unit | inferred |
-| `x2` | f308_309 (a value, 0 in the transfers) | xreg | register transfer | inferred |
+| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A | inferred (verified but f69_71, which changed no result) |
+| `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
 | `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports (hypothesis) | verified (the pairing) |
-| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of G, R (verified), B, A (inferred) | verified (the pairing) |
+| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
 | `m` | f276 (active low) | f274_275 | a held mode of the compute group | hypothesis |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
-S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0..X2 and PR (the
+S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0, X1 and PR (the
 transfer group) with the data ops, early in a routine. Grid B follows grid A at +110 in which
 words are active, but not in its values or control: not a mirror bank. The 2-bit PB enables,
 f252_254 / f255, f256_257 / f258 and f265_266 / f267_268 are cut where the two bits across a
@@ -129,14 +128,25 @@ integers that wrap. The scalar unit has four register files:
 
 | file | read by | written by (port, register) |
 |---|---|---|
-| G | ra, rb | f272_273 on f224_228: 1 the ALU result of the same word, read by the next word; 2 X0's result in the strobe's own word (verified); 0 X1's result (inferred) |
-| R (8 entries) | family A stores (datum R[f120_122]), 0x46 / 0x47 | f270_271 = 1 on f221_223 with the ALU result, read by a store in the very next word (verified) |
-| A | X0 (f100_104, f105_109) | f265_266 on f206_210: 2 the ALU result, 0 X0's result (inferred) |
-| B | the X2 xreg | f267_268 = 1 on f211_215 with the ALU result (inferred, strong); it writes no G register (verified) and no A register (inferred) |
+| G | ra, rb | f272_273 on f224_228: 0 X1, 1 the ALU bus, 2 X0; read by the next word |
+| R (8 entries) | family A stores (datum R[f120_122]), 0x46 / 0x47 | f270_271 on f221_223: 0 X1, 1 the ALU bus, 2 X0; read by a store in the very next word |
+| A | X0 (f100_104, f105_109) | f265_266 on f206_210: 0 X0, 1 X1, 2 the ALU bus; X0 reads it from the next word on |
+| B | X1 (f110_114, xreg f115_119) | f267_268 on f211_215: 0 X1, 1 the ALU bus, 2 nothing; f269 = 0 on f216_220: X0 |
 
-A data op writes no register by itself: its result goes on the ALU result bus, which the word's
-enabled ports write (verified by exact readout). The emulator models G (`Boot.slot`) and B
+Each port's enable value selects its source (`fields.PR_SOURCES`, verified by exact readout); X0
+and X1 are their heads' results in the port's own word. A data op writes no register by itself:
+its result goes on the ALU bus, which also carries a load's datum three words after the load and
+a multiply's product one word after the multiply. The emulator models G (`Boot.slot`) and B
 (`Boot.regs`).
+
+X0 and X1 are two copies of one ALU (`fields.X_FUNCTIONS`, verified by exact readout): X0's head
+f302_307 on a = A[f100_104], b = A[f105_109], K = f105_109 << 6 | f2_6 << 1 | f1 (11 bits); X1's
+head f308_312 on a = B[f110_114], b = B[f115_119], K = f115_119 << 8 | f9_14 << 2 | f7_8 (13
+bits). The shared table is the op slot's compacted: compares against K and b, a +/- K, a +/- b,
+-b, abs(b), b, K zero- or sign-extended, a | K << 16. X1 adds logic functions at 0x16..0x1b; its
+heads 0x1c..0x1e are the register transfers, which put no result on the bus and change no
+register. X0 gives no result at 0x16..0x19 and 0x22, counts at 0x1a..0x21 and 0 at
+0x23..0x3e.
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.
@@ -296,9 +306,9 @@ index 0), the resampler's held line pairs, the register file and the DRAM view. 
 of a stock `.BIN` for loads from firmware text. A byte is known or UNKNOWN, and its source says
 where it came from or why it is unknown; the emulator never guesses a byte.
 
-The model covers each word of a job at its index (`model.cover`): the idle word; X2's semantic,
-a register transfer at any index (matched by its signature, every field idle but the register
-groups, the route nibbles and f308_309); the row of the undecoded stock word at its stock index
+The model covers each word of a job at its index (`model.cover`): the idle word; X1's register
+transfer (head 0x1c or 0x1d) at any index (matched by its signature, every field idle but the
+register groups, the route nibbles and the head); the row of the undecoded stock word at its stock index
 (`OpaqueClass`, which leaves the measured operand fields free); and the stock halt at another
 index, which acts where stepping reaches it (below) and is a hypothesis elsewhere. A stock word
 at another index than its own is no row, unless inserted words moved it there ("Inserted

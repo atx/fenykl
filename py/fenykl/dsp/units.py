@@ -10,7 +10,7 @@ fields need not be contiguous; re-cutting one is an edit of the `unit` of its fi
 
 A slot holds the values of some fields of one unit, keyed by id or semantic name::
 
-    X2(xreg=3, f308_309=0)
+    X1(xreg=3, x1op=0x1C)
 """
 
 from collections.abc import Iterator
@@ -37,7 +37,6 @@ class Unit:
 _HEAD = (
     "the compute slot {}: its head f{}_{} and the grid A nibbles that change under it"
 )
-_XFER = "the transfer unit {}: its strobe f{}_{} and the fields that change under it"
 _UNITS = (
     (
         "op_slot",
@@ -64,20 +63,22 @@ _UNITS = (
         "X0",
         I,
         (
-            "the X0 unit: its strobe f302_307 and the fields that change under it; a second "
-            "ALU on the register file A, its result written to G or A by the PR ports (inferred)"
+            "the X0 unit: its head f302_307 and the fields that change under it; an ALU on "
+            "the register file A, its result written to A, B, R or G by the PR ports (verified "
+            "on the camera by exact readout)"
         ),
         ("f302_307",),
     ),
-    *(
+    (
+        "x1",
+        "X1",
+        V,
         (
-            u,
-            u.upper(),
-            I,
-            _XFER.format(u.upper(), *HEADS[u]),
-            (f"f{HEADS[u][0]}_{HEADS[u][1]}",),
-        )
-        for u in ("x1", "x2")
+            "the X1 unit: its head f308_312 and the fields that change under it; X0's copy on "
+            "the register file B, its result written to A, B, R or G by the PR ports, and the "
+            "register transfers (verified on the camera by exact readout)"
+        ),
+        ("f308_312",),
     ),
     (
         "pb",
@@ -97,8 +98,8 @@ _UNITS = (
         (
             "5 ports, one enable in 265..273 for each field of register group B 206..228, the "
             "pairing verified in the bytes: register write ports, f272_273 of G and f270_271 of "
-            "R (verified on the camera by exact readout), f267_268 of B and f265_266 of A "
-            "(inferred), f269 open"
+            "R, f267_268 and f269 of B, f265_266 of A, each enable value a source (verified on "
+            "the camera by exact readout)"
         ),
         tuple(e for e in PORTS if lookup(e).unit == "pr"),
     ),
@@ -201,7 +202,6 @@ S2 = slot_class("s2")
 S3 = slot_class("s3")
 X0 = slot_class("x0")
 X1 = slot_class("x1")
-X2 = slot_class("x2")
 PB = slot_class("pb")
 PR = slot_class("pr")
 M = slot_class("m")
@@ -210,7 +210,7 @@ Const = slot_class("const")
 
 SLOTS: dict[str, type[Slot]] = {
     cls.unit.name: cls
-    for cls in (OpSlot, S0, S1, S2, S3, X0, X1, X2, PB, PR, M, Q, Const)
+    for cls in (OpSlot, S0, S1, S2, S3, X0, X1, PB, PR, M, Q, Const)
 }
 _missing = set(UNITS) - set(SLOTS)
 if _missing:

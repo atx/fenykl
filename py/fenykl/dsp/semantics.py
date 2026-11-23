@@ -236,11 +236,11 @@ class Mode(Enum):
 class Sequencer:
     """Hidden state that gives the register transfers their roles.
 
-    POINTER (the default): each channel has a slot pointer; a transfer with bit 308 clear takes
+    POINTER (the default): each channel has a slot pointer; a transfer with X1 head 0x1c takes
     the slot at the pointer and advances it, so roles follow the order of the transfers
     (inferred). Idling a transfer leaves its channel's last slot unset, and an unset slot stalls
     the job; this reproduces the camera: every idled counted transfer of 42..49 and 66..77 times
-    out, while 74 and 78 (bit 308 set) have no effect. The pointers start at slot 0 with every
+    out, while 74 and 78 (head 0x1d) have no effect. The pointers start at slot 0 with every
     job. On the camera the roles followed the counted transfers when they moved: the count one
     index later (exchanged with the holding word 74, also at another register), and 75..77 one
     index earlier as a block, with a holding word after them (one run each, verified on the
@@ -345,11 +345,11 @@ class OpSemantics:
 
 
 class RegSet(Enum):
-    """Two of the scalar unit's four register files (`fields`): B, which the X2 xreg reads and
+    """Two of the scalar unit's four register files (`fields`): B, which X1 reads (xreg among its operands) and
     port 267 writes, and G, which ra and rb read and port 272 writes (verified on the camera by
     exact readout that port 267 writes no G register). R and A are not modelled."""
 
-    XREG = "B, the file the X2 xreg reads (`Boot.regs`)"
+    XREG = "B, the file X1 reads (`Boot.regs`)"
     OPERAND = "G, the file ra and rb read (`Boot.slot`)"
 
 

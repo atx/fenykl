@@ -1,7 +1,7 @@
 """The word-level emulator: a `Job` (a program and its request in local memory) run on a `Boot`.
 
 The words run in order; the model covers each at its index (the stock word's row, a field
-semantic such as X2's register transfer, or the coverage rule of a window), which records what it
+semantic such as X1's register transfer, or the coverage rule of a window), which records what it
 contributes to the job's `Trace`. At the end the model of the program
 (`memcpy.Copy16Model`, `resample.Resample13Model`) applies the trace: it reads the command's
 request from local memory, resolves the job and writes its result to the boot's state.

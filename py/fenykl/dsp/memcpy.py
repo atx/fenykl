@@ -12,7 +12,7 @@ index:
 
 `Copy16Model` takes the stock program (from the user's firmware, `from_image`) and derives what
 covers a job's words from it: each undecoded stock word is the row of its stock index, the
-register transfers are X2's semantic at any index, matched by their signature, with the
+register transfers are X1's semantic at any index, matched by their signature, with the
 register contexts and the register group B and route values of the stock transfers as the
 reference. A job with words inserted into the stock program is covered by content (`align`,
 `Copy16Model.cover_job`). No stock word is part of this code. The model resolves a job's trace
@@ -228,7 +228,9 @@ CONTEXT = ("f100_104", "f105_109", "f110_114", "f123_127", "f128_132")
 REGS_B = tuple(
     f.id for f in UNITS["pr"].fields if f.kind == "reg" and f.id != "f221_223"
 )
-TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_309"})
+TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_312"})
+COUNTED, HOLDING = 0x1C, 0x1D
+"""The X1 heads of the counted and the holding register transfers."""
 
 T_SET = (7, 9, 16, 18, 19, 20, 24, 27, 28, 30)
 Z_SET = (4, 5, 10, 12, 13)
@@ -401,7 +403,7 @@ _CHANNELS: tuple[Channel, ...] = (
     ),
 )
 """Channels cmd 0xF does not need (`needed=False`): idling their transfers has no effect, with
-len, dst and src changing between jobs. Word 57 is a holding transfer (bit 308 set) of its own
+len, dst and src changing between jobs. Word 57 is a holding transfer (head 0x1d) of its own
 register context and takes no slot."""
 
 # Word 47's formats by register; r21's is a boot parameter.
@@ -427,16 +429,16 @@ class Reference:
 
 @dataclass(frozen=True, eq=False)
 class TransferSemantic(WordClass):
-    """X2's semantic, the register transfers at any index: they hand the register named in
-    115..119 to the sequencer."""
+    """The register transfers at any index, X1 heads 0x1c and 0x1d: they hand the register
+    named in 115..119 to the sequencer."""
 
     channel_of: dict[tuple[int, ...], str] = field(default_factory=dict)
     reference: dict[tuple[int, ...], Reference] = field(default_factory=dict)
     holding: frozenset[int] = frozenset()
-    """The indices of the stock holding transfers (bit 308 set)."""
+    """The indices of the stock holding transfers (head 0x1d)."""
 
     def matches(self, word: Word) -> bool:
-        return super().matches(word) and word["f308_309"] in (0, 1)
+        return super().matches(word) and word["f308_312"] in (COUNTED, HOLDING)
 
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         ctx = context(word)
@@ -459,7 +461,7 @@ class TransferSemantic(WordClass):
                 )
             trace.ignored.append((index, [f.id for f, _ in routes]))
             trace.taint = H
-        if word["f308_309"] == 1:
+        if word["f308_312"] == HOLDING:
             # 74 and 78 differ from 73 and 77 only here and copy at every register (hypothesis:
             # a transfer that does not take a slot).
             trace.notes.append(f"word {index}: a holding transfer, no slot")
@@ -508,7 +510,7 @@ def _transfer_semantic(words: tuple[Word, ...]) -> TransferSemantic:
             w = words[role.word]
             if (
                 not cls.matches(w)
-                or w["f308_309"] != 0
+                or w["f308_312"] != COUNTED
                 or context(w) != context(words[c.anchor])
             ):
                 raise ValueError(
@@ -516,10 +518,10 @@ def _transfer_semantic(words: tuple[Word, ...]) -> TransferSemantic:
                 )
     roles = {r.word for c in _CHANNELS for r in c.roles}
     for i, w in enumerate(words):
-        if cls.matches(w) and w["f308_309"] == 0 and i not in roles:
+        if cls.matches(w) and w["f308_312"] == COUNTED and i not in roles:
             raise ValueError(f"stock transfer {i} has no role")
     holding = frozenset(
-        i for i, w in enumerate(words) if cls.matches(w) and w["f308_309"] == 1
+        i for i, w in enumerate(words) if cls.matches(w) and w["f308_312"] == HOLDING
     )
     return TransferSemantic(
         cls.name,
@@ -933,7 +935,7 @@ class Copy16Model:
         return ""
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
-        """Run the job's word at `index` by what covers it: the idle word; X2's semantic, a
+        """Run the job's word at `index` by what covers it: the idle word; X1's transfer semantic, a
         register transfer at any index; the row of the stock word at its stock index, which
         matches the word on its fields besides its operands; the stock halt word at another
         index, which ends the job where stepping reaches it (`_halt`) and else is a hypothesis.

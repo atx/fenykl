@@ -24,10 +24,11 @@ Facts tagged "by exact readout" were measured on the camera with own programs: e
 stored into DSP local memory and read back as an exact 32-bit word. Values are plain 32-bit
 integers. The scalar unit has four register files: G, which ra and rb read and the PR port
 f272_273 writes (f224_228); R, 8 entries, which family A stores and ops 0x46 / 0x47 read
-(f120_122) and the port f270_271 writes (f221_223); A, the X0 unit's operands, written by the
-port f265_266 (f206_210); B, which the X2 xreg reads, written by the port f267_268 (f211_215). A
-data op writes no register by itself: its result goes on the ALU result bus, which an enabled
-port writes to its register.
+(f120_122) and the port f270_271 writes (f221_223); A, X0's operands, written by the port
+f265_266 (f206_210); B, X1's operands, written by the ports f267_268 (f211_215) and f269
+(f216_220). X0 and X1 are two copies of one ALU beside the op slot (`X_FUNCTIONS`). A data op
+writes no register by itself: its result goes on the ALU result bus, and each PR port's enable
+value selects its source, the bus or X0's or X1's result (`PR_SOURCES`).
 """
 
 from collections.abc import Mapping
@@ -281,6 +282,8 @@ IMM_FACT = (
 )
 EXACT = "verified on the camera by exact readout"
 """The tag of a fact measured with own programs whose results were read back as exact words."""
+X0_IMM = f"K, X0's 11-bit immediate f105_109 << 6 | f2_6 << 1 | f1 ({EXACT})"
+X1_IMM = f"K, X1's 13-bit immediate f115_119 << 8 | f9_14 << 2 | f7_8 ({EXACT})"
 T_HIGH = (
     "in a control op 0..3 bits 8..12 of the target T, not a register (verified in the bytes); in a "
     "return mostly 1 (in every return of the five stock programs but three, which hold 2, 3 and "
@@ -307,12 +310,13 @@ RA_FACT = (
     "in the bytes across later firmware versions of the same family)"
 )
 XREG_FACT = (
-    "In program 16 the register-transfer words name the register they use here: as a load "
+    f"b, X1's second B register, and bits 8..12 of {X1_IMM}; f128_132 is neither ({EXACT}). "
+    "Named xreg for the register transfers (X1 heads 0x1c, 0x1d): in program 16 the register-transfer words name the register they use here: as a load "
     "address (word 67), a buffer offset (68 load side, 76 store side), a store count (73), "
     "an enable (42, 66, 69, 70) or the store element format (47) (verified on the camera "
-    "per word); r3 holds the job source address. xreg reads the register file B, apart from G, "
-    "which ra and rb read: a data op's result written through PR port 267 (f211_215 under "
-    "f267_268 = 1) reached the xreg of words 68 and 73 and never an operand (inferred, strong), "
+    "per word); r3 holds the job source address. B is apart from G, which ra and rb read: a "
+    "data op's result written through PR port 267 (f211_215 under f267_268 = 1) reached the "
+    f"xreg of words 68 and 73 and never an operand ({EXACT} through X1, and in the copy), "
     f"and port 267 writes no G register ({EXACT}), while one written through port 272 (f224_228) "
     "reached a later op's ra and rb and not word 68's xreg (inferred, strong). Per routine the "
     "registers xreg changes to and those the op slot names overlap only slightly more than "
@@ -325,7 +329,8 @@ FLAGS_FACT = (
     "readout), 0 in 99 % of family D's stock words; the R register of a family A or A' store's "
     "datum, whose low 32, 16 or 8 bits it writes, and of the third operand of 0x46 and 0x47 "
     f"({EXACT}); no effect on the loads, the E ops other than 0x47, family C, 0x44 and the "
-    f"control ops 0..2 ({EXACT}, at 0 and 4). In op 0..3 words bits 120..121 are 0 and bit 122 "
+    f"control ops 0..2 ({EXACT}, at 0 and 4), nor on the multiply 0x49 ({EXACT}, at 0, 1 and "
+    "3, one operand pair). In op 0..3 words bits 120..121 are 0 and bit 122 "
     "is set in some words of each control op, mostly constant within a routine (verified in the "
     "bytes across later firmware versions of the same family); its meaning in a call open"
 )
@@ -345,12 +350,9 @@ OP_FACT = (
     "in a return's delay slot, its 13-bit immediate (f15_22 | f128_132 << 8) a multiple of 4 in all "
     "300 such words across later firmware versions of the same family (inferred)"
 )
-XFER_BASIS = (
-    "cut from 308..312 (the segmentation's field) at the register-transfer signature"
-)
 XFER = (
-    "0 in the register-transfer words; their role (load address, offset, count, enable, store "
-    "format) is given by the sequencer, not by an opcode, in the order of the transfers "
+    "In the register-transfer words (0x1c and 0x1d) the role of B[f115_119] (load address, "
+    "offset, count, enable, store format) is given by the sequencer, not by an opcode, in the order of the transfers "
     "(inferred): in program 16 the count role followed its transfer from 73 to 74 and the roles "
     "of 75..77 followed theirs one index earlier, while a counted transfer at 78, the word "
     "before the return 79, stalls the job (verified on the camera, one run each, the stall on "
@@ -499,37 +501,99 @@ X0_PATH = (
     "The residual changes of its nibble fall in data-op words with f302_307 active: the nibble is "
     "also written on the X0 path (hypothesis)"
 )
-X0_STROBES = "exact algebraic relations among 144 results read back by exact readout"
-X0_FACT = (
-    "the strobe of X0: f1 and f2_6 are active only where it is; f69_71 and f100_104 change only "
-    f"where it is active, f105_109 in 0.71 of its changes, {OWNERSHIP}. X0 is a second ALU on "
-    "the register file A, a = f100_104, b = f105_109: its result goes to G through f272_273 = 2 "
-    f"in the strobe's own word ({EXACT}) and to A through f265_266 = 0 (inferred). The values "
-    f"(inferred, strong: {X0_STROBES}): 3 A[a] + imm11 and 2 A[a] - imm11, imm11 = f105_109 << "
-    "6 | f2_6 << 1 | f1; 0x10 A[a] - A[b]; 0x11 A[a] + A[b]; 0xf -A[b]; 0xb A[a] < A[b] as 1 or "
-    "0; the other values and f69_71 open"
+X_OPERANDS = (
+    "a and b are the unit's two register operands, zK / sK its immediate K zero- / "
+    "sign-extended from its top bit; a compare gives 1 or 0"
 )
-X0_VALUES = {
-    0x2: "A[a] - imm11 (inferred)",
-    0x3: "A[a] + imm11 (inferred)",
-    0xB: "A[a] < A[b], 1 or 0 (inferred)",
-    0xF: "-A[b] (inferred)",
-    0x10: "A[a] - A[b] (inferred)",
-    0x11: "A[a] + A[b] (inferred)",
-    0x3F: "idle",
+X_SHARED: dict[int, tuple[str, Confidence, str]] = {
+    0x00: ("a != sK", V, "K's sign fitted on two points of X1"),
+    0x01: ("a == sK", V, "K's sign fitted on two points of X1"),
+    0x02: ("a - zK", V, ""),
+    0x03: ("a + zK", V, ""),
+    0x04: ("a <= sK signed", V, ""),
+    0x05: ("a < sK signed", V, ""),
+    0x06: ("a <= zK unsigned", V, ""),
+    0x07: ("a < zK unsigned", V, ""),
+    0x08: ("a <= b unsigned", V, ""),
+    0x09: ("a < b unsigned", V, ""),
+    0x0A: ("a <= b signed", V, ""),
+    0x0B: ("a < b signed", V, ""),
+    0x0C: ("a != b", V, ""),
+    0x0D: ("a == b", V, ""),
+    0x0E: ("abs(b)", V, ""),
+    0x0F: ("-b", V, ""),
+    0x10: ("a - b", V, ""),
+    0x11: ("a + b", V, ""),
+    0x12: ("a | zK << 16", V, ""),
+    0x13: ("zK", V, ""),
+    0x14: ("sK", I, "the sign fitted on five points of X1 and two of X0"),
+    0x15: ("b", V, ""),
 }
-X0_IMM = f"under strobes 2 and 3 (inferred, strong: {X0_STROBES})"
-X1_FACT = (
-    "the strobe of X1: f7_8 and f9_14 are active only where it is; f110_114 changes where it is "
-    f"active in 0.78 of its changes, {OWNERSHIP}. Strobe 4 with f272_273 = 0 in its own word "
-    "wrote to G a per-context base plus the 8-bit immediate f9_14 << 2 | f7_8 (the immediate's "
-    f"composition {EXACT}); the base and the unit's role open (hypothesis)"
+"""The function table X0 and X1 share, by head value h: (result, tier, note). It is the op
+slot's ALU table compacted: h 0..7 are ops 0x1c..0x23, 8..0xb ops 0x28..0x2b, 0xc..0x11 ops
+0x30..0x35, with the same signedness (verified on the camera by exact readout, X0 117 of 117
+pre-registered values on operands that separate the compares, X1 139 of 155, the misses all in
+the rows tagged fitted)."""
+NO_RESULT = "no result on the ALU bus"
+TRANSFER_HEADS = (0x1C, 0x1D, 0x1E)
+"""X1's register-transfer forms: no result, no R, G or B register changed."""
+X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
+    0x16: ("~a & b", I, "fitted on three points"),
+    0x17: ("~a & ~b", V, ""),
+    0x18: ("a ^ b", I, "pre-registered the other way round with 0x19, three points each"),
+    0x19: ("a | b", I, "pre-registered the other way round with 0x18, three points each"),
+    0x1A: ("a & b", V, ""),
+    0x1B: ("~b", V, ""),
+    **{h: (f"{NO_RESULT}: a register transfer", V, "") for h in TRANSFER_HEADS},
+}
+X0_ONLY: dict[int, tuple[str, Confidence, str]] = {
+    0x16: (NO_RESULT, V, ""),
+    0x17: (NO_RESULT, V, ""),
+    0x18: (NO_RESULT, I, ""),
+    0x19: (NO_RESULT, I, ""),
+    **{h: ("sK + 1", I, "the sign fitted on six points") for h in range(0x1A, 0x1E)},
+    **{h: ("b + 1", V, "") for h in range(0x1E, 0x22)},
+    0x22: (NO_RESULT, V, ""),
+    **{h: ("0", V, "") for h in range(0x23, 0x3F)},
+}
+X_FUNCTIONS = {"x0": X_SHARED | X0_ONLY, "x1": X_SHARED | X1_ONLY}
+"""Each unit's functions by head value; its idle value (all-ones) is none of them."""
+
+
+def _x_values(unit: str) -> dict[int, str]:
+    tag = {V: "verified", I: "inferred", H: "hypothesis"}
+    values = {
+        h: f"{text} ({tag[conf]}{'; ' + note if note else ''})"
+        for h, (text, conf, note) in X_FUNCTIONS[unit].items()
+    }
+    return values | {(1 << (HEADS[unit][1] - HEADS[unit][0] + 1)) - 1: "idle"}
+
+
+X0_FACT = (
+    "the head of X0: f1 and f2_6 are active only where it is; f69_71 and f100_104 change only "
+    f"where it is active, f105_109 in 0.71 of its changes, {OWNERSHIP}. X0 and X1 are two "
+    "copies of one ALU, the same function table by head value but for a few values "
+    f"(`X_FUNCTIONS`; {EXACT}): X0 on the register file A, a = A[f100_104], b = A[f105_109], "
+    "K = f105_109 << 6 | f2_6 << 1 | f1 (11 bits). Its result goes to G through f272_273 = 2, "
+    "to A through f265_266 = 0, to R through f270_271 = 2 and to B through f269 = 0, all in "
+    f"the head's own word ({EXACT}). {X_OPERANDS}. f69_71 at 0, 1, 2, 4 and 7 changed no result "
+    f"({EXACT})"
 )
-X1_IMM = "bits {} of X1's 8-bit immediate f9_14 << 2 | f7_8 (inferred, by exact readout at strobe 4)"
-X2_FACT = (
-    f"{XFER}; in program 16 words 58..79, bit 308 clear marks the words that stall the job when "
-    "idled. The strobe of X2, a value rather than an on/off strobe: xreg changes in 0.81 of the "
-    f"words at 0, 0.58 at 1 and 0.61 at 2 against 0.27 overall, {OWNERSHIP} (inferred, weak)"
+X1_HEAD_FACT = (
+    "the head of X1, one 5-bit value h = f310_312 << 2 | f308_309: at every value of 310..312 the "
+    "four values of 308..309 give four functions, so 308..309 is no unit of its own (verified on "
+    "the camera by exact readout). Its values 0x1c, 0x1d and 0x1e, once read as a separate "
+    "transfer unit X2, put no result on the ALU bus and change no R, G or B register (verified "
+    "on the camera by exact readout, a stock copy clean after each): they hand something to the "
+    "stream engine that the scalar side does not see. xreg changes in 0.81 of the words at 0x1c, "
+    f"0.58 at 0x1d and 0.61 at 0x1e against 0.27 overall, {OWNERSHIP}. {XFER}; in program 16 "
+    "words 58..79, the 0x1c words (bit 308 clear) stall the job when idled. X1 is X0's copy on "
+    "the register file B, a = B[f110_114], b = B[f115_119], K = f115_119 << 8 | f9_14 << 2 | "
+    "f7_8 (13 bits): logic functions at 0x16..0x1b where X0 has none, the transfers at "
+    f"0x1c..0x1e (`X_FUNCTIONS`; {EXACT}). Its result goes to A through f265_266 = 1, to B "
+    "through f267_268 = 0, to R through f270_271 = 0 and to G through f272_273 = 0, in the "
+    f"head's own word ({EXACT}). {X_OPERANDS}. f7_8 and f9_14 are active only where it is; "
+    f"f110_114 changes where it is active in 0.78 of its changes, {OWNERSHIP}"
 )
 GRID_B_FACT = (
     "grid B follows grid A at +110 in which words are active, but its values equal the +110 "
@@ -574,10 +638,9 @@ HEADS = {
     "s2": (292, 295),
     "s3": (296, 301),
     "x0": (302, 307),
-    "x1": (310, 312),
-    "x2": (308, 309),
+    "x1": (308, 312),
 }
-"""The strobe of each compute slot S0..S3 and transfer unit X0..X2: the C2 head or control
+"""The strobe of each compute slot S0..S3 and ALU X0, X1: the C2 head or control
 field whose activity the unit's operands change under."""
 
 # Grid A: the unit of each field, and the share of its changes in words where the unit's head
@@ -634,6 +697,36 @@ R_PORTS = (
     (270, 271, 221, 0.96),
     (272, 273, 224, 0.99),
 )
+
+
+ALU_BUS = "the ALU bus"
+PR_SOURCES: dict[str, dict[int, str | None]] = {
+    "f265_266": {0: "X0's result", 1: "X1's result", 2: ALU_BUS},
+    "f267_268": {0: "X1's result", 1: ALU_BUS, 2: None},
+    "f269": {0: "X0's result"},
+    "f270_271": {0: "X1's result", 1: ALU_BUS, 2: "X0's result"},
+    "f272_273": {0: "X1's result", 1: ALU_BUS, 2: "X0's result"},
+}
+"""What each PR port writes to its register by enable value (verified on the camera by exact
+readout: each value one exact word on a sentinel register, the other sources in the same word
+leaving it; None writes nothing, with the bus, X0 and X1 all carrying results). X0's and X1's
+results are those of their heads in the port's own word. The ALU bus carries the word's op
+result, a load's datum three words after the load and a multiply's product one word after the
+multiply (verified on the camera by exact readout)."""
+PR_FILES = {
+    "f265_266": "A",
+    "f267_268": "B",
+    "f269": "B",
+    "f270_271": "R",
+    "f272_273": "G",
+}
+
+
+def _pr_values(enable: str, idle: int) -> dict[int, str]:
+    return {
+        v: "writes nothing (verified)" if src is None else f"{src} to {PR_FILES[enable]} (verified)"
+        for v, src in PR_SOURCES[enable].items()
+    } | {idle: "idle"}
 
 
 def _fid(lo: int, hi: int) -> str:
@@ -743,37 +836,37 @@ FIELDS: tuple[Field, ...] = (
         1,
         "x0",
         0,
-        f"{_only('f302_307 is')}; bit 0 of X0's imm11 {X0_IMM}",
+        f"{_only('f302_307 is')}; bit 0 of {X0_IMM}",
         kind=Kind.IMM,
-        confidence=I,
+        confidence=V,
     ),
     _ctl(
         2,
         6,
         "x0",
         0,
-        f"{_only('f302_307 is')}; bits 1..5 of X0's imm11 {X0_IMM}",
+        f"{_only('f302_307 is')}; bits 1..5 of {X0_IMM}",
         kind=Kind.IMM,
-        confidence=I,
+        confidence=V,
     ),
     _ctl(
         7,
         8,
         "x1",
         0,
-        f"{_only('f310_312 is')}; {X1_IMM.format('0..1')}",
+        f"{_only('f308_312 is')}; bits 0..1 of {X1_IMM}",
         kind=Kind.IMM,
-        confidence=I,
+        confidence=V,
     ),
     _ctl(
         9,
         14,
         "x1",
         0,
-        f"program 16 never sets bits 11 and 14; {_only('f310_312 is')}; "
-        f"{X1_IMM.format('2..7')}",
+        f"program 16 never sets bits 11 and 14; {_only('f308_312 is')}; bits 2..7 of "
+        f"{X1_IMM}",
         kind=Kind.IMM,
-        confidence=I,
+        confidence=V,
     ),
     Field(15, 22, Kind.IMM, "op_slot", 0, V, IMM_FACT, name="imm"),
     *(_grid_a(lo, hi) for lo, hi in GRID_A),
@@ -781,28 +874,29 @@ FIELDS: tuple[Field, ...] = (
         100,
         "x0",
         31,
-        "a, the A register X0 reads first (inferred, strong: "
-        f"{X0_STROBES}); it changes only where f302_307 is active",
+        f"a, the A register X0 reads first ({EXACT}); it changes only where f302_307 is active",
         name="x0a",
-        confidence=I,
+        confidence=V,
     ),
     _reg(
         105,
         "x0",
         31,
-        f"b, X0's second A register, and bits 6..10 of its imm11 {X0_IMM}; it changes where "
-        "f302_307 is active in 0.71 of its changes",
+        f"b, X0's second A register, and bits 6..10 of {X0_IMM}; it changes where f302_307 "
+        "is active in 0.71 of its changes",
         name="x0b",
-        confidence=I,
+        confidence=V,
     ),
     _reg(
         110,
         "x1",
         31,
-        "it changes where f310_312 is active in 0.78 of its changes, f308_309 0.67 (inferred, "
-        "weak: the X1 / X2 split of f110_114 and xreg)",
+        f"a, the B register X1 reads first ({EXACT}); it changes where f308_312 is active in "
+        "0.78 of its changes",
+        name="x1a",
+        confidence=V,
     ),
-    _reg(115, "x2", 31, XREG_FACT, name="xreg", confidence=I),
+    _reg(115, "x1", 31, XREG_FACT, name="xreg", confidence=V),
     Field(120, 122, Kind.REG, "op_slot", 7, V, FLAGS_FACT),
     _reg(123, "op_slot", 31, RA_FACT, name="ra", confidence=V),
     _reg(128, "op_slot", 31, T_HIGH, confidence=V),
@@ -811,26 +905,33 @@ FIELDS: tuple[Field, ...] = (
     _port_reg(
         206,
         0,
-        "Under f265_266 the register of A, the X0 unit's operand file, that the port writes "
-        "(inferred). Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged "
-        "(verified on the camera)",
-        confidence=I,
+        "The register of A, X0's operand file, that f265_266 writes, its source by value "
+        f"(`PR_SOURCES`; {EXACT}). X0 reads a write from the next word on; in the port's own "
+        f"word it reads the old value ({EXACT}). Flipping its bits in program 16 words 67 and 68 "
+        "leaves the copy unchanged (verified on the camera)",
+        confidence=V,
         name="adst",
     ),
     _port_reg(
         211,
         0,
         "Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged (verified on "
-        "the camera); the only difference between words 66..68. Under f267_268 = 1 the "
-        "register of B, the file the X2 xreg reads, that the word's data op result goes to "
-        "(inferred, strong: on the camera, ops of families B, C, D and E inserted after program "
-        "16's word 64 with f267_268 = 1 set the register it names to their result, which word "
-        "68 or 73 then read through its xreg, at pre-registered values; program 16's word 64 "
-        "writes its count r7 so)",
-        confidence=I,
+        "the camera); the only difference between words 66..68. The register of B, X1's "
+        f"operand file, that f267_268 writes, its source by value (`PR_SOURCES`; {EXACT}); in "
+        "the copy, ops of families B, C, D and E inserted after program 16's word 64 with "
+        "f267_268 = 1 set the register it names to their result, which word 68 or 73 then read "
+        "through its xreg, at pre-registered values (verified on the camera); program 16's word "
+        "64 writes its count r7 so",
+        confidence=V,
         name="bdst",
     ),
-    _port_reg(216, 31),
+    _port_reg(
+        216,
+        31,
+        f"The register of B that f269 = 0 writes with X0's result ({EXACT})",
+        confidence=V,
+        name="bdst2",
+    ),
     Field(
         221,
         223,
@@ -896,15 +997,12 @@ FIELDS: tuple[Field, ...] = (
         266,
         "pr",
         3,
-        "The enable of A's write port on f206_210, its value the source: 2 the ALU result bus, 0 "
-        "X0's result (inferred). Not the end op: idling it in program 16 word 79 (bit 229 clear) "
+        f"The enable of A's write port on f206_210, its value the source ({EXACT}). Not the end "
+        "op: idling it in program 16 word 79 (bit 229 clear) "
         "copied; idling it with bit 268 in word 60 times the job out (verified on the camera, "
         "one run each)",
-        values={
-            0: "X0's result to A (inferred)",
-            2: "ALU result to A (inferred)",
-            3: "idle",
-        },
+        values=_pr_values("f265_266", 3),
+        confidence=V,
         name="asrc",
     ),
     _enable(
@@ -914,11 +1012,12 @@ FIELDS: tuple[Field, ...] = (
         3,
         "Bit 268 is needed in program 16 words 63 and 65: setting it alone times the job out in "
         "63 and wedged the job (status -5) in 65, whose whole idle times out (verified on the "
-        "camera, one run each); bit 267 is set in the stock words 60, 63, 65 and 79. Value 1 "
-        "sends the word's data op result to the B register f211_215 names, the file the X2 "
-        "xreg reads (inferred, strong; `semantics.RESULT_PORTS`); it writes no G register "
-        f"({EXACT}) and no A register (inferred)",
-        values={1: "ALU result to B (inferred)", 3: "idle"},
+        "camera, one run each); bit 267 is set in the stock words 60, 63, 65 and 79. The enable "
+        f"of B's write port on f211_215, its value the source ({EXACT}); 2, which no stock word "
+        "uses, writes nothing with the bus, X0 and X1 all carrying results. It writes no G "
+        f"register ({EXACT}) and no A register (inferred)",
+        values=_pr_values("f267_268", 3),
+        confidence=V,
         name="bsrc",
     ),
     _enable(
@@ -926,18 +1025,23 @@ FIELDS: tuple[Field, ...] = (
         269,
         "pr",
         1,
-        "Under 0 an inserted op's result did not reach the xreg set as word 68 saw it; the "
-        "operand set untested (one job: hypothesis)",
+        f"The enable of B's second write port on f216_220: 0 takes X0's result ({EXACT}), not "
+        "the ALU bus (in the copy an inserted op's result under 0 did not reach the xreg set "
+        "as word 68 saw it, verified on the camera, one job)",
+        values=_pr_values("f269", 1),
+        confidence=V,
+        name="bsrc2",
     ),
     _enable(
         270,
         271,
         "pr",
         3,
-        f"{SELECTOR}. Value 1 writes the word's ALU result to the R register f221_223 names, "
-        "which a store in the very next word reads; in a word with an idle op it takes a load's "
-        f"datum, which reaches the ALU result bus three words after the load ({EXACT})",
-        values={1: "ALU result to R (verified)", 3: "idle"},
+        f"{SELECTOR}. The enable of R's write port on f221_223, its value the source ({EXACT}); "
+        "a store in the very next word reads the register written; in a word with an idle op "
+        "1 takes a load's datum three words after the load, or a multiply's product one word "
+        f"after it ({EXACT})",
+        values=_pr_values("f270_271", 3),
         confidence=V,
         name="rsrc",
     ),
@@ -949,17 +1053,12 @@ FIELDS: tuple[Field, ...] = (
         f"{SELECTOR}; in op 0 words with value 1, f224_228 names ra (307 of 336) {OWNERSHIP}, "
         "the loop counter's write-back; not needed in program 16 words 60 and 63, where idling "
         "it (272 alone in 63) copied (verified on the camera, one run each). The enable of G's "
-        "write port on f224_228, its value the source: 1 the word's ALU result, which the next "
-        f"word's ra and rb read, no latency ({EXACT}); 2 X0's result in the strobe's own word "
-        f"({EXACT}); 0 X1's result (inferred). Under 1 in a word with an idle op it takes a "
-        f"load's datum, which reaches the ALU result bus three words after the load ({EXACT}). "
-        f"Without an enabled port a data op writes no register ({EXACT})",
-        values={
-            0: "X1's result to G (inferred)",
-            1: "ALU result to G, read by the next word (verified)",
-            2: "X0's result to G (verified)",
-            3: "idle",
-        },
+        f"write port on f224_228, its value the source ({EXACT}); the next word's ra and rb "
+        f"read the register written, no latency ({EXACT}). Under 1 in a word with an idle op it "
+        "takes a load's datum three words after the load, or a multiply's product one word "
+        f"after it, which the multiply's own word does not write ({EXACT}). Without an enabled "
+        f"port a data op writes no register ({EXACT})",
+        values=_pr_values("f272_273", 3),
         confidence=V,
         name="gsrc",
     ),
@@ -1017,12 +1116,21 @@ FIELDS: tuple[Field, ...] = (
         0x3F,
         X0_FACT,
         kind=Kind.OPCODE,
-        confidence=I,
-        values=X0_VALUES,
+        confidence=V,
+        values=_x_values("x0"),
         name="x0op",
     ),
-    _ctl(308, 309, "x2", 0x3, X2_FACT, basis=XFER_BASIS),
-    _ctl(310, 312, "x1", 0x7, X1_FACT, basis=XFER_BASIS, kind=Kind.OPCODE),
+    _ctl(
+        308,
+        312,
+        "x1",
+        0x1F,
+        X1_HEAD_FACT,
+        kind=Kind.OPCODE,
+        confidence=V,
+        values=_x_values("x1"),
+        name="x1op",
+    ),
     Field(
         313,
         319,
@@ -1408,9 +1516,12 @@ MEANINGS = {
     0x3F: "ra >> imm5, logical (inferred, by exact readout)",
     0x40: "ra << imm5 (inferred, by exact readout)",
     0x47: f"{RING_STEP}; R = R[f120_122], L = rb",
-    0x48: f"no ALU result, no operand changed, no stall on three operand pairs ({EXACT}); its "
-    "function open",
-    0x49: f"as 0x48: no ALU result, no operand changed, no stall ({EXACT}); its function open",
+    0x48: "the multiply as 0x49, the same 32 bits on every operand pair; no stock word uses it "
+    f"({EXACT}); what sets it apart from 0x49 is open",
+    0x49: "the multiply: (ra x rb) & 0xffffffff on the ALU bus one word after the op, nothing in "
+    "the op's own word and nothing two or three words on; a port of the next word takes it, "
+    f"also when that word holds the next multiply ({EXACT}, 48 of 48 values on eight operand "
+    "pairs of both signs); the high half was not seen",
 }
 
 
