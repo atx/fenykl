@@ -771,27 +771,34 @@ def test_an_inserted_op_takes_its_semantics_tier():
 
 
 @pytest.mark.parametrize(
-    "word, why",
+    "word, at, why",
     [
-        (Word.from_fields({"f313_319": 0x48}, base=IDLE), "op48 has no op semantics"),
         (
-            Word.from_fields({"f313_319": 0x1A}, base=IDLE),
+            Word.from_fields({"f313_319": 0x48}, base=IDLE),
+            12,
+            "op48 has no op semantics",
+        ),
+        # A word load at r2, (len + 0x1f) / 16 at the engine site: not word-aligned.
+        (
+            Word.data(0x1A, Operands(ra=2, imm=0)),
+            65,
             "outside what its op semantics covers",
         ),
         (
             Word.from_fields({"f313_319": 0x38}, base=IDLE),
+            12,
             "no PR port enabled: where the result goes is open",
         ),
-        (stock().words[42], "an inserted register transfer"),
+        (stock().words[42], 12, "an inserted register transfer"),
     ],
-    ids=["no-row", "flag-bits", "no-port", "transfer"],
+    ids=["no-row", "unaligned", "no-port", "transfer"],
 )
-def test_an_insert_without_semantics_is_unknown(word: Word, why: str):
-    program = inserted(12, word)
-    with pytest.raises(UnknownSemantics, match=f"word 12: .*{why}"):
+def test_an_insert_without_semantics_is_unknown(word: Word, at: int, why: str):
+    program = inserted(at, word)
+    with pytest.raises(UnknownSemantics, match=f"word {at}: .*{why}"):
         run(program)
     result, boot = run(program, strict=False)
-    assert [i for i, _ in result.ignored] == [12]
+    assert [i for i, _ in result.ignored] == [at]
     assert boot.read(DST, LEN).weakest() is Confidence.HYPOTHESIS
 
 
@@ -825,18 +832,17 @@ def engine(words: tuple[Word, ...], reader: int = 68, length: int = 0x1000):
 
 
 def d_op(code: int, ra: int, c: int) -> Word:
+    """An immediate op whose constant is c as the transfers read it, imm = c / 16."""
     return Word.data(code, Operands(ra=ra, imm=c >> 4))
 
 
 def e_op(code: int, ra: int, rb: int) -> Word:
-    return Word.from_fields(
-        {"f120_122": 7}, base=Word.data(code, Operands(ra=ra, rb=rb))
-    )
+    return Word.data(code, Operands(ra=ra, rb=rb))
 
 
 def test_an_engine_op_sets_the_load_offset():
-    """ra = r2 = len + 0x10..0x1f after word 64; 0x1f adds c; word 68 offsets the load by
-    the value / 32 in 32-byte steps, so dst[o:] = src[:len - o] and dst[:o] is unknown."""
+    """ra = r2 = (len + 0x1f) / 16 after word 64; 0x1f adds c / 16; word 68 offsets the load
+    by 16 x the value / 32 in 32-byte steps, so dst[o:] = src[:len - o] and dst[:o] is unknown."""
     result, boot = engine((port(d_op(0x1F, 2, 0x400), "f267_268", 12),))
     o = (0x1000 + 0x400) // 32 & ~0x1F
     dst = boot.read(DST, 0x1000)
@@ -847,8 +853,8 @@ def test_an_engine_op_sets_the_load_offset():
 
 
 def test_an_operand_chain_feeds_a_count():
-    """min(r2, 0x40) = 0x40 into r13 through port 272, read three words on by a compare
-    through port 267 into r12: true is 0x10, so word 73 stores 16 bytes."""
+    """min(r2, 4) = 4 into r13 through port 272, read three words on by a compare through
+    port 267 into r12: true is 1, so word 73 stores 16 bytes."""
     words = (
         port(d_op(0x25, 2, 0x40), "f272_273", 13),
         IDLE,
@@ -859,7 +865,7 @@ def test_an_operand_chain_feeds_a_count():
     dst = boot.read(DST, 0x1000)
     assert result.status is Status.OK and all(dst.known)
     assert bytes(dst.data) == bytes(range(16)) + b"\xa5" * (0x1000 - 16)
-    with pytest.raises(UnknownSemantics, match="no exact multiple of 16"):
+    with pytest.raises(UnknownSemantics, match="a count above len"):
         engine((port(e_op(0x08, 2, 2), "f267_268", 12),), reader=73)
 
 

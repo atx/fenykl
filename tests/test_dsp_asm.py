@@ -16,7 +16,7 @@ from fenykl.dsp.program import (
     labels,
     stock_programs,
 )
-from fenykl.dsp.units import X0, X2, OpSlot
+from fenykl.dsp.units import X0, X1, X2, OpSlot
 from fenykl.dsp.word import IDLE, Word
 
 
@@ -36,9 +36,9 @@ def test_assemble_warns_only_about_hypothesis_fields():
         warnings.simplefilter("error")
         assemble([Word(x2=X2(xreg=3)), IDLE])
     with pytest.warns(
-        HypothesisFieldWarning, match=r"2 hypothesis fields: f100_104, f308_309$"
+        HypothesisFieldWarning, match=r"2 hypothesis fields: f110_114, f308_309$"
     ):
-        assemble([Word(x2=X2(xreg=3), x0=X0(f100_104=2)), Word(x2=X2(f308_309=0))])
+        assemble([Word(x2=X2(xreg=3), x1=X1(f110_114=2)), Word(x2=X2(f308_309=0))])
 
 
 @pytest.mark.parametrize("const", ["f133_140", "f230_231", "f277"])
@@ -70,10 +70,10 @@ def test_listing_names_ops_targets_and_delay_slots():
     text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0   call~ -> 1443!  x0: f1=1",
+        "0   call~ -> 1443!  x0: f1=1~",
         "1..4 | idle x4",
         "5..6   idle x2",
-        "7   ret~  op_slot: f128_132=r1",
+        "7   ret~  op_slot: f128_132=r1!",
         "8 | op1f~ r2, #0xc",
         "9 | call~ -> 10! ctl_n=1!",
     ]
@@ -107,7 +107,7 @@ def test_a_slot_rejects_a_field_given_by_id_and_name():
 
 def test_listing_shows_data_ops_in_their_format():
     # Operands replace their fields; a slot field outside the format (imm in a register form,
-    # f120_122 as an operand) stays a field.
+    # f120_122 as an R register) stays a field.
     shift = Word.data(0x3F, Operands(ra=2, rb=2, imm=5))
     signed = Word.data(
         0x0C, Operands(ra=3, imm=-7), base=Word(op_slot=OpSlot(f120_122=1))
@@ -118,7 +118,7 @@ def test_listing_shows_data_ops_in_their_format():
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body[::2] == [
         "0   op3f~ r2, r2, #5",
-        "2   op0c~ r3, #-7  op_slot: f120_122=1",
+        "2   op0c~ r3, #-7  op_slot: f120_122=r1!",
         "4   op0b~ r1, #0x2468",
         "6   op49~ r1, r2  op_slot: imm=4!",
     ]

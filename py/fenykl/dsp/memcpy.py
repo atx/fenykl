@@ -92,27 +92,35 @@ ITEM = 16
 ENGINE_AFTER = 64
 """Inserted data ops right after this stock word (before 65) are the measured site: their
 operands and their results through the PR ports are modelled there only."""
+READOUT = 16
+"""The transfers read a register value in units of 16 bytes: the copy model holds the xreg
+set's values as the transfers use them, 16 times what an op computes (inferred: the scale that
+read as immediates and results scaled by 16 through these transfers, and that exact readout of
+own programs on the camera does not show)."""
 ENGINE_OPERANDS = (
     (
         2,
-        lambda length: (length + 0x10, length + 0x1F),
+        lambda length: ((length + 0x1F) // READOUT,) * 2,
         (
-            "len + 0x10..0x1f (inferred): the favoured model of the count, floored to 16 B, "
-            "needs r2 at least len + 0x10, which also explains a full copy then a timeout at "
-            "0x3f imm 0; r2 = len with counts rounded up is not excluded"
+            "(len + 0x10..0x1f) / 16, the one integer there (inferred): the favoured model of "
+            "the count, floored to 16 B, needs r2 at least (len + 0x10) / 16, which also "
+            "explains a full copy then a timeout at 0x3f imm 0; r2 = len / 16 with counts "
+            "rounded up is not excluded"
         ),
     ),
     (
         7,
-        lambda length: (0x40010, 0x4041F) if length in (0x2000, 0x4000) else None,
+        lambda length: (0x4001, 0x4041) if length in (0x2000, 0x4000) else None,
         (
-            "a value near 0x40000, read through ra - rb at two lengths, 0x2000 and 0x4000; "
-            "not the len / 2 that word 64 writes to the xreg's r7 (inferred); at shorter "
+            "a value near 0x4000, read through ra - rb at two lengths, 0x2000 and 0x4000; "
+            "not what word 64 writes to the xreg's r7, len / 2 as the transfers use it "
+            "(inferred); at shorter "
             "lengths it lay further above (unknown there)"
         ),
     ),
 )
-"""The operand set's registers at the engine site (inferred, on the camera), by job length."""
+"""The operand set's registers at the engine site (inferred, on the camera), by job length, in
+the units the ops compute in."""
 MAX_COUNT = 0x40000
 """A count above this is an address or junk: the store never ends (hypothesis)."""
 ZERO_FILL = 0x4000
@@ -675,6 +683,14 @@ class Plan:
         return min(self.cap, *deciding)
 
 
+def _readout(value: Reg | None) -> Reg | None:
+    """An op's result as the copy's transfers use it (`READOUT`)."""
+    if value is None:
+        return None
+    fact = f"{READOUT} x ({value.fact})"
+    return Reg(READOUT * value.lo, READOUT * value.hi, value.taint, fact)
+
+
 def _trunc32(v: int) -> int:
     """v / 32 truncated towards zero, to a multiple of 32."""
     q = abs(v) // 32 & ~0x1F
@@ -909,7 +925,7 @@ class Copy16Model:
                     f"inserted word {j} writes r{r}, which a stock word after it writes too"
                 )
             else:
-                trace.writes[r] = (effect.result, j)
+                trace.writes[r] = (_readout(effect.result), j)
         return ""
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:

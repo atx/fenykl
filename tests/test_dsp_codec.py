@@ -136,18 +136,18 @@ def test_program_16_control_flow(items):
 @pytest.mark.parametrize(
     "code, args, fields",
     [
-        # Family A: imm13 = imm | f128_132 << 8; f120_122 keeps the base word's value.
+        # Family A: imm13 = imm | f128_132 << 8, signed; f120_122 keeps the base word's value.
         (
             0x1A,
-            Operands(ra=5, imm=0x1ABC),
+            Operands(ra=5, imm=0x1ABC - 0x2000),
             {"ra": 5, "imm": 0xBC, "f128_132": 0x1A, "f120_122": 7},
         ),
-        # 0x0c's immediate is two's complement: -7 is 0x1ff9.
+        # -7 is 0x1ff9.
         (0x0C, Operands(ra=3, imm=-7), {"ra": 3, "imm": 0xF9, "f128_132": 0x1F}),
         # Family B: imm16 takes f120_122 as bits 13..15.
         (
             0x0B,
-            Operands(ra=1, imm=0xABCD),
+            Operands(ra=1, imm=0xABCD - 0x10000),
             {"ra": 1, "imm": 0xCD, "f128_132": 0x0B, "f120_122": 5},
         ),
         (
@@ -172,11 +172,14 @@ def test_data_op_operands_assemble_and_decode(code, args, fields):
     assert word.operands == args
 
 
-def test_only_0x0c_and_0x10_immediates_are_signed():
-    raw = Word.data(0x1A, Operands(ra=0, imm=0x1FF9))
-    assert raw.operands.imm == 0x1FF9
-    assert Word.data(0x10, Operands(ra=0, imm=-1)).operands.imm == -1
+def test_an_immediate_extends_by_its_op():
+    assert Word.data(0x1A, Operands(ra=0, imm=-7)).operands.imm == -7
     assert Word.data(0x10, Operands(ra=0, imm=-0x1000)).operands.imm == -0x1000
+    assert Word.data(0x1C, Operands(ra=0, imm=-1)).operands.imm == -1
+    # 0x1e, 0x1f and 0x23 zero-extend imm16 although family D sign-extends it.
+    assert Word.data(0x1E, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
+    assert Word.data(0x0B, Operands(ra=0, imm=-1)).operands.imm == -1
+    assert Word.data(0x0A, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
 
 
 @pytest.mark.parametrize(
@@ -186,7 +189,7 @@ def test_only_0x0c_and_0x10_immediates_are_signed():
         (0x40, Operands(ra=0, rb=0, imm=32)),  # 5 bits
         (0x0C, Operands(ra=0, imm=0x1000)),  # signed 13 bits
         (0x0C, Operands(ra=0, imm=-0x1001)),
-        (0x1A, Operands(ra=0, imm=-1)),  # unsigned
+        (0x1E, Operands(ra=0, imm=-1)),  # zero-extended
         (0x49, Operands(ra=0)),  # rb missing
         (0x1A, Operands(ra=0, rb=1, imm=0)),  # no rb in family A
         (0x49, Operands(ra=0, rb=1, imm=0)),  # no immediate in family E

@@ -78,7 +78,7 @@ def test_undecided_branch_stops_or_raises():
     assert flow.stop is Stop.UNDECIDED and flow.order()[-1] == 27
     flow = run_copy(0x400, RaTest())  # r7 of the op slot: unknown
     assert flow.stop is Stop.UNDECIDED and flow.order()[-1] == 27
-    with pytest.raises(UnknownSemantics, match="word 1: no semantics"):
+    with pytest.raises(UnknownSemantics, match="word 10: .*under f265_266=0 is open"):
         run_copy(0x400, copy_branches(0x400), strict=True)
 
 
@@ -98,19 +98,19 @@ def control(code: int, target: int, ra: int) -> Word:
 HALT = Word.from_fields({"op": 7})
 
 
-def test_local_read_uses_ra_as_a_base():
-    read = Word.from_fields(
-        {"f120_122": 7}, base=Word.data(0x1A, Operands(ra=4, imm=1))
-    )
+def test_local_read_uses_ra_as_a_byte_base():
+    read = Word.data(0x1A, Operands(ra=4, imm=1))
     job = commands.copy(Program((read, HALT)), SRC, DST, 0x400)
     boot = Boot()
-    boot.slot[4] = Reg(1, 1, Confidence.VERIFIED, "set by the test")
+    boot.slot[4] = Reg(4, 4, Confidence.VERIFIED, "set by the test")
     flow = Executor(boot).step(job)
     assert flow.steps[0].note == "reads local word 0x2: 0x400"
-    assert boot.slot[4] == Reg(1, 1, Confidence.VERIFIED, "set by the test")
+    assert boot.slot[4] == Reg(4, 4, Confidence.VERIFIED, "set by the test")
+    # f120_122 has no effect on a load.
     other = Word.from_fields({"f120_122": 3}, base=read)
-    with pytest.raises(UnknownSemantics, match="outside what its semantics covers"):
-        Executor(Boot()).step(commands.copy(Program((other, HALT)), SRC, DST, 0x400))
+    boot.slot[4] = Reg(4, 4, Confidence.VERIFIED, "set by the test")
+    job = commands.copy(Program((other, HALT)), SRC, DST, 0x400)
+    assert Executor(boot).step(job).steps[0].note == "reads local word 0x2: 0x400"
 
 
 def test_a_program_without_a_halt_runs_past_its_end():
@@ -120,10 +120,8 @@ def test_a_program_without_a_halt_runs_past_its_end():
 
 
 def load(op: int, imm: int, ra: int = 4) -> Word:
-    """A family A word (a load or a store) at ra + imm, covered (f120_122 = 7)."""
-    return Word.from_fields(
-        {"f120_122": 7}, base=Word.data(op, Operands(ra=ra, imm=imm))
-    )
+    """A family A word (a load or a store) at the byte address ra + width x imm."""
+    return Word.data(op, Operands(ra=ra, imm=imm))
 
 
 def test_word_halfword_and_byte_loads_share_one_base():
@@ -135,35 +133,35 @@ def test_word_halfword_and_byte_loads_share_one_base():
         f"reads local halfword 0x1: {SRC >> 16:#x}",
         f"reads local byte 0x1: {SRC >> 8 & 0xFF:#x}",
         f"reads local halfword 0x2: {DST & 0xFFFF:#x}",
-        "reads local byte r4 + -0x1 = -0x1, outside the modelled local memory",
+        "reads local byte r4 + -0x1 B = -0x1, outside the modelled local memory",
     ]
     assert boot.slot[4] == given(0)  # ra is the base, not written
-    # A base of word 1 (dst) moves both by 4 bytes.
-    _, flow = run_slot((load(0x16, 1), load(0x10, 1)), r4=given(1))
+    # A base of byte 4 (dst) moves both by 4 bytes.
+    _, flow = run_slot((load(0x16, 1), load(0x10, 1)), r4=given(4))
     assert flow.steps[0].note == f"reads local halfword 0x3: {DST >> 16:#x}"
     assert flow.steps[1].note == f"reads local byte 0x5: {DST >> 8 & 0xFF:#x}"
 
 
-def test_family_a_offset_is_the_signed_low_13_bits_of_width_times_imm13():
-    # From local word 2: 4 x 0x7ff and 2 x 0xffe are -4 B in 13 bits, the word and halfwords
-    # below; 0x14 loads halfwords as 0x16 does.
-    words = (load(0x1A, 0x7FF), load(0x16, 0xFFE), load(0x14, 0xFFF), load(0x14, 1))
-    _, flow = run_slot(words, r4=given(2))
+def test_family_a_offset_is_width_times_the_signed_imm13():
+    # From byte 8, local word 2: 4 x -1 and 2 x -2 are -4 B, the word and halfwords below;
+    # 0x14 loads halfwords as 0x16 does.
+    words = (load(0x1A, -1), load(0x16, -2), load(0x14, -1), load(0x14, 1))
+    _, flow = run_slot(words, r4=given(8))
     assert [s.note for s in flow.steps[:4]] == [
         f"reads local word 0x1: {DST:#x}",
         f"reads local halfword 0x2: {DST & 0xFFFF:#x}",
         f"reads local halfword 0x3: {DST >> 16:#x}",
         "reads local halfword 0x5: 0x0",
     ]
-    # Bit 11 of a halfword op's imm13 is the offset's sign, not the flag.
-    _, flow = run_slot((load(0x16, 0x800),), r4=given(0))
+    # imm13's high bits are the offset's sign.
+    _, flow = run_slot((load(0x16, -0x800),), r4=given(0))
     assert flow.steps[0].note.endswith("= -0x800, outside the modelled local memory")
 
 
-@pytest.mark.parametrize("op, imm", [(0x1A, 0x800), (0x1A, 0x1000), (0x16, 0x1000)])
-def test_family_a_flag_bits_are_not_covered(op: int, imm: int):
+@pytest.mark.parametrize("op, base", [(0x1A, 2), (0x16, 1), (0x18, 6)])
+def test_an_unaligned_family_a_access_is_not_covered(op: int, base: int):
     with pytest.raises(UnknownSemantics, match="outside what its semantics covers"):
-        run_slot((load(op, imm),), r4=given(0))
+        run_slot((load(op, 0),), r4=given(base))
 
 
 def test_family_a_stores_make_their_bytes_unknown():
@@ -182,7 +180,9 @@ def test_family_a_stores_make_their_bytes_unknown():
     assert boot.slot[4] == given(0)
     # At an unknown base the store may hit any byte.
     boot, flow = run_slot((load(0x12, 0), load(0x1A, 0, ra=5)), r5=given(0))
-    assert flow.steps[0].note == "writes local halfword r4 + 0x0, r4 unknown: anywhere"
+    assert (
+        flow.steps[0].note == "writes local halfword r4 + 0x0 B, r4 unknown: anywhere"
+    )
     assert flow.steps[1].note == "reads local word 0x0: unknown"
 
 
@@ -264,54 +264,54 @@ def test_and_mask_sign_extends_imm16():
         boot, _ = run_slot((line, IDLE, IDLE, IDLE), r4=r4)
         return boot.slot[5]
 
-    assert masked(0xFFE0, given(0xA1113610)) == Reg(
-        0xA1113600, 0xA1113600, Confidence.INFERRED, "r4 & 0xffffffe0 (op 0x38)"
+    assert masked(-0x20, given(0xA1113610)) == Reg(
+        0xA1113600, 0xA1113600, Confidence.VERIFIED, "r4 & 0xffffffe0 (op 0x38)"
     )
     # Clearing low bits keeps the order of the bounds; other masks are enumerated.
-    wide = masked(0xFFE0, given(0x30, 0x5F))
+    wide = masked(-0x20, given(0x30, 0x5F))
     assert (wide.lo, wide.hi) == (0x20, 0x40)
     low = masked(0xF, given(0x13, 0x40))
     assert (low.lo, low.hi) == (0, 0xF)
     assert masked(0xF, given(0x13)).exact == 3
-    mixed = masked(0x8001, given(0x10, 0x11))
+    mixed = masked(-0x7FFF, given(0x10, 0x11))
     assert (mixed.lo, mixed.hi) == (0, 1)
 
 
 @pytest.mark.parametrize(
     "op, operands, a, b, value, taint",
     [
-        # D: c = imm16 << 4, imm16 signed over imm, f128_132 and f120_122.
-        (0x1F, Operands(ra=2, imm=-0x1FF0), 0x1010, None, 0x1010 - 0x1FF00, "I"),
-        (0x25, Operands(ra=2, imm=0x7F0), 0x1010, None, 0x1010, "I"),
-        (0x23, Operands(ra=2, imm=-1), 0x10, None, 0x10, "V"),  # unsigned: 0x10 < -0x10
+        # B, C, D, F: ra and the immediate as the op's format extends it; rb unused.
+        (0x0B, Operands(ra=2, imm=-13), 0x1010, None, -13, "V"),
+        (0x0A, Operands(ra=2, imm=0x1234), 0x10, None, 0x12340010, "I"),
+        (0x37, Operands(ra=2, imm=0x7001), 0x10, None, 0x7011, "V"),
+        (0x3E, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, -0x10, "I"),
+        (0x3F, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, 0x0FFFFFF0, "I"),
+        (0x40, Operands(ra=2, rb=3, imm=4), 0x10, 0x1234, 0x100, "I"),
+        (0x1F, Operands(ra=2, imm=0xE010), 0x1010, None, 0xF020, "I"),  # zero-extended
+        (0x25, Operands(ra=2, imm=0x7F0), 0x1010, None, 0x7F0, "V"),
+        (0x25, Operands(ra=2, imm=-1), 0x10, None, -1, "V"),  # sign-extended
+        (0x23, Operands(ra=2, imm=0xFFFF), 0x10, None, 1, "I"),
         (0x21, Operands(ra=2, imm=-1), 0x10, None, 0, "V"),
+        (0x44, Operands(ra=2, imm=0x408), 7, None, 0, "V"),  # 7 + 1 wraps at L = 8
+        (0x44, Operands(ra=2, imm=0x408), 2, None, 3, "V"),
         # E, on (r2, r3).
         (0x28, Operands(ra=2, rb=3), -0x10, 0x1010, 0, "V"),  # unsigned <=
-        (0x2A, Operands(ra=2, rb=3), -0x10, 0x1010, 0x10, "V"),  # signed <=
+        (0x2A, Operands(ra=2, rb=3), -0x10, 0x1010, 1, "V"),  # signed <=
         (0x3D, Operands(ra=2, rb=3), 0x400, 0, -0x401, "V"),
-        (0x2F, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "I"),  # signed: inferred
-        (0x2C, Operands(ra=2, rb=3), -0x1000, 0x1010, None, None),  # signedness open
-        (0x41, Operands(ra=2, rb=3), 0x1010, 0x20, 0x1010 >> 2, "V"),
-        (
-            0x41,
-            Operands(ra=2, rb=3),
-            -0x1400,
-            0x10,
-            -0xA00,
-            "I",
-        ),  # arithmetic: inferred
-        (0x43, Operands(ra=2, rb=3), 0x10, 0x210, 0x20, "I"),  # the & 31: inferred
+        (0x32, Operands(ra=2, rb=3), 0, -5, 5, "I"),
+        (0x2F, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "V"),
+        (0x2E, Operands(ra=2, rb=3), -0x1000, 0x1010, 0x1010, "V"),
+        (0x2C, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "I"),  # unsigned
+        (0x41, Operands(ra=2, rb=3), 0x1010, 0x22, 0x1010 >> 2, "V"),  # rb & 31
+        (0x41, Operands(ra=2, rb=3), -0x1400, 1, -0xA00, "V"),  # arithmetic
+        (0x42, Operands(ra=2, rb=3), -0x10, 4, 0x0FFFFFFF, "I"),  # logical
+        (0x43, Operands(ra=2, rb=3), 0x10, 0x21, 0x20, "V"),
     ],
 )
 def test_measured_op_rules(op, operands, a, b, value, taint):
     word = Word.data(op, operands)
-    if operands.rb is not None:
-        word = Word.from_fields({"f120_122": 7}, base=word)
     regs = {"r2": given(a)} | ({} if b is None else {"r3": given(b)})
     boot, _ = run_slot((ported(word, "operand", 9), IDLE, IDLE, IDLE), **regs)
-    if value is None:
-        assert boot.slot[9] is None
-        return
     assert boot.slot[9].exact == value
     assert (
         boot.slot[9].taint
@@ -323,7 +323,7 @@ def test_ops_chain_through_the_operand_set():
     """A mask into r2, then a shift of it three words on; an op without semantics breaks the
     chain (lenient)."""
     words = (
-        ported(Word.data(0x38, Operands(ra=2, imm=0xFFF0)), "operand", 2),
+        ported(Word.data(0x38, Operands(ra=2, imm=-0x10)), "operand", 2),
         IDLE,
         IDLE,
         ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=2)), "operand", 7),
@@ -342,7 +342,7 @@ def test_ops_chain_through_the_operand_set():
     assert boot.slot[7].exact == 0x100
     assert flow.steps[4].unknown and boot.slot[2] is None
     assert boot.slot[8] is None
-    assert flow.steps[7].note == "r2 >> 1 (op 0x3f): an unknown input"
+    assert flow.steps[7].note == "r2 >>> 0x1 (op 0x3f): an unknown input"
 
 
 def framed(*routine: Word) -> Job:

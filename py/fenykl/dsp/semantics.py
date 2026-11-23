@@ -345,13 +345,12 @@ class OpSemantics:
 
 
 class RegSet(Enum):
-    """The two register sets of the scalar unit (inferred, strong: a data op's result written
-    through port 267 is read by the X2 xreg of a later register transfer and not as an operand,
-    one written through port 272 under enable 1 is read as an operand three words later and not
-    by the xreg)."""
+    """Two of the scalar unit's four register files (`fields`): B, which the X2 xreg reads and
+    port 267 writes, and G, which ra and rb read and port 272 writes (verified on the camera by
+    exact readout that port 267 writes no G register). R and A are not modelled."""
 
-    XREG = "the set the X2 xreg reads (`Boot.regs`)"
-    OPERAND = "the set ra and rb read (`Boot.slot`)"
+    XREG = "B, the file the X2 xreg reads (`Boot.regs`)"
+    OPERAND = "G, the file ra and rb read (`Boot.slot`)"
 
 
 @dataclass(frozen=True)
@@ -374,8 +373,9 @@ RESULT_PORTS = (
 families B, C, D and E inserted after a copy's last setup word wrote the register f211_215
 names under f267_268 = 1, not ra, which word 68 or 73 then read through its xreg; f224_228
 under f272_273 = 1 fed a later op's ra and rb). The latencies are the shortest distances seen
-working: the xreg transfer four words after the write, the operand read three words after it;
-nearer reads are not known."""
+working in the copy: the xreg transfer four words after the write, the operand read three
+words after it; exact readout on the camera shows the G write read by the very next word, which
+the operand latency here does not model yet."""
 PR_ENABLES = {
     "f265_266": "f206_210",
     "f267_268": "f211_215",
@@ -389,10 +389,9 @@ PR_ENABLES = {
 def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], str]:
     """Where the word's data op result goes: (set, register, latency) per decoded enabled port,
     the port fields of the enabled ports whose destination is open, and why the destination is
-    incomplete ("" when every enabled port is decoded and one is). Under f272_273 = 2 the
-    result reached neither set on the camera, under f265_266 = 1 and f269 = 0 not the xreg set
-    (the operand set untested; one job each, hypothesis); with no port enabled nothing was seen
-    written (hypothesis)."""
+    incomplete ("" when every enabled port is decoded and one is). An enable that takes another
+    unit's result (f272_273 = 0 or 2, f265_266 = 0) counts as open here; without an enabled
+    port a data op writes no register (verified on the camera by exact readout)."""
     dests, open_, names = [], [], []
     for enable, reg in PR_ENABLES.items():
         v = word[enable]
@@ -415,14 +414,14 @@ def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], 
     return dests, open_, why
 
 
-TRUE = 0x10
-"""A compare's true; false is 0 (verified on the camera: a flag of 0x10 makes word 73 store 16
-bytes, as a scalar unit whose values count in units of 16 would give)."""
 ENUM_LIMIT = 1 << 16
 """The most input combinations a result over register intervals is enumerated for."""
 SPAN = (-(1 << 31), 1 << 32)
-"""Results outside [lo, hi), 32 bits read signed or unsigned, are unknown: the register width
-was never measured."""
+"""Results outside [lo, hi), 32 bits read signed or unsigned, are unknown: the ops wrap at 32
+bits (verified on the camera by exact readout), which the intervals do not model."""
+EXACT = "verified on the camera by exact readout"
+"""Own programs run on the camera, every result stored into DSP local memory and read back as an
+exact 32-bit word."""
 
 Value = Callable[..., int | None]
 Scope = Callable[..., Confidence]
@@ -448,7 +447,7 @@ def _result(
         n *= x.hi - x.lo + 1
     if n > ENUM_LIMIT:
         return Effect(True, None, f"{name}: inputs too wide to enumerate")
-    outs, taint = [], min(tier, *(x.taint for x in regs))
+    outs, taint = [], min((tier, *(x.taint for x in regs)))
     for args in product(*(range(x.lo, x.hi + 1) for x in regs)):
         v = f(*args)
         if v is None:
@@ -458,26 +457,23 @@ def _result(
             taint = min(taint, scope(*args))
     lo, hi = min(outs), max(outs)
     if lo < SPAN[0] or hi >= SPAN[1]:
-        return Effect(True, None, f"{name}: beyond 32 bits, the width is not measured")
+        return Effect(True, None, f"{name}: beyond 32 bits, the wrap is not modelled")
     value = f"{lo:#x}" if lo == hi else f"{lo:#x}..{hi:#x}"
     return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
 
 
 def _e(
-    text: str, f: Value, tier: Confidence = V, scope: Scope | None = None
+    text: str, f: Value, tier: Confidence = V
 ) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A family E op on (ra, rb), covered at f120_122 = 7, where it was measured."""
+    """A family E op on (ra, rb); f120_122 has no effect on it."""
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
         assert args is not None and args.rb is not None
-        if word["f120_122"] != 7:
-            return None
         named = text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
         if args.ra == args.rb:
-            one = None if scope is None else (lambda a: scope(a, a))
-            return _result(word, named, (slot[args.ra],), lambda a: f(a, a), tier, one)
-        return _result(word, named, (slot[args.ra], slot[args.rb]), f, tier, scope)
+            return _result(word, named, (slot[args.ra],), lambda a: f(a, a), tier)
+        return _result(word, named, (slot[args.ra], slot[args.rb]), f, tier)
 
     return run
 
@@ -485,49 +481,24 @@ def _e(
 def _imm(
     text: str, f: Callable[[int, int], int | None], tier: Confidence
 ) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """An op on ra and c = imm << 4, imm as its format decodes it (family D's signed imm16)."""
+    """An op on ra and c, the immediate as its format decodes it (sign- or zero-extended)."""
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
         assert args is not None and args.imm is not None
-        c = args.imm << 4
+        c = args.imm
         named = text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
         return _result(word, named, (slot[args.ra],), lambda a: f(a, c), tier)
 
     return run
 
 
-def _imm_shift(
-    text: str,
-    f: Callable[[int, int], int | None],
-    tier: Confidence,
-    measured: Callable[[int], bool] | None = None,
-) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A family C op by its immediate, on a register that ra and rb both name (which of the two
-    it reads is open), covered at f120_122 = 7 and imm 1..31 (imm 0 ended in a timeout, its
-    reading open); `measured(imm)` false lowers the taint one tier."""
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        args = word.operands
-        assert args is not None and args.imm is not None
-        if word["f120_122"] != 7 or args.ra != args.rb or args.imm == 0:
-            return None
-        k = args.imm
-        t = tier if measured is None or measured(k) else Confidence(max(tier - 1, 0))
-        named = text.replace("ra", f"r{args.ra}").replace("k", str(k))
-        return _result(word, named, (slot[args.ra],), lambda a: f(a, k), t)
-
-    return run
-
-
-def _signed_ops(scope_tier: Confidence) -> Scope:
-    """`scope_tier` where the operands' signs differ, else verified."""
-    return lambda a, b: scope_tier if (a < 0) != (b < 0) else V
-
-
-def _same_sign(f: Callable[[int, int], int]) -> Value:
-    """f where the operands' signs agree; None (open) where they differ."""
-    return lambda a, b: f(a, b) if (a < 0) == (b < 0) else None
+def _const(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """0x0b: the sign-extended imm16; ra is not read."""
+    args = word.operands
+    assert args is not None and args.imm is not None
+    c = args.imm
+    return _result(word, f"{c:#x}", (), lambda: c, V)
 
 
 def _u32(v: int) -> int:
@@ -535,52 +506,40 @@ def _u32(v: int) -> int:
 
 
 def _flag(test: bool) -> int:
-    return TRUE if test else 0
-
-
-def _shift_count(rb: int) -> int:
-    return (rb >> 4) & 31
-
-
-def _rb_shift_scope(a: int, b: int) -> Confidence:
-    """Verified on a non-negative ra and a count rb >> 4 below 32; the arithmetic shift of a
-    negative ra and the & 31 are inferred."""
-    return I if a < 0 or b < 0 or b >> 4 > 31 else V
+    return 1 if test else 0
 
 
 LOCAL_UNITS = {4: "word", 2: "halfword", 1: "byte"}
-FLAG_BITS = {4: 0x1800, 2: 0x1000, 1: 0}
-"""The imm13 bits of a family A op above the 13-bit byte offset: a flag that does not move the
-address on r0 (inferred), its meaning open; words with it set are not covered."""
 
 
 def local_offset(width: int, imm13: int) -> int:
-    """The byte offset of a family A access: the low 13 bits of width x imm13, signed."""
-    off = width * imm13 & 0x1FFF
-    return off - 0x2000 if off & 0x1000 else off
+    """The byte offset of a family A access: width x imm13, imm13 signed (verified on the camera
+    by exact readout)."""
+    return width * imm13
 
 
 def _local_access(
     width: int, word: Word, slot: RegisterFile
 ) -> tuple[str, int | None] | None:
     """(the access as text, its index in units of `width` from the local base, None for an
-    unknown base) at byte 4 ra + offset, ra a word index; None outside what is covered."""
+    unknown base) at the byte address ra + width x imm13; None at an address not aligned to
+    the width (not measured)."""
     args = word.operands
     assert args is not None and args.imm is not None
-    imm13 = args.imm & 0x1FFF
-    if word["f120_122"] != 7 or imm13 & FLAG_BITS[width]:
-        return None
-    units = local_offset(width, imm13) // width
-    where = f"local {LOCAL_UNITS[width]} r{args.ra} + {units:#x}"
+    offset = local_offset(width, args.imm)
+    where = f"local {LOCAL_UNITS[width]} r{args.ra} + {offset:#x} B"
     base = slot[args.ra]
     if base is None or base.exact is None:
         return f"{where}, r{args.ra} unknown", None
-    return where, 4 * base.exact // width + units
+    addr = base.exact + offset
+    if addr % width:
+        return None
+    return where, addr // width
 
 
 def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
     """A read of `width` bytes of local memory; ra is a base it does not write. The read is
-    recorded only: where the datum goes is open."""
+    recorded only: the datum's delivery to a port three words on is not modelled."""
     unit = LOCAL_UNITS[width]
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
@@ -603,8 +562,9 @@ def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | No
 
 
 def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A write of `width` bytes of local memory; ra is a base it does not write. The datum's
-    source is open, so the bytes become unknown; with an unknown base, all of local memory."""
+    """A write of `width` bytes of local memory; ra is a base it does not write. The datum,
+    R[f120_122], is not modelled, so the bytes become unknown; with an unknown base, all of
+    local memory."""
     unit = LOCAL_UNITS[width]
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
@@ -626,92 +586,61 @@ def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | N
     return run
 
 
-def sign_extend16(imm: int) -> int:
-    return imm - 0x10000 if imm & 0x8000 else imm
-
-
 def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     """ra & imm16 sign-extended. A mask that clears only low bits (~(2^k - 1)) is monotonic, so
     a wide ra interval keeps exact bounds; other masks of a wide interval give a bound."""
     args = word.operands
     assert args is not None and args.imm is not None
-    if word["f267_268"] == 1:
-        return None
-    mask = sign_extend16(args.imm)
+    mask = args.imm
     src = slot[args.ra]
     text = f"r{args.ra} & {mask & 0xFFFFFFFF:#x}"
     clears_low = mask < 0 and (-mask) & (-mask - 1) == 0
     if src is None or src.exact is not None or not clears_low:
-        return _result(word, text, (src,), lambda a: a & mask, I)
+        return _result(word, text, (src,), lambda a: a & mask, V)
     if src.lo < 0:
         return Effect(True, None, f"{text} (op {word.op:#x}): a negative input")
     name = f"{text} (op {word.op:#x})"
-    reg = Reg(src.lo & mask, src.hi & mask, min(src.taint, I), name)
+    reg = Reg(src.lo & mask, src.hi & mask, src.taint, name)
     return Effect(True, reg, f"{name} = {reg.lo:#x}..{reg.hi:#x}")
 
 
-def _f_imm(
-    text: str, f: Callable[[int, int], int | None], tier: Confidence
-) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A family F op on ra and imm13 << 4, covered at f120_122 = 0 and imm13 below 0x1000 (bit
-    12's sign is not measured)."""
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        args = word.operands
-        assert args is not None and args.imm is not None
-        if word["f120_122"] != 0 or args.imm >= 0x1000:
-            return None
-        c = args.imm << 4
-        named = text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
-        return _result(word, named, (slot[args.ra],), lambda a: f(a, c), tier)
-
-    return run
+def _ring_step(s: int, length: int) -> int:
+    """A ring pointer step from s = zext(ra) + sext(R) by the ring length L."""
+    if s < 0:
+        return s + length
+    if s >= length:
+        return s - length
+    return s
 
 
-def _hidden(
-    text: str, same_regs: bool
-) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """An op that adds R, a per-boot value no job sets: its result is unknown until R is.
-    Covered at f120_122 = 0 (other values select other hidden values), and with ra and rb one
-    register where `same_regs` (the only form run)."""
+def _ring_one(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """0x44: the ring pointer step with R = 1 and L the low 8 bits of imm13."""
+    args = word.operands
+    assert args is not None and args.imm is not None
+    length = args.imm & 0xFF
+    text = f"ring step r{args.ra} + 1, L {length:#x}"
+    return _result(
+        word, text, (slot[args.ra],), lambda a: _ring_step(_u32(a) + 1, length), V
+    )
+
+
+def _ring_r(text: str) -> Callable[[Word, RegisterFile, Space], Effect | None]:
+    """0x46 / 0x47: the ring pointer step with R[f120_122], which the model does not hold, so
+    the result is unknown."""
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
         assert args is not None
-        if word["f120_122"] != 0 or same_regs and args.ra != args.rb:
-            return None
         named = text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
+        r = word["f120_122"]
         return Effect(
-            True, None, f"{named} (op {word.op:#x}): R, a per-boot value, unknown"
+            True, None, f"{named}, R{r} (op {word.op:#x}): the R file is not modelled"
         )
 
     return run
 
 
-def _move(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-    """ra where ra >= imm (max(ra, imm) is not excluded); exact equality is inferred, the
-    readout resolving 1 KiB."""
-    args = word.operands
-    assert args is not None and args.imm is not None
-    if not 0 <= args.imm <= 0x1234:
-        return None
-    imm = args.imm
-    return _result(
-        word, f"r{args.ra}", (slot[args.ra],), lambda a: a if a >= imm else None, I
-    )
-
-
-_ADDRESS = (
-    "the byte address is 4 ra plus the low 13 bits of width x imm13 as a signed offset; imm13's "
-    "bits above them (11..12 in the word ops, 12 in the halfword ops) do not move the address "
-    "on r0 (inferred: across later firmware versions of the same family, every read of an "
-    "r0-based slot follows a store to the same low-13-bit bytes whatever those bits hold), so "
-    "they are a flag of open meaning and words with it set are not covered"
-)
-_R0_READS = (
-    "across later firmware versions of the same family, every read of an r0-based slot follows "
-    "a store to the same bytes"
-)
+_EXACT_RULE = f"{EXACT}; 32-bit wrap"
 
 
 OP_SEMANTICS: dict[int, OpSemantics] = {
@@ -721,308 +650,189 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "op slot",
         lambda word, slot, local: Effect(),
     ),
-    0x1A: OpSemantics(
-        I,
-        "reads local word ra + imm, ra a base register it does not write (inferred: program "
-        "16's three 0x1a words name local words 0, 1 and 2 (src, dst, len) with one ra, and "
-        "across later firmware versions of the same family, in 59 % of its words the next "
-        "naming of that register is this op again, with another immediate in 95 % of those "
-        "pairs, which as writes would be dead; on the camera, 0x1a in place of the resampler's "
-        "tap-1 read, imm 1 and ra kept, gave tap 1 the coefficient c2, the low 16 bits of the "
-        f"word at 4 bytes: the immediate counts words); {_ADDRESS}; where the datum goes is "
-        "open, so stepping records the read only; covered at f120_122 = 7, the value of those "
-        "three words",
-        _local_load(4),
+    **{
+        code: OpSemantics(
+            V,
+            f"{fmt} local {LOCAL_UNITS[width]} load at the byte address ra + {width} x imm13, ra "
+            f"a base it does not write ({EXACT}); the datum reaches the ALU result bus three "
+            "words on, which stepping does not model: it records the read only",
+            _local_load(width),
+        )
+        for code, width, fmt in (
+            (0x1A, 4, "a"),
+            (0x16, 2, "a signed"),
+            (0x14, 2, "an unsigned"),
+            (0x10, 1, "an unsigned"),
+            (0x0E, 1, "a signed"),
+        )
+    },
+    **{
+        code: OpSemantics(
+            V,
+            f"a local {LOCAL_UNITS[width]} store at the byte address ra + {width} x imm13 of "
+            f"the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT}); "
+            "the R file is not modelled, so the bytes become unknown",
+            _local_store(width),
+        )
+        for code, width in ((0x18, 4), (0x12, 2), (0x0C, 1))
+    },
+    0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})", _and_mask),
+    0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})", _const),
+    0x37: OpSemantics(
+        V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c, V)
     ),
-    0x16: OpSemantics(
+    0x0A: OpSemantics(
         I,
-        "reads the local halfword at ra + imm halfwords, ra a base register it does not write, "
-        "as 0x1a's (verified on the camera at one word that the immediate selects the tap: in "
-        "the resampler, the word that reads tap 1 of the line's phase holds imm 1, and imm 0 "
-        "gave tap 1 tap 0's coefficient, byte for byte; the halfword unit is inferred from "
-        "that and from the request's halfwords, and ra a word index as 0x1a's is a hypothesis); "
-        f"{_ADDRESS}; the sign extension is open; where the datum goes is open, so stepping "
-        "records the read only; covered at f120_122 = 7, the value of that word",
-        _local_load(2),
-    ),
-    0x14: OpSemantics(
-        I,
-        "reads the local halfword at ra + imm halfwords, ra a base register it does not write "
-        f"(inferred: {_R0_READS}, 31 of 31 for 0x14; on the camera, 0x14 in place of the "
-        "resampler's tap-1 read gave tap 1 c0 at imm 0 and the stock c1 at imm 1, so the "
-        "immediate counts halfwords and the word does not pass on the datum read before it; "
-        f"its sign extension against 0x16's is open); {_ADDRESS}; stepping records the read "
-        "only; covered at f120_122 = 7",
-        _local_load(2),
-    ),
-    0x10: OpSemantics(
-        I,
-        "reads the local byte at ra + imm bytes, zero-extended, ra a base register it does not "
-        "write (inferred: on the camera, 0x10 in place of the resampler's tap-1 read, ra kept, "
-        "gave tap 1 c0's bits 8..15 zero-extended at imm 1 and its bits 0..7 at imm 0, the "
-        "bytes at offsets 1 and 0 of the phase's taps, on every line; a sign-extended byte is "
-        f"refuted); {_ADDRESS}; where the datum goes is open, so stepping records the read "
-        "only; covered at f120_122 = 7",
-        _local_load(1),
-    ),
-    0x0E: OpSemantics(
-        I,
-        "reads the local byte at ra + imm bytes, sign-extended, ra a base register it does not "
-        "write (inferred: on the camera, 0x0e in place of the resampler's tap-1 read, ra kept, "
-        "gave tap 1 c0's bits 0..7 at imm 0 and its bits 8..15 at imm 1, sign-extended, on "
-        "every line (imm 1 on two tap sets); nothing delivered and a zero-extended byte are refuted; "
-        "a load from local memory and a select of byte imm of the datum the word before it "
-        "delivered give the same bytes there, so the direction is open); "
-        f"{_ADDRESS}; stepping records the read only; covered at f120_122 = 7",
-        _local_load(1),
-    ),
-    0x12: OpSemantics(
-        I,
-        "writes the local halfword at ra + imm halfwords, ra a base register it does not write "
-        "(inferred: across later firmware versions of the same family, 108 of its 114 accesses "
-        "of r0-based slots are their first touch, 105 of its 124 accesses at -64..-1 B lie in "
-        "the first fifth of their routine, an entry spill, and its displacements fit a halfword "
-        f"unit); {_ADDRESS}; the datum's source is open, so the bytes become unknown; covered at "
-        "f120_122 = 7",
-        _local_store(2),
-    ),
-    0x18: OpSemantics(
-        I,
-        "writes the local word at ra + imm words, ra a base register it does not write "
-        "(inferred: across later firmware versions of the same family, it opens 88 of the 95 "
-        "r0-based word slots of the E-M10 II programs, its accesses at -64..-1 B lean to the "
-        "first fifth of their routine (101 against 61 in the last), and a later access to the "
-        "same address repeats the op in 0.19 of the cases against 0.66 for 0x1a); "
-        f"{_ADDRESS}; the datum's source is open, so the bytes become unknown; covered at "
-        "f120_122 = 7",
-        _local_store(4),
-    ),
-    0x38: OpSemantics(
-        I,
-        "ra & imm16 sign-extended (inferred: on the camera, clearing bit 4 of the "
-        "immediate 0xfff0 in a copy's store-side 0x38 word moved the whole store 16 B down at a "
-        "dst 16 mod 32 and left it in place at a 32-aligned dst, an AND of an address-derived "
-        "value; the sign extension rests on the encoding (f120_122 = 7 exactly when f128_132 = "
-        "31), since the masked value there is small); unlike the other immediates measured, "
-        "not scaled by 16 there. Not covered through port 267 (f267_268 = 1): inserted so, "
-        "r2 & 0x1080 at len 0x1100 stored nothing where 0x1000 bytes were expected, and what "
-        "that port carries for 0x38 is open",
-        _and_mask,
-    ),
-    0x3F: OpSemantics(
-        I,
-        "rb >> imm (inferred: on the camera, at imm 1..5 (others hypothesis) and two lengths "
-        "the count a later "
-        "transfer reads followed len >> imm, a positive value, so logical and arithmetic "
-        "shifts are not separated and a negative input is open; ra and rb named one register "
-        "in every word measured, so which one it reads is open); covered with ra = rb at "
-        "f120_122 = 7",
-        _imm_shift(
-            "ra >> k", lambda a, k: a >> k if a >= 0 else None, I, lambda k: k <= 5
-        ),
+        "ra | (imm16 << 16) (inferred, by exact readout)",
+        _imm("ra | (c << 16)", lambda a, c: a | c << 16, I),
     ),
     0x3E: OpSemantics(
         I,
-        "rb >> imm, as 0x3f (inferred: on the camera, imm 1 halved its input at three "
-        "lengths; logical and arithmetic not separated, the operand role open; other "
-        "immediates hypothesis); covered with ra = rb at f120_122 = 7",
-        _imm_shift(
-            "ra >> k", lambda a, k: a >> k if a >= 0 else None, I, lambda k: k == 1
-        ),
+        "ra >> imm5, arithmetic; rb and f120_122 have no effect (inferred, by exact readout)",
+        _imm("ra >> c", lambda a, c: a >> c, I),
+    ),
+    0x3F: OpSemantics(
+        I,
+        "ra >> imm5, logical; rb and f120_122 have no effect (inferred, by exact readout)",
+        _imm("ra >>> c", lambda a, c: _u32(a) >> c, I),
     ),
     0x40: OpSemantics(
-        V,
-        "ra << imm (verified on the camera at imm 1, 9, 10 and 11 with ra and rb naming one "
-        "register, so which one it shifts is open; other immediates inferred); covered with "
-        "ra = rb at f120_122 = 7",
-        _imm_shift("ra << k", lambda a, k: a << k, V, lambda k: k in (1, 9, 10, 11)),
-    ),
-    0x37: OpSemantics(
         I,
-        "ra | (imm << 4) (inferred: on the camera at three lengths with one immediate; add "
-        "and 3 x ra refuted)",
-        _imm("ra | c", lambda a, c: a | c, I),
-    ),
-    0x0A: OpSemantics(
-        V,
-        "ra (verified on the camera at imm 0..0x1234 through word 68's 1 KiB resolution, so "
-        "exact equality is inferred; max(ra, imm) is not excluded, so covered where ra >= imm, "
-        "at imm16 0..0x1234)",
-        _move,
+        "ra << imm5; rb and f120_122 have no effect (inferred, by exact readout)",
+        _imm("ra << c", lambda a, c: a << c, I),
     ),
     0x44: OpSemantics(
         V,
-        "ra - (imm13 << 4) (verified on the camera at four immediates, f120_122 = 0)",
-        _f_imm("ra - c", lambda a, c: a - c, V),
+        "the ring pointer step: s = zext(ra) + 1, L the low 8 bits of imm13, the result s + L "
+        f"if s < 0, s - L if s >= L, else s ({EXACT} at 216 points with 0x46 and 0x47)",
+        _ring_one,
     ),
     0x46: OpSemantics(
-        I,
-        "ra + (imm13 << 4) + R, R a value no job input sets that differs between boots "
-        "(inferred: slope 1 in ra and in the immediate on the camera, the rest one value per "
-        "boot); R is an unknown input, so the result is unknown; covered at f120_122 = 0",
-        _hidden("ra + imm + R", False),
+        V,
+        "the ring pointer step as 0x44's with s = zext(ra) + sext(R[f120_122]) "
+        f"({EXACT}); the R file is not modelled, so the result is unknown",
+        _ring_r("ring step ra + R, L imm"),
     ),
     0x47: OpSemantics(
+        V,
+        "the ring pointer step as 0x46's with L = rb "
+        f"({EXACT}); the R file is not modelled, so the result is unknown",
+        _ring_r("ring step ra + R, L rb"),
+    ),
+    **{
+        code: OpSemantics(V, f"rb ({_EXACT_RULE})", _e("rb", lambda a, b: b))
+        for code in (0x08, 0x09)
+    },
+    0x32: OpSemantics(
+        I, "abs(rb) (inferred, by exact readout)", _e("abs(rb)", lambda a, b: abs(b), I)
+    ),
+    0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
+    0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
+    0x34: OpSemantics(V, f"ra - rb ({_EXACT_RULE})", _e("ra - rb", lambda a, b: a - b)),
+    0x35: OpSemantics(V, f"ra + rb ({_EXACT_RULE})", _e("ra + rb", lambda a, b: a + b)),
+    0x33: OpSemantics(V, f"-rb ({_EXACT_RULE})", _e("-rb", lambda a, b: -b)),
+    0x3D: OpSemantics(V, f"~ra ({_EXACT_RULE})", _e("~ra", lambda a, b: ~a)),
+    0x2F: OpSemantics(V, f"min(ra, rb) signed ({_EXACT_RULE})", _e("min(ra, rb)", min)),
+    0x2E: OpSemantics(V, f"max(ra, rb) signed ({_EXACT_RULE})", _e("max(ra, rb)", max)),
+    0x2C: OpSemantics(
         I,
-        "ra + rb + R_f, R_f a value no job input sets that differs between boots, selected by "
-        "f120_122 (inferred: measured with ra and rb one register only, at f120_122 = 0 the "
-        "same R as 0x46's); the result is unknown while R is; covered at f120_122 = 0 with ra "
-        "= rb",
-        _hidden("ra + rb + R", True),
+        "max(ra, rb) unsigned (inferred, by exact readout)",
+        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, I),
     ),
-    **{
-        code: OpSemantics(
-            V,
-            "rb (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
-            _e("rb", lambda a, b: b),
-        )
-        for code in (0x08, 0x09, 0x32)
-    },
-    0x3C: OpSemantics(
-        V,
-        "ra & rb (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
-        _e("ra & rb", lambda a, b: a & b),
-    ),
-    0x3A: OpSemantics(
-        V,
-        "ra | rb (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
-        _e("ra | rb", lambda a, b: a | b),
-    ),
-    0x34: OpSemantics(
-        V,
-        "ra - rb (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
-        _e("ra - rb", lambda a, b: a - b),
-    ),
-    0x35: OpSemantics(
-        V,
-        "ra + rb (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
-        _e("ra + rb", lambda a, b: a + b),
-    ),
-    0x33: OpSemantics(
-        V,
-        "-rb (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
-        _e("-rb", lambda a, b: -b),
-    ),
-    0x3D: OpSemantics(
-        V,
-        "~ra, not -ra (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run; a negate prediction failed by one)",
-        _e("~ra", lambda a, b: ~a),
-    ),
-    0x2F: OpSemantics(
-        V,
-        "min(ra, rb) (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run; signed inferred: one point with a negative operand, its "
-        "offset not pre-registered)",
-        _e("min(ra, rb)", min, V, _signed_ops(I)),
-    ),
-    **{
-        code: OpSemantics(
-            V,
-            "max(ra, rb) (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run); signed or unsigned is open, so operands of "
-            "different signs are not covered",
-            _e("max(ra, rb)", _same_sign(max)),
-        )
-        for code in (0x2C, 0x2E)
-    },
     0x28: OpSemantics(
         V,
-        "0x10 if ra <= rb unsigned, else 0 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
+        f"1 if ra <= rb unsigned, else 0 ({EXACT})",
         _e("ra <=u rb", lambda a, b: _flag(_u32(a) <= _u32(b))),
     ),
     0x29: OpSemantics(
         V,
-        "0x10 if ra < rb unsigned, else 0 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
+        f"1 if ra < rb unsigned, else 0 ({EXACT})",
         _e("ra <u rb", lambda a, b: _flag(_u32(a) < _u32(b))),
     ),
     0x2A: OpSemantics(
         V,
-        "0x10 if ra <= rb signed, else 0 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
+        f"1 if ra <= rb signed, else 0 ({EXACT})",
         _e("ra <= rb", lambda a, b: _flag(a <= b)),
     ),
     0x2B: OpSemantics(
         V,
-        "0x10 if ra < rb signed, else 0 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
+        f"1 if ra < rb signed, else 0 ({EXACT})",
         _e("ra < rb", lambda a, b: _flag(a < b)),
     ),
     0x30: OpSemantics(
         V,
-        "0x10 if ra != rb, else 0 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
+        f"1 if ra != rb, else 0 ({EXACT})",
         _e("ra != rb", lambda a, b: _flag(a != b)),
     ),
     0x31: OpSemantics(
         V,
-        "0x10 if ra == rb, else 0 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run)",
+        f"1 if ra == rb, else 0 ({EXACT})",
         _e("ra == rb", lambda a, b: _flag(a == b)),
     ),
-    **{
-        code: OpSemantics(
-            V,
-            "ra >> ((rb >> 4) & 31), the count in units of 16 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run; arithmetic "
-            "inferred from negative inputs whose offsets were not pre-registered, the & 31 "
-            "from one point; 0x41 and 0x42 not told apart)",
-            _e(
-                "ra >> (rb >> 4)", lambda a, b: a >> _shift_count(b), V, _rb_shift_scope
-            ),
-        )
-        for code in (0x41, 0x42)
-    },
+    0x41: OpSemantics(
+        V,
+        f"ra >> (rb & 31), arithmetic ({EXACT})",
+        _e("ra >> rb", lambda a, b: a >> (b & 31)),
+    ),
+    0x42: OpSemantics(
+        I,
+        "ra >> (rb & 31), logical (inferred, by exact readout)",
+        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), I),
+    ),
     0x43: OpSemantics(
         V,
-        "ra << ((rb >> 4) & 31), the count in units of 16 (verified on the camera: chain-fed constants and len-derived values in ra and rb, the result read through word 68's load offset or word 73's count, each rule passing pre-registered dst sha256 predictions; at f120_122 = 7, the value of every word run; the & 31 inferred "
-        "from 0x41's one point)",
-        _e("ra << (rb >> 4)", lambda a, b: a << _shift_count(b), V, _rb_shift_scope),
+        f"ra << (rb & 31) ({_EXACT_RULE})",
+        _e("ra << rb", lambda a, b: a << (b & 31)),
     ),
     0x1E: OpSemantics(
         I,
-        "ra - c, c = imm16 << 4 (inferred, strong: pre-registered dst sha256 predictions "
-        "passed on the camera at several c of both signs)",
+        "ra - imm16, imm16 zero-extended (inferred, by exact readout)",
         _imm("ra - c", lambda a, c: a - c, I),
     ),
     0x1F: OpSemantics(
         I,
-        "ra + c, c = imm16 << 4 (inferred, strong: as 0x1e)",
+        "ra + imm16, imm16 zero-extended (inferred, by exact readout)",
         _imm("ra + c", lambda a, c: a + c, I),
     ),
     0x36: OpSemantics(
-        I,
-        "ra ^ c, c = imm16 << 4 (inferred, strong: as 0x1e)",
-        _imm("ra ^ c", lambda a, c: a ^ c, I),
+        V,
+        f"ra ^ c, c = imm16 sign-extended ({EXACT})",
+        _imm("ra ^ c", lambda a, c: a ^ c, V),
     ),
     0x24: OpSemantics(
-        I,
-        "max(ra, c), c = imm16 << 4 (inferred: pre-registered predictions passed on the "
-        "camera)",
-        _imm("max(ra, c)", max, I),
+        V,
+        f"max(ra, c) signed, c = imm16 sign-extended ({EXACT})",
+        _imm("max(ra, c)", max, V),
     ),
     0x25: OpSemantics(
-        I,
-        "min(ra, c), c = imm16 << 4, signed (inferred: as 0x24; c < 0 gave c)",
-        _imm("min(ra, c)", min, I),
+        V,
+        f"min(ra, c) signed, c = imm16 sign-extended ({EXACT})",
+        _imm("min(ra, c)", min, V),
     ),
     0x1C: OpSemantics(
         V,
-        "0x10 if ra != c, else 0; c = imm16 << 4 (verified on the camera through word 73's "
-        "count, pre-registered)",
+        f"1 if ra != c, else 0; c = imm16 sign-extended ({EXACT})",
         _imm("ra != c", lambda a, c: _flag(a != c), V),
     ),
     0x1D: OpSemantics(
         V,
-        "0x10 if ra == c, else 0; c = imm16 << 4 (verified as 0x1c)",
+        f"1 if ra == c, else 0; c = imm16 sign-extended ({EXACT})",
         _imm("ra == c", lambda a, c: _flag(a == c), V),
     ),
     0x20: OpSemantics(
         V,
-        "0x10 if ra <= c signed, else 0; c = imm16 << 4 (verified as 0x1c)",
+        f"1 if ra <= c signed, else 0; c = imm16 sign-extended ({EXACT})",
         _imm("ra <= c", lambda a, c: _flag(a <= c), V),
     ),
     0x21: OpSemantics(
         V,
-        "0x10 if ra < c signed, else 0; c = imm16 << 4 (verified as 0x1c)",
+        f"1 if ra < c signed, else 0; c = imm16 sign-extended ({EXACT})",
         _imm("ra < c", lambda a, c: _flag(a < c), V),
     ),
     0x23: OpSemantics(
-        V,
-        "0x10 if ra < c unsigned, else 0; c = imm16 << 4 (verified as 0x1c)",
-        _imm("ra <u c", lambda a, c: _flag(_u32(a) < _u32(c)), V),
+        I,
+        "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (inferred, by exact readout)",
+        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), I),
     ),
 }
 """The op slot's semantics: the data ops stepping runs; every other op has none (strict
@@ -1107,16 +917,14 @@ class Count(Enum):
 
 @dataclass(frozen=True)
 class RaTest:
-    """A condition on the register ra of the control word [hypothesis]: brf taken when `brf`
-    holds, br when `br` holds, a loop end goes back to T when `loop` holds (after `count`).
+    """A condition on the register ra of the control word: brf taken when `brf` holds, br when
+    `br` holds, a loop end goes back to T when `loop` holds (after `count`).
 
-    No reading is supported: in program 16 the transfer registers' job-start values fit both
-    branches seen on the camera (27 names r7 = len / 2, not taken; 45 names r5, about 0, taken),
-    but ra and xreg read two register sets (inferred), and stepping leaves r7 unknown by 27:
-    word 14 names it through a PR port whose destination is open. 45 is taken in every tested job, also with each of src, dst, len,
-    src + len, dst + len and src - dst odd, so a test of ra = a job value & 0xf (the AND at 28)
-    is refuted under either polarity (inferred); what 45 tests is open. A guard and its loop end name the same register in about half
-    the guarded loops, so the register is a shared loop operand of open meaning."""
+    The defaults of brf and br are the measured rules: op 1 branches iff ra == 0, op 2 iff ra
+    != 0 (verified on the camera by exact readout). The measured loop end branches iff ra > 0
+    signed and computes ra - 1, which an enabled PR port writes back; `loop` and `count` do not
+    express that write-back, so a loop end here stays a hypothesis. In program 16 stepping
+    leaves r7 unknown by 27: word 14 names it through a PR port whose destination is open."""
 
     brf: Test = Test.ZERO
     br: Test = Test.NONZERO

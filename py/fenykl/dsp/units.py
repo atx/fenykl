@@ -59,6 +59,16 @@ _UNITS = (
         )
         for u in ("s0", "s1", "s2", "s3")
     ),
+    (
+        "x0",
+        "X0",
+        I,
+        (
+            "the X0 unit: its strobe f302_307 and the fields that change under it; a second "
+            "ALU on the register file A, its result written to G or A by the PR ports (inferred)"
+        ),
+        ("f302_307",),
+    ),
     *(
         (
             u,
@@ -67,7 +77,7 @@ _UNITS = (
             _XFER.format(u.upper(), *HEADS[u]),
             (f"f{HEADS[u][0]}_{HEADS[u][1]}",),
         )
-        for u in ("x0", "x1", "x2")
+        for u in ("x1", "x2")
     ),
     (
         "pb",
@@ -86,8 +96,9 @@ _UNITS = (
         V,
         (
             "5 ports, one enable in 265..273 for each field of register group B 206..228, the "
-            "pairing verified in the bytes: register write ports, with X0..X2 the transfer group "
-            "(hypothesis)"
+            "pairing verified in the bytes: register write ports, f272_273 of G and f270_271 of "
+            "R (verified on the camera by exact readout), f267_268 of B and f265_266 of A "
+            "(inferred), f269 open"
         ),
         tuple(e for e in PORTS if lookup(e).unit == "pr"),
     ),

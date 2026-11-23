@@ -29,7 +29,7 @@ from enum import Enum
 
 from .fields import GRID_A, GRID_B, PORTS, Confidence, Field, lookup
 from .resample_edits import Probe
-from .semantics import FLAG_BITS, UnknownSemantics, local_offset
+from .semantics import UnknownSemantics, local_offset
 from .units import UNITS
 from .word import Word
 
@@ -136,9 +136,8 @@ def field_is(fid: str, value: int) -> Callable[[Word], bool]:
 
 
 def is_load(word: Word) -> bool:
-    """A family A load in a form the load semantic covers (f120_122 = 7, no flag bits)."""
-    op, imm13 = word["op"], word["imm"] | word["f128_132"] << 8
-    return op in LOADS and word["f120_122"] == 7 and not imm13 & FLAG_BITS[LOADS[op][0]]
+    """A family A load the load semantic covers (f120_122 has no effect on a load)."""
+    return word["op"] in LOADS
 
 
 class Coverage(Enum):
@@ -432,8 +431,9 @@ class Machine:
     def _datum(self, word: Word) -> Value:
         """What a family A load returns: the phase's tap bytes at the tap base register."""
         width, fmt = LOADS[word["op"]]
-        imm13 = word["imm"] | word["f128_132"] << 8
-        offset = local_offset(width, imm13)
+        args = word.operands
+        assert args is not None and args.imm is not None
+        offset = local_offset(width, args.imm)
         key = (word["op"], word["ra"], offset)
         if word["ra"] != self.anchors.phase_base:
             return Unknown(f"r{word['ra']} holds no known base in the window", key)
