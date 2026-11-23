@@ -91,9 +91,9 @@ class Trace:
     """Hypothesis when a field was ignored (lenient mode) or a word ran off its stock position."""
     inserted: list[int] = field(default_factory=list)
     """The job indices of the words inserted into the stock program (`memcpy.align`)."""
-    writes: dict[int, Reg | None] = field(default_factory=dict)
-    """The xreg-set registers that inserted words wrote, and their values (`memcpy`'s engine
-    site)."""
+    writes: dict[int, tuple[Reg | None, int]] = field(default_factory=dict)
+    """The xreg-set registers that inserted words wrote: (value, the writer's job index)
+    (`memcpy`'s engine site)."""
     notes: list[str] = field(default_factory=list)
 
 
@@ -389,9 +389,9 @@ PR_ENABLES = {
 def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], str]:
     """Where the word's data op result goes: (set, register, latency) per decoded enabled port,
     the port fields of the enabled ports whose destination is open, and why the destination is
-    incomplete ("" when every enabled port is decoded and one is). Under f272_273 = 2,
-    f265_266 = 1 or f269 = 0 the result reached neither set on the camera (one job each), so
-    those ports go elsewhere or nowhere (hypothesis); with no port enabled nothing was seen
+    incomplete ("" when every enabled port is decoded and one is). Under f272_273 = 2 the
+    result reached neither set on the camera, under f265_266 = 1 and f269 = 0 not the xreg set
+    (the operand set untested; one job each, hypothesis); with no port enabled nothing was seen
     written (hypothesis)."""
     dests, open_, names = [], [], []
     for enable, reg in PR_ENABLES.items():
@@ -438,7 +438,7 @@ def _result(
 ) -> Effect:
     """The result f(*inputs) over the inputs' intervals, its hull enumerated; its taint is the
     weakest of `tier`, the inputs' and `scope` at each combination. f None at a combination
-    (a case the rule leaves open) or a result outside `WIDTH` gives an unknown value."""
+    (a case the rule leaves open) or a result outside `SPAN` gives an unknown value."""
     name = f"{text} (op {word.op:#x})"
     if any(x is None for x in inputs):
         return Effect(True, None, f"{name}: an unknown input")
@@ -474,6 +474,9 @@ def _e(
         if word["f120_122"] != 7:
             return None
         named = text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
+        if args.ra == args.rb:
+            one = None if scope is None else (lambda a: scope(a, a))
+            return _result(word, named, (slot[args.ra],), lambda a: f(a, a), tier, one)
         return _result(word, named, (slot[args.ra], slot[args.rb]), f, tier, scope)
 
     return run
@@ -501,16 +504,16 @@ def _imm_shift(
     measured: Callable[[int], bool] | None = None,
 ) -> Callable[[Word, RegisterFile, Space], Effect | None]:
     """A family C op by its immediate, on a register that ra and rb both name (which of the two
-    it reads is open), covered at f120_122 = 7; `measured(imm)` false lowers the taint to
-    inferred."""
+    it reads is open), covered at f120_122 = 7 and imm 1..31 (imm 0 ended in a timeout, its
+    reading open); `measured(imm)` false lowers the taint one tier."""
 
     def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
         assert args is not None and args.imm is not None
-        if word["f120_122"] != 7 or args.ra != args.rb:
+        if word["f120_122"] != 7 or args.ra != args.rb or args.imm == 0:
             return None
         k = args.imm
-        t = tier if measured is None or measured(k) else min(tier, I)
+        t = tier if measured is None or measured(k) else Confidence(max(tier - 1, 0))
         named = text.replace("ra", f"r{args.ra}").replace("k", str(k))
         return _result(word, named, (slot[args.ra],), lambda a: f(a, k), t)
 
@@ -686,11 +689,16 @@ def _hidden(
 
 
 def _move(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """ra where ra >= imm (max(ra, imm) is not excluded); exact equality is inferred, the
+    readout resolving 1 KiB."""
     args = word.operands
     assert args is not None and args.imm is not None
     if not 0 <= args.imm <= 0x1234:
         return None
-    return _result(word, f"r{args.ra}", (slot[args.ra],), lambda a: a, V)
+    imm = args.imm
+    return _result(
+        word, f"r{args.ra}", (slot[args.ra],), lambda a: a if a >= imm else None, I
+    )
 
 
 _ADDRESS = (
@@ -803,19 +811,24 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     ),
     0x3F: OpSemantics(
         I,
-        "rb >> imm (inferred: on the camera, at imm 1..5 and two lengths the count a later "
+        "rb >> imm (inferred: on the camera, at imm 1..5 (others hypothesis) and two lengths "
+        "the count a later "
         "transfer reads followed len >> imm, a positive value, so logical and arithmetic "
         "shifts are not separated and a negative input is open; ra and rb named one register "
         "in every word measured, so which one it reads is open); covered with ra = rb at "
         "f120_122 = 7",
-        _imm_shift("ra >> k", lambda a, k: a >> k if a >= 0 else None, I),
+        _imm_shift(
+            "ra >> k", lambda a, k: a >> k if a >= 0 else None, I, lambda k: k <= 5
+        ),
     ),
     0x3E: OpSemantics(
         I,
         "rb >> imm, as 0x3f (inferred: on the camera, imm 1 halved its input at three "
-        "lengths; logical and arithmetic not separated, the operand role open); covered with "
-        "ra = rb at f120_122 = 7",
-        _imm_shift("ra >> k", lambda a, k: a >> k if a >= 0 else None, I),
+        "lengths; logical and arithmetic not separated, the operand role open; other "
+        "immediates hypothesis); covered with ra = rb at f120_122 = 7",
+        _imm_shift(
+            "ra >> k", lambda a, k: a >> k if a >= 0 else None, I, lambda k: k == 1
+        ),
     ),
     0x40: OpSemantics(
         V,
@@ -832,9 +845,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     ),
     0x0A: OpSemantics(
         V,
-        "ra (verified on the camera at imm 0..0x1234, through word 68's 1 KiB resolution: the "
-        "immediate does not enter; at 0x1234, max(ra, imm) gives the same reading); covered at "
-        "imm16 0..0x1234",
+        "ra (verified on the camera at imm 0..0x1234 through word 68's 1 KiB resolution, so "
+        "exact equality is inferred; max(ra, imm) is not excluded, so covered where ra >= imm, "
+        "at imm16 0..0x1234)",
         _move,
     ),
     0x44: OpSemantics(

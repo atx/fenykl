@@ -272,8 +272,8 @@ RA_FACT = (
     "imm13 the offset (inferred: in 58..74 % of A's namings the next reference to the register "
     "is the same op naming it again with another immediate, which as writes would be dead); "
     "0x0b names it just before family A uses it (24 % against 7 % by chance), whether as a "
-    "write or a read is open (hypothesis); in B, C, D, E and F a source operand that the "
-    "result does not go to: the result goes to the register of the word's enabled PR port "
+    "write or a read is open (hypothesis); in B, C, D, E and F an operand where the op reads "
+    "it, which the result does not go to: the result goes to the register of the word's enabled PR port "
     "(inferred, strong on the camera: the result reached the port's register and not ra); in "
     "ops 0..2 a loop or condition operand, the same register in a guard and "
     "its loop end in 47 % of the pairs against 13 % by chance (verified in the bytes for the "
@@ -791,8 +791,8 @@ FIELDS: tuple[Field, ...] = (
         3,
         "Not the end op: idling it in program 16 word 79 (bit 229 clear) copied; idling it with "
         "bit 268 in word 60 times the job out (verified on the camera, one run each). Under 1 "
-        "an inserted op's result reached neither register set as word 68 saw it (one job: "
-        "hypothesis)",
+        "an inserted op's result did not reach the xreg set as word 68 saw it; the operand set "
+        "untested (one job: hypothesis)",
     ),
     _enable(
         267,
@@ -811,8 +811,8 @@ FIELDS: tuple[Field, ...] = (
         269,
         "pr",
         1,
-        "Under 0 an inserted op's result reached neither register set as word 68 saw it "
-        "(one job: hypothesis)",
+        "Under 0 an inserted op's result did not reach the xreg set as word 68 saw it; the "
+        "operand set untested (one job: hypothesis)",
     ),
     _enable(270, 271, "pr", 3, SELECTOR),
     _enable(
@@ -1154,7 +1154,7 @@ FAMILIES = (
         False,
         16,
         "ra and a wide immediate, f120_122 its bits 13..15 (13..14 in 0x37, whose f120_122 is "
-        "0..3 in every word); 0x0a passes ra and 0x37 ORs imm << 4 (on the camera)",
+        "0..3 in every word); 0x0a passes ra (to 1 KiB) and 0x37 ORs imm << 4 (on the camera)",
     ),
     Family(
         "C",
@@ -1218,10 +1218,10 @@ SIGNED_OPS = frozenset({0x0C, 0x10})
 """Ops whose 13-bit immediates 0x1fxx read as small negative numbers, two's complement (inferred)."""
 MEANINGS = {
     0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
-    "from its position); it passes rb (verified on the camera), so there it sets the port's "
-    "register from rb",
+    "from its position); it passes rb (verified on the camera at f120_122 = 7), so there it "
+    "may set the port's register from rb (hypothesis)",
     0x0A: "periodic immediates such as 0x5555 and 0x3333; on the camera it passes ra, the "
-    "immediate not entering at 0..0x1234 (verified)",
+    "immediate not entering at 0..0x1234 (verified to 1 KiB; max(ra, imm) not excluded)",
     0x0B: "the most varied immediates, often in a call's delay slots: sets ra from the immediate, "
     "or uses it as a base as family A does (hypothesis); it names a register just before family "
     "A uses it as a base (24 % against 7 % by chance across later firmware versions of the same "
@@ -1230,7 +1230,7 @@ MEANINGS = {
     "the end side: on the camera, bit 6 of program 16 word 65's immediate cleared gave a full "
     "copy, then a timeout (inferred: not the store's count, data or address); through port 267 "
     "its result was above the job length at immediate 0x123, so it is no set of the low half "
-    "(inferred)",
+    "(hypothesis: it rests on that count reading and on port 267 carrying 0x0b)",
     0x0C: "its immediates 0x1fxx read as small negative numbers (inferred); a byte store by its "
     "place before the byte loads 0x0e and 0x10 (hypothesis: no anchor; 7 of its 10 accesses of "
     "r0-based slots are their first touch, but 21 of 24 later accesses at its address are 0x0c "

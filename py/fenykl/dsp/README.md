@@ -121,7 +121,7 @@ its program in every op 0..3 word (verified in the bytes). In those words `imm` 
 f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` have no field of
 their own; the candidate is the register ra (f123_127), a loop or condition operand that a guard
 and its loop end share in about half the guarded loops (hypothesis). By family, ra is an address
-base the op reads in family A (inferred), a source operand in B..F, whose result goes to the
+base the op reads in family A (inferred), an operand where read in B..F, whose result goes to the
 register of the word's enabled PR port, not ra (inferred, strong). xreg and the op slot's ra /
 rb read two register sets (inferred, strong): a result written through PR port 267 (f211_215
 under f267_268 = 1) reaches the xreg of words 68 and 73 and not the operands, one written
@@ -177,7 +177,8 @@ f120_122 = 7): 0x08 / 0x09 / 0x32 rb, 0x3c AND, 0x3a OR, 0x34 ra - rb, 0x35 ra +
 NOT, 0x2f min (signed inferred), 0x2c / 0x2e max (signedness open); compares 0x28 / 0x29 <= / <
 unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 != / ==, and against c = imm16 << 4 0x1c != , 0x1d ==,
 0x20 <= signed, 0x21 < signed, 0x23 < unsigned; 0x41 / 0x42 ra >> ((rb >> 4) & 31), 0x43 ra <<
-((rb >> 4) & 31) (arithmetic and & 31 inferred); 0x40 ra << imm; 0x44 ra - (imm13 << 4); 0x0a ra.
+((rb >> 4) & 31) (arithmetic and & 31 inferred); 0x40 ra << imm; 0x44 ra - (imm13 << 4); 0x0a ra
+(to 1 KiB, where ra >= imm: max(ra, imm) is not excluded).
 Inferred: family D's signed imm16, 0x1e ra - c, 0x1f ra + c, 0x36 ra ^ c, 0x24 max, 0x25 min;
 0x3e / 0x3f right shifts by imm; 0x37 ra | (imm << 4); 0x38 ra & imm16 (not scaled; one cleared
 mask bit moved a copy's store by 16 B; not covered through port 267, where it did not fit);
@@ -341,8 +342,9 @@ the executor's `ops`), when the semantics covers its operands. A load is recorde
 its datum goes is open; with a PR port enabled it is UNKNOWN). A result goes through the word's
 PR ports (`semantics.destinations`), and only right after stock word 64, the site where ops were
 measured (`memcpy.ENGINE_AFTER`): there the operands r2 = len + 0x10..0x1f and r7 near 0x40000
-are known (inferred), a port-272 result feeds later inserts' operands three words on, and a
-port-267 result is what words 68 and 73 read at that register. A load offset or count that the
+are known (inferred; r7 at len 0x2000 and 0x4000 only), a port-272 result feeds later
+inserts' operands three words on, and a port-267 result is what words 68 and 73 read at that
+register four or more words on; other transfers reading it raise. A load offset or count that the
 model cannot place from such a value (unknown, negative, two placements, beyond the buffer, a
 count off 16-byte steps or above len) raises. Every other insert is UNKNOWN, naming the op or
 the fields: an op without semantics, operands outside them (the idle word with only its op

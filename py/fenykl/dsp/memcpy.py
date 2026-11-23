@@ -97,16 +97,18 @@ ENGINE_OPERANDS = (
         2,
         lambda length: (length + 0x10, length + 0x1F),
         (
-            "len + 0x10..0x1f: the results on it fit one value, and a count of it floored to "
-            "16 B stores len, of len + 1 would too (inferred)"
+            "len + 0x10..0x1f (inferred): the favoured model of the count, floored to 16 B, "
+            "needs r2 at least len + 0x10, which also explains a full copy then a timeout at "
+            "0x3f imm 0; r2 = len with counts rounded up is not excluded"
         ),
     ),
     (
         7,
-        lambda length: (0x40010, 0x4041F),
+        lambda length: (0x40010, 0x4041F) if length in (0x2000, 0x4000) else None,
         (
-            "a value near 0x40000 at several lengths, not the len / 2 that word 64 writes to "
-            "the xreg's r7, read through ra - rb (inferred)"
+            "a value near 0x40000, read through ra - rb at two lengths, 0x2000 and 0x4000; "
+            "not the len / 2 that word 64 writes to the xreg's r7 (inferred); at shorter "
+            "lengths it lay further above (unknown there)"
         ),
     ),
 )
@@ -695,8 +697,8 @@ class Operands16:
 
     def seed(self, length: int) -> None:
         for r, value, fact in ENGINE_OPERANDS:
-            lo, hi = value(length)
-            self.regs[r] = Reg(lo, hi, I, fact)
+            v = value(length)
+            self.regs[r] = None if v is None else Reg(v[0], v[1], I, fact)
         self.seeded = True
 
     def write(self, j: int, r: int, value: Reg | None) -> None:
@@ -801,6 +803,10 @@ class Copy16Model:
                 word = Word.from_int(TARGET.put(word.value, to))
             self.cover(trace, s, word, emu.strict)
             stocked.append(word)
+        if trace.writes:
+            # The writer's distance in words to stock word ENGINE_AFTER + 1.
+            j65 = at.index(ENGINE_AFTER + 1)
+            trace.writes = {r: (v, j65 - j) for r, (v, j) in trace.writes.items()}
         shifted = [s for j, s in enumerate(at) if s is not None and s != j]
         listed = ", ".join(map(str, trace.inserted))
         trace.notes.append(
@@ -898,12 +904,12 @@ class Copy16Model:
             if to is RegSet.OPERAND:
                 operands.write(j, r, effect.result)
             elif r in self.late_writes:
-                trace.writes[r] = None
+                trace.writes[r] = (None, j)
                 trace.notes.append(
                     f"inserted word {j} writes r{r}, which a stock word after it writes too"
                 )
             else:
-                trace.writes[r] = effect.result
+                trace.writes[r] = (effect.result, j)
         return ""
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
@@ -954,7 +960,7 @@ class Copy16Model:
         late = boot.regs
         if trace.writes:
             late = RegisterFile(list(boot.regs.regs))
-            for r, v in trace.writes.items():
+            for r, (v, _) in trace.writes.items():
                 late[r] = v
         plan = self.resolve(
             trace, boot.regs, view, emu.sequencer, job.program.words, late
@@ -1067,7 +1073,8 @@ class Copy16Model:
         for role, t, assigned in filled:
             pre = min(assigned, t.taint)
             at = late if late is not None and t.index > ENGINE_AFTER else regs
-            written = t.index > ENGINE_AFTER and t.reg in trace.writes
+            lead = trace.writes.get(t.reg) if t.index > ENGINE_AFTER else None
+            written = None if lead is None else t.index - ENGINE_AFTER - 1 + lead[1]
             conf = min(pre, self._role(plan, role, t, pre, at, view, written))
             roles.append((role, conf))
         base = min(plan.cap, trace.classes, *(c for _, _, c in plan.outcomes))
@@ -1135,12 +1142,13 @@ class Copy16Model:
         pre: Confidence,
         regs: RegisterFile,
         view: JobView,
-        written: bool = False,
+        written: int | None = None,
     ) -> Confidence:
         """Apply `role` at the transfer's register; returns the confidence of what it did.
 
         An outcome it records gets `pre`, the confidence of the assignment, at most. A value an
-        inserted word wrote (`written`) that the role cannot place raises UnknownSemantics.
+        inserted word wrote `written` words before the transfer that the role cannot place
+        raises UnknownSemantics.
         """
         length = view.length
         assert length is not None
@@ -1160,8 +1168,8 @@ class Copy16Model:
             return table
         conf = role.use_at(stock, length)
         value = regs[reg]
-        if written:
-            self._check_written(role, t, value, length)
+        if written is not None:
+            self._check_written(role, t, value, length, written)
         if value is not None:
             conf = min(conf, value.taint)
         match role.use:
@@ -1202,20 +1210,24 @@ class Copy16Model:
         return conf
 
     def _check_written(
-        self, role: Role, t: Transfer, value: Reg | None, length: int
+        self, role: Role, t: Transfer, value: Reg | None, length: int, distance: int
     ) -> None:
         """Raise unless the load offset or count role can place `value`, written by an
         inserted word: known and not negative (word 68's rounding of negative values is open:
         truncation fits the register sweep, flooring the op sweep); for the load offset one
         placement over the interval, inside the buffer (beyond it no load was seen, and the
         store then emits an older job's bytes); for the count an exact multiple of 16 up to
-        len (how a count rounds below 16 bytes and what one above len does are open: a floor
-        fits the inserted counts, not an odd-length copy's; a full copy then a timeout was
-        seen, and so was an overrun on another route)."""
-        if role.use not in (Use.LOAD_OFFSET, Use.COUNT):
-            return
+        len (whether a count off 16-byte steps is floored or rounded up is open: a floor fits
+        the inserted counts, not an odd-length copy's; above len a full copy then a timeout was
+        seen, and so was an overrun on another route). Only these two roles were measured
+        reading such a value, `RESULT_PORTS`' latency or more words after the write."""
+        latency = next(p.latency for p in RESULT_PORTS if p.to is RegSet.XREG)
         what = None
-        if value is None:
+        if role.use not in (Use.LOAD_OFFSET, Use.COUNT):
+            what = "a value for a role not measured with one"
+        elif distance < latency:
+            what = f"a value written {distance} words before, under the latency"
+        elif value is None:
             what = "a value the model does not know"
         elif value.lo < 0:
             what = "a negative value"

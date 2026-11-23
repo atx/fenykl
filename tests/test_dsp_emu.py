@@ -908,3 +908,20 @@ def test_an_engine_value_the_load_cannot_place_is_unknown(words, why):
 def test_an_engine_write_off_the_site_is_unknown():
     with pytest.raises(UnknownSemantics, match="no modelled reader off the site"):
         run(inserted(12, port(d_op(0x1F, 2, 0), "f267_268", 12)))
+
+
+def test_an_op_on_one_register_reads_one_value():
+    """0x31 on (r2, r2): r2 is an interval, but equal to itself, so the flag is true."""
+    result, boot = engine((port(e_op(0x31, 2, 2), "f267_268", 12),), reader=73)
+    assert result.status is Status.OK
+    assert bytes(boot.read(DST, 0x1000).data[:16]) == bytes(range(16))
+
+
+def test_an_engine_value_for_another_reader_is_unknown():
+    base = list(stock().words)
+    base[76] = Word.from_fields({"xreg": 12}, base=base[76])
+    program = inserted(
+        65, port(d_op(0x1F, 2, 0x400), "f267_268", 12), base=Program(tuple(base))
+    )
+    with pytest.raises(UnknownSemantics, match="a role not measured with one"):
+        run(program, 0x1000)
