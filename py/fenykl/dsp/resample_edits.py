@@ -14,7 +14,16 @@ gets a law only where the law gives every changed byte exactly. Outside its clas
 gives no prediction.
 
 The classes that ran: sources whose lines are constant along x ("flat") or not, at b = 1, 1 +
-1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48."""
+1/16 and 0.5, W 64, and flat sources at b = 1 with W 32 and 48.
+
+Some edits ran in a copy of the program placed elsewhere in memory: a field edit there gives the
+bytes it gives in place (verified on the camera, five edits). A word inserted into the program
+(the later words and their targets moved by one) is not inert, even the idle word, and is no
+edit here [verified on the camera, one run each]: inserted before word 441 it gives the chroma
+planes and plane 0's first 32 lanes of idling 441's grid B in place; before 442 or 443 the
+chroma planes stay stock and plane 0 changes; before 440 plane 1 stays stock and plane 2 changes
+(post hoc R16((16 - p) P2[a + 1] + p P0[a + 1]), inferred). Reading: a port's write needs the
+word before it to run (hypothesis)."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -196,6 +205,9 @@ BLOCK = Changed("bytes changed, per 32-pixel column block; no law gives them")
 SUBSTITUTED = Changed(
     "tap 0's product replaced by the boot's tap-0 substitute; at this width it never ran where "
     "the substitute is known"
+)
+PER_BOOT = Changed(
+    "reads per-lane state that no program writes and that differs between boots; not known"
 )
 
 
@@ -556,6 +568,75 @@ FACTS: tuple[Fact, ...] = (
     Fact(HELD_A_439, (439,), {FLAT: _planes("...")}, ""),
     Fact(HELD_A_439_X0, (439,), {FLAT: _planes("...")}, ""),
     Fact(FieldValue("f69_71", 7), (439,), {FLAT: _planes("...")}, ""),
+    # Single C2 port enables at their idle value 3: each drops one port's effect.
+    Fact(
+        FieldValue("f244_245", 3),
+        (439,),
+        {FLAT: _planes(".o.")},
+        "as f163_166 = 15: its port's write is dropped",
+    ),
+    Fact(FieldValue("f244_245", 3), (440,), {FLAT: _planes("..o")}, ""),
+    Fact(FieldValue("f240_241", 3), (440,), {FLAT: _planes("o..")}, "saturation only"),
+    Fact(FieldValue("f242_243", 3), (440,), {FLAT: _planes("o..")}, ""),
+    Fact(FieldValue("f242_243", 3), (448,), {FLAT: _planes("..o")}, ""),
+    Fact(FieldValue("f246_247", 3), (448,), {FLAT: _planes(".o.")}, ""),
+    Fact(
+        FieldValue("f250_251", 3),
+        (448,),
+        {FLAT: _planes(".o.")},
+        "the first lane of each 32-lane block only",
+    ),
+    Fact(
+        FieldValue("f261_262", 3),
+        (433,),
+        {FLAT: _planes("o.."), VARY: _planes("o..")},
+        "as f198_201 = 15 but in the job's first column block",
+    ),
+    *(
+        Fact(FieldValue("f248_249", 3), (i,), {VARY: _planes(planes)}, "")
+        for i, planes in ((529, ".o."), (533, "o.."), (558, "o.."))
+    ),
+    Fact(
+        FieldValue("f250_251", 3),
+        (557,),
+        {VARY: (S, PER_BOOT, S)},
+        "plane 1's operands stay at per-boot state",
+    ),
+    # S2 heads idled: what the consumer reads instead is per-boot state.
+    Fact(
+        FieldValue("f292_295", 15),
+        (557,),
+        {VARY: (S, PER_BOOT, S)},
+        "as f250_251 = 3 there",
+    ),
+    *(
+        Fact(
+            FieldValue("f292_295", v),
+            (439,),
+            {VARY: (PER_BOOT, S, S), **({FLAT: (PER_BOOT, S, S)} if v == 15 else {})},
+            "tap 0's term is replaced by per-boot state, not dropped",
+        )
+        for v in (15, 8)
+    ),
+    # S0's operands at 446 and 448: plane 0's saturation select.
+    *(
+        Fact(FieldValue("f41_44", v), (i,), {VARY: _planes("o..")}, "")
+        for i, values in ((446, (2, 4, 5, 6)), (448, (1, 4, 5, 6)))
+        for v in values
+    ),
+    *(
+        Fact(
+            FieldValue("f76_79", v),
+            (i,),
+            {
+                VARY: _planes("o.."),
+                **({FLAT: _planes("o..")} if i == 448 and v in (1, 4) else {}),
+            },
+            "a per-lane mask that the value selects",
+        )
+        for i, values in ((446, (1, 2, 3, 4, 15)), (448, range(1, 16)))
+        for v in values
+    ),
 )
 
 SUBSTITUTE_MOVER = (433, GRID_B_ONLY)

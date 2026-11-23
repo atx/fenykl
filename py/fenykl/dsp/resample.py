@@ -57,6 +57,15 @@ read of table entry 1: the run cannot tell, so line 1 is a hypothesis), then pla
 64 bytes past 3 x 64 x H [verified: one run]; an odd H above 1 never ran, so its dst is
 unknown.
 
+Store timing [verified: the stock words cut by a halt at one word, b = 1, H 16, one run per
+halt]: the lines land in dst during the job, each in all three planes at once, and a halt leaves
+the lines not yet landed unwritten. Line 0 is in dst at a halt at word 205 and not at 190, more
+than 5 and at most 20 words after its routine call (180, to 362) returns; lines 1..14 land after
+the first run of 294 and before the first of 299, one per pass of the inner loop 197..298
+(inferred: 14 passes); line 15 needs 348..352 to run. Reading: a line lands a fixed lag after its
+call returns, 12 or 13 words for lines 1..15 (inferred), with no issuing word after the return
+needed. The model writes dst as a whole; a halt inside the job is no measured edit.
+
 The b = 1 kernel is the loop-head window's (`resample_window`): term lists of the field-level
 executor, evaluated per pixel. Edits: an edited program runs as one of the edits measured on
 the camera (`resample_edits`), or on the window where it covers every changed field, on the

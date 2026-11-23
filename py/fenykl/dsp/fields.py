@@ -370,7 +370,11 @@ OPS: dict[int, Op] = {
         "call: when a return lies between the word and T, the word at i + 5 is almost never a "
         "branch target (11 of 950 across later firmware versions of the same family), so a "
         "return reaches it (inferred, strong); program 16's word 0 calls its job routine at 10; "
-        "the op 3 words with no return before T are open, a jump or a call",
+        "the op 3 words with no return before T (local, `Program.local_op3`) are open, a jump "
+        "or a call: program 13's at word 210 runs in a job (verified on the camera: a halt "
+        "there cuts the job) and acts as a jump (inferred: as a call its link would re-run the "
+        "job's inner loop, longer than the measured job), its twin at 312 by analogy "
+        "(hypothesis); `Executor(local_op3_jump=True)` steps them as jumps",
     ),
     4: Op(
         "ret",
@@ -849,14 +853,12 @@ UNIT_FACTS = {
     f"all of grid B there, byte for byte ({_CAMERA}); what it routes is open, not the loaded "
     "tap coefficient itself (inferred: the lines it changes are not those where that tap is "
     "non-zero)",
-    "f261_262": f"its port f198_201 carries grid B's effect at program 13 word 433 ({_CAMERA})",
     "f202_205": "program 13 word 433, its enable f263_264 active: idling it has no effect "
     f"({_CAMERA}), so an active enable is not sufficient for an effect",
     "f263_264": "active at program 13 word 433, where idling its port f202_205 has no effect "
     f"({_CAMERA})",
     "f163_166": "program 13 word 439, its enable f244_245 active: idling it alone equals idling "
     f"all of grid B there, the second plane's path ({_CAMERA})",
-    "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA})",
     "f53_56": "program 13 word 439, S2's head active: idling it with f57_60 and f88_91 equals "
     f"idling all of grid A there ({_CAMERA}); 1 in place of the stock 2 has no effect",
     "f57_60": "program 13 word 439, S2's head active: tap 0's source line, 5 (stock) its own "
@@ -876,18 +878,68 @@ UNIT_FACTS = {
     "planes' two linear weights (inferred, one run each, not modelled); at word 437, 4 -> 5 "
     "changes tap 0's line at the edge lines only",
     "f292_295": "its operands f57_60 and f88_91 select program 13 word 439's tap 0 line and "
-    "coefficient, and f88_91 at words 440..442 taps 1..3's coefficients "
-    f"({_CAMERA}; the head itself not idled)",
+    f"coefficient, and f88_91 at words 440..442 taps 1..3's coefficients ({_CAMERA}). At "
+    "word 439, 15 (idle) and 8 give the same bytes: only the first plane changes, tap 0's term "
+    "replaced, not dropped, by per-lane state that no program writes and that differs between "
+    f"boots ({_CAMERA}, one run each on three boots; the state reading inferred); at word 557, "
+    "15 equals f250_251 = 3 there (verified on the camera)",
     "f69_71": f"program 13 word 439, X0 active: idling it has no effect ({_CAMERA}), so an "
     "active owner is not sufficient for an effect",
-    **{
-        k: _HELD_439
-        for k in ("f37_40", "f41_44", "f45_48", "f49_52", "f65_68", "f76_79", "f80_83")
-    },
+    **{k: _HELD_439 for k in ("f37_40", "f45_48", "f49_52", "f65_68", "f80_83")},
+    "f41_44": f"{_HELD_439}. Program 13 words 446 and 448, S0's head active: each value tried "
+    "(2, 4, 5, 6 at 446; 1, 4, 5, 6 at 448) changes only the first plane, every byte 0, 255 or "
+    "the low byte of the unclamped luma (verified on the camera, one run each); post hoc, the "
+    "byte is 0, 255 or that low byte by the sign of the sum of the two words' selected "
+    "operands, in the stock words range states of the taps 0 + 1 partial sum and of the full "
+    "sum (inferred: a saturation select); what the values select is not the S2 operand "
+    "registers (hypothesis)",
+    "f76_79": f"{_HELD_439}. Program 13 words 446 and 448, S0's head active (stock 0): every "
+    "value 1..15 changes only the first plane (verified on the camera); post hoc, on lines "
+    "whose kernel is one-hot a byte is 255 where bit x mod 32 of a 32-lane mask is set and the "
+    "stock byte elsewhere, and on the other lines the mask enters the saturation select with "
+    "the sign and carry of the taps 2 + 3 partial sum (inferred: one law fits every byte of "
+    "every value). The mask is fixed per value: the same at both words, after other values' "
+    "jobs, on flat and x-varying sources and across boots (verified on the camera), but for "
+    "lane 8 of value 1, fixed within a boot and different between boots; no function of the "
+    "value's bits and no input of the job gives the masks (inferred): a stored per-lane vector "
+    "that the value selects (hypothesis)",
+    "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA}); "
+    "idling it there equals idling f163_166, byte for byte, and at word 440 changes only the third plane, to the whole word's idle's third "
+    "plane (verified on the camera, a flat source, pre-registered); post hoc the register its "
+    "port writes keeps its older content (inferred)",
+    "f240_241": "idling it at program 13 word 440 changes only the first plane, by saturation "
+    "(verified on the camera, a flat source, one run)",
+    "f242_243": "idling it changes one plane only: the first at program 13 word 440, the third "
+    "at 448, to the whole word's idle's third plane (verified on the camera, a flat source, one "
+    "run each); post hoc, at 448 the third plane's p-weighted term becomes the second plane's "
+    "(16 - p) term (inferred): its port hands S2's previous product to S1 (hypothesis)",
+    "f246_247": "idling it at program 13 word 448 changes only the second plane, in every lane "
+    "but the first of each 32-lane block (verified on the camera, a flat source, one run); "
+    "post hoc that plane is then the rounded older content of one operand register (inferred)",
+    "f250_251": "idling it at program 13 word 448 changes only the second plane's first lane "
+    "of each 32-lane block on a flat source; at word 557 only the second plane, whose "
+    "operands then stay at per-lane state that no program writes and that differs between "
+    "boots, as idling 557's S2 head does, byte for byte (verified on the camera, one run each; "
+    "the state reading inferred)",
+    "f248_249": "the only C2 free bits off idle at program 13's store words 529, 533 and 558: "
+    "idling it at 533 equals idling the word's C2 free bits and grid, byte for byte (verified "
+    "on the camera, pre-registered); at 529 and 558 too but for single lanes that hold "
+    "per-boot state (inferred)",
+    "f261_262": f"its port f198_201 carries grid B's effect at program 13 word 433 ({_CAMERA}); "
+    "idling it there equals idling f198_201 but in "
+    "the job's first 32-lane block, where tap 0 reads outside the source (verified on the "
+    "camera on a flat source; predicted from that and met on an x-varying one, one run each)",
 }
 """Camera facts of single fields on the units (`units.py`): ownership predicts use."""
+CAMERA_TIERS = {"f244_245": V, "f248_249": V, "f41_44": I, "f76_79": I}
+"""Fields whose tier the camera raised above the bytes': an idled enable equal to idling its
+port or its word (verified), a nibble acting as one select value (inferred, post hoc)."""
 FIELDS = tuple(
-    replace(f, fact=f"{f.fact}. {UNIT_FACTS[f.id][0].upper()}{UNIT_FACTS[f.id][1:]}")
+    replace(
+        f,
+        fact=f"{f.fact}. {UNIT_FACTS[f.id][0].upper()}{UNIT_FACTS[f.id][1:]}",
+        confidence=CAMERA_TIERS.get(f.id, f.confidence),
+    )
     if f.id in UNIT_FACTS
     else f
     for f in FIELDS

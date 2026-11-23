@@ -458,6 +458,31 @@ def test_a_measured_edit_outside_its_classes_gives_no_prediction():
     assert not any(got.dst.known)
 
 
+def test_an_edit_that_exposes_per_boot_state_leaves_that_plane_unknown():
+    taps = Taps.of(PHASES)
+    vary = bytes(range(64)) * 48
+    head = "f292_295"
+    for src, at, edit, plane in (
+        (FLAT, 439, FieldValue(head, 15), 0),
+        (vary, 439, FieldValue(head, 8), 0),
+        (vary, 557, FieldValue(head, 15), 1),
+        (vary, 557, FieldValue("f250_251", 3), 1),
+    ):
+        got = predict(model(), taps, src, TABLE13, edits=[(at, edit)])
+        stock = predict(model(), taps, src, TABLE13)
+        a, z = 1024 * plane, 1024 * plane + 1024
+        assert not any(got.dst.known[a:z]), (at, edit)
+        assert {got.sources[s].fact for s in got.dst.src[a:z]} == {
+            resample_edits.PER_BOOT.why
+        }
+        rest = [k for k in range(3072) if not a <= k < z]
+        assert [got.dst.data[k] for k in rest] == [stock.dst.data[k] for k in rest]
+        assert [got.dst.known[k] for k in rest] == [stock.dst.known[k] for k in rest]
+    # Head 8 at 439 ran on x-varying sources only.
+    got = predict(model(), taps, FLAT, TABLE13, edits=[(439, FieldValue(head, 8))])
+    assert not any(got.dst.known) and "ran only on" in got.result.notes[-1]
+
+
 def bits(*ranges: tuple[int, int]) -> int:
     return sum(((1 << (hi - lo + 1)) - 1) << lo for lo, hi in ranges)
 

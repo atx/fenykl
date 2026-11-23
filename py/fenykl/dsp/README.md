@@ -106,7 +106,7 @@ confidence and fact; `fields.op(value)` is total:
 | 0 | `loop` | loop end, back to T | inferred, strong |
 | 1 | `brf` | forward conditional branch, the guard of a loop | inferred |
 | 2 | `br` | conditional branch either way | inferred |
-| 3 | `call` | call (when a return lies before T; the other op 3 words are open) | inferred, strong |
+| 3 | `call` | call (when a return lies before T; the other op 3 words are open, program 13's at 210 acts as a jump) | inferred, strong |
 | 4 | `ret` | return to the word after the call's delay slots | inferred, strong |
 | 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); word 5 of every stock program, where the call at word 0 returns | inferred |
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
@@ -379,6 +379,17 @@ raised, and from there the grid B idle does not bring it back to a known value: 
 contain it left a non-zero moved value in place. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
 `Resample13Model(program, facts)` takes another outcome table.
 
+Single C2 fields have rows too, plane-level outcomes. A port enable at its idle value 3
+changes one plane (verified): at 439 f244_245 gives the bytes of idling its port, at 440 and 448
+two enables give that plane of their word's whole idle (post hoc the port's register keeps its
+older content, inferred). Idling f248_249 is the whole idle of the store word 533, and of 529
+and 558 but for lanes of per-boot state. S0's f41_44 and f76_79 at 446 and 448 change plane 0
+only: f41_44 feeds a saturation select, f76_79 = v sets bytes to 255 by a per-lane mask that v
+selects (post hoc laws, inferred; not modelled). Where an edit exposes state that no program
+writes and that differs between boots (439's S2 head idle or 8, 557's head or its port 175
+idle), that plane is unknown (`PER_BOOT`), never a value. Rows that ran in a copy of the program
+placed elsewhere count as in place: five field edits gave the same bytes there.
+
 - one edited word that is a measured row, on a class it ran on: its planes; `JobResult.edits`
   names it, verified (the bytes stay at most inferred, through the law);
 - else a job whose every changed field the window covers, in any number of words: the window's
@@ -466,8 +477,10 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   strict mode and stops the run in lenient mode; a loop end into its own delay slots, a control
   op in a delay slot and a return without a call raise in both.
 - **Local op 3** (`Program.local_op3()`): a forward op 3 after word 0 with no return between it
-  and T. Whether it is a call or a jump is open. It runs as a call by default, or as a jump with
-  no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
+  and T. Whether it is a call or a jump is open in general; program 13's at word 210 runs in a
+  job and acts as a jump (inferred: as a call it would re-run the inner loop, longer than the
+  measured job), the one at 312 by analogy (hypothesis). It runs as a call by default, or as a
+  jump with no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
   finds no link, raises `LinkError` (an `UnknownSemantics`): no return of its own lies before
   that T, and stepped as calls such a link re-ran a loop's tail.
 - **Registers**: the op slot's (`Boot.slot`) and the transfer registers (`Boot.regs`) are kept
