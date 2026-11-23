@@ -164,13 +164,13 @@ def start_copy(boot: Boot) -> JobView:
 
 
 class Model(Protocol):
-    """The model of one program: what covers each word of a job at its index (`cover`, which
-    records into the job's trace, or raises `UnknownSemantics` in strict mode), and what the
-    trace does."""
+    """The model of one program: what covers each word of a job (`cover_job`, which records
+    into the job's trace, or raises `UnknownSemantics` in strict mode, and returns the job as
+    `apply` takes it), and what the trace does."""
 
     program: Program
 
-    def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None: ...
+    def cover_job(self, emu: "Executor", job: Job, trace: Trace) -> Job: ...
 
     def apply(self, emu: "Executor", job: Job, trace: Trace) -> JobResult: ...
 
@@ -308,8 +308,7 @@ class Executor:
             raise ValueError("run needs a model; step runs a job without one")
         self.boot.setup(job)
         trace = Trace()
-        for index, word in enumerate(job.program.words):
-            self.model.cover(trace, index, word, self.strict)
+        job = self.model.cover_job(self, job, trace)
         return self.model.apply(self, job, trace)
 
     def step(self, job: Job, start: Callable[[Boot], object] | None = None) -> Flow:

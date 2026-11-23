@@ -14,8 +14,9 @@ index:
 covers a job's words from it: each undecoded stock word is the row of its stock index, the
 register transfers are X2's semantic at any index, matched by their signature, with the
 register contexts and the register group B and route values of the stock transfers as the
-reference. No stock word is part of this
-code. The model resolves a job's trace into its one load and one store (`resolve`) and applies
+reference. A job with words inserted into the stock program is covered by content (`align`,
+`Copy16Model.cover_job`). No stock word is part of this code. The model resolves a job's trace
+into its one load and one store (`resolve`) and applies
 them to the boot (`apply`):
 
     load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
@@ -34,7 +35,8 @@ Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the jo
 20, 24, 26, 27, 28; word 70 at 26; word 71 at 0.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from difflib import SequenceMatcher
 
 from .emu import (
     HALT_OP,
@@ -47,7 +49,18 @@ from .emu import (
     dram_alias,
     start_copy,
 )
-from .fields import FIELDS, STAIRCASE, TARGET_OPS, Confidence, Kind, lookup
+from .fields import (
+    DELAY_SLOTS,
+    FIELDS,
+    OP_FIELD,
+    STAIRCASE,
+    TARGET,
+    TARGET_OPS,
+    Confidence,
+    Kind,
+    lookup,
+    op,
+)
 from .program import Program, stock_programs
 from .semantics import (
     KIB,
@@ -540,6 +553,43 @@ def _edit(stock: Word, word: Word) -> str:
     )
 
 
+def _key(word: Word) -> int:
+    """The word's value with its control target cleared, as the alignment compares words."""
+    return word.value if word.target is None else TARGET.put(word.value, 0)
+
+
+def align(stock: tuple[Word, ...], words: tuple[Word, ...]) -> list[int | None] | None:
+    """The stock index of each word of a longer program that is the stock program with words
+    inserted and some edited in place (None at an inserted word), matched by content with the
+    control targets left out; None for any other program."""
+    if len(words) <= len(stock):
+        return None
+    matcher = SequenceMatcher(
+        None, [_key(w) for w in stock], [_key(w) for w in words], autojunk=False
+    )
+    at: list[int | None] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "insert":
+            at += [None] * (j2 - j1)
+        elif i2 - i1 != j2 - j1:
+            return None
+        else:
+            at += range(i1, i2)
+    # An insert into a run of equal words is the same program wherever in the run it is: put
+    # it after the run, so that it lies in delay slots only if every place in the run does.
+    for j in range(len(at) - 2, -1, -1):
+        k = j
+        while (
+            k + 1 < len(at)
+            and at[k] is None
+            and at[k + 1] is not None
+            and words[k] == words[k + 1]
+        ):
+            at[k], at[k + 1] = at[k + 1], None
+            k += 1
+    return at
+
+
 _LOOP_ENTRIES: dict[frozenset[tuple[int, str]], tuple[Outcome, str]] = {
     frozenset({(GUARD, "idle"), (53, "idle")}): (
         Outcome.NO_STORE,
@@ -625,6 +675,121 @@ class Copy16Model:
     @classmethod
     def from_image(cls, image: bytes) -> "Copy16Model":
         return cls(stock_programs(image)[ITEM])
+
+    def cover_job(self, emu: Executor, job: Job, trace: Trace) -> Job:
+        """Cover the job's words and return it in the stock program's index space. A job that is
+        the stock program with words inserted (`align`) has its stock words covered at their
+        stock indices, their control targets moved back through the alignment, and its inserted
+        words by their content (`_cover_insert`); it returns without its inserted words, so the
+        indices of what it resolves are stock indices. Words off their stock indices make it a
+        hypothesis. An insert in a control word's delay slots, a target on an inserted word and
+        an inserted control or halt word raise UnknownSemantics, also in lenient mode."""
+        words = job.program.words
+        at = align(self.program.words, words)
+        if at is None:
+            for index, word in enumerate(words):
+                self.cover(trace, index, word, emu.strict)
+            return job
+        trace.inserted = [j for j, s in enumerate(at) if s is None]
+        for j in trace.inserted:
+            word = words[j]
+            if word.control or word.op == HALT_OP:
+                raise UnknownSemantics(
+                    j,
+                    op(word.op).name,
+                    [(OP_FIELD, word.op)],
+                    "an inserted control or halt word: the flow around it is not modelled",
+                )
+            c = next(
+                (i for i in range(max(j - DELAY_SLOTS, 0), j) if words[i].control),
+                None,
+            )
+            if c is not None:
+                raise UnknownSemantics(
+                    j,
+                    "insert",
+                    [],
+                    f"inserted in the delay slots of word {c}, it pushes a stock word out "
+                    "of them",
+                )
+        stocked = []
+        for j, s in enumerate(at):
+            word = words[j]
+            if s is None:
+                self._cover_insert(emu, trace, j, word)
+                continue
+            t = word.target
+            if t is not None:
+                to = at[t] if t < len(at) else None
+                if to is None:
+                    raise UnknownSemantics(
+                        j,
+                        op(word.op).name,
+                        [],
+                        f"its target {t} is no stock word of the job",
+                    )
+                word = Word.from_int(TARGET.put(word.value, to))
+            self.cover(trace, s, word, emu.strict)
+            stocked.append(word)
+        shifted = [s for j, s in enumerate(at) if s is not None and s != j]
+        listed = ", ".join(map(str, trace.inserted))
+        trace.notes.append(
+            f"words inserted at job indices {listed}; the other words are named by their "
+            "stock indices"
+        )
+        if shifted:
+            trace.taint = H
+            trace.notes.append(
+                f"stock words {shifted[0]}..{shifted[-1]} off their stock indices"
+            )
+        return replace(job, program=replace(job.program, words=tuple(stocked)))
+
+    def _cover_insert(self, emu: Executor, trace: Trace, j: int, word: Word) -> None:
+        """An inserted word by its content: the idle word, or a data op with only its op slot's
+        fields off idle that its op semantics (`emu.ops`) covers, at the semantics' confidence,
+        and neither writes a register nor local memory (program 16's words that could read them
+        are undecoded). The op slot's registers are unknown: no stock word of the job is
+        stepped. Anything else raises UnknownSemantics (strict) or is ignored and taints."""
+        if word == IDLE:
+            return
+        changed = word.changed(IDLE)
+        fields = [(f, v) for f, v in changed if f.unit != "op_slot"]
+        sem = emu.ops.get(word.op)
+        name = op(word.op).name
+        effect = None
+        if self.transfer.matches(word):
+            why = "an inserted register transfer: which slot it takes is not modelled"
+        elif fields:
+            why = "fields outside the op slot"
+        elif sem is None:
+            fields, why = [(OP_FIELD, word.op)], f"{name} has no op semantics"
+        else:
+            fields = [(OP_FIELD, word.op)]
+            effect = sem.run(word, RegisterFile(), emu.boot.local)
+            if effect is None:
+                fields = [(f, word[f.id]) for f in UNITS["op_slot"].fields]
+                why = f"{name}: outside what its op semantics covers"
+            elif effect.writes:
+                why = (
+                    f"{name} ({effect.note}): the words that may read the register are "
+                    "undecoded"
+                )
+            elif effect.stores:
+                why = f"{name} ({effect.note}): the copy's request in local memory may change"
+            else:
+                why = ""
+        if not why:
+            assert sem is not None and effect is not None
+            trace.classes = min(trace.classes, sem.confidence)
+            trace.notes.append(
+                f"inserted word {j}: {name}, {effect.note or 'no effect'}; where a datum it "
+                "reads goes is open"
+            )
+            return
+        if emu.strict:
+            raise UnknownSemantics(j, f"inserted word {j}", fields, why)
+        trace.ignored.append((j, [f.id for f, _ in changed]))
+        trace.taint = H
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
         """Run the job's word at `index` by what covers it: the idle word; X2's semantic, a
@@ -727,7 +892,11 @@ class Copy16Model:
         length = view.length
         assert length is not None
         stock = self.program.words
-        edits = sum(a != b for a, b in zip(words, stock)) + abs(len(words) - len(stock))
+        edits = (
+            sum(a != b for a, b in zip(words, stock))
+            + abs(len(words) - len(stock))
+            + len(trace.inserted)
+        )
         # The defaults are what every stock copy shows: load at src, offsets 0, count len, bytes.
         plan = Plan(count=length, cap=min(trace.taint, I if edits >= 2 else V))
         entry = self._loop_entry(words, length)

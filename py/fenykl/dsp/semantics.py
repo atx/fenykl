@@ -88,6 +88,8 @@ class Trace:
     """The weakest confidence of the classes that ran, at the positions they ran at."""
     taint: Confidence = V
     """Hypothesis when a field was ignored (lenient mode) or a word ran off its stock position."""
+    inserted: list[int] = field(default_factory=list)
+    """The job indices of the words inserted into the stock program (`memcpy.align`)."""
     notes: list[str] = field(default_factory=list)
 
 

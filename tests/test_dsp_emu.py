@@ -1,6 +1,8 @@
 import base64
 import json
 import struct
+import warnings
+from dataclasses import replace
 from functools import cache
 from pathlib import Path
 
@@ -11,10 +13,17 @@ from fenykl.dsp import commands
 from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.memcpy import Copy16Model
-from fenykl.dsp.program import Program
-from fenykl.dsp.semantics import Mode, Sequencer, UnknownSemantics
+from fenykl.dsp.program import (
+    Ctl,
+    HypothesisFieldWarning,
+    Label,
+    Program,
+    Statement,
+    assemble,
+)
+from fenykl.dsp.semantics import OP_SEMANTICS, Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
-from fenykl.dsp.units import PR, S1
+from fenykl.dsp.units import PR, S1, OpSlot
 from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
@@ -683,3 +692,114 @@ def test_sources_stay_bounded_over_jobs():
     for _ in range(3):
         run(stock(), boot=boot)
     assert len(boot.sources) == n
+
+
+def statements(program: Program) -> list[Statement]:
+    """`program` as DSL statements: a label at each target, each control word a `Ctl`."""
+    words = program.words
+    targets = {w.target for w in words if w.target is not None}
+    out: list[Statement] = []
+    for i, w in enumerate(words):
+        if i in targets:
+            out.append(Label(f"w{i}"))
+        out.append(w if w.target is None else Ctl(w.op, f"w{w.target}", w))
+    return out
+
+
+def inserted(k: int, word: Word, after_label: bool = False) -> Program:
+    """The stock copy assembled with `word` inserted before stock word k, before its label (or
+    after it, so that a control word targeting k targets the inserted word)."""
+    stmts = statements(stock())
+    at = next(
+        (
+            n
+            for n in range(len(stmts))
+            if sum(not isinstance(x, Label) for x in stmts[:n]) == k
+        ),
+        len(stmts),
+    )
+    if after_label and isinstance(stmts[at], Label):
+        at += 1
+    stmts.insert(at, word)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", HypothesisFieldWarning)
+        return assemble(stmts)
+
+
+LOAD = Word(op_slot=OpSlot(f313_319=0x1A, f15_22=1, f123_127=5, f128_132=0))
+"""A 0x1a read of local word r5 + 1, inside what its op semantics covers."""
+
+
+@pytest.mark.parametrize("k", [0, 12, 40, 60])
+def test_an_idle_insert_keeps_the_copy(k: int):
+    """The stock words keep their semantics where an insert moved them, as hypotheses."""
+    _, base = run(stock())
+    result, boot = run(inserted(k, IDLE))
+    dst = boot.read(DST, LEN)
+    assert result.status is Status.OK
+    assert (dst.data, dst.known) == (
+        base.read(DST, LEN).data,
+        base.read(DST, LEN).known,
+    )
+    assert result.taint is Confidence.HYPOTHESIS
+
+
+def test_an_insert_after_the_last_word_moves_nothing():
+    stock_result, base = run(stock())
+    result, boot = run(inserted(len(stock()), IDLE))
+    assert result.taint is stock_result.taint
+    assert boot.read(DST, LEN).taint == base.read(DST, LEN).taint
+
+
+def test_an_inserted_op_takes_its_semantics_tier():
+    end = len(stock())
+    stock_result, base = run(stock())
+    result, boot = run(inserted(end, LOAD))
+    assert result.taint is stock_result.taint
+    weak = replace(OP_SEMANTICS[0x1A], confidence=Confidence.HYPOTHESIS)
+    boot = Boot()
+    boot.put(SRC, bytes(range(256)) * (LEN // 256), "src")
+    emu = Executor(boot, model(), ops={**OP_SEMANTICS, 0x1A: weak})
+    result = emu.run(commands.copy(inserted(end, LOAD), SRC, DST, LEN))
+    dst = boot.read(DST, LEN)
+    assert result.status is Status.OK and dst.data == base.read(DST, LEN).data
+    assert result.taint is Confidence.HYPOTHESIS
+    assert dst.weakest() is Confidence.HYPOTHESIS
+
+
+@pytest.mark.parametrize(
+    "word, why",
+    [
+        (Word.from_fields({"f313_319": 0x40}, base=IDLE), "op40 has no op semantics"),
+        (
+            Word.from_fields({"f313_319": 0x1A}, base=IDLE),
+            "outside what its op semantics covers",
+        ),
+        (
+            Word.from_fields({"f313_319": 0x38}, base=IDLE),
+            "may read the register are undecoded",
+        ),
+        (stock().words[42], "an inserted register transfer"),
+    ],
+    ids=["no-row", "flag-bits", "writes-a-register", "transfer"],
+)
+def test_an_insert_without_semantics_is_unknown(word: Word, why: str):
+    program = inserted(12, word)
+    with pytest.raises(UnknownSemantics, match=f"word 12: .*{why}"):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert [i for i, _ in result.ignored] == [12]
+    assert boot.read(DST, LEN).weakest() is Confidence.HYPOTHESIS
+
+
+def test_an_insert_must_keep_the_flow():
+    """A word inserted in a control word's delay slots, a target left on the moved word's old
+    index and a target on the inserted word have no semantics, in lenient mode too."""
+    with pytest.raises(UnknownSemantics, match="delay slots of word 45"):
+        run(inserted(47, IDLE), strict=False)
+    words = list(stock().words)
+    words.insert(20, IDLE)  # 53's target 50 now names stock word 49
+    with pytest.raises(UnknownSemantics, match="word 53: no semantics for f15_22"):
+        run(Program(tuple(words)))
+    with pytest.raises(UnknownSemantics, match="its target 58 is no stock word"):
+        run(inserted(58, IDLE, after_label=True), strict=False)

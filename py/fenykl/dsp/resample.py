@@ -399,6 +399,12 @@ class Resample13Model:
             self._hold(boot, req, entries, taps, px, full)
         return result
 
+    def cover_job(self, emu: Executor, job: Job, trace: Trace) -> Job:
+        """Cover each word of the job at its index (`cover`)."""
+        for index, word in enumerate(job.program.words):
+            self.cover(trace, index, word, emu.strict)
+        return job
+
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
         """A job's word at `index` is covered when it is the stock word, a measured edit of it
         or a window word whose changed fields the window covers; any other word raises

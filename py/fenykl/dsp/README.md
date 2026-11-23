@@ -13,7 +13,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` with labels, `call_return_errors()` |
 | `disasm.py` | listings and DSL source of a program |
-| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store and their application |
+| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
 | `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
@@ -228,7 +228,8 @@ is weaker:
   hypothesis: an undecoded stock word is a row at its stock index only (inferred), and at
   another index it is no row (strict mode raises, lenient mode runs the stock word there); a
   transfer whose role the sequencer assigns away from the role's stock word is a hypothesis;
-  the idle word is verified anywhere.
+  the idle word is verified anywhere. Stock words that inserted words move keep their rows at
+  hypothesis; an inserted data op has its op semantics' confidence ("Inserted words").
 - **Outcome tables.** What a role's table (or a part's swept register, or an idled part) gives
   is verified at the job lengths it ran at on the camera (`seen`, 1 KiB unless stated) and
   inferred at others.
@@ -276,9 +277,9 @@ a register transfer at any index (matched by its signature, every field idle but
 groups, the route nibbles and f308_309); the row of the undecoded stock word at its stock index
 (`OpaqueClass`, which leaves the measured operand fields free); and the stock halt at another
 index, which acts where stepping reaches it (below) and is a hypothesis elsewhere. A stock word
-at another index than its own is no row. The model derives the rows, the transfers' register
-contexts and their reference values from the stock program it is built from, so no stock word
-is part of the code. At the end the sequencer gives the transfers their roles (the stock word
+at another index than its own is no row, unless inserted words moved it there ("Inserted
+words"). The model derives the rows, the transfers' register contexts and their reference
+values from the stock program it is built from, so no stock word is part of the code. At the end the sequencer gives the transfers their roles (the stock word
 66 loads, 67 addresses, 68 offsets, 73 counts, 76 offsets the store, 47 formats it, ...) in the
 order of the transfers (`Sequencer`, inferred: the roles followed counted transfers moved by one
 index on the camera, and a counted transfer at word 78, the word before the return, stalls the
@@ -304,6 +305,31 @@ ignores every field that differs from it and taints every byte the job loads or 
 carries, where they would overfill it (a transfer moved onto another word's index): as many as
 overfill it, the first ones in program order, so that a transfer moved before them leaves
 the later ones in their stock roles.
+
+### Inserted words
+
+A job longer than the stock program that is the stock program with words inserted (and some
+edited in place) is covered by content (`memcpy.align`, `Copy16Model.cover_job`): its words
+are matched to the stock words with the control targets left out, an insert into a run of equal
+words counting as placed after the run. Each stock word is covered at its stock index, its
+target moved back through the match, so a target that follows its word (labels, or every
+target at or above the insert plus one) gives the stock word, and one left at its old index is
+an edit of the word, which has no row. The job resolves in the stock index space: the
+results name the stock words by their stock indices, the inserts by their job indices (a note
+says where they are). An insert counts as an edited word for the combinations rule, and stock
+words off their stock indices make the job a hypothesis.
+
+An inserted word is covered by its content: the idle word, or a data op whose fields off idle
+are all in the op slot, at its op semantics' confidence (`OP_SEMANTICS`, or the executor's
+`ops`), when the semantics covers its operands and the op neither writes a register nor
+local memory (the undecoded words that might read them have no semantics for another value);
+the op slot's registers count as unknown. Where a datum the op reads goes is open: the copy is
+assumed not to see it. Every other insert is UNKNOWN, naming the op or the fields: an op
+without semantics, operands outside them (the idle word with only its op changed sets imm13's
+flag bits, so the family A ops are not covered there), a register or local memory write, a
+register transfer (its slot is not modelled). These raise in both modes: an inserted control
+or halt word, an insert in a control word's four delay slots (it pushes a stock word out of
+them), a target on an inserted word.
 
 ### The resampler
 
