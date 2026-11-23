@@ -195,15 +195,19 @@ ra << (rb & 31), 0x28 / 0x29 ra <= rb, ra < rb unsigned, 0x2a / 0x2b signed, 0x3
 min signed, 0x36 ra ^ c; 0x0b c itself, ra not used; 0x37 ra | imm15; 0x38 ra & c; the ring
 pointer steps 0x44, 0x46 and 0x47 (216 points): s = zext(ra) + sext(R), R = 1 in 0x44 and
 R[f120_122] in 0x46 / 0x47, L the low 8 bits of imm13 (0x44, 0x46) or rb (0x47), the result s +
-L if s < 0, s - L if s >= L, else s. 0x48 and 0x49 give no result, change no operand and do not
-stall; what they do is open. Inferred: 0x32 abs(rb), 0x2c max unsigned, 0x42 ra >> (rb & 31)
+L if s < 0, s - L if s >= L, else s. 0x49 and 0x48 multiply: (ra x rb) & 0xffffffff reaches
+the ALU bus one word after the op, where a port of that word takes it, and the op's own word gets
+nothing (`semantics.MULTIPLY_LAG`); what sets 0x48 apart is open, and stepping records the
+product without delivering it. Inferred: 0x32 abs(rb), 0x2c max unsigned, 0x42 ra >> (rb & 31)
 logical, 0x1e / 0x1f ra - imm16, ra + imm16 and 0x23 ra < imm16 unsigned with imm16
 zero-extended, 0x0a ra | (imm16 << 16), 0x3e / 0x3f / 0x40 ra >> imm5 arithmetic, logical and
-ra << imm5 (ra shifted, not rb). No op screened multiplies.
+ra << imm5 (ra shifted, not rb).
 
 Family A is local memory, 0x2000 bytes with a stack at its top and r0 the stack pointer, at the
-byte address ra + w x imm13, imm13 signed (verified by exact readout; its high bits, once read
-as a flag, are the offset's sign); the register forms use ra + w x rb. The stores 0x18 / 0x12 /
+byte address ra + w x imm13 modulo 0x2000 (`semantics.LOCAL_BYTES`), imm13 signed (verified by
+exact readout: any ra reads at its low 13 bits, so no DRAM, register or lane state is reachable;
+imm13's high bits, once read as a flag, are the offset's sign, which modulo 0x2000 gives the
+same address as the unsigned reading); the register forms use ra + w x rb. The stores 0x18 / 0x12 /
 0x0c write the low 32 / 16 / 8 bits of R[f120_122] (register forms 0x19 / 0x13 / 0x0d); the
 loads are 0x1a 32-bit, 0x16 signed and 0x14 unsigned 16-bit, 0x10 unsigned and 0x0e signed 8-bit
 (register forms 0x1b, 0x17, 0x15, 0x11, 0x0f). A load's datum goes to no register by itself: it

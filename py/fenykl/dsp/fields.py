@@ -293,7 +293,8 @@ T_HIGH = (
     "family: in 31878 of 32911 idle-op words it holds the last register-form word's value, "
     "which survives the immediate forms in between); in family C it is encoded as a register, "
     f"but rb had no effect on the result ({EXACT}). In family A imm13's high bits are the "
-    f"offset's sign, not a flag ({EXACT}). In families A' and E a source that stays fixed "
+    f"offset's sign, not a flag ({EXACT}), which modulo 0x2000 gives the same address as the "
+    "unsigned reading. In families A' and E a source that stays fixed "
     "across consecutive register-form ops while ra changes (same rb with another ra in 59 % of "
     "such pairs, 10 % by chance), live into the routine more often than chance (verified in the "
     "bytes across later firmware versions of the same family)"
@@ -540,8 +541,16 @@ TRANSFER_HEADS = (0x1C, 0x1D, 0x1E)
 X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x16: ("~a & b", I, "fitted on three points"),
     0x17: ("~a & ~b", V, ""),
-    0x18: ("a ^ b", I, "pre-registered the other way round with 0x19, three points each"),
-    0x19: ("a | b", I, "pre-registered the other way round with 0x18, three points each"),
+    0x18: (
+        "a ^ b",
+        I,
+        "pre-registered the other way round with 0x19, three points each",
+    ),
+    0x19: (
+        "a | b",
+        I,
+        "pre-registered the other way round with 0x18, three points each",
+    ),
     0x1A: ("a & b", V, ""),
     0x1B: ("~b", V, ""),
     **{h: (f"{NO_RESULT}: a register transfer", V, "") for h in TRANSFER_HEADS},
@@ -724,7 +733,9 @@ PR_FILES = {
 
 def _pr_values(enable: str, idle: int) -> dict[int, str]:
     return {
-        v: "writes nothing (verified)" if src is None else f"{src} to {PR_FILES[enable]} (verified)"
+        v: "writes nothing (verified)"
+        if src is None
+        else f"{src} to {PR_FILES[enable]} (verified)"
         for v, src in PR_SOURCES[enable].items()
     } | {idle: "idle"}
 
@@ -1324,6 +1335,22 @@ TARGET = Composite(
     "op 0..3 word); what goes there is the op's meaning",
 )
 
+X_IMMEDIATES = {
+    "x0": Composite(
+        "x0k",
+        (BY_KEY["f1"], BY_KEY["f2_6"], BY_KEY["x0b"]),
+        V,
+        f"X0's 11-bit immediate K, f1 | f2_6 << 1 | f105_109 << 6 ({EXACT})",
+    ),
+    "x1": Composite(
+        "x1k",
+        (BY_KEY["f7_8"], BY_KEY["f9_14"], BY_KEY["xreg"]),
+        V,
+        f"X1's 13-bit immediate K, f7_8 | f9_14 << 2 | f115_119 << 8 ({EXACT})",
+    ),
+}
+"""Each X unit's immediate; its high bits are the register field of its operand b."""
+
 RA = BY_KEY["ra"]
 RB = BY_KEY["f128_132"]
 IMM = BY_KEY["imm"]
@@ -1388,7 +1415,8 @@ FAMILIES = (
         13,
         "ra and a signed 13-bit immediate: loads and stores of width w (bytes 0x0c..0x10, "
         "halfwords 0x12..0x16, words 0x18, 0x1a) in local memory, 0x2000 bytes with a stack at "
-        f"its top, r0 the stack pointer, at the byte address ra + w x imm13 ({EXACT}); imm13's "
+        f"its top, r0 the stack pointer, at the byte address ra + w x imm13 ({EXACT}), taken "
+        f"modulo 0x2000: no DRAM, register or lane state is reachable ({EXACT}); imm13's "
         "high bits, once read as a flag, are the offset's sign. Stores 0x18 / 0x12 / 0x0c write "
         "the low 32 / 16 / 8 bits of R[f120_122]; loads 0x1a 32 bits, 0x16 signed and 0x14 "
         f"unsigned 16, 0x10 unsigned and 0x0e signed 8 ({EXACT}); {LOAD_DATUM}; each op's "

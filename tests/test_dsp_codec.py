@@ -10,13 +10,34 @@ from fenykl.dsp.fields import (
     FIELDS,
     FORMATS,
     IDLE_OP,
+    IDLE_VALUE,
     STAIRCASE,
     WORD_BITS,
+    X_IMMEDIATES,
     Operands,
     op,
 )
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
 from fenykl.dsp.word import IDLE, Word
+
+
+@pytest.mark.parametrize(
+    "unit, k, parts",
+    [
+        ("x0", 0x5A5, {"f1": 1, "f2_6": 0x12, "f105_109": 0x16}),
+        ("x1", 0x1ABC, {"f7_8": 0, "f9_14": 0x2F, "f115_119": 0x1A}),
+    ],
+)
+def test_x_immediates_pack_into_their_fields(unit, k, parts):
+    word = Word.from_int(X_IMMEDIATES[unit].put(IDLE_VALUE, k))
+    assert {key: word[key] for key in parts} == parts
+    assert X_IMMEDIATES[unit].get(word.value) == k
+
+
+def test_x1_head_is_f310_312_over_f308_309():
+    # The transfer form 0x1d: 7 in 310..312, 1 in 308..309.
+    word = Word.from_int(IDLE_VALUE & ~(0x1F << 308) | (7 << 310) | (1 << 308))
+    assert word["x1op"] == 0x1D
 
 
 def test_every_bit_in_exactly_one_field():

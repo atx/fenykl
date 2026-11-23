@@ -38,7 +38,9 @@ def test_assemble_warns_only_about_hypothesis_fields():
     with pytest.warns(
         HypothesisFieldWarning, match=r"2 hypothesis fields: f0, f23_30$"
     ):
-        assemble([Word.from_fields({"xreg": 3, "f0": 1}), Word.from_fields({"f23_30": 0})])
+        assemble(
+            [Word.from_fields({"xreg": 3, "f0": 1}), Word.from_fields({"f23_30": 0})]
+        )
 
 
 @pytest.mark.parametrize("const", ["f133_140", "f230_231", "f277"])

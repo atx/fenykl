@@ -774,9 +774,9 @@ def test_an_inserted_op_takes_its_semantics_tier():
     "word, at, why",
     [
         (
-            Word.from_fields({"f313_319": 0x48}, base=IDLE),
+            Word.from_fields({"f313_319": 0x1B}, base=IDLE),
             12,
-            "op48 has no op semantics",
+            "op1b has no op semantics",
         ),
         # A word load at r2, (len + 0x1f) / 16 at the engine site: not word-aligned.
         (

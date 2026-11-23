@@ -23,6 +23,7 @@ from ..firmware import unpack_firmware
 from .fields import DELAY_SLOTS, OP_FIELD, Confidence, Kind, Operands, lookup, op
 from .program import Program
 from .semantics import (
+    LOCAL_BYTES,
     OP_SEMANTICS,
     OTHER_FILES,
     Branching,
@@ -49,8 +50,8 @@ from .word import Word
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 LOCAL_BASE = 0x9D000000
-LOCAL_SIZE = 0x2000
-"""Local memory reaches at least 0x9D001D1C (the resampler's setup writes there)."""
+LOCAL_SIZE = LOCAL_BYTES
+"""Local memory, 8 KiB, which the scalar addresses wrap in (`semantics.LOCAL_BYTES`)."""
 BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
 """The modelled buffer indices: it holds at least 16 KiB and reaches below index 0."""
 LINE_PAIRS = 3 * 2 * 64

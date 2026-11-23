@@ -209,8 +209,7 @@ Q = slot_class("q")
 Const = slot_class("const")
 
 SLOTS: dict[str, type[Slot]] = {
-    cls.unit.name: cls
-    for cls in (OpSlot, S0, S1, S2, S3, X0, X1, PB, PR, M, Q, Const)
+    cls.unit.name: cls for cls in (OpSlot, S0, S1, S2, S3, X0, X1, PB, PR, M, Q, Const)
 }
 _missing = set(UNITS) - set(SLOTS)
 if _missing:

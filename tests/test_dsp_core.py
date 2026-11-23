@@ -11,7 +11,17 @@ from fenykl.dsp.emu import Boot, Executor, Flow, Job, LinkError, Stop, start_cop
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.memcpy import ITEM, copy_branches
 from fenykl.dsp.program import Program, stock_programs
-from fenykl.dsp.semantics import Branching, Count, Given, RaTest, Regs, UnknownSemantics
+from fenykl.dsp.semantics import (
+    Branching,
+    Count,
+    Given,
+    RaTest,
+    Regs,
+    RegSet,
+    UnknownSemantics,
+    destinations,
+    x_result,
+)
 from fenykl.dsp.state import Reg
 from fenykl.dsp.word import IDLE, Word
 
@@ -133,7 +143,7 @@ def test_word_halfword_and_byte_loads_share_one_base():
         f"reads local halfword 0x1: {SRC >> 16:#x}",
         f"reads local byte 0x1: {SRC >> 8 & 0xFF:#x}",
         f"reads local halfword 0x2: {DST & 0xFFFF:#x}",
-        "reads local byte r4 + -0x1 B = -0x1, outside the modelled local memory",
+        "reads local byte 0x1fff: unknown",  # the address wraps at 8 KiB
     ]
     assert boot.slot[4] == given(0)  # ra is the base, not written
     # A base of byte 4 (dst) moves both by 4 bytes.
@@ -153,9 +163,16 @@ def test_family_a_offset_is_width_times_the_signed_imm13():
         f"reads local halfword 0x3: {DST >> 16:#x}",
         "reads local halfword 0x5: 0x0",
     ]
-    # imm13's high bits are the offset's sign.
-    _, flow = run_slot((load(0x16, -0x800),), r4=given(0))
-    assert flow.steps[0].note.endswith("= -0x800, outside the modelled local memory")
+    # imm13 decodes signed; modulo 8 KiB the signed and unsigned readings give one address.
+    _, flow = run_slot((load(0x16, -0x800),), r4=given(0x1000))
+    assert flow.steps[0].operands.imm == -0x800
+    assert flow.steps[0].note == f"reads local halfword 0x0: {SRC & 0xFFFF:#x}"
+
+
+@pytest.mark.parametrize("base", [0x2004, 0x10004, -0x1FFC, 0x9D000004])
+def test_local_addresses_wrap_at_8_kib(base):
+    _, flow = run_slot((load(0x1A, 0),), r4=given(base))
+    assert flow.steps[0].note == f"reads local word 0x1: {DST:#x}"
 
 
 @pytest.mark.parametrize("op, base", [(0x1A, 2), (0x16, 1), (0x18, 6)])
@@ -330,7 +347,7 @@ def test_ops_chain_through_the_operand_set():
         IDLE,
         IDLE,
         ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=2)), "operand", 7),
-        ported(Word.data(0x48, Operands(ra=2, rb=2)), "operand", 2),
+        ported(Word.data(0x1B, Operands(ra=2, rb=2)), "operand", 2),
         IDLE,
         IDLE,
         ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=1)), "operand", 8),
@@ -346,6 +363,68 @@ def test_ops_chain_through_the_operand_set():
     assert flow.steps[4].unknown and boot.slot[2] is None
     assert boot.slot[8] is None
     assert flow.steps[7].note == "r2 >>> 0x1 (op 0x3f): an unknown input"
+
+
+def test_a_multiply_writes_nothing_in_its_own_word():
+    # -13 x 7: the product is recorded, its own word's port keeps r4.
+    mul = ported(Word.data(0x49, Operands(ra=2, rb=3)), "operand", 4)
+    boot, flow = run_slot((mul, IDLE), r2=given(-13), r3=given(7), r4=given(0x5555))
+    assert flow.steps[0].note == (
+        "r2 x r3 (op 0x49) = 0xffffffa5; on the ALU bus 1 word on, not delivered"
+    )
+    assert boot.slot[4] == given(0x5555)
+
+
+def test_a_port_that_writes_nothing_leaves_no_open_destination():
+    word = Word.from_fields(
+        {"f267_268": 2, "f211_215": 5, "f272_273": 1, "f224_228": 6},
+        base=Word.data(0x0B, Operands(ra=0, imm=1)),
+    )
+    assert destinations(word) == ([(RegSet.OPERAND, 6, 3)], [], "")
+
+
+@pytest.mark.parametrize(
+    "unit, head, a, b, k, result",
+    [
+        # K's top bit set: sK negative, zK large.
+        ("x1", 0x00, 0xFFFFFFFF, 0, 0x1FFF, 0),  # a != sK, sK = -1
+        ("x1", 0x01, -1, 0, 0x1FFF, 1),  # a == sK, either reading of a
+        ("x0", 0x04, -0x400, 0, 0x400, 1),  # a <= sK signed, sK = -0x400
+        ("x0", 0x05, -0x400, 0, 0x400, 0),
+        ("x0", 0x06, -1, 0, 0x400, 0),  # a <= zK unsigned: 0xffffffff > 0x400
+        ("x0", 0x07, 0x3FF, 0, 0x400, 1),
+        ("x1", 0x02, 0, 0, 0x1000, 0xFFFFF000),  # a - zK
+        ("x0", 0x03, 0xFFFFFFFF, 0, 0x7FF, 0x7FE),  # a + zK wraps
+        ("x1", 0x08, -1, 1, 0, 0),  # a <= b unsigned
+        ("x1", 0x0A, -1, 1, 0, 1),  # a <= b signed
+        ("x0", 0x0B, 0x7FFFFFFF, 0x80000000, 0, 0),  # a < b signed
+        ("x0", 0x09, 0x7FFFFFFF, 0x80000000, 0, 1),  # a < b unsigned
+        ("x1", 0x0D, -1, 0xFFFFFFFF, 0, 1),  # a == b on 32 bits
+        ("x0", 0x0E, 0, -5, 0, 5),  # abs(b)
+        ("x0", 0x0F, 0, 5, 0, 0xFFFFFFFB),  # -b
+        ("x1", 0x12, 0x1234, 0, 0x1FFF, 0x1FFF1234),  # a | zK << 16
+        ("x0", 0x14, 0, 0, 0x7FF, 0xFFFFFFFF),  # sK, 11 bits
+        ("x1", 0x14, 0, 0, 0x7FF, 0x7FF),  # sK, 13 bits: positive
+        ("x1", 0x16, 0xF0, 0xFF, 0, 0x0F),  # ~a & b
+        ("x1", 0x17, 0xF0, 0x0F, 0, 0xFFFFFF00),  # ~a & ~b
+        ("x1", 0x1B, 0, 0, 0, 0xFFFFFFFF),  # ~b
+        ("x0", 0x1A, 0, 0, 0x7FF, 0),  # sK + 1
+        ("x0", 0x1E, 0, 0xFFFFFFFF, 0, 0),  # b + 1
+        ("x0", 0x30, 5, 7, 0x123, 0),
+        ("x0", 0x16, 5, 7, 0, None),  # no result where X1 has its logic
+        ("x0", 0x22, 5, 7, 0, None),
+        ("x1", 0x1C, 5, 7, 0, None),  # a register transfer
+    ],
+)
+def test_x_function_table(unit, head, a, b, k, result):
+    assert x_result(unit, head, a, b, k) == result
+
+
+def test_the_x_units_have_no_rule_at_their_idle_head():
+    with pytest.raises(KeyError):
+        x_result("x1", 0x1F, 0, 0, 0)
+    with pytest.raises(KeyError):
+        x_result("x0", 0x3F, 0, 0, 0)
 
 
 def framed(*routine: Word) -> Job:

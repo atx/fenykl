@@ -16,7 +16,8 @@ The classes and tables of one program are held by its model (`memcpy.Copy16Model
 
 Stepping (`emu.Executor.step`) takes the op semantics `OP_SEMANTICS` (what a data op does,
 each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
-decisions (the default, none: no condition is known) or `RaTest`.
+decisions (the default, none: no condition is known) or `RaTest`. `X_RULES` are the functions
+of the two X units, which stepping does not run.
 """
 
 from collections import Counter
@@ -26,7 +27,15 @@ from enum import Enum
 from itertools import product
 from typing import Protocol
 
-from .fields import IDLE_OP, Confidence, Field, lookup
+from .fields import (
+    IDLE_OP,
+    PR_SOURCES,
+    X_FUNCTIONS,
+    X_IMMEDIATES,
+    Confidence,
+    Field,
+    lookup,
+)
 from .state import Reg, RegisterFile, Space
 from .word import Word
 
@@ -369,9 +378,10 @@ RESULT_PORTS = (
     ResultPort("f267_268", 1, "f211_215", RegSet.XREG, 4),
     ResultPort("f272_273", 1, "f224_228", RegSet.OPERAND, 3),
 )
-"""The ports a data op's result goes through (inferred: on the camera, a data op of each of the
-families B, C, D and E inserted after a copy's last setup word wrote the register f211_215
-names under f267_268 = 1, not ra, which word 68 or 73 then read through its xreg; f224_228
+"""The ports a data op's result goes through (verified on the camera by exact readout: each
+enable value's source, `fields.PR_SOURCES`; and in the copy, a data op of each of the families
+B, C, D and E inserted after a copy's last setup word wrote the register f211_215 names under
+f267_268 = 1, not ra, which word 68 or 73 then read through its xreg; f224_228
 under f272_273 = 1 fed a later op's ra and rb). The latencies are the shortest distances seen
 working in the copy: the xreg transfer four words after the write, the operand read three
 words after it; exact readout on the camera shows the G write read by the very next word, which
@@ -392,14 +402,17 @@ and B as they are."""
 def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], str]:
     """Where the word's data op result goes: (set, register, latency) per decoded enabled port,
     the port fields of the enabled ports whose destination is open, and why the destination is
-    incomplete ("" when every enabled port is decoded and one is). An enable that takes another
-    unit's result (f272_273 = 0 or 2, f265_266 = 0) or writes R or A counts as open here. Without
-    an enabled port a data op writes no register (verified on the camera by exact readout);
-    stepping still reports such a result as open rather than dropping it."""
+    incomplete ("" when every enabled port is decoded and one is). An enable that takes X0's or
+    X1's result (`fields.PR_SOURCES`), which stepping does not run, or writes R or A counts as
+    open here; one that writes nothing (f267_268 = 2) is skipped as idle. Without an enabled
+    port a data op writes no register (verified on the camera by exact readout); stepping still
+    reports such a result as open rather than dropping it."""
     dests, open_, names = [], [], []
     for enable, reg in PR_ENABLES.items():
         v = word[enable]
-        if v == lookup(enable).idle:
+        if v == lookup(enable).idle or (
+            v in PR_SOURCES[enable] and PR_SOURCES[enable][v] is None
+        ):
             continue
         port = next(
             (p for p in RESULT_PORTS if p.enable == enable and p.value == v), None
@@ -527,6 +540,10 @@ def _flag(test: bool) -> int:
 
 
 LOCAL_UNITS = {4: "word", 2: "halfword", 1: "byte"}
+LOCAL_BYTES = 0x2000
+"""The scalar address space: local memory, 8 KiB; a family A address is taken modulo its size
+(verified on the camera by exact readout: ra up to 0xffffe008 read the word at its low 13
+bits, a DRAM address read local memory)."""
 
 
 def local_offset(width: int, imm13: int) -> int:
@@ -539,8 +556,8 @@ def _local_access(
     width: int, word: Word, slot: RegisterFile
 ) -> tuple[str, int | None] | None:
     """(the access as text, its index in units of `width` from the local base, None for an
-    unknown base) at the byte address ra + width x imm13; None at an address not aligned to
-    the width (not measured)."""
+    unknown base) at the byte address ra + width x imm13 modulo `LOCAL_BYTES`; None at an
+    address not aligned to the width (not measured)."""
     args = word.operands
     assert args is not None and args.imm is not None
     offset = local_offset(width, args.imm)
@@ -548,7 +565,7 @@ def _local_access(
     base = slot[args.ra]
     if base is None or base.exact is None:
         return f"{where}, r{args.ra} unknown", None
-    addr = base.exact + offset
+    addr = (base.exact + offset) % LOCAL_BYTES
     if addr % width:
         return None
     return where, addr // width
@@ -566,12 +583,7 @@ def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | No
         where, k = access
         if k is None:
             return Effect(note=f"reads {where}")
-        addr = local.base + width * k
-        if not local.contains(addr, width):
-            return Effect(
-                note=f"reads {where} = {k:#x}, outside the modelled local memory"
-            )
-        b = local.read(addr, width)
+        b = local.read(local.base + width * k, width)
         value = f"{int.from_bytes(b.data, 'little'):#x}" if all(b.known) else "unknown"
         return Effect(note=f"reads local {unit} {k:#x}: {value}")
 
@@ -592,10 +604,6 @@ def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | N
         if k is None:
             return Effect(stores=((None, width),), note=f"writes {where}: anywhere")
         addr = local.base + width * k
-        if not local.contains(addr, width):
-            return Effect(
-                note=f"writes {where} = {k:#x}, outside the modelled local memory"
-            )
         return Effect(
             stores=((addr, width),), note=f"writes local {unit} {k:#x}: unknown datum"
         )
@@ -657,6 +665,31 @@ def _ring_r(text: str) -> Callable[[Word, RegisterFile, Space], Effect | None]:
     return run
 
 
+MULTIPLY_LAG = 1
+"""A multiply's product reaches the ALU bus this many words after the op; a port of that word
+takes it, and the op's own word gets nothing (verified on the camera by exact readout)."""
+LOAD_LAG = 3
+"""A load's datum reaches the ALU bus this many words after the load (verified on the camera by
+exact readout)."""
+
+
+def _multiply(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """0x48 / 0x49: the low 32 bits of ra x rb, recorded only: stepping does not deliver a
+    product to the next word's ports."""
+    args = word.operands
+    assert args is not None and args.rb is not None
+    text = f"r{args.ra} x r{args.rb}"
+    if args.ra == args.rb:
+        product_ = _result(word, text, (slot[args.ra],), lambda a: _u32(a * a), V)
+    else:
+        product_ = _result(
+            word, text, (slot[args.ra], slot[args.rb]), lambda a, b: _u32(a * b), V
+        )
+    return Effect(
+        note=f"{product_.note}; on the ALU bus {MULTIPLY_LAG} word on, not delivered"
+    )
+
+
 _EXACT_RULE = f"{EXACT}; 32-bit wrap"
 
 
@@ -670,9 +703,10 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     **{
         code: OpSemantics(
             V,
-            f"{fmt} local {LOCAL_UNITS[width]} load at the byte address ra + {width} x imm13, ra "
-            f"a base it does not write ({EXACT}); the datum reaches the ALU result bus three "
-            "words on, which stepping does not model: it records the read only",
+            f"{fmt} local {LOCAL_UNITS[width]} load at the byte address ra + {width} x imm13 "
+            f"modulo 0x2000, ra a base it does not write ({EXACT}); the datum reaches the ALU "
+            f"result bus {LOAD_LAG} words on, which stepping does not model: it records the "
+            "read only",
             _local_load(width),
         )
         for code, width, fmt in (
@@ -686,8 +720,8 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     **{
         code: OpSemantics(
             V,
-            f"a local {LOCAL_UNITS[width]} store at the byte address ra + {width} x imm13 of "
-            f"the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT}); "
+            f"a local {LOCAL_UNITS[width]} store at the byte address ra + {width} x imm13 "
+            f"modulo 0x2000 of the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT}); "
             "the R file is not modelled, so the bytes become unknown",
             _local_store(width),
         )
@@ -857,9 +891,109 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (inferred, by exact readout)",
         _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), I),
     ),
+    0x49: OpSemantics(
+        V,
+        f"(ra x rb) & 0xffffffff on the ALU bus {MULTIPLY_LAG} word after the op, nothing in "
+        "the op's own word nor two or three words on; back to back, each word's port takes the "
+        f"previous multiply's product; f120_122 has no effect ({EXACT}, 48 of 48 values on "
+        "eight operand pairs of both signs). Stepping records the product only: the next "
+        "word's ports do not get it",
+        _multiply,
+    ),
+    0x48: OpSemantics(
+        V,
+        f"as 0x49, the same 32 bits on every operand pair ({EXACT}); what sets the two apart "
+        "is open (the high half was not seen). Stepping records the product only",
+        _multiply,
+    ),
 }
 """The op slot's semantics: the data ops stepping runs; every other op has none (strict
 stepping raises)."""
+
+
+XValue = Callable[[int, int, int, int], int]
+"""An X function of (a, b, zK, sK)."""
+_X_SHARED: dict[int, XValue] = {
+    0x00: lambda a, b, zk, sk: _flag(_u32(a) != _u32(sk)),
+    0x01: lambda a, b, zk, sk: _flag(_u32(a) == _u32(sk)),
+    0x02: lambda a, b, zk, sk: a - zk,
+    0x03: lambda a, b, zk, sk: a + zk,
+    0x04: lambda a, b, zk, sk: _flag(_s32(a) <= sk),
+    0x05: lambda a, b, zk, sk: _flag(_s32(a) < sk),
+    0x06: lambda a, b, zk, sk: _flag(_u32(a) <= zk),
+    0x07: lambda a, b, zk, sk: _flag(_u32(a) < zk),
+    0x08: lambda a, b, zk, sk: _flag(_u32(a) <= _u32(b)),
+    0x09: lambda a, b, zk, sk: _flag(_u32(a) < _u32(b)),
+    0x0A: lambda a, b, zk, sk: _flag(_s32(a) <= _s32(b)),
+    0x0B: lambda a, b, zk, sk: _flag(_s32(a) < _s32(b)),
+    0x0C: lambda a, b, zk, sk: _flag(_u32(a) != _u32(b)),
+    0x0D: lambda a, b, zk, sk: _flag(_u32(a) == _u32(b)),
+    0x0E: lambda a, b, zk, sk: abs(_s32(b)),
+    0x0F: lambda a, b, zk, sk: -b,
+    0x10: lambda a, b, zk, sk: a - b,
+    0x11: lambda a, b, zk, sk: a + b,
+    0x12: lambda a, b, zk, sk: a | zk << 16,
+    0x13: lambda a, b, zk, sk: zk,
+    0x14: lambda a, b, zk, sk: sk,
+    0x15: lambda a, b, zk, sk: b,
+}
+_X_ONLY: dict[str, dict[int, XValue | None]] = {
+    "x0": {
+        **{h: None for h in (0x16, 0x17, 0x18, 0x19, 0x22)},
+        **{h: lambda a, b, zk, sk: sk + 1 for h in range(0x1A, 0x1E)},
+        **{h: lambda a, b, zk, sk: b + 1 for h in range(0x1E, 0x22)},
+        **{h: lambda a, b, zk, sk: 0 for h in range(0x23, 0x3F)},
+    },
+    "x1": {
+        0x16: lambda a, b, zk, sk: ~a & b,
+        0x17: lambda a, b, zk, sk: ~a & ~b,
+        0x18: lambda a, b, zk, sk: a ^ b,
+        0x19: lambda a, b, zk, sk: a | b,
+        0x1A: lambda a, b, zk, sk: a & b,
+        0x1B: lambda a, b, zk, sk: ~b,
+        **{h: None for h in (0x1C, 0x1D, 0x1E)},
+    },
+}
+
+
+@dataclass(frozen=True)
+class XRule:
+    """What an X unit's head value does: `value` of (a, b, zK, sK), None for no result on the
+    ALU bus."""
+
+    confidence: Confidence
+    fact: str
+    value: XValue | None
+
+
+def _x_rules(unit: str) -> dict[int, XRule]:
+    values = _X_SHARED | _X_ONLY[unit]
+    table = X_FUNCTIONS[unit]
+    if set(values) != set(table):
+        raise ValueError(
+            f"{unit}: rules and fields.X_FUNCTIONS differ in their head values"
+        )
+    return {
+        h: XRule(conf, f"{text}; {note}" if note else text, values[h])
+        for h, (text, conf, note) in table.items()
+    }
+
+
+X_RULES = {unit: _x_rules(unit) for unit in X_FUNCTIONS}
+"""X0's and X1's functions by head value, each with its tier (`fields.X_FUNCTIONS`): a and b
+the unit's register operands, K its immediate (`fields.X_IMMEDIATES`)."""
+
+
+def x_result(unit: str, head: int, a: int, b: int, k: int) -> int | None:
+    """The 32-bit result X unit `unit` puts out at head value `head` on operands a, b and the
+    raw immediate k; None where the head gives no result. Raises KeyError at a head value
+    without a rule (the idle value)."""
+    rule = X_RULES[unit][head]
+    if rule.value is None:
+        return None
+    width = X_IMMEDIATES[unit].width
+    sk = k - (1 << width) if k >> (width - 1) else k
+    return _u32(rule.value(a, b, k, sk))
 
 
 @dataclass(frozen=True)
