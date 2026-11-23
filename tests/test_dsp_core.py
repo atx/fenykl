@@ -7,7 +7,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import commands
-from fenykl.dsp.emu import Boot, Executor, Flow, Stop, start_copy
+from fenykl.dsp.emu import Boot, Executor, Flow, Job, LinkError, Stop, start_copy
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.memcpy import ITEM, copy_branches
 from fenykl.dsp.program import Program, stock_programs
@@ -273,3 +273,50 @@ def test_measured_ops_chain_through_the_slot():
     assert flow.steps[2].unknown and boot.slot[2] is None
     assert boot.slot[8] is None
     assert flow.steps[3].note == "r8 := r2 >> 1: an unknown input, unknown"
+
+
+def framed(*routine: Word) -> Job:
+    """Call 0 -> 10, halt at 5, `routine` from word 10."""
+    words = (Word.ctl(3, 10), *[IDLE] * 4, HALT, *[IDLE] * 4, *routine)
+    return Job(Program(words), ())
+
+
+# 10 is a local op 3: no return between it and its T 16.
+LOCAL = framed(Word.ctl(3, 16), *[IDLE] * 5, Word.ctl(4), *[IDLE] * 4)
+
+
+def test_a_local_op3_runs_as_a_jump_with_the_option():
+    assert LOCAL.program.local_op3() == {10}
+    flow = Executor(Boot(), local_op3_jump=True).step(LOCAL)
+    assert flow.stop is Stop.HALT
+    assert flow.order() == span((0, 4), (10, 14), (16, 20), (5, 5))
+
+
+def test_a_return_popping_a_local_op3s_link_raises():
+    with pytest.raises(
+        LinkError, match="word 16: .*a return to 15, a local op 3's link"
+    ):
+        Executor(Boot()).step(LOCAL)
+
+
+def test_a_call_with_a_return_before_its_target_stays_a_call_with_the_option():
+    # 10 calls 22 over the return at 16; 22 returns to 15, which falls into 16 and back to 5.
+    job = framed(
+        Word.ctl(3, 22), *[IDLE] * 5, Word.ctl(4), *[IDLE] * 5, Word.ctl(4), *[IDLE] * 4
+    )
+    assert job.program.local_op3() == set()
+    orders = {
+        jump: Executor(Boot(), local_op3_jump=jump).step(job).order()
+        for jump in (False, True)
+    }
+    assert (
+        orders[False]
+        == orders[True]
+        == span((0, 4), (10, 14), (22, 26), (15, 20), (5, 5))
+    )
+
+
+def test_a_return_without_a_call_raises():
+    job = Job(Program((Word.ctl(4), *[IDLE] * 4, HALT)), ())
+    with pytest.raises(LinkError, match="word 0: .*a return without a call"):
+        Executor(Boot()).step(job)

@@ -249,6 +249,17 @@ def _run(a: Step, b: Step) -> str:
 HALT_OP = 7
 
 
+class LinkError(UnknownSemantics):
+    """A return that pops no link of its own call: none at all, or one a local op 3 pushed."""
+
+
+@dataclass(frozen=True)
+class Link:
+    back: int
+    local: bool = False
+    """Pushed by a local op 3 (`Program.local_op3`), which has no return of its own."""
+
+
 class Executor:
     """Runs jobs on `boot`.
 
@@ -259,9 +270,13 @@ class Executor:
     every control op has four delay slots that run before its transfer takes effect, and op 7
     halts at once at any word and call depth, the return stack unchecked (whether a halt has
     delay slots of its own is open). `branching` decides ops 0..2; the default `Given()`
-    decides none of them. A loop end whose T lies in its own delay slots, a control op in
-    another's delay slots, a return without a call and a step past the program end raise
-    `UnknownSemantics`: what they do is open. A data op runs as the op slot's semantics `ops`; one without semantics raises
+    decides none of them. A local op 3 (`Program.local_op3`) runs as a call, or with
+    `local_op3_jump` as a jump to T after its delay slots, pushing no link. A loop end whose T
+    lies in its own delay slots, a control op in another's delay slots and a step past the
+    program end raise `UnknownSemantics`: what they do is open. A return without a link, or
+    one that pops a local op 3's link, raises `LinkError`: no return lies between that op 3 and
+    its T, so the return is not its own (stepped as calls, a stock loop re-ran its tail).
+    A data op runs as the op slot's semantics `ops`; one without semantics raises
     `UnknownSemantics` (strict) or is recorded in its step, and then its ra in the op slot's
     registers is unknown, since the op may write it. Strict mode also raises at an undecided
     control op; lenient mode stops there. Stepping does not model the register transfers or any
@@ -280,8 +295,10 @@ class Executor:
         branching: Branching | None = None,
         ops: dict[int, OpSemantics] | None = None,
         limit: int = 100_000,
+        local_op3_jump: bool = False,
     ) -> None:
         self.boot, self.model, self.strict, self.limit = boot, model, strict, limit
+        self.local_op3_jump = local_op3_jump
         self.sequencer = sequencer or Sequencer()
         self.branching = branching or Given()
         self.ops = OP_SEMANTICS if ops is None else ops
@@ -302,8 +319,9 @@ class Executor:
         if start is not None:
             start(self.boot)
         words = job.program.words
+        local = job.program.local_op3()
         steps: list[Step] = []
-        stack: list[int] = []
+        stack: list[Link] = []
         visits: dict[int, int] = {}
         pc, slots, pending = 0, 0, None
         for _ in range(self.limit):
@@ -334,7 +352,10 @@ class Executor:
                 )
             visit = visits.get(pc, 0)
             visits[pc] = visit + 1
-            step, pending = self._control(pc, visit, word, stack)
+            if pc in local:
+                step, pending = self._local_op3(pc, word, stack)
+            else:
+                step, pending = self._control(pc, visit, word, stack)
             steps.append(step)
             if step.taken is None:
                 if self.strict:
@@ -344,8 +365,18 @@ class Executor:
             pc += 1
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
 
+    def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
+        t, conf = word.target, op(word.op).confidence
+        if self.local_op3_jump:
+            note = "local op 3 as a jump, no link"
+        else:
+            back = i + DELAY_SLOTS + 1
+            stack.append(Link(back, local=True))
+            note = f"local op 3 as a call, returns to {back}"
+        return Step(i, word.op, target=t, taken=True, note=note, confidence=conf), t
+
     def _control(
-        self, i: int, visit: int, word: Word, stack: list[int]
+        self, i: int, visit: int, word: Word, stack: list[Link]
     ) -> tuple[Step, int | None]:
         """The step of control word i and where it transfers after its delay slots (None: it
         falls through or is undecided)."""
@@ -353,7 +384,7 @@ class Executor:
         t = word.target
         if word.op == 3:
             back = i + DELAY_SLOTS + 1
-            stack.append(back)
+            stack.append(Link(back))
             return Step(
                 i,
                 word.op,
@@ -364,8 +395,13 @@ class Executor:
             ), t
         if word.op == 4:
             if not stack:
-                raise UnknownSemantics(i, name, [], "a return without a call")
-            back = stack.pop()
+                raise LinkError(i, name, [], "a return without a call")
+            link = stack.pop()
+            if link.local:
+                raise LinkError(
+                    i, name, [], f"a return to {link.back}, a local op 3's link"
+                )
+            back = link.back
             return Step(
                 i, word.op, taken=True, note=f"to {back}", confidence=conf
             ), back

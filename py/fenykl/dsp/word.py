@@ -7,9 +7,13 @@ Validation of assembled words (constants, allowed values) is `Word.check`.
 from collections.abc import Mapping
 
 from .fields import (
+    CONTROL_FLAG,
+    CONTROL_OPS,
     FIELDS,
     IDLE_VALUE,
     OP_FIELD,
+    TARGET,
+    TARGET_OPS,
     WORD_BITS,
     WORD_BYTES,
     Field,
@@ -75,6 +79,22 @@ class Word:
             raise ValueError(f"op {code:#x} has no operand format")
         word = OP_FIELD.put(IDLE_VALUE if base is None else base.value, code)
         return cls.from_int(fmt.encode(word, args))
+
+    @classmethod
+    def ctl(
+        cls, code: int, target: int | None = None, base: "Word | None" = None
+    ) -> "Word":
+        """Control op `code` with f229 clear and, for ops 0..3, the absolute word index `target`
+        in `TARGET`; other fields keep `base`. (`control` is the property that tests a word.)"""
+        if code not in CONTROL_OPS:
+            raise ValueError(f"op {code:#x} is no control op")
+        if (target is not None) != (code in TARGET_OPS):
+            raise ValueError(f"op {code:#x}: target {target!r}")
+        value = IDLE_VALUE if base is None else base.value
+        value = CONTROL_FLAG.put(OP_FIELD.put(value, code), 0)
+        if target is not None:
+            value = TARGET.put(value, target)
+        return cls.from_int(value)
 
     def to_bytes(self) -> bytes:
         return self.value.to_bytes(WORD_BYTES, "little")

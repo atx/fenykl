@@ -11,7 +11,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the op meanings `OPS`, the target `TARGET`, the delay slots `DELAY_SLOTS` |
 | `units.py` | the units (a strobe and the fields that change under it) and their slot classes, derived from the table |
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`) and as a control word (`control`, `end`, `target`); `IDLE` |
-| `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` |
+| `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` with labels, `call_return_errors()` |
 | `disasm.py` | listings and DSL source of a program |
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
@@ -128,6 +128,15 @@ xreg and the op slot name one register file is open; the emulator keeps the tran
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.
+
+`Word.ctl(op, target, base)` assembles a control word: the op, f229 clear and, for ops 0..3, T
+(over 13 bits raises). In a statement list, `Label("name")` marks the next word and
+`Ctl(op, "name", base)` is a control op to it; `assemble(stmts, origin=N)` places the words at
+word index N in two passes, so moving the origin moves every label target and nothing else. An
+undefined or duplicate label raises `AssemblyError`; a word's own target stays absolute.
+`labels(stmts, origin)` gives the label indices, and `source(program, name, labels, origin)` prints
+the statements back (a `Ctl` where a target has a label). A call's return is implicit, i + 5;
+`call_return_errors(program)` reports each op 3 whose return point lies past the program end.
 
 ### Data ops: the op slot
 
@@ -456,6 +465,11 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   lenient mode records it in its step and makes its ra unknown. An undecided branch raises in
   strict mode and stops the run in lenient mode; a loop end into its own delay slots, a control
   op in a delay slot and a return without a call raise in both.
+- **Local op 3** (`Program.local_op3()`): a forward op 3 after word 0 with no return between it
+  and T. Whether it is a call or a jump is open. It runs as a call by default, or as a jump with
+  no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
+  finds no link, raises `LinkError` (an `UnknownSemantics`): no return of its own lies before
+  that T, and stepped as calls such a link re-ran a loop's tail.
 - **Registers**: the op slot's (`Boot.slot`) and the transfer registers (`Boot.regs`) are kept
   apart; whether ra / rb and xreg name one file is open.
 

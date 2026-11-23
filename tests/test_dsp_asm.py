@@ -5,7 +5,17 @@ from conftest import stock_image
 
 from fenykl.dsp.disasm import listing, source
 from fenykl.dsp.fields import Operands
-from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_programs
+from fenykl.dsp.program import (
+    AssemblyError,
+    Ctl,
+    HypothesisFieldWarning,
+    Label,
+    Program,
+    assemble,
+    call_return_errors,
+    labels,
+    stock_programs,
+)
 from fenykl.dsp.units import X0, X2, OpSlot
 from fenykl.dsp.word import IDLE, Word
 
@@ -111,4 +121,92 @@ def test_listing_shows_data_ops_in_their_format():
         "2   op0c~ r3, #-7  op_slot: f120_122=1",
         "4   op0b~ r1, #0x2468",
         "6   op49~ r1, r2  op_slot: imm=4!",
+    ]
+
+
+HALT = Word(op_slot=OpSlot(op=7))
+
+
+def labelled() -> list:
+    """Call 0 -> routine, halt at 5; the routine loops back to its top and returns."""
+    return [
+        Ctl(3, "routine"),
+        *[IDLE] * 4,
+        HALT,
+        Label("routine"),
+        Word(x2=X2(xreg=3)),
+        Ctl(0, "routine", Word(x0=X0(f1=1))),
+        *[IDLE] * 4,
+        Word.ctl(4),
+        *[IDLE] * 4,
+        Label("end"),
+    ]
+
+
+def build(stmts: list, origin: int = 0) -> Program:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", HypothesisFieldWarning)
+        return assemble(stmts, origin=origin)
+
+
+def test_word_ctl_holds_its_target_in_imm_and_f128_132():
+    base = Word(x0=X0(f1=1))
+    assert Word.ctl(3, 0x5A3, base) == Word(
+        x0=X0(f1=1), op_slot=OpSlot(imm=0xA3, f128_132=0x5, ctl_n=0, op=3)
+    )
+    assert Word.ctl(4) == Word(op_slot=OpSlot(ctl_n=0, op=4))
+    for bad in ((4, 10), (3, None), (7, None)):
+        with pytest.raises(ValueError):
+            Word.ctl(*bad)
+
+
+def test_relocation_moves_every_label_target_and_nothing_else():
+    at0, at40 = build(labelled()), build(labelled(), 40)
+    assert [(i, w.target) for i, w in enumerate(at0.words) if w.target is not None] == [
+        (0, 6),
+        (7, 6),
+    ]
+    assert labels(labelled(), 40) == {"routine": 46, "end": 57}
+    for a, b in zip(at0.words, at40.words, strict=True):
+        if a.target is None:
+            assert a == b
+            continue
+        assert b.target == a.target + 40
+        assert Word.ctl(b.op, a.target, b) == a
+
+
+def test_undefined_and_duplicate_labels_raise():
+    with pytest.raises(AssemblyError, match="'nowhere' is not defined"):
+        build([Ctl(1, "nowhere"), IDLE])
+    with pytest.raises(AssemblyError, match="'end' defined twice"):
+        build([*labelled(), Label("end")])
+
+
+def test_a_target_over_13_bits_raises():
+    build(labelled(), 8191 - 6)
+    with pytest.raises(ValueError, match="does not fit 13 bits"):
+        build(labelled(), 8191 - 5)
+
+
+def test_labelled_source_reassembles_the_program():
+    program = build(labelled(), 32)
+    text = source(program, "P", labels(labelled(), 32), 32)
+    assert "    Ctl(3, 'routine'),  # 32 call -> 38\n    IDLE,  # 33\n" in text
+    assert "    Label('routine'),\n    Word(x2=X2(xreg=3)),  # 38\n" in text
+    assert "    Ctl(0, 'routine', Word(x0=X0(f1=0x1))),  # 39 loop -> 38\n" in text
+    assert text.endswith("  # 48\n    Label('end'),\n]\n")
+    namespace: dict = {}
+    exec(text, namespace)  # noqa: S102 (our own generated source)
+    assert namespace["P"] == labelled()
+    assert build(namespace["P"], 32) == program
+
+
+def test_call_return_check_reports_a_return_past_the_end():
+    program = build(labelled())
+    assert call_return_errors(program) == []
+    # 3 returns to 8, the last word; 5 to 10, past the end.
+    call = Word.ctl(3, 0)
+    short = Program((*[IDLE] * 3, call, IDLE, call, *[IDLE] * 3))
+    assert call_return_errors(short) == [
+        "op 3 at word 5 returns to 10, past the end (9 words)"
     ]

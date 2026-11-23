@@ -5,6 +5,8 @@ DRAM; the driver points the engine's program register 0x9D200010 at one of them 
 An item is a run of 64-byte slots, one word in the first 40 bytes of each (bytes 40..63 zero),
 zero up to an optional constant block, then zero to its end. The constants are read only by the
 CPU setup of the command, which copies them to DSP local memory 0x9D000000.
+
+`assemble` takes statements: words, `Label`s and `Ctl`s, control ops whose target is a label.
 """
 
 import struct
@@ -24,6 +26,10 @@ DIR_ENTRY = struct.Struct("<IIII")  # flash address, size, 0, 0
 
 class ProgramFormatError(ValueError):
     pass
+
+
+class AssemblyError(ValueError):
+    """A label defined twice or never."""
 
 
 class HypothesisFieldWarning(UserWarning):
@@ -103,6 +109,18 @@ class Program:
             for j in range(i + 1, min(i + DELAY_SLOTS + 1, len(self.words)))
         }
 
+    def local_op3(self) -> set[int]:
+        """The indices of the local op 3 words: forward, after word 0, with no return (op 4)
+        between the word and T. Word 0 calls the job routine although no return lies before its
+        T; whether a local op 3 is a call or a jump is open."""
+        local = set()
+        for i, w in enumerate(self.words):
+            if w.op != 3 or i == 0 or w.target <= i:
+                continue
+            if all(v.op != 4 for v in self.words[i + 1 : w.target]):
+                local.add(i)
+        return local
+
 
 def decode_item(data: bytes, spec: StockProgram) -> Program:
     """The program in item bytes `data`; raises ProgramFormatError if the layout is off."""
@@ -167,9 +185,57 @@ def stock_programs(image: bytes) -> dict[int, Program]:
     }
 
 
-def assemble(words: Iterable[Word], constants: bytes = b"") -> Program:
-    """A program from DSL words; checks every word and warns once about hypothesis fields."""
-    words = tuple(words)
+@dataclass(frozen=True)
+class Label:
+    """Marks the statement after it; a `Ctl` names it as its target."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class Ctl:
+    """Control op 0..3 `op` to label `to`: `Word.ctl(op, index of to, base)` once assembled."""
+
+    op: int
+    to: str
+    base: Word = IDLE
+
+
+Statement = Word | Label | Ctl
+
+
+def labels(stmts: Iterable[Statement], origin: int = 0) -> dict[str, int]:
+    """Each label's word index: `origin` plus the number of words before it."""
+    names: dict[str, int] = {}
+    index = origin
+    for s in stmts:
+        if not isinstance(s, Label):
+            index += 1
+            continue
+        if s.name in names:
+            raise AssemblyError(f"label {s.name!r} defined twice")
+        names[s.name] = index
+    return names
+
+
+def assemble(
+    stmts: Iterable[Statement], constants: bytes = b"", *, origin: int = 0
+) -> Program:
+    """A program from DSL statements placed at word index `origin`, in two passes: the labels'
+    indices, then the words, each `Ctl` targeting its label's index (a target over 13 bits raises
+    ValueError). A word's own target stays as it is, absolute. Checks every word and warns once
+    about hypothesis fields."""
+    stmts = tuple(stmts)
+    names = labels(stmts, origin)
+    words = []
+    for s in stmts:
+        if isinstance(s, Label):
+            continue
+        if isinstance(s, Ctl):
+            if s.to not in names:
+                raise AssemblyError(f"label {s.to!r} is not defined")
+            s = Word.ctl(s.op, names[s.to], s.base)
+        words.append(s)
     weak = set()
     for word in words:
         word.check()
@@ -183,4 +249,14 @@ def assemble(words: Iterable[Word], constants: bytes = b"") -> Program:
             HypothesisFieldWarning,
             stacklevel=2,
         )
-    return Program(words, constants)
+    return Program(tuple(words), constants)
+
+
+def call_return_errors(program: Program) -> list[str]:
+    """Report each op 3 whose return point, i + 5 after its delay slots (the call reading), is
+    no word of `program`; the return is implicit, so no label can move it."""
+    return [
+        f"op 3 at word {i} returns to {i + DELAY_SLOTS + 1}, past the end ({len(program)} words)"
+        for i, w in enumerate(program.words)
+        if w.op == 3 and i + DELAY_SLOTS + 1 >= len(program)
+    ]

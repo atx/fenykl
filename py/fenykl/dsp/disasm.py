@@ -13,7 +13,7 @@ control op drops f229 while it is clear, as in every stock control word. A `|` a
 marks the delay slots of a control word.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 from .fields import CONTROL_FLAG, IDLE_OP, OP_FIELD, TARGET, Field, Kind, Operands, op
 from .program import Program
@@ -133,17 +133,46 @@ def word_source(word: Word) -> str:
     return f"Word({', '.join(f'{unit}={slot!r}' for unit, slot in slots.items())})"
 
 
-def source(program: Program, name: str = "PROGRAM") -> str:
-    """Python source that rebuilds `program` from slot objects (constants left out)."""
+def _ctl_source(word: Word, label: str) -> str:
+    """Control word `word` as a `Ctl` to `label`, its other fields as the base."""
+    value = word.value
+    for f in (OP_FIELD, CONTROL_FLAG, *TARGET.parts):
+        value = f.put(value, f.get(IDLE.value))
+    base = Word.from_int(value)
+    args = f"{word.op}, {label!r}" + ("" if base == IDLE else f", {word_source(base)}")
+    return f"Ctl({args})"
+
+
+def source(
+    program: Program,
+    name: str = "PROGRAM",
+    labels: Mapping[str, int] | None = None,
+    origin: int = 0,
+) -> str:
+    """Python source that rebuilds `program` from slot objects (constants left out).
+
+    With `labels` (`program.labels(statements, origin)`) the source is a statement
+    list for `assemble(..., origin=origin)`: each label before its word, a control op whose
+    target has a label as a `Ctl`; the comments give word indices from `origin`."""
     classes = ", ".join(cls for cls in (u.cls_name for u in UNITS.values()))
     lines = [
         f"from fenykl.dsp.units import {classes}",
         "from fenykl.dsp.word import IDLE, Word",
-        "",
-        f"{name} = [",
     ]
-    for index, word in enumerate(program.words):
+    at: dict[int, list[str]] = {}
+    for label, index in (labels or {}).items():
+        if not origin <= index <= origin + len(program):
+            raise ValueError(f"label {label!r} at {index}, outside the program")
+        at.setdefault(index, []).append(label)
+    if labels:
+        lines.append("from fenykl.dsp.program import Ctl, Label")
+    lines += ["", f"{name} = ["]
+    for index, word in enumerate(program.words, origin):
+        lines += [f"    Label({label!r})," for label in at.get(index, [])]
         note = "" if word.op == IDLE_OP else f" {_head(word, marks=False)[0]}"
-        lines.append(f"    {word_source(word)},  # {index}{note}")
+        named = at.get(word.target) if word.target is not None else None
+        text = _ctl_source(word, named[0]) if named else word_source(word)
+        lines.append(f"    {text},  # {index}{note}")
+    lines += [f"    Label({label!r})," for label in at.get(origin + len(program), [])]
     lines.append("]")
     return "\n".join(lines) + "\n"
