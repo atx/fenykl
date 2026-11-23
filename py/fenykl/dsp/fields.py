@@ -272,8 +272,10 @@ RA_FACT = (
     "imm13 the offset (inferred: in 58..74 % of A's namings the next reference to the register "
     "is the same op naming it again with another immediate, which as writes would be dead); "
     "0x0b names it just before family A uses it (24 % against 7 % by chance), whether as a "
-    "write or a read is open (hypothesis); in C and E the op's result or accumulator "
-    "(hypothesis); in ops 0..2 a loop or condition operand, the same register in a guard and "
+    "write or a read is open (hypothesis); in B, C, D, E and F an operand where the op reads "
+    "it, which the result does not go to: the result goes to the register of the word's enabled PR port "
+    "(inferred, strong on the camera: the result reached the port's register and not ra); in "
+    "ops 0..2 a loop or condition operand, the same register in a guard and "
     "its loop end in 47 % of the pairs against 13 % by chance (verified in the bytes for the "
     "count, the reading inferred). Counted across later firmware versions of the same family"
 )
@@ -281,19 +283,28 @@ XREG_FACT = (
     "In program 16 the register-transfer words name the register they use here: as a load "
     "address (word 67), a buffer offset (68 load side, 76 store side), a store count (73), "
     "an enable (42, 66, 69, 70) or the store element format (47) (verified on the camera "
-    "per word); r3 holds the job source address. Whether xreg and the op slot's ra and rb "
-    "name one register file is open: per routine the registers xreg changes to and those the "
-    "op slot names overlap only slightly more than chance (Jaccard 0.51 against 0.44 across "
-    "later firmware versions of the same family), and program 16's r1 = len is never named in "
-    "the op slot. The emulator keeps the two apart (`Boot.regs`, `Boot.slot`)"
+    "per word); r3 holds the job source address. xreg and the op slot's ra and rb read two "
+    "register sets (inferred, strong): on the camera a data op's result written through PR "
+    "port 267 (f211_215 under f267_268 = 1) reached the xreg of words 68 and 73 and never an "
+    "operand, while one written through port 272 under enable 1 (f224_228) reached a later "
+    "op's ra and rb and not word 68's xreg; the operand r7 just after program 16's word 64 "
+    "held a value near 0x40000, not the len / 2 that 64 writes through port 267 and that 68 "
+    "and 73 read at r7. Per routine the registers xreg changes to and those the op slot names "
+    "overlap only slightly more than chance (Jaccard 0.51 against 0.44 across later firmware "
+    "versions of the same family). The emulator keeps the two apart (`Boot.regs`, "
+    "`Boot.slot`)"
 )
 FLAGS_FACT = (
     "3 bits between the register specifiers; bits 120..121 are 0 in every op 0..3 word and bit 122 "
     "is a flag in them, set in some words of each control op and mostly constant within a routine "
     "(verified in the bytes across later firmware versions of the same family), its meaning open. "
-    "In a data op bits 13..15 of the immediate in ops 0x0a, 0x0b, 0x38 and 13..14 in 0x37, 0 in 99 % "
-    "of family D, an operand of open meaning in families A, A', C and E, where it varies apart "
-    "from the immediate (verified in the bytes)"
+    "In a data op bits 13..15 of the immediate in ops 0x0a, 0x0b, 0x38 and 13..14 in 0x37 "
+    "(verified in the bytes); in family D bits 13..15 of a signed 16-bit immediate (inferred, "
+    "strong: on the camera, values 1 and 7 moved the constant by 0x2000 and -0x2000 in units "
+    "of 16, as predicted); 0 in 99 % of family D's stock words, small positive immediates. An "
+    "operand of open meaning in families A, A', C and E, where it varies apart from the "
+    "immediate (verified in the bytes); in 0x47 it selects among hidden per-boot values "
+    "(inferred), and the E rules measured on the camera hold at 7"
 )
 SELECTOR = (
     "the loop-end selector pair f270_271 / f272_273: in every op 0 word of the five stock programs exactly "
@@ -399,8 +410,9 @@ CONTROL_OPS = range(5)
 DATA_OPS = range(8, 74)
 DATA_OP_CONFIDENCE = I
 DATA_OP_FACT = (
-    "a data op: it leaves f229 set and holds its operands in the op slot (`FAMILIES`); what it "
-    "does is open (inferred)"
+    "a data op: it leaves f229 set and holds its operands in the op slot (`FAMILIES`); what the "
+    "measured ones compute is `semantics.OP_SEMANTICS`, their result going to the register of "
+    "the word's enabled PR port (inferred)"
 )
 UNSEEN_OP_FACT = (
     "never occurs in the stock programs nor across later firmware versions of the "
@@ -602,16 +614,22 @@ _PORT_P = {_width_id(owned): p for _, _, owned, p in (*B_PORTS, *R_PORTS)}
 _OWNER = {owned: enable for enable, owned in PORTS.items()}
 
 
-def _enable(lo: int, hi: int, unit: str, idle: int, fact: str = "") -> Field:
+def _enable(
+    lo: int,
+    hi: int,
+    unit: str,
+    idle: int,
+    fact: str = "",
+    values: Mapping[int, str] | None = None,
+) -> Field:
     owned = PORTS[_fid(lo, hi)]
     base = (
         f"enable of {owned}: {owned} changes in words where it is active in "
         f"{_PORT_P[owned]:.2f} of its changes, and it is active only where {owned} is not idle, "
         f"{OWNERSHIP}; {_c2_fact(lo, hi)}"
     )
-    return Field(
-        lo, hi, Kind.OPCODE, unit, idle, I, f"{base}. {fact}" if fact else base
-    )
+    fact = f"{base}. {fact}" if fact else base
+    return Field(lo, hi, Kind.OPCODE, unit, idle, I, fact, values=values or {})
 
 
 def _head(unit: str, idle: int, fact: str) -> Field:
@@ -643,10 +661,12 @@ def _grid_b(lo: int, hi: int) -> Field:
     return _grid(lo, hi, "pb", f"the port of enable {_OWNER[fid]}; {GRID_B_FACT}")
 
 
-def _port_reg(lo: int, idle: int, fact: str = "") -> Field:
+def _port_reg(lo: int, idle: int, fact: str = "", confidence: Confidence = H) -> Field:
     owned = _width_id(lo)
     port = f"Written under enable {_OWNER[owned]} (hypothesis: a register write port)"
-    return _reg(lo, "pr", idle, f"{port}. {fact}" if fact else port)
+    return _reg(
+        lo, "pr", idle, f"{port}. {fact}" if fact else port, confidence=confidence
+    )
 
 
 FIELDS: tuple[Field, ...] = (
@@ -696,7 +716,13 @@ FIELDS: tuple[Field, ...] = (
         211,
         0,
         "Flipping its bits in program 16 words 67 and 68 leaves the copy unchanged (verified on "
-        "the camera); the only difference between words 66..68",
+        "the camera); the only difference between words 66..68. Under f267_268 = 1 the "
+        "register the word's data op result goes to, in the set the X2 xreg reads (inferred, "
+        "strong: on the camera, ops of families B, C, D and E inserted after program 16's word "
+        "64 with f267_268 = 1 set the register it names to their result, which word 68 or 73 "
+        "then read through its xreg, at pre-registered values; program 16's word 64 writes its "
+        "count r7 so)",
+        confidence=I,
     ),
     _port_reg(216, 31),
     Field(
@@ -709,7 +735,15 @@ FIELDS: tuple[Field, ...] = (
         "3 bits between the register specifiers; written under enable f270_271; equal to f120_122 "
         f"in 66 % of all words, {OWNERSHIP}",
     ),
-    _port_reg(224, 0, PARTNER_FACT),
+    _port_reg(
+        224,
+        0,
+        f"{PARTNER_FACT}. Under f272_273 = 1 the register the word's data op result goes to, "
+        "in the set ra and rb read (inferred, strong: on the camera, a constant written so "
+        "was a later op's operand three words on, at pre-registered values, and word 68's "
+        "xreg did not see it)",
+        confidence=I,
+    ),
     Field(
         229,
         229,
@@ -756,7 +790,9 @@ FIELDS: tuple[Field, ...] = (
         "pr",
         3,
         "Not the end op: idling it in program 16 word 79 (bit 229 clear) copied; idling it with "
-        "bit 268 in word 60 times the job out (verified on the camera, one run each)",
+        "bit 268 in word 60 times the job out (verified on the camera, one run each). Under 1 "
+        "an inserted op's result did not reach the xreg set as word 68 saw it; the operand set "
+        "untested (one job: hypothesis)",
     ),
     _enable(
         267,
@@ -765,9 +801,19 @@ FIELDS: tuple[Field, ...] = (
         3,
         "Bit 268 is needed in program 16 words 63 and 65: setting it alone times the job out in "
         "63 and wedged the job (status -5) in 65, whose whole idle times out (verified on the "
-        "camera, one run each); bit 267 is set in the stock words 60, 63, 65 and 79",
+        "camera, one run each); bit 267 is set in the stock words 60, 63, 65 and 79. Value 1 "
+        "sends the word's data op result to the register f211_215 names, in the set the X2 "
+        "xreg reads (inferred, strong; `semantics.RESULT_PORTS`)",
+        values={1: "data op result to f211_215, xreg set (inferred)", 3: "idle"},
     ),
-    _enable(269, 269, "pr", 1),
+    _enable(
+        269,
+        269,
+        "pr",
+        1,
+        "Under 0 an inserted op's result did not reach the xreg set as word 68 saw it; the "
+        "operand set untested (one job: hypothesis)",
+    ),
     _enable(270, 271, "pr", 3, SELECTOR),
     _enable(
         272,
@@ -777,7 +823,15 @@ FIELDS: tuple[Field, ...] = (
         f"{SELECTOR}; in op 0 words with value 1, f224_228 names ra (307 of 336) {OWNERSHIP}: "
         "the enable of the port that writes the loop counter back (hypothesis); not needed in "
         "program 16 words 60 and 63, where idling it (272 alone in 63) copied (verified on the "
-        "camera, one run each)",
+        "camera, one run each). Value 1 sends the word's data op result to the register "
+        "f224_228 names, in the set ra and rb read (inferred, strong; "
+        "`semantics.RESULT_PORTS`); under 2 an inserted op's result reached neither set (one "
+        "job each way: hypothesis)",
+        values={
+            1: "data op result to f224_228, operand set (inferred)",
+            2: "reached neither set in one test (hypothesis)",
+            3: "idle",
+        },
     ),
     Field(
         274,
@@ -1039,7 +1093,8 @@ IMM16 = Composite(
     V,
     "a data op's 16-bit immediate, imm | f128_132 << 8 | f120_122 << 13 (verified in the bytes "
     "across later firmware versions of the same family: in 0x38 f120_122 = 7 exactly when "
-    "f128_132 = 31, a sign extension)",
+    "f128_132 = 31, a sign extension); family D's constant too, signed and scaled by 16 "
+    "(inferred on the camera, `FAMILIES`)",
 )
 IMM_WIDTHS = {
     5: Composite("imm5", (IMM,), V, "imm, its values 0..31"),
@@ -1060,11 +1115,12 @@ class Family:
     rb: bool
     imm_bits: int
     fact: str
+    signed: bool = False
 
 
 FAMILY_BASIS = (
-    "the format verified in the bytes across later firmware versions of the same family, the "
-    "meanings hypotheses"
+    "the format verified in the bytes across later firmware versions of the same family; the "
+    "meanings hypotheses unless tagged"
 )
 FAMILIES = (
     Family(
@@ -1088,7 +1144,9 @@ FAMILIES = (
         True,
         0,
         "ra and rb, imm 0 in every word; f120_122 an operand; the operation of the op - 1 with a "
-        "register in place of its immediate (inferred from the pairing)",
+        "register in place of its immediate (inferred from the pairing); on the camera, each "
+        "inserted on (r2, r2) with port 267 enabled left nothing that word 68 sees and "
+        "nothing damaged",
     ),
     Family(
         "B",
@@ -1096,23 +1154,29 @@ FAMILIES = (
         False,
         16,
         "ra and a wide immediate, f120_122 its bits 13..15 (13..14 in 0x37, whose f120_122 is "
-        "0..3 in every word)",
+        "0..3 in every word); 0x0a passes ra (to 1 KiB) and 0x37 ORs imm << 4 (on the camera)",
     ),
     Family(
         "C",
         (0x3E, 0x3F, 0x40),
         True,
         5,
-        "ra, rb and an immediate 0..31 in every word; f120_122 an operand; shifts or bit-field ops "
-        "by a 5-bit count, 16 the most common count of all three: 0x3f a right shift (inferred "
-        "from the camera), 0x3e and 0x40 open (hypothesis)",
+        "ra, rb and an immediate 0..31 in every word; f120_122 an operand; shifts by the 5-bit "
+        "count, 16 the most common count of all three: 0x3e and 0x3f right shifts (inferred "
+        "from the camera), 0x40 a left shift (verified on the camera); ra and rb named one "
+        "register in every word measured",
     ),
     Family(
         "D",
         (*range(0x1C, 0x22), *range(0x23, 0x26), 0x36),
         False,
-        13,
-        "ra and a small 13-bit immediate; f120_122 is 0 in 99 % of the words",
+        16,
+        "ra and a signed 16-bit immediate imm16 = imm | f128_132 << 8 | f120_122 << 13, used "
+        "as c = imm16 << 4 (inferred, strong: on the camera, pre-registered dst sha256 "
+        "predictions under this rule passed for 0x1e, 0x1f, 0x24, 0x25 and 0x36 at constants "
+        "of both signs); f120_122 is 0 in 99 % of the stock words. Arithmetic, min / max and "
+        "compares with c (`semantics.OP_SEMANTICS`)",
+        signed=True,
     ),
     Family(
         "E",
@@ -1133,16 +1197,19 @@ FAMILIES = (
         ),
         True,
         0,
-        "ra, rb and f120_122, imm 0 in every word; register-register ALU or multiply-accumulate "
-        "ops (hypothesis)",
+        "ra, rb and f120_122, imm 0 in every word; register-register ALU ops: moves, AND, OR, "
+        "add, subtract, negate, NOT, min, max, compares and shifts by rb / 16 (verified on the "
+        "camera at f120_122 = 7, `semantics.OP_SEMANTICS`); 0x47 adds a hidden per-boot value "
+        "(inferred); 0x48 and 0x49 undecoded, and no op screened multiplies",
     ),
     Family(
         "F",
         (0x44, 0x46),
         False,
         13,
-        "ra and a 13-bit immediate whose f128_132 is 4 or 8 (0x404, 0x408, 0x40c, 0x460): packed "
-        "constants (hypothesis)",
+        "ra and a 13-bit immediate whose f128_132 is 4 or 8 (0x404, 0x408, 0x40c, 0x460) in the "
+        "stock words; 0x44 subtracts imm13 << 4 (verified on the camera at f120_122 = 0), 0x46 "
+        "adds it and a hidden per-boot value (inferred)",
     ),
 )
 IMM_BITS = {0x37: 15}
@@ -1151,15 +1218,19 @@ SIGNED_OPS = frozenset({0x0C, 0x10})
 """Ops whose 13-bit immediates 0x1fxx read as small negative numbers, two's complement (inferred)."""
 MEANINGS = {
     0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
-    "from its position), what it does open",
-    0x0A: "periodic immediates such as 0x5555 and 0x3333: a lane or phase mask set-up (hypothesis)",
+    "from its position); it passes rb (verified on the camera at f120_122 = 7), so there it "
+    "may set the port's register from rb (hypothesis)",
+    0x0A: "periodic immediates such as 0x5555 and 0x3333; on the camera it passes ra, the "
+    "immediate not entering at 0..0x1234 (verified to 1 KiB; max(ra, imm) not excluded)",
     0x0B: "the most varied immediates, often in a call's delay slots: sets ra from the immediate, "
     "or uses it as a base as family A does (hypothesis); it names a register just before family "
     "A uses it as a base (24 % against 7 % by chance across later firmware versions of the same "
     "family), but in program 16 base plus immediate addressing with 0x0b writing ra would move "
     "the local words that the camera shows 0x1a reading; its immediate's value is consumed on "
     "the end side: on the camera, bit 6 of program 16 word 65's immediate cleared gave a full "
-    "copy, then a timeout (inferred: not the store's count, data or address)",
+    "copy, then a timeout (inferred: not the store's count, data or address); through port 267 "
+    "its result was above the job length at immediate 0x123, so it is no set of the low half "
+    "(hypothesis: it rests on that count reading and on port 267 carrying 0x0b)",
     0x0C: "its immediates 0x1fxx read as small negative numbers (inferred); a byte store by its "
     "place before the byte loads 0x0e and 0x10 (hypothesis: no anchor; 7 of its 10 accesses of "
     "r0-based slots are their first touch, but 21 of 24 later accesses at its address are 0x0c "
@@ -1194,19 +1265,26 @@ MEANINGS = {
     "with another immediate in 95 % of those pairs; as writes they would be dead), so the word "
     "is ra + imm; on the camera, 0x1a in place of the resampler's 0x16 tap-1 read (imm 1) gave "
     "tap 1 c2, the low 16 bits of the word at ra + 1 word (inferred)",
-    0x1E: "at a routine's entry + 1 in 67 routines: adds or subtracts a small immediate, a frame or "
-    "pointer adjust (hypothesis)",
-    0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: adds or subtracts a "
-    "small immediate, a frame or pointer adjust (hypothesis)",
-    0x36: "imm 1, f128_132 and f120_122 0 in all 53 words: an increment (hypothesis)",
-    0x37: "periodic immediates such as 0x5555 and 0x2222: a lane or phase mask set-up (hypothesis)",
+    0x1E: "at a routine's entry + 1 in 67 routines; it subtracts imm16 << 4 (inferred, strong, "
+    "on the camera): a frame allocate there (hypothesis)",
+    0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all; it adds imm16 << 4 "
+    "(inferred, strong, on the camera): the frame release there (hypothesis)",
+    0x36: "imm 1, f128_132 and f120_122 0 in all 53 words; it XORs imm16 << 4 (inferred, strong, "
+    "on the camera): a 16 B toggle there (hypothesis)",
+    0x37: "periodic immediates such as 0x5555 and 0x2222; it ORs imm << 4 (inferred, on the "
+    "camera): a lane or phase mask set-up (hypothesis)",
     0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: an AND with a mask; on the camera "
     "clearing bit 4 of a copy's store-side mask 0xfff0 moved the store 16 B down at a dst 16 mod 32 "
     "only (inferred: an AND with the sign-extended imm16)",
     0x3F: "on the camera, the immediate of a copy's 0x3f word set to 1 and 2 gave a count of len / 2 "
-    "and len / 4 (inferred: a right shift by imm)",
-    0x40: "on the camera, 0x40 in place of a copy's 0x3f word (imm 1, the same input) gave a count "
-    "larger than its input, so not a right shift; what it computes is open",
+    "and len / 4, and inserted with imm 1..5 len >> imm (inferred: a right shift by imm)",
+    0x40: "a left shift by imm (verified on the camera at imm 1, 9, 10 and 11)",
+    0x47: "it adds a hidden per-boot value; at f120_122 = 1, 2, 4 and 6 its result on equal "
+    "operands near the job length was beyond the readout, as a product would be: the open "
+    "multiply candidate (hypothesis)",
+    0x48: "undecoded: on the camera it ran clean only on (r2, r2) inserted after the copy's "
+    "setup, and stopped the copy with dst unwritten in three other forms",
+    0x49: "undecoded: as 0x48, two other forms stopped the copy",
 }
 
 
@@ -1270,7 +1348,7 @@ def _formats(families: tuple[Family, ...]) -> dict[int, Format]:
             if value in formats or value not in DATA_OPS:
                 raise ValueError(f"op {value:#x} in family {family.name}")
             bits = IMM_BITS.get(value, family.imm_bits)
-            formats[value] = Format(family, bits, value in SIGNED_OPS)
+            formats[value] = Format(family, bits, family.signed or value in SIGNED_OPS)
     return formats
 
 

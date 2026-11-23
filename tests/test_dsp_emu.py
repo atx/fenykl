@@ -11,7 +11,7 @@ from conftest import stock_image
 
 from fenykl.dsp import commands
 from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
-from fenykl.dsp.fields import Confidence
+from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.memcpy import Copy16Model
 from fenykl.dsp.program import (
     Ctl,
@@ -706,10 +706,13 @@ def statements(program: Program) -> list[Statement]:
     return out
 
 
-def inserted(k: int, word: Word, after_label: bool = False) -> Program:
-    """The stock copy assembled with `word` inserted before stock word k, before its label (or
-    after it, so that a control word targeting k targets the inserted word)."""
-    stmts = statements(stock())
+def inserted(
+    k: int, word: Word, after_label: bool = False, base: Program | None = None
+) -> Program:
+    """`base` (default the stock copy) assembled with `word` inserted before stock word k,
+    before its label (or after it, so that a control word targeting k targets the inserted
+    word)."""
+    stmts = statements(base or stock())
     at = next(
         (
             n
@@ -770,18 +773,18 @@ def test_an_inserted_op_takes_its_semantics_tier():
 @pytest.mark.parametrize(
     "word, why",
     [
-        (Word.from_fields({"f313_319": 0x40}, base=IDLE), "op40 has no op semantics"),
+        (Word.from_fields({"f313_319": 0x48}, base=IDLE), "op48 has no op semantics"),
         (
             Word.from_fields({"f313_319": 0x1A}, base=IDLE),
             "outside what its op semantics covers",
         ),
         (
             Word.from_fields({"f313_319": 0x38}, base=IDLE),
-            "may read the register are undecoded",
+            "no PR port enabled: where the result goes is open",
         ),
         (stock().words[42], "an inserted register transfer"),
     ],
-    ids=["no-row", "flag-bits", "writes-a-register", "transfer"],
+    ids=["no-row", "flag-bits", "no-port", "transfer"],
 )
 def test_an_insert_without_semantics_is_unknown(word: Word, why: str):
     program = inserted(12, word)
@@ -803,3 +806,122 @@ def test_an_insert_must_keep_the_flow():
         run(Program(tuple(words)))
     with pytest.raises(UnknownSemantics, match="its target 58 is no stock word"):
         run(inserted(58, IDLE, after_label=True), strict=False)
+
+
+def port(word: Word, enable: str, reg: int) -> Word:
+    field = {"f267_268": "f211_215", "f272_273": "f224_228"}[enable]
+    return Word.from_fields({enable: 1, field: reg}, base=word)
+
+
+def engine(words: tuple[Word, ...], reader: int = 68, length: int = 0x1000):
+    """The copy with `words` inserted after its word 64 and `reader` (68: load offset, 73:
+    count) reading r12 through its xreg; (result, dst bytes)."""
+    base = list(stock().words)
+    base[reader] = Word.from_fields({"xreg": 12}, base=base[reader])
+    program = Program(tuple(base))
+    for w in reversed(words):
+        program = inserted(65, w, base=program)
+    return run(program, length)
+
+
+def d_op(code: int, ra: int, c: int) -> Word:
+    return Word.data(code, Operands(ra=ra, imm=c >> 4))
+
+
+def e_op(code: int, ra: int, rb: int) -> Word:
+    return Word.from_fields(
+        {"f120_122": 7}, base=Word.data(code, Operands(ra=ra, rb=rb))
+    )
+
+
+def test_an_engine_op_sets_the_load_offset():
+    """ra = r2 = len + 0x10..0x1f after word 64; 0x1f adds c; word 68 offsets the load by
+    the value / 32 in 32-byte steps, so dst[o:] = src[:len - o] and dst[:o] is unknown."""
+    result, boot = engine((port(d_op(0x1F, 2, 0x400), "f267_268", 12),))
+    o = (0x1000 + 0x400) // 32 & ~0x1F
+    dst = boot.read(DST, 0x1000)
+    assert result.status is Status.OK and o == 0xA0
+    assert bytes(dst.data[o:]) == (bytes(range(256)) * 16)[: 0x1000 - o]
+    assert all(dst.known[o:]) and not any(dst.known[:o])
+    assert dst.weakest() is Confidence.HYPOTHESIS  # stock words off their indices
+
+
+def test_an_operand_chain_feeds_a_count():
+    """min(r2, 0x40) = 0x40 into r13 through port 272, read three words on by a compare
+    through port 267 into r12: true is 0x10, so word 73 stores 16 bytes."""
+    words = (
+        port(d_op(0x25, 2, 0x40), "f272_273", 13),
+        IDLE,
+        IDLE,
+        port(e_op(0x31, 13, 13), "f267_268", 12),
+    )
+    result, boot = engine(words, reader=73)
+    dst = boot.read(DST, 0x1000)
+    assert result.status is Status.OK and all(dst.known)
+    assert bytes(dst.data) == bytes(range(16)) + b"\xa5" * (0x1000 - 16)
+    with pytest.raises(UnknownSemantics, match="no exact multiple of 16"):
+        engine((port(e_op(0x08, 2, 2), "f267_268", 12),), reader=73)
+
+
+@pytest.mark.parametrize(
+    "words, why",
+    [
+        # Read two words after the write: the latency is not met.
+        (
+            (
+                port(d_op(0x25, 2, 0x40), "f272_273", 13),
+                IDLE,
+                port(e_op(0x31, 13, 13), "f267_268", 12),
+            ),
+            "a value the model does not know",
+        ),
+        ((port(d_op(0x25, 2, -0x400), "f267_268", 12),), "a negative value"),
+        (
+            (
+                port(
+                    Word.from_fields(
+                        {"f120_122": 0}, base=Word.data(0x46, Operands(ra=2, imm=1))
+                    ),
+                    "f267_268",
+                    12,
+                ),
+            ),
+            "a value the model does not know",
+        ),
+        (
+            (
+                port(d_op(0x24, 2, 0x7FFF0), "f272_273", 13),
+                IDLE,
+                IDLE,
+                port(Word.data(0x40, Operands(ra=13, rb=13, imm=4)), "f267_268", 12),
+            ),
+            "beyond the buffer",
+        ),
+    ],
+    ids=["latency", "negative", "hidden-r", "beyond"],
+)
+def test_an_engine_value_the_load_cannot_place_is_unknown(words, why):
+    with pytest.raises(UnknownSemantics, match=why):
+        engine(words)
+
+
+def test_an_engine_write_off_the_site_is_unknown():
+    with pytest.raises(UnknownSemantics, match="no modelled reader off the site"):
+        run(inserted(12, port(d_op(0x1F, 2, 0), "f267_268", 12)))
+
+
+def test_an_op_on_one_register_reads_one_value():
+    """0x31 on (r2, r2): r2 is an interval, but equal to itself, so the flag is true."""
+    result, boot = engine((port(e_op(0x31, 2, 2), "f267_268", 12),), reader=73)
+    assert result.status is Status.OK
+    assert bytes(boot.read(DST, 0x1000).data[:16]) == bytes(range(16))
+
+
+def test_an_engine_value_for_another_reader_is_unknown():
+    base = list(stock().words)
+    base[76] = Word.from_fields({"xreg": 12}, base=base[76])
+    program = inserted(
+        65, port(d_op(0x1F, 2, 0x400), "f267_268", 12), base=Program(tuple(base))
+    )
+    with pytest.raises(UnknownSemantics, match="a role not measured with one"):
+        run(program, 0x1000)

@@ -83,15 +83,10 @@ def test_undecided_branch_stops_or_raises():
 
 
 def test_ra_test_on_the_transfer_registers():
-    """The job-start transfer registers decide both branches: 27 names r7 = len / 2."""
-    hypothesis = RaTest(reads=Regs.TRANSFER)
-    flow = run_copy(0x400, hypothesis)
-    assert flow.order() == COPY_ORDER
-    assert {s.confidence for s in flow.steps if s.index in (27, 45)} == {
-        Confidence.HYPOTHESIS
-    }
-    empty = run_copy(0, hypothesis)
-    assert empty.order() == span((0, 4), (10, 31), (79, 83), (5, 5))
+    """27 names the transfer register r7, which word 14's port f216_220 names under an enable
+    whose destination is open: stepping cannot tell what 27 tests."""
+    flow = run_copy(0x400, RaTest(reads=Regs.TRANSFER))
+    assert flow.stop is Stop.UNDECIDED and flow.order()[-1] == 27
 
 
 def control(code: int, target: int, ra: int) -> Word:
@@ -222,57 +217,132 @@ def given(lo: int, hi: int | None = None) -> Reg:
     return Reg(lo, lo if hi is None else hi, Confidence.VERIFIED, "set by the test")
 
 
-def test_shift_right_reads_rb_and_writes_ra():
-    shift = Word.data(0x3F, Operands(ra=7, rb=2, imm=1))
-    boot, flow = run_slot((shift,), r2=given(0x200, 0x201), r7=given(5))
-    assert boot.slot[7] is not None and boot.slot[7].exact == 0x100
-    assert boot.slot[7].taint is Confidence.HYPOTHESIS  # the destination ra
+def ported(word: Word, port: str, reg: int) -> Word:
+    """`word` with one result port enabled: "x" (f267_268 = 1) or "operand" (f272_273 = 1)."""
+    enable, field = {
+        "x": ("f267_268", "f211_215"),
+        "operand": ("f272_273", "f224_228"),
+    }[port]
+    return Word.from_fields({enable: 1, field: reg}, base=word)
+
+
+def test_a_result_goes_to_its_port_register_after_the_latency():
+    """Not to ra: f211_215 in the xreg set from 4 words on, f224_228 in the operand set from
+    3 words on, unknown before."""
+    shift = Word.data(0x3F, Operands(ra=2, rb=2, imm=1))
+    words = (ported(shift, "operand", 9), ported(shift, "x", 12), IDLE)
+    boot, _ = run_slot(words, r2=given(0x200, 0x201))
+    assert boot.regs[12] is None and boot.slot[9] is not None
+    assert (boot.slot[9].lo, boot.slot[9].hi) == (0x100, 0x100)
+    assert boot.slot[9].taint is Confidence.INFERRED
     assert boot.slot[2] == given(0x200, 0x201)
-    assert flow.steps[0].note == "r7 := r2 >> 1 = 0x100"
-    # A negative rb (logical and arithmetic shifts differ) leaves ra unknown, not stale.
-    boot, _ = run_slot((shift,), r2=given(-4), r7=given(5))
-    assert boot.slot[7] is None
-    other = Word.from_fields({"f120_122": 3}, base=shift)
-    with pytest.raises(UnknownSemantics, match="outside what its semantics covers"):
-        run_slot((other,))
+    boot, _ = run_slot((*words, IDLE, IDLE))
+    assert boot.slot[9] is None  # the input was unknown
+    boot, _ = run_slot((*words, IDLE, IDLE), r2=given(0x200))
+    assert boot.regs[12].exact == 0x100 and boot.slot[9].exact == 0x100
+
+
+def test_a_result_without_a_decoded_port_is_open():
+    shift = Word.data(0x3F, Operands(ra=2, rb=2, imm=1))
+    with pytest.raises(UnknownSemantics, match="no PR port enabled"):
+        run_slot((shift,), r2=given(0x200))
+    other = Word.from_fields({"f272_273": 2, "f224_228": 4}, base=shift)
+    with pytest.raises(UnknownSemantics, match="under f272_273=2 is open"):
+        run_slot((other,), r2=given(0x200))
+    # Lenient: the open port's register is unknown in both sets.
+    boot = Boot()
+    boot.slot[4] = boot.regs[4] = given(1)
+    boot.slot[2] = given(0x200)
+    job = commands.copy(Program((other, IDLE, IDLE, IDLE, HALT)), SRC, DST, 0x400)
+    Executor(boot, strict=False).step(job)
+    assert boot.slot[4] is None and boot.regs[4] is None
 
 
 def test_and_mask_sign_extends_imm16():
-    line = Word.data(0x38, Operands(ra=4, imm=0xFFE0))
-    boot, _ = run_slot((line,), r4=given(0xA1113610))
-    assert boot.slot[4] == Reg(
+    def masked(imm: int, r4: Reg) -> Reg | None:
+        line = ported(Word.data(0x38, Operands(ra=4, imm=imm)), "operand", 5)
+        boot, _ = run_slot((line, IDLE, IDLE, IDLE), r4=r4)
+        return boot.slot[5]
+
+    assert masked(0xFFE0, given(0xA1113610)) == Reg(
         0xA1113600, 0xA1113600, Confidence.INFERRED, "r4 & 0xffffffe0 (op 0x38)"
     )
-    # Clearing low bits keeps the order of the bounds; a low mask bounds the result by itself.
-    boot, _ = run_slot((line,), r4=given(0x30, 0x5F))
-    assert (boot.slot[4].lo, boot.slot[4].hi) == (0x20, 0x40)
-    low = Word.data(0x38, Operands(ra=4, imm=0xF))
-    boot, _ = run_slot((low,), r4=given(0x13, 0x40))
-    assert (boot.slot[4].lo, boot.slot[4].hi) == (0, 0xF)
-    boot, _ = run_slot((low,), r4=given(0x13))
-    assert boot.slot[4].exact == 3
-    # A negative mask with low bits set is not monotonic: bounded by the input only.
-    mixed = Word.data(0x38, Operands(ra=4, imm=0x8001))
-    boot, _ = run_slot((mixed,), r4=given(0x10, 0x11))
-    assert (boot.slot[4].lo, boot.slot[4].hi) == (0, 0x11)
+    # Clearing low bits keeps the order of the bounds; other masks are enumerated.
+    wide = masked(0xFFE0, given(0x30, 0x5F))
+    assert (wide.lo, wide.hi) == (0x20, 0x40)
+    low = masked(0xF, given(0x13, 0x40))
+    assert (low.lo, low.hi) == (0, 0xF)
+    assert masked(0xF, given(0x13)).exact == 3
+    mixed = masked(0x8001, given(0x10, 0x11))
+    assert (mixed.lo, mixed.hi) == (0, 1)
 
 
-def test_measured_ops_chain_through_the_slot():
-    """A mask, then a shift of its result; an op without semantics breaks the chain (lenient)."""
+@pytest.mark.parametrize(
+    "op, operands, a, b, value, taint",
+    [
+        # D: c = imm16 << 4, imm16 signed over imm, f128_132 and f120_122.
+        (0x1F, Operands(ra=2, imm=-0x1FF0), 0x1010, None, 0x1010 - 0x1FF00, "I"),
+        (0x25, Operands(ra=2, imm=0x7F0), 0x1010, None, 0x1010, "I"),
+        (0x23, Operands(ra=2, imm=-1), 0x10, None, 0x10, "V"),  # unsigned: 0x10 < -0x10
+        (0x21, Operands(ra=2, imm=-1), 0x10, None, 0, "V"),
+        # E, on (r2, r3).
+        (0x28, Operands(ra=2, rb=3), -0x10, 0x1010, 0, "V"),  # unsigned <=
+        (0x2A, Operands(ra=2, rb=3), -0x10, 0x1010, 0x10, "V"),  # signed <=
+        (0x3D, Operands(ra=2, rb=3), 0x400, 0, -0x401, "V"),
+        (0x2F, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "I"),  # signed: inferred
+        (0x2C, Operands(ra=2, rb=3), -0x1000, 0x1010, None, None),  # signedness open
+        (0x41, Operands(ra=2, rb=3), 0x1010, 0x20, 0x1010 >> 2, "V"),
+        (
+            0x41,
+            Operands(ra=2, rb=3),
+            -0x1400,
+            0x10,
+            -0xA00,
+            "I",
+        ),  # arithmetic: inferred
+        (0x43, Operands(ra=2, rb=3), 0x10, 0x210, 0x20, "I"),  # the & 31: inferred
+    ],
+)
+def test_measured_op_rules(op, operands, a, b, value, taint):
+    word = Word.data(op, operands)
+    if operands.rb is not None:
+        word = Word.from_fields({"f120_122": 7}, base=word)
+    regs = {"r2": given(a)} | ({} if b is None else {"r3": given(b)})
+    boot, _ = run_slot((ported(word, "operand", 9), IDLE, IDLE, IDLE), **regs)
+    if value is None:
+        assert boot.slot[9] is None
+        return
+    assert boot.slot[9].exact == value
+    assert (
+        boot.slot[9].taint
+        is {"I": Confidence.INFERRED, "V": Confidence.VERIFIED}[taint]
+    )
+
+
+def test_ops_chain_through_the_operand_set():
+    """A mask into r2, then a shift of it three words on; an op without semantics breaks the
+    chain (lenient)."""
     words = (
-        Word.data(0x38, Operands(ra=2, imm=0xFFF0)),
-        Word.data(0x3F, Operands(ra=7, rb=2, imm=2)),
-        Word.data(0x40, Operands(ra=2, rb=2, imm=1)),
-        Word.data(0x3F, Operands(ra=8, rb=2, imm=1)),
+        ported(Word.data(0x38, Operands(ra=2, imm=0xFFF0)), "operand", 2),
+        IDLE,
+        IDLE,
+        ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=2)), "operand", 7),
+        ported(Word.data(0x48, Operands(ra=2, rb=2)), "operand", 2),
+        IDLE,
+        IDLE,
+        ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=1)), "operand", 8),
+        IDLE,
+        IDLE,
+        IDLE,
     )
     boot = Boot()
     boot.slot[2] = given(0x40F)
     job = commands.copy(Program((*words, HALT)), SRC, DST, 0x400)
     flow = Executor(boot, strict=False).step(job)
     assert boot.slot[7].exact == 0x100
-    assert flow.steps[2].unknown and boot.slot[2] is None
+    assert flow.steps[4].unknown and boot.slot[2] is None
     assert boot.slot[8] is None
-    assert flow.steps[3].note == "r8 := r2 >> 1: an unknown input, unknown"
+    assert flow.steps[7].note == "r2 >> 1 (op 0x3f): an unknown input"
 
 
 def framed(*routine: Word) -> Job:

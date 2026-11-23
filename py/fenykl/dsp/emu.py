@@ -20,21 +20,24 @@ from enum import Enum
 from typing import Protocol
 
 from ..firmware import unpack_firmware
-from .fields import DELAY_SLOTS, OP_FIELD, Confidence, Operands, op
+from .fields import DELAY_SLOTS, OP_FIELD, Confidence, Kind, Operands, lookup, op
 from .program import Program
 from .semantics import (
     OP_SEMANTICS,
     Branching,
     Given,
     OpSemantics,
+    RegSet,
     Sequencer,
     Trace,
     UnknownSemantics,
+    destinations,
 )
 from .state import (
     BootParams,
     Bytes,
     JobView,
+    Reg,
     RegisterFile,
     Source,
     Space,
@@ -276,11 +279,14 @@ class Executor:
     program end raise `UnknownSemantics`: what they do is open. A return without a link, or
     one that pops a local op 3's link, raises `LinkError`: no return lies between that op 3 and
     its T, so the return is not its own (stepped as calls, a stock loop re-ran its tail).
-    A data op runs as the op slot's semantics `ops`; one without semantics raises
-    `UnknownSemantics` (strict) or is recorded in its step, and then its ra in the op slot's
-    registers is unknown, since the op may write it. Strict mode also raises at an undecided
-    control op; lenient mode stops there. Stepping does not model the register transfers or any
-    datapath unit.
+    A data op runs as the op slot's semantics `ops`, its operands read from the operand set
+    (`Boot.slot`); a result goes where the word's PR ports send it (`semantics.destinations`),
+    landing `latency` executed words later and unknown until then. A result whose destination
+    is open raises `UnknownSemantics` (strict) or makes the open ports' registers unknown in both
+    sets. An op without semantics raises (strict) or is recorded in its step, and then its ra
+    and its ports' registers are unknown, since the op may write them. Strict mode also raises
+    at an undecided control op; lenient mode stops there. Stepping does not model the register
+    transfers or any datapath unit.
 
     strict=False ignores fields without semantics (and taints).
     """
@@ -302,6 +308,8 @@ class Executor:
         self.sequencer = sequencer or Sequencer()
         self.branching = branching or Given()
         self.ops = OP_SEMANTICS if ops is None else ops
+        self._landing: list[tuple[int, RegisterFile, int, Reg | None]] = []
+        """Results in flight: (step count they land at, set, register, value)."""
 
     def run(self, job: Job) -> JobResult:
         if self.model is None:
@@ -323,7 +331,9 @@ class Executor:
         stack: list[Link] = []
         visits: dict[int, int] = {}
         pc, slots, pending = 0, 0, None
+        self._landing = []
         for _ in range(self.limit):
+            self._land(len(steps))
             if pc >= len(words):
                 # On the camera the stock copy with its return word idled ran on and the job
                 # timed out; the stepper does not model what runs past the end, so it raises.
@@ -337,7 +347,7 @@ class Executor:
                 )
                 return Flow(steps, Stop.HALT)
             if not word.control:
-                steps.append(self._data(pc, word, slots > 0))
+                steps.append(self._data(pc, word, slots > 0, len(steps)))
                 if slots:
                     slots -= 1
                     if slots == 0 and pending is not None:
@@ -423,13 +433,39 @@ class Executor:
         )
         return step, t if b.taken else None
 
-    def _data(self, i: int, word: Word, slot: bool) -> Step:
+    def _land(self, now: int) -> None:
+        for due, regs, r, value in [x for x in self._landing if x[0] <= now]:
+            regs[r] = value
+        self._landing = [x for x in self._landing if x[0] > now]
+
+    def _sets(self) -> dict[RegSet, RegisterFile]:
+        return {RegSet.XREG: self.boot.regs, RegSet.OPERAND: self.boot.slot}
+
+    def _route(self, i: int, word: Word, result: Reg | None, now: int) -> str:
+        """Send a data op's result through its word's PR ports; returns why a destination is
+        open ("" when none is)."""
+        dests, open_, why = destinations(word)
+        if why and self.strict:
+            raise UnknownSemantics(i, op(word.op).name, [], why)
+        sets = self._sets()
+        for to, r, latency in dests:
+            sets[to][r] = None
+            self._landing.append((now + latency, sets[to], r, result))
+        for fid in open_:
+            if lookup(fid).kind is Kind.REG:
+                for regs in sets.values():
+                    regs[word[fid]] = None
+        return why
+
+    def _data(self, i: int, word: Word, slot: bool, now: int = 0) -> Step:
         args = word.operands
         sem = self.ops.get(word.op)
         effect = None if sem is None else sem.run(word, self.boot.slot, self.boot.local)
         if effect is not None:
-            for r, v in effect.writes:
-                self.boot.slot[r] = v
+            note = effect.note
+            if effect.computes:
+                why = self._route(i, word, effect.result, now)
+                note = f"{note}; {why}" if why else note
             for addr, n in effect.stores:
                 src = self.boot.source(
                     "local store", f"op {word.op:#x}: its datum is open"
@@ -438,15 +474,14 @@ class Executor:
                     self.boot.local.forget(src)
                 else:
                     self.boot.local.write(addr, Bytes.unknown(n, src))
-            return Step(
-                i, word.op, slot, args, note=effect.note, confidence=sem.confidence
-            )
+            return Step(i, word.op, slot, args, note=note, confidence=sem.confidence)
         why = "no semantics" if sem is None else "outside what its semantics covers"
         if self.strict:
             raise UnknownSemantics(i, op(word.op).name, [(OP_FIELD, word.op)], why)
         if args is not None:
             self.boot.slot[args.ra] = None
-            why += f", r{args.ra} unknown after it"
+            self._route(i, word, None, now)
+            why += f", r{args.ra} and its ports' registers unknown after it"
         return Step(i, word.op, slot, args, note=why, unknown=True)
 
 

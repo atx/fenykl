@@ -121,10 +121,13 @@ its program in every op 0..3 word (verified in the bytes). In those words `imm` 
 f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` have no field of
 their own; the candidate is the register ra (f123_127), a loop or condition operand that a guard
 and its loop end share in about half the guarded loops (hypothesis). By family, ra is an address
-base the op reads in family A (inferred), the result or accumulator in C and E (hypothesis);
-f224_228 changes to it with or one word ahead of the op, an operand select (hypothesis). Whether
-xreg and the op slot name one register file is open; the emulator keeps the transfer registers
-(`Boot.regs`) and the op slot's (`Boot.slot`) apart.
+base the op reads in family A (inferred), an operand where read in B..F, whose result goes to the
+register of the word's enabled PR port, not ra (inferred, strong). xreg and the op slot's ra /
+rb read two register sets (inferred, strong): a result written through PR port 267 (f211_215
+under f267_268 = 1) reaches the xreg of words 68 and 73 and not the operands, one written
+through port 272 under enable 1 (f224_228) reaches a later op's ra / rb three words on and not
+68's xreg. The emulator keeps them apart: the transfer registers `Boot.regs`, the operands
+`Boot.slot`.
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.
@@ -143,7 +146,7 @@ the statements back (a `Ctl` where a target has a label). A call's return is imp
 A data op holds its operands in five fields, the op slot: `op`, `imm`, the register `ra`
 (f123_127), f128_132 and f120_122. `ra` changes only in a word that carries an op (a data op or a
 control op 0..2; a call holds it), verified in the bytes across later firmware versions of the
-same family; whether it is a destination, a source or a base is open. The data ops fall into
+same family; it is a base or a source, the result going through a PR port. The data ops fall into
 families by the layout of the slot (`FAMILIES`; the formats are verified in the bytes, every
 meaning is a hypothesis unless tagged):
 
@@ -153,9 +156,9 @@ meaning is a hypothesis unless tagged):
 | A' | 0x0d..0x1b odd | ra, rb | an operand |
 | B | 0x0a 0x0b 0x37 0x38 | ra, imm16 (imm15 in 0x37) | immediate bits 13..15 |
 | C | 0x3e 0x3f 0x40 | ra, rb, imm5 | an operand |
-| D | 0x1c..0x25 but 0x22, 0x36 | ra, imm13 | 0 in 99 % of the words |
+| D | 0x1c..0x25 but 0x22, 0x36 | ra, imm16 signed, used as imm16 << 4 | immediate bits 13..15 (inferred, strong), 0 in 99 % of the words |
 | E | 0x08 0x09 0x28..0x35 but 0x2d, 0x3a 0x3c 0x3d 0x41..0x43 0x47..0x49 | ra, rb | an operand |
-| F | 0x44 0x46 | ra, imm13 | open |
+| F | 0x44 0x46 | ra, imm13 | open; 0 where measured |
 
 rb is f128_132; imm13 is `imm` | f128_132 << 8 and imm16 adds f120_122 << 13. 0x0c's and 0x10's
 immediates are two's complement (inferred: their 0x1fxx values read as small negative numbers).
@@ -164,11 +167,24 @@ of the local word at its immediate (inferred, strong): program 16's three 0x1a w
 local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
 destination (inferred: across later firmware versions of the same family, in 59 % of its words
 the next naming of that register is this op again, with another immediate in 95 % of those
-pairs, which as writes would be dead). Four ops have camera-measured meanings, run by
-stepping (`OP_SEMANTICS`, inferred): 0x3f, a right shift of rb by imm (a copy's count halved and
-quartered at imm 1 and 2), and 0x38, an AND of ra with its sign-extended imm16 (one cleared mask
-bit moved a copy's store by 16 B). Where 0x3f's result goes is open: stepping writes ra at
-hypothesis taint. The resampler's word that reads tap 1 is a 0x16 with imm 1; on the camera,
+pairs, which as writes would be dead).
+
+Ops inserted into the copy after its word 64, their result read through word 68's load offset
+or word 73's count, decode the scalar ALU (`OP_SEMANTICS`, each with its tier). The values look
+scaled by 16: the immediates enter as imm << 4, a compare's true is 0x10, a shift by rb counts in
+units of 16. Verified on the camera (pre-registered dst sha256 predictions passed; E ops at
+f120_122 = 7): 0x08 / 0x09 / 0x32 rb, 0x3c AND, 0x3a OR, 0x34 ra - rb, 0x35 ra + rb, 0x33 -rb, 0x3d
+NOT, 0x2f min (signed inferred), 0x2c / 0x2e max (signedness open); compares 0x28 / 0x29 <= / <
+unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 != / ==, and against c = imm16 << 4 0x1c != , 0x1d ==,
+0x20 <= signed, 0x21 < signed, 0x23 < unsigned; 0x41 / 0x42 ra >> ((rb >> 4) & 31), 0x43 ra <<
+((rb >> 4) & 31) (arithmetic and & 31 inferred); 0x40 ra << imm; 0x44 ra - (imm13 << 4); 0x0a ra
+(to 1 KiB, where ra >= imm: max(ra, imm) is not excluded).
+Inferred: family D's signed imm16, 0x1e ra - c, 0x1f ra + c, 0x36 ra ^ c, 0x24 max, 0x25 min;
+0x3e / 0x3f right shifts by imm; 0x37 ra | (imm << 4); 0x38 ra & imm16 (not scaled; one cleared
+mask bit moved a copy's store by 16 B; not covered through port 267, where it did not fit);
+0x46 / 0x47 add a value per boot that no job sets (an unknown input, so their results are
+unknown). 0x48 / 0x49, 0x0b and family A' stay undecoded; no op screened multiplies. The
+resampler's word that reads tap 1 is a 0x16 with imm 1; on the camera,
 with ra kept (one run each; ra as a word index is a hypothesis):
 
 | op in its place | imm 0 | imm 1 | reading (inferred) |
@@ -321,14 +337,20 @@ says where they are). An insert counts as an edited word for the combinations ru
 words off their stock indices make the job a hypothesis.
 
 An inserted word is covered by its content: the idle word, or a data op whose fields off idle
-are all in the op slot, at its op semantics' confidence (`OP_SEMANTICS`, or the executor's
-`ops`), when the semantics covers its operands and the op neither writes a register nor
-local memory (the undecoded words that might read them have no semantics for another value);
-the op slot's registers count as unknown. Where a datum the op reads goes is open: the copy is
-assumed not to see it. Every other insert is UNKNOWN, naming the op or the fields: an op
-without semantics, operands outside them (the idle word with only its op changed sets imm13's
-flag bits, so the family A ops are not covered there), a register or local memory write, a
-register transfer (its slot is not modelled). These raise in both modes: an inserted control
+are all in the op slot and the PR ports, at its op semantics' confidence (`OP_SEMANTICS`, or
+the executor's `ops`), when the semantics covers its operands. A load is recorded only (where
+its datum goes is open; with a PR port enabled it is UNKNOWN). A result goes through the word's
+PR ports (`semantics.destinations`), and only right after stock word 64, the site where ops were
+measured (`memcpy.ENGINE_AFTER`): there the operands r2 = len + 0x10..0x1f and r7 near 0x40000
+are known (inferred; r7 at len 0x2000 and 0x4000 only), a port-272 result feeds later
+inserts' operands three words on, and a port-267 result is what words 68 and 73 read at that
+register four or more words on; other transfers reading it raise. A load offset or count that the
+model cannot place from such a value (unknown, negative, two placements, beyond the buffer, a
+count off 16-byte steps or above len) raises. Every other insert is UNKNOWN, naming the op or
+the fields: an op without semantics, operands outside them (the idle word with only its op
+changed sets imm13's flag bits, so the family A ops are not covered there), a result with no
+decoded port or off the site, a local memory write, a register transfer (its slot is not
+modelled). These raise in both modes: an inserted control
 or halt word, an insert in a control word's four delay slots (it pushes a stock word out of
 them), a target on an inserted word.
 
@@ -494,13 +516,16 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   (27 not taken, 45 taken, also at odd src, dst and len). `RaTest` is the alternative to test: brf, br and the loop end on
   ra == 0 or ra != 0, in the op slot's registers or the transfer registers, the loop end
   testing ra as it is or after decrementing it (all hypotheses). On the copy's transfer
-  registers at job start it reproduces the camera's path, but nothing shows those to be the
-  registers the control ops name.
+  registers it decides nothing: word 14 names 27's r7 through a port whose destination is open.
 - **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): the family A loads 0x1a,
   0x16, 0x14, 0x10 and 0x0e record their read (where the datum goes is open), the stores 0x18 and
-  0x12 make their bytes unknown, 0x38 and 0x3f compute ra, and the idle op does nothing in the
-  slot. Every other op has no semantics: strict mode raises `UnknownSemantics`,
-  lenient mode records it in its step and makes its ra unknown. An undecided branch raises in
+  0x12 make their bytes unknown, the computing ops send their result through the word's PR
+  ports (`semantics.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
+  the operands three words on, unknown until then), and the idle op does nothing in the slot. A
+  result with an open destination (no port, or another enable value) raises in strict mode and
+  makes the open ports' registers unknown in lenient mode. Every other op has no semantics:
+  strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
+  and its ports' registers unknown. An undecided branch raises in
   strict mode and stops the run in lenient mode; a loop end into its own delay slots, a control
   op in a delay slot and a return without a call raise in both.
 - **Local op 3** (`Program.local_op3()`): a forward op 3 after word 0 with no return between it
@@ -510,8 +535,8 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   jump with no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
   finds no link, raises `LinkError` (an `UnknownSemantics`): no return of its own lies before
   that T, and stepped as calls such a link re-ran a loop's tail.
-- **Registers**: the op slot's (`Boot.slot`) and the transfer registers (`Boot.regs`) are kept
-  apart; whether ra / rb and xreg name one file is open.
+- **Registers**: the operands (`Boot.slot`) and the transfer registers (`Boot.regs`), two
+  register sets (inferred, strong).
 
 Stepping models neither the register transfers nor the datapath, so it says which words run in
 which order, not what they move. `fenykl dsp flow [--len N] [--branch I=0|1]` prints the copy's
