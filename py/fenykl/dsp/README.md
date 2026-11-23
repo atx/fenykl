@@ -279,8 +279,9 @@ groups, the route nibbles and f308_309); the row of the undecoded stock word at 
 index, which acts where stepping reaches it (below) and is a hypothesis elsewhere. A stock word
 at another index than its own is no row, unless inserted words moved it there ("Inserted
 words"). The model derives the rows, the transfers' register contexts and their reference
-values from the stock program it is built from, so no stock word is part of the code. At the end the sequencer gives the transfers their roles (the stock word
-66 loads, 67 addresses, 68 offsets, 73 counts, 76 offsets the store, 47 formats it, ...) in the
+values from the stock program it is built from, so no stock word is part of the code. At the
+end the sequencer gives the transfers their roles (the stock word 66 loads, 67 addresses, 68
+offsets, 73 counts, 76 offsets the store, 47 formats it, ...) in the
 order of the transfers (`Sequencer`, inferred: the roles followed counted transfers moved by one
 index on the camera, and a counted transfer at word 78, the word before the return, stalls the
 job) and the job resolves into a status, one load and one store. The rows are outcomes of whole
