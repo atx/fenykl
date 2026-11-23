@@ -289,8 +289,9 @@ def _half(job: JobView) -> int | None:
 
 # Values seen through program 16's register-transfer words on the camera (copy jobs of
 # 0.5..4 KiB): word 73 counts a register's value in bytes, word 68 offsets the load by the
-# value / 32 (rounded to 32 bytes) and word 67 reads at it as an address. No word of the program
-# is known to write these registers; they are set when the job starts (hypothesis).
+# value / 32 (rounded to 32 bytes) and word 67 reads at it as an address. The program's data ops
+# write some of them through PR port 267 (word 64 writes r7, inferred); the model sets them when
+# the job starts with the values its transfers read.
 REGISTER_FACTS: tuple[RegisterFact, ...] = (
     RegisterFact(
         0, I, "0x10: word 73 counts 0x10 bytes, word 68 offsets by 0", _const(0x10)

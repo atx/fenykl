@@ -39,6 +39,7 @@ from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 
 from .emu import (
+    BUFFER_HI,
     HALT_OP,
     Boot,
     Executor,
@@ -64,11 +65,14 @@ from .fields import (
 from .program import Program, stock_programs
 from .semantics import (
     KIB,
+    RESULT_PORTS,
     Channel,
+    Effect,
     Given,
     OpaqueClass,
     Outcome,
     Part,
+    RegSet,
     Role,
     Sequencer,
     Trace,
@@ -76,14 +80,37 @@ from .semantics import (
     UnknownSemantics,
     Use,
     WordClass,
+    destinations,
 )
-from .state import Bytes, JobView, RegisterFile
+from .state import Bytes, JobView, Reg, RegisterFile
 from .units import UNITS
 from .word import IDLE, Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 ITEM = 16
+ENGINE_AFTER = 64
+"""Inserted data ops right after this stock word (before 65) are the measured site: their
+operands and their results through the PR ports are modelled there only."""
+ENGINE_OPERANDS = (
+    (
+        2,
+        lambda length: (length + 0x10, length + 0x1F),
+        (
+            "len + 0x10..0x1f: the results on it fit one value, and a count of it floored to "
+            "16 B stores len, of len + 1 would too (inferred)"
+        ),
+    ),
+    (
+        7,
+        lambda length: (0x40010, 0x4041F),
+        (
+            "a value near 0x40000 at several lengths, not the len / 2 that word 64 writes to "
+            "the xreg's r7, read through ra - rb (inferred)"
+        ),
+    ),
+)
+"""The operand set's registers at the engine site (inferred, on the camera), by job length."""
 MAX_COUNT = 0x40000
 """A count above this is an address or junk: the store never ends (hypothesis)."""
 ZERO_FILL = 0x4000
@@ -657,6 +684,34 @@ def _floor32(v: int) -> int:
     return v // 32 & ~0x1F
 
 
+@dataclass
+class Operands16:
+    """The operand set as inserted words at the engine site see it: `ENGINE_OPERANDS` and
+    their own writes, each read `RESULT_PORTS`' latency after it lands (nearer: unknown)."""
+
+    regs: RegisterFile = field(default_factory=RegisterFile)
+    written: dict[int, int] = field(default_factory=dict)
+    seeded: bool = False
+
+    def seed(self, length: int) -> None:
+        for r, value, fact in ENGINE_OPERANDS:
+            lo, hi = value(length)
+            self.regs[r] = Reg(lo, hi, I, fact)
+        self.seeded = True
+
+    def write(self, j: int, r: int, value: Reg | None) -> None:
+        self.regs[r] = value
+        self.written[r] = j
+
+    def at(self, j: int) -> RegisterFile:
+        latency = next(p.latency for p in RESULT_PORTS if p.to is RegSet.OPERAND)
+        view = RegisterFile(list(self.regs.regs))
+        for r, w in self.written.items():
+            if j - w < latency:
+                view[r] = None
+        return view
+
+
 class Copy16Model:
     """The model of program 16, built from the stock program (`from_image` reads it from a
     stock E-M10 II `.BIN`)."""
@@ -669,6 +724,14 @@ class Copy16Model:
         self.rows = {i: c for c in self.opaque for i in c.positions}
         """The row of each undecoded stock word, by its stock index."""
         self.halt = next(w for w in words if w.op == HALT_OP)
+        self.late_writes = {
+            r
+            for w in words[ENGINE_AFTER + 1 : STREAM.stop]
+            if not w.control
+            for to, r, _ in destinations(w)[0]
+            if to is RegSet.XREG
+        }
+        """The xreg-set registers that stock words after the engine site write."""
         self.channels = _CHANNELS
         self.formats = _FORMATS
 
@@ -712,12 +775,19 @@ class Copy16Model:
                     f"inserted in the delay slots of word {c}, it pushes a stock word out "
                     "of them",
                 )
+        length = emu.boot.u32(8)
+        operands = Operands16()
+        prev = -1
         stocked = []
         for j, s in enumerate(at):
             word = words[j]
             if s is None:
-                self._cover_insert(emu, trace, j, word)
+                site = prev == ENGINE_AFTER and length is not None
+                if site and not operands.seeded:
+                    operands.seed(length)
+                self._cover_insert(emu, trace, j, word, operands if site else None)
                 continue
+            prev = s
             t = word.target
             if t is not None:
                 to = at[t] if t < len(at) else None
@@ -744,52 +814,97 @@ class Copy16Model:
             )
         return replace(job, program=replace(job.program, words=tuple(stocked)))
 
-    def _cover_insert(self, emu: Executor, trace: Trace, j: int, word: Word) -> None:
+    def _cover_insert(
+        self,
+        emu: Executor,
+        trace: Trace,
+        j: int,
+        word: Word,
+        operands: "Operands16 | None",
+    ) -> None:
         """An inserted word by its content: the idle word, or a data op with only its op slot's
-        fields off idle that its op semantics (`emu.ops`) covers, at the semantics' confidence,
-        and neither writes a register nor local memory (program 16's words that could read them
-        are undecoded). The op slot's registers are unknown: no stock word of the job is
-        stepped. Anything else raises UnknownSemantics (strict) or is ignored and taints."""
+        and PR ports' fields off idle that its op semantics (`emu.ops`) covers, at the
+        semantics' confidence. A load is recorded only (where its datum goes is open). A
+        result goes through the word's PR ports (`destinations`): at the engine site
+        (`ENGINE_AFTER`, `operands` given) to the operand set, which later inserts read after
+        the port's latency, or to the xreg set, which the stock transfers after the site read
+        (`Trace.writes`); elsewhere the operands are unknown and a result has no modelled
+        reader. Anything else raises UnknownSemantics (strict) or is ignored and taints."""
         if word == IDLE:
             return
         changed = word.changed(IDLE)
-        fields = [(f, v) for f, v in changed if f.unit != "op_slot"]
+        fields = [(f, v) for f, v in changed if f.unit not in ("op_slot", "pr")]
         sem = emu.ops.get(word.op)
         name = op(word.op).name
         effect = None
         if self.transfer.matches(word):
             why = "an inserted register transfer: which slot it takes is not modelled"
         elif fields:
-            why = "fields outside the op slot"
+            why = "fields outside the op slot and the PR ports"
         elif sem is None:
             fields, why = [(OP_FIELD, word.op)], f"{name} has no op semantics"
         else:
             fields = [(OP_FIELD, word.op)]
-            effect = sem.run(word, RegisterFile(), emu.boot.local)
+            regs = RegisterFile() if operands is None else operands.at(j)
+            effect = sem.run(word, regs, emu.boot.local)
+            why = self._insert_effect(word, name, effect, operands, trace, j)
             if effect is None:
                 fields = [(f, word[f.id]) for f in UNITS["op_slot"].fields]
-                why = f"{name}: outside what its op semantics covers"
-            elif effect.writes:
-                why = (
-                    f"{name} ({effect.note}): the words that may read the register are "
-                    "undecoded"
-                )
-            elif effect.stores:
-                why = f"{name} ({effect.note}): the copy's request in local memory may change"
-            else:
-                why = ""
         if not why:
             assert sem is not None and effect is not None
             trace.classes = min(trace.classes, sem.confidence)
-            trace.notes.append(
-                f"inserted word {j}: {name}, {effect.note or 'no effect'}; where a datum it "
-                "reads goes is open"
-            )
+            if not effect.computes:
+                note = (
+                    f"{effect.note or 'no effect'}; where a datum it reads goes is open"
+                )
+            else:
+                note = effect.note
+            trace.notes.append(f"inserted word {j}: {name}, {note}")
             return
         if emu.strict:
             raise UnknownSemantics(j, f"inserted word {j}", fields, why)
         trace.ignored.append((j, [f.id for f, _ in changed]))
         trace.taint = H
+
+    def _insert_effect(
+        self,
+        word: Word,
+        name: str,
+        effect: Effect | None,
+        operands: "Operands16 | None",
+        trace: Trace,
+        j: int,
+    ) -> str:
+        """Apply an inserted word's effect; returns why it is not covered ("" when it is)."""
+        if effect is None:
+            return f"{name}: outside what its op semantics covers"
+        if effect.stores:
+            return (
+                f"{name} ({effect.note}): the copy's request in local memory may change"
+            )
+        if not effect.computes:
+            if any(f.unit == "pr" for f, _ in word.changed(IDLE)):
+                return f"{name}: a PR port enabled, where its datum goes is open"
+            return ""
+        dests, _, why = destinations(word)
+        if why:
+            return f"{name} ({effect.note}): {why}"
+        if operands is None:
+            return (
+                f"{name} ({effect.note}): its result has no modelled reader off the "
+                f"site after word {ENGINE_AFTER}"
+            )
+        for to, r, _ in dests:
+            if to is RegSet.OPERAND:
+                operands.write(j, r, effect.result)
+            elif r in self.late_writes:
+                trace.writes[r] = None
+                trace.notes.append(
+                    f"inserted word {j} writes r{r}, which a stock word after it writes too"
+                )
+            else:
+                trace.writes[r] = effect.result
+        return ""
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
         """Run the job's word at `index` by what covers it: the idle word; X2's semantic, a
@@ -836,7 +951,14 @@ class Copy16Model:
         halted = self._halt(job, trace, view)
         if halted is not None:
             return halted
-        plan = self.resolve(trace, boot.regs, view, emu.sequencer, job.program.words)
+        late = boot.regs
+        if trace.writes:
+            late = RegisterFile(list(boot.regs.regs))
+            for r, v in trace.writes.items():
+                late[r] = v
+        plan = self.resolve(
+            trace, boot.regs, view, emu.sequencer, job.program.words, late
+        )
         return self._apply(boot, plan, trace, view)
 
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
@@ -887,8 +1009,10 @@ class Copy16Model:
         view: JobView,
         sequencer: Sequencer,
         words: tuple[Word, ...],
+        late: RegisterFile | None = None,
     ) -> Plan:
-        """The plan of a job of the program `words`."""
+        """The plan of a job of the program `words`; `late` holds the registers as the
+        transfers after the engine site see them (`Trace.writes`)."""
         length = view.length
         assert length is not None
         stock = self.program.words
@@ -942,7 +1066,9 @@ class Copy16Model:
         roles = []
         for role, t, assigned in filled:
             pre = min(assigned, t.taint)
-            conf = min(pre, self._role(plan, role, t, pre, regs, view))
+            at = late if late is not None and t.index > ENGINE_AFTER else regs
+            written = t.index > ENGINE_AFTER and t.reg in trace.writes
+            conf = min(pre, self._role(plan, role, t, pre, at, view, written))
             roles.append((role, conf))
         base = min(plan.cap, trace.classes, *(c for _, _, c in plan.outcomes))
         plan.load_taint = min([base, *(c for r, c in roles if r.load)])
@@ -1009,10 +1135,12 @@ class Copy16Model:
         pre: Confidence,
         regs: RegisterFile,
         view: JobView,
+        written: bool = False,
     ) -> Confidence:
         """Apply `role` at the transfer's register; returns the confidence of what it did.
 
-        An outcome it records gets `pre`, the confidence of the assignment, at most.
+        An outcome it records gets `pre`, the confidence of the assignment, at most. A value an
+        inserted word wrote (`written`) that the role cannot place raises UnknownSemantics.
         """
         length = view.length
         assert length is not None
@@ -1032,6 +1160,8 @@ class Copy16Model:
             return table
         conf = role.use_at(stock, length)
         value = regs[reg]
+        if written:
+            self._check_written(role, t, value, length)
         if value is not None:
             conf = min(conf, value.taint)
         match role.use:
@@ -1070,6 +1200,40 @@ class Copy16Model:
                         index, role.name, [(lookup("xreg"), reg)], role.fact
                     )
         return conf
+
+    def _check_written(
+        self, role: Role, t: Transfer, value: Reg | None, length: int
+    ) -> None:
+        """Raise unless the load offset or count role can place `value`, written by an
+        inserted word: known and not negative (word 68's rounding of negative values is open:
+        truncation fits the register sweep, flooring the op sweep); for the load offset one
+        placement over the interval, inside the buffer (beyond it no load was seen, and the
+        store then emits an older job's bytes); for the count an exact multiple of 16 up to
+        len (how a count rounds below 16 bytes and what one above len does are open: a floor
+        fits the inserted counts, not an odd-length copy's; a full copy then a timeout was
+        seen, and so was an overrun on another route)."""
+        if role.use not in (Use.LOAD_OFFSET, Use.COUNT):
+            return
+        what = None
+        if value is None:
+            what = "a value the model does not know"
+        elif value.lo < 0:
+            what = "a negative value"
+        elif role.use is Use.LOAD_OFFSET and value.image(_floor32) is None:
+            what = "a value interval with two placements"
+        elif role.use is Use.LOAD_OFFSET and _floor32(value.hi) + length > BUFFER_HI:
+            what = "a load offset beyond the buffer"
+        elif role.use is Use.COUNT and (value.exact is None or value.exact % 16):
+            what = "a count that is no exact multiple of 16"
+        elif role.use is Use.COUNT and value.exact > length:
+            what = "a count above len"
+        if what is not None:
+            raise UnknownSemantics(
+                t.index,
+                role.name,
+                [(lookup("xreg"), t.reg)],
+                f"r{t.reg} holds {what}, written by an inserted word",
+            )
 
     def _apply(self, boot: Boot, plan: Plan, trace: Trace, view: JobView) -> JobResult:
         if plan.has(Outcome.HAZARD):
