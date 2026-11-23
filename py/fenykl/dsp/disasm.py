@@ -151,7 +151,7 @@ def source(
 ) -> str:
     """Python source that rebuilds `program` from slot objects (constants left out).
 
-    With `labels` (`program.labels(statements, origin)`) the source is a statement
+    With `labels` (`labels(statements, origin)` of `program.py`) the source is a statement
     list for `assemble(..., origin=origin)`: each label before its word, a control op whose
     target has a label as a `Ctl`; the comments give word indices from `origin`."""
     classes = ", ".join(cls for cls in (u.cls_name for u in UNITS.values()))
