@@ -848,8 +848,9 @@ S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2; L0 wri
 port then read by S0, L1 by S1's then S1); a head in the port's own word, and U, were not
 measured."""
 LANE_THIRD_FILE = (
-    "U, a third kind of lane register file, 16 registers named by f31_34 (inferred, fitted: 16 "
-    "values of f31_34 gave 16 different fills of power-up content), whose lanes 0..3 are the "
+    "U, a third kind of lane register file, 16 registers named by f31_34 (verified on the "
+    "camera, pre-registered: sixteen values written through f141_144 = 0..15 read back by "
+    "number), whose lanes 0..3 are the "
     "carry lanes of S3's lane shifts: a shift up by n = 1..4 fills its top n lanes from U's lanes "
     "0..n-1, a shift down by m = 1..4 its bottom m lanes from U's lanes 4-m..3 (verified on "
     "the camera, pre-registered, 0x1b). Its port is f141_144 under f232_233 = 1, "
@@ -954,11 +955,12 @@ LANE_MEMORY = (
     "source byte, zero-extended, source byte 32 n at vector n lane 0 at placement 0, and its "
     "store writes each element's low 8 bits (verified on the camera, pre-registered: a stock "
     "copy in, an own vector program, a stock copy out, exact on 512 + 512 + 4096 bytes). "
-    "Timing: a store head three words after O's port write stores the new content (verified, "
-    "pre-registered); one in the same word as the write stores the old content of O, a load one "
-    "word after a store to the same vector reads the stored vector, and four loads in "
-    "consecutive words land in four consecutive port words (measured on the camera, not "
-    "pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
+    "Timing: a store head in the word of O's port write stores the old content of O, one, two "
+    "or three words later the new content; a load one or two words after a store to the same "
+    "vector reads the stored vector, and a store one, two or three words after a load of its "
+    "vector does not change what the load delivers (verified on the camera, pre-registered); "
+    "four loads in consecutive words land in four consecutive port words (measured on the "
+    "camera, not pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
     "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
     "output), so "
     "a job can leave data, such as a layer's weights, for the next"
@@ -1273,9 +1275,8 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             "b where bit 1 of the nibble f88_91 is set, else a",
             V,
             (
-                "pre-registered at f88_91 = 2, 3, 8, 9, 10, 12 and 13 and met on all 32 lanes, "
-                "the port in the head's word; at the other values measured, the rule fitted "
-                "on them (inferred)"
+                "pre-registered at all sixteen values of f88_91 (seven on all 32 lanes, nine on "
+                "four lanes), the port in the head's word"
             ),
         ),
         **_rows((0x08, 0x0D), "b", V),
@@ -1329,21 +1330,20 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             (
                 "down by 1..4 (f92_95 = 15..12) pre-registered on all 32 lanes; up by 1..4 "
-                "pre-registered on lanes 24..31, up by 2 also on 30 lanes (with U's lanes "
-                "0..3 holding b's own lanes 0..3), lanes 0..23 at 1, 3 and 4 the rule's "
-                "(inferred); U's register named by f31_34 (verified: two registers read back by "
-                "number); f92_95 = 5..11 b (measured, the pre-registered shift missed: inferred)"
+                "pre-registered on lanes 0..4, 15 and 24..31 with U's lanes moved in, up by 2 "
+                "also on 30 lanes; U's register named by f31_34 (verified: all sixteen read "
+                "back by number); f92_95 = 5..11 b, no move (pre-registered at each count)"
             ),
         ),
         **_rows(
             (0x1C, 0x22),
-            "as 0x1b at f92_95 = 2, 3, 4 and 13; other counts not predicted",
+            "as 0x1b at f92_95 = 1..5, 8 and 11..15; 6, 7, 9 and 10 not predicted",
             V,
-            "pre-registered at 3 and 13 on all 32 lanes, at 4 on lanes 0..27 and (0x1c) at 2 on "
-            "lanes 0..29; at 14 as 0x1b too on all 32 lanes, measured, not pre-registered "
-            "(inferred); the result takes the lower of this tier and 0x1b's at the count; an earlier "
-            "run fitted all three heads alike at every count (inferred), the other counts not "
-            "pre-registered for these two heads; they differ from 0x1b in what U's port takes "
+            "pre-registered at 3 and 13 on all 32 lanes, at 4 on lanes 0..27, (0x1c) at 2 on "
+            "lanes 0..29, and at 1, 5, 8, 11, 12, 14 and 15 on six edge lanes with U's lanes "
+            "moved in; an earlier run fitted all three heads alike at every count (inferred), "
+            "6, 7, 9 and 10 not pre-registered for these two heads; they differ from 0x1b in "
+            "what U's port takes "
             "beside them "
             "(`LANE_THIRD_FILE`); 0x22 wrote nothing while F3 held power-up content",
         ),
@@ -1631,8 +1631,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         (
             "S3's: bit 2 is bit 4 of the lane 0x10 inserts (verified on the camera: inserts at "
             "lanes 0..31 read back as built) and 0xe / 0xf extract; bits 3..2 are bits 5..4 of "
-            "S3 0x11's immediate (verified on the camera, pre-registered on fresh values), and "
-            "0x16 / 0x17 ignore it (inferred, fitted); as a whole the register of U that the lane "
+            "S3 0x11's immediate (verified on the camera, pre-registered on fresh values); "
+            "0x17 ignores it (verified on the camera, pre-registered at two values) and 0x16 "
+            "too (inferred, fitted); as a whole the register of U that the lane "
             "shifts read (verified on the camera, pre-registered: U[3] and U[9] read back by "
             f"number through 0x1b): {LANE_THIRD_FILE}"
         ),
@@ -1741,7 +1742,7 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f88_91": (
-        I,
+        V,
         (
             f"Under S2 head 0xe the register of F2 it returns ({EXACT}); t, the scalar S2's lane "
             "heads read (verified on the camera by S2's pre-registered function table). Its bits "
@@ -1749,11 +1750,11 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "verified on the camera, pre-registered) and under S2 0xc bits 2..0 of the lane read, "
             "its bit 0 without effect (verified on the camera, pre-registered). Under S2 0x7 its "
             "bit 1 chooses b over a (`LANE_FUNCTIONS`; verified on the camera, pre-registered "
-            "at seven values; at the other nine measured and fitted: inferred)"
+            "at all sixteen values)"
         ),
     ),
     "f92_95": (
-        I,
+        V,
         (
             "S3's lane select: the lane itself under 0xe, 0xf and 0x10 (with f31_34 bit 2 as bit "
             "4), the register of F3 whose value & 31 is the lane under 0x15, 0x16 and 0x17 "
@@ -1761,9 +1762,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "pre-registered by nibble, the & 31 pre-registered); bits 3..0 of 0x11's immediate "
             "(verified on the camera, pre-registered); the signed shift count of 0x1b, 0x1c and "
             "0x22, used at -4..+4 (`LANE_FUNCTIONS`: for 0x1b down by 1..4 verified on all 32 "
-            "lanes and up by 1..4 on lanes 24..31, pre-registered; 0x1c and 0x22 at 3, 4 and "
-            "13) and 5..11 no shift under 0x1b (measured, the "
-            "pre-registered shift missed: inferred)"
+            "lanes and up by 1..4 on lanes 0..4, 15 and 24..31, pre-registered; 0x1c and 0x22 "
+            "at eleven counts) and 5..11 no shift (verified on the camera, pre-registered at "
+            "each count under 0x1b)"
         ),
     ),
     "f96_99": (
@@ -2570,8 +2571,10 @@ RING_STEP = (
 )
 LOAD_DATUM = (
     "a load's datum goes to no register by itself: it appears on the ALU result bus exactly "
-    "three words after the load, where a word with an idle op and f272_273 = 1 or f270_271 = 1 "
-    "takes it; a data op in that word wins and the datum is lost; consecutive loads deliver in "
+    "three words after the load, where a word with f272_273 = 1 or f270_271 = 1 takes it, also "
+    "a word with a branch, a store, a load or a multiply; the bus ORs it with the result of a "
+    "data op or of op 0 in that word and with a product arriving there (verified on the camera, "
+    "pre-registered on values whose bits are not nested); consecutive loads deliver in "
     f"consecutive words ({EXACT})"
 )
 FAMILIES = (

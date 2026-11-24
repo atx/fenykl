@@ -339,10 +339,11 @@ such a port write four words later, and none lacks its head (379 words; verified
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
 occur and were not run, `fields.STORE_SOURCES`), the moves tried in the head's own word and the
-arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head three
-words after O's port write stores the new content [verified]; one in the same word as the write
-stores the old content, a load one word after a store to the same vector reads it back, and four
-loads in consecutive words land in four consecutive port words [inferred]. The lane memory keeps
+arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head in
+the word of O's port write stores the old content, one to three words later the new content; a
+load one or two words after a store to the same vector reads it back, and a store up to three
+words after a load of its vector does not change the load [verified]; four loads in consecutive
+words land in four consecutive port words [inferred]. The lane memory keeps
 its content across jobs within a boot [verified, pre-registered: vectors 0x40..0x7f read back after
 later jobs]. Each head and its even / odd twin showed no
 difference in address, lanes, element width or scalar result, and none writes A back
@@ -434,9 +435,11 @@ same address as the unsigned reading); the register forms use ra + w x rb. The s
 0x0c write the low 32 / 16 / 8 bits of R[f120_122] (register forms 0x19 / 0x13 / 0x0d); the
 loads are 0x1a 32-bit, 0x16 signed and 0x14 unsigned 16-bit, 0x10 unsigned and 0x0e signed 8-bit
 (register forms 0x1b, 0x17, 0x15, 0x11, 0x0f). A load's datum goes to no register by itself: it
-appears on the ALU result bus exactly three words after the load, where a word with an idle op
-and f272_273 = 1 or f270_271 = 1 takes it; a data op in that word wins and the datum is lost;
-consecutive loads deliver in consecutive words (verified by exact readout). Stepping records a
+appears on the ALU result bus exactly three words after the load, where a word with
+f272_273 = 1 or f270_271 = 1 takes it; the bus ORs it with a data op's result and with a
+multiply's product arriving in that word, and a word with a branch, a store, a load or a
+multiply takes it alone; consecutive loads deliver in consecutive words (verified by exact
+readout). Stepping records a
 load's read only and makes a store's bytes unknown, since R is not modelled; an access at an
 address not aligned to its width has no semantics. The resampler's word that reads tap 1 is a
 0x16 with imm 1; on the camera, with ra kept (one run each):
@@ -809,10 +812,10 @@ boot.local.read(
 
 `Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,
 a `Branching`, to decide ops 0..2 on G[ra]). One clock rule: every unit reads the state from
-before the word and every port write lands at its end; a head that reads a register a port
-writes in its own word gets the old value at hypothesis. Buses carry a value in the word it
-arrives in: the op result in its word, a product one word later, a local load's datum three
-words later (a data op in that word wins), a lane load four words after its X0 head, a lane
+before the word and every port write lands at its end; a unit that reads a register a port
+writes in its own word gets the old value (verified for every register file). Buses carry a
+value in the word it arrives in and OR what arrives together: the op result in its word, a
+product one word later, a local load's datum three words later, a lane load four words after its X0 head, a lane
 head's result `LANE_LAG` words after the head for that word only (a head without a measured lag
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
 reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
