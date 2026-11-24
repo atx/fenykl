@@ -782,10 +782,9 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
   and its ports' registers unknown. An undecided branch raises in
   strict mode and stops the run in lenient mode. Every taken control op jumps after its own
-  four following words, also a control op in another's delay slots and one whose target is one
-  of its own slots [verified for a taken br in a br's first slot and a loop end into its third
-  slot; any other such step is inferred at most]. A decided branch takes the decision's tier;
-  a call or return the plain stepper derives from its stack is inferred at most. On the camera
+  four following words, also a control op in a taken control op's delay slots and one whose
+  target is one of its own slots [verified for a taken br in a br's first slot and a loop end
+  into its third slot; any other such step is inferred at most]. On the camera
   op 3 is a jump and op 4 jumps to the word G[f128_132] names [verified]: with a `datapath` the
   stepper takes op 4's target from that register (undecided while it is unknown) and keeps no
   stack.

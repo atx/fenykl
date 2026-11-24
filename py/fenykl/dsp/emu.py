@@ -516,7 +516,7 @@ class Executor:
                 i, word.op, taken=True, note=f"to {to}, {reg}", confidence=tier
             ), to
         # Without a datapath the stepper infers the link from the stock convention.
-        link_conf = min(conf, Confidence.INFERRED)
+        conf = min(conf, Confidence.INFERRED)
         if word.op == 3:
             back = i + DELAY_SLOTS + 1
             stack.append(Link(back))
@@ -526,7 +526,7 @@ class Executor:
                 target=t,
                 taken=True,
                 note=f"returns to {back}",
-                confidence=link_conf,
+                confidence=conf,
             ), t
         if word.op == 4:
             if not stack:
@@ -538,7 +538,7 @@ class Executor:
                 )
             back = link.back
             return Step(
-                i, word.op, taken=True, note=f"to {back}", confidence=link_conf
+                i, word.op, taken=True, note=f"to {back}", confidence=conf
             ), back
         b = self.branching.decide(i, visit, word, self.boot.slot, self.boot.regs)
         ra = f"r{word['ra']}"

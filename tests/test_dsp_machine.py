@@ -605,27 +605,20 @@ def test_a_halt_in_a_jumps_delay_slots_raises_with_only_idle_ops_behind_it():
         Executor(boot, datapath=Machine(boot)).step(Job(Program(words), ()))
 
 
-def control_tiers(words: list[Word], **regs: int) -> dict[int, Confidence | None]:
+def control_tiers(words: list[Word]) -> dict[int, Confidence | None]:
     """The tier of each control word's step, by index."""
     boot = Boot()
-    m = Machine(boot)
-    for name, value in regs.items():
-        m.g[int(name[1:])] = Sv(value)
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
-    flow = Executor(boot, datapath=m).step(
-        Job(Program((*words, halt, *[IDLE] * 3)), ())
-    )
+    program = Program((*words, halt, *[IDLE] * 3))
+    flow = Executor(boot, datapath=Machine(boot)).step(Job(program, ()))
     return {s.index: s.confidence for s in flow.steps if s.taken is not None}
 
 
-@pytest.mark.parametrize(("slot", "tier"), [(1, V), (2, I)])
-def test_a_branch_in_a_branchs_slots_is_verified_in_the_first_slot_only(slot, tier):
-    words = [control(2, 8, ra=11), *[IDLE] * 13]
-    words[slot] = control(2, 13, ra=11)
-    assert control_tiers(words, r11=1) == {0: V, slot: tier}
+def test_a_jump_in_a_jumps_delay_slots_is_inferred():
+    words = [control(3, 8), control(3, 13), *[IDLE] * 12]
+    assert control_tiers(words) == {0: V, 1: I}
 
 
-@pytest.mark.parametrize(("target", "tier"), [(3, V), (2, I)])
-def test_a_loop_end_into_its_own_slots_is_verified_into_the_third_only(target, tier):
-    words = [control(0, target, ra=8), *[IDLE] * 5]
-    assert control_tiers(words, r8=1) == {0: tier}
+@pytest.mark.parametrize(("target", "tier"), [(6, V), (2, I)])
+def test_a_jump_into_its_own_delay_slots_is_inferred(target, tier):
+    assert control_tiers([control(3, target), *[IDLE] * 5]) == {0: tier}
