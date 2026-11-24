@@ -2,19 +2,27 @@
 engine, run word by word under `emu.Executor.step`'s control flow.
 
 One clock rule: every unit reads the state from before the word, and every port write lands at the
-word's end, so a register a port writes in word t is read from word t + 1 on (verified on the camera
-for G, R, A, the lane files L0..L3 and the scalar files). A head that reads a register a port writes
-in its own word reads the old value, which was not measured: such a read is a hypothesis. Buses
-carry values in the word they arrive in, counted in executed words:
+word's end, so a register a port writes in word t is read from word t + 1 on, and a unit that reads
+a register a port writes in its own word reads the old value (verified on the camera, each file
+with the port's value from another source than the reader: G by the op slot and by op 0's
+decision, A by X0, B by X1, R by a store and by a ring step, F0..F3 by their read heads, L0..L3 by
+a head beside another unit's result, the unit's own previous result and a lane load, U by the lane
+shift, O by a lane store). The lane memory and the local memory are read in the load's word and
+written in the store's word (verified on the camera: a store one, two or three words after a load
+of its address does not change the load's datum, a load one or two words after a store reads the
+new content). Buses carry values in the word they arrive in, counted in executed words:
 
 - the ALU bus: the word's own op result; a multiply's product one word after the op; a local load's
-  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); a data op in the word
-  wins over a delivery, whose datum is lost;
+  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
+  whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
+  arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
+  whose bits are not nested);
 - X0's and X1's results in their head's word; under the M strobe (f276 = 0) X0's result bus carries
   M's value instead (`fields.S_RESULTS`);
 - a lane head's result on its unit's bus for exactly one word, `fields.LANE_LAG` words after the head
   (a port at another word writes nothing); a head whose lag was not measured puts its result on the
-  bus at both lags 0 and 1 as a hypothesis;
+  bus at both lags 0 and 1 as a hypothesis; a lag-1 result and the next word's lag-0 result of
+  one unit are OR-ed on its bus (verified on the camera in S0, S1, S2 and S3);
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing;
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
@@ -157,13 +165,6 @@ U_TAKES = {
 U_NOTHING = (0x18, 0x19, 0x22, 0x14)
 """S3 heads beside which U's port wrote nothing (measured on the camera)."""
 LANE_SHIFTS = (0x1B, 0x1C, 0x22)
-STORE_SETTLE = 3
-"""Words from O's port write to a store head that stores the new content (verified); a store in
-the write's own word stores the old content (inferred); 1 and 2 words were not measured."""
-DELIVERING_OPS = (IDLE_OP, 1)
-"""Ops of a word that a delivery on the ALU bus reaches: the idle op and brf, which has no result
-of its own (the stock copy's brf took a load's datum into G through 272 / 1, measured on the camera
-by prefix dumps: inferred, so a datum delivered into a brf word is at most inferred)."""
 HALF = 1 << 16
 
 
@@ -254,8 +255,6 @@ class Machine:
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
-        self.o_written: dict[int, int] = {}
-        self._writes: set[tuple[str, int]] = set()
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -287,8 +286,7 @@ class Machine:
     # ------------------------------------------------------------------ reads
 
     def _rd(self, file: str, reg: int) -> Sv:
-        v = self._file(file)[reg]
-        return _cap(v, H) if (file, reg) in self._writes else v
+        return self._file(file)[reg]
 
     _rv = _rd
 
@@ -296,7 +294,6 @@ class Machine:
 
     def execute(self, index: int, word: Word, t: int) -> str:
         """Run word `word` (program index `index`) as executed word number `t`; returns a note."""
-        self._writes = self._port_targets(word)
         notes: list[str] = []
         alu = self._op_slot(index, word, t, notes)
         bus = self._bus(word, alu, t)
@@ -321,23 +318,6 @@ class Machine:
         ):
             due.pop(t, None)
         return "; ".join(notes)
-
-    def _port_targets(self, word: Word) -> set[tuple[str, int]]:
-        out = set()
-        for enable, reg in PR_ENABLES.items():
-            if word[enable] != lookup(enable).idle:
-                out.add((PR_FILES[enable], word[reg]))
-        for enable, file in PB_FILES.items():
-            if word[enable] != lookup(enable).idle:
-                out.add((file, word[PORTS[enable]]))
-        for enable, file in LANE_PORT_FILE.items():
-            if word[enable] != lookup(enable).idle:
-                out.add((file, word[PORTS[enable]]))
-        if word["f252_254"] != lookup("f252_254").idle:
-            out.add(("O", word["f179_181"]))
-        if word["f232_233"] == 1:
-            out.add(("U", word["f141_144"]))
-        return out
 
     def _op_slot(self, index: int, word: Word, t: int, notes: list[str]) -> Sv | None:
         """The op slot: its result on the ALU bus this word (None: no result), its deliveries
@@ -404,14 +384,9 @@ class Machine:
         else:
             step = self._rd("R", word["f120_122"])
             step = Sv(None if step.value is None else _s32(step.value), step.tier)
-        length = (
-            (c if code != 0x47 else rb.value)
-            if code != 0x47 or rb.value is not None
-            else None
-        )
+        length = rb.value if code == 0x47 else c & 0xFF
         if step.value is None or length is None:
             return Sv(None, tier)
-        length &= 0xFF
         s = ra.value + step.value
         s = s + length if s < 0 else s - length if s >= length else s
         return Sv(s & M32, min(tier, step.tier))
@@ -458,16 +433,20 @@ class Machine:
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
-        due = self.bus_due.get(t, [])
+        parts = [v for v, _ in self.bus_due.get(t, [])]
         if alu is not None:
-            return alu
-        if word.op not in DELIVERING_OPS and due:
-            return UNKNOWN  # a delivery into a word with another op: not measured
-        if len(due) == 1:
-            return due[0][0] if word.op == IDLE_OP else _cap(due[0][0], I)
-        if due:
-            return UNKNOWN
-        return NOTHING
+            parts.append(alu)
+        if not parts:
+            return NOTHING
+        if len(parts) == 1:
+            return parts[0]
+        tier = min(v.tier for v in parts)
+        if any(v.value is None for v in parts):
+            return Sv(None, tier)
+        value = 0
+        for v in parts:
+            value |= v.value
+        return Sv(value, tier)
 
     # ------------------------------------------------------------------ X0, X1
 
@@ -523,11 +502,7 @@ class Machine:
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(_cap(v, tier))
             return
         reg = word["f69_71"]
-        v = self._rv("O", reg)
-        since = t - self.o_written.get(reg, -STORE_SETTLE)
-        if 0 < since < STORE_SETTLE:
-            v = _cap(v, H)
-        self.memory[addr] = _cap(v, tier)
+        self.memory[addr] = _cap(self._rv("O", reg), tier)
 
     # ------------------------------------------------------------------ S units
 
@@ -846,11 +821,17 @@ class Machine:
         due = self.lane_due.get(t, {}).get(unit, [])
         if not due:
             return NOTHING
-        if len(due) > 1:
-            return Vec(UNKNOWN_VEC.lanes, H)
-        low, high = due[0]
         if text == S2_HIGH:
+            high = due[-1][1] if len(due) == 1 else None
             return UNKNOWN_VEC if high is None else high
+        low = due[0][0]
+        for other, _ in due[1:]:
+            # A lag-1 result and the next word's lag-0 result on one bus: OR-ed (verified).
+            lanes = tuple(
+                None if x is None or y is None else x | y
+                for x, y in zip(low.lanes, other.lanes, strict=True)
+            )
+            low = Vec(lanes, min(low.tier, other.tier))
         return low
 
     def _file(self, file: str) -> list:
@@ -861,5 +842,3 @@ class Machine:
     def _commit(self, key: tuple[str, int], value, t: int) -> None:
         file, reg = key
         self._file(file)[reg] = value
-        if file == "O":
-            self.o_written[reg] = t

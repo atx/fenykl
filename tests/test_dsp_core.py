@@ -695,7 +695,7 @@ S3_NIBBLES = {
             0x22,
             lanes(),
             lanes(l0=6),
-            S3_NIBBLES | {"f92_95": 0xE},
+            S3_NIBBLES | {"f92_95": 9},
             {0: None, 2: None},
         ),
         (

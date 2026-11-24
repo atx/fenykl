@@ -1147,7 +1147,7 @@ def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [*[None] * -n, *b[:n]]
 
 
-SHIFT_COUNTS = (2, 3, 4, 13)
+SHIFT_COUNTS = (1, 2, 3, 4, 5, 8, 11, 12, 13, 14, 15)
 """The counts f92_95 at which S3 0x1c and 0x22 were pre-registered as 0x1b."""
 
 
@@ -1480,21 +1480,9 @@ _LANE_READS = {
 """The lane operands each S head's lane rule reads, from its rule; a head not listed reads both."""
 
 
-def _shift_tier(c: Scalars) -> Confidence:
-    """S3 0x1b: down by 1..4 verified on all 32 lanes; up by 1..4 pre-registered on part of the
-    lanes and f92_95 = 5..11 fitted: inferred."""
-    return V if c["f92_95"] in (12, 13, 14, 15) else I
-
-
-def _choice_tier(c: Scalars) -> Confidence:
-    """S2 0x7: pre-registered at f88_91 = 2, 3, 8, 9, 10, 12, 13, fitted at the others."""
-    return V if c["f88_91"] in (2, 3, 8, 9, 10, 12, 13) else I
-
-
-_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {
-    "s2": {0x07: _choice_tier},
-    "s3": {0x1B: _shift_tier, 0x1C: _shift_tier, 0x22: _shift_tier},
-}
+_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {}
+"""Per head a tier that depends on the word's scalars; none since every count of the lane shifts
+and every nibble of S2 0x7 was pre-registered."""
 
 
 def _lane_rules(unit: str) -> dict[int, LaneRule]:

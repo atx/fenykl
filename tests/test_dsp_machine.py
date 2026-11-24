@@ -13,10 +13,10 @@ from fenykl.dsp.semantics import (
     LANE_RULES,
     X_RULES,
     lane_result,
-    lane_tier,
     s_result,
     x_result,
 )
+from fenykl.dsp.state import Bytes
 from fenykl.dsp.word import IDLE, Word
 
 V, I = Confidence.VERIFIED, Confidence.INFERRED
@@ -220,11 +220,6 @@ def test_a_signed_compare_against_a_negative_immediate():
     assert s_result("s1", 0x2A, lanes, lanes, c) == 0
 
 
-@pytest.mark.parametrize(("count", "tier"), [(15, V), (12, V), (1, I), (6, I)])
-def test_a_lane_shift_takes_the_tier_of_its_count(count, tier):
-    assert lane_tier("s3", 0x1B, {"f92_95": count}) == tier
-
-
 def test_a_lane_shift_takes_the_tier_of_u(m):
     """Moving b down by one fills lane 0 from U, whose tier the result takes."""
     m.lanes["L3"][2] = Vec(B)
@@ -239,7 +234,7 @@ def test_a_lane_shift_takes_the_tier_of_u(m):
 def test_an_unpredicted_shift_count_takes_nothing_from_u(m):
     m.lanes["L3"][2] = Vec(B)
     m.u[3] = Vec((0x77,) * 32)
-    shift = w(f296_301=0x1C, f65_68=2, f92_95=5, f31_34=3, **l3_port(9, 0))
+    shift = w(f296_301=0x1C, f65_68=2, f92_95=6, f31_34=3, **l3_port(9, 0))
     run(m, [shift])
     assert m.lanes["L3"][9].lanes == (None,) * 32
 
@@ -265,3 +260,106 @@ def test_another_units_held_mask_is_not_on_m(m):
         ],
     )
     assert m.f["F1"][3] == Sv(0x1234, I)
+
+
+def op_word(
+    code: int, ra: int, rb: int | None = None, imm: int | None = None, **fields: int
+) -> Word:
+    return Word.from_fields(
+        fields, base=Word.data(code, Operands(ra, rb, imm), base=IDLE)
+    )
+
+
+def test_an_op_reads_the_old_value_of_a_register_another_source_writes(m):
+    m.g[12], m.g[13] = Sv(0x1000), Sv(1)
+    x0_imm = {
+        "f302_307": 0x13,
+        "f105_109": 0xD,
+        "f2_6": 2,
+        "f1": 1,
+    }  # X0's result: 0x345
+    word = op_word(
+        0x35, 12, 13, **x0_imm, f272_273=2, f224_228=12, f270_271=1, f221_223=0
+    )
+    run(m, [word])
+    assert m.r[0] == Sv(0x1001)
+    assert m.g[12] == Sv(0x345)
+
+
+def test_a_head_reads_the_old_vector_of_a_register_its_port_writes(m):
+    m.lanes["L1"][1] = Vec(A)
+    m.lanes["L1"][2] = Vec(B)
+    m.lanes["L1"][5] = Vec((0x1111,) * 32)
+    add = {"f285_291": 0x34, "f49_52": 2}
+    words = [
+        w(**add, f45_48=1),
+        w(
+            **add, f45_48=5, f242_243=2, f159_162=5
+        ),  # reads L1[5] while the first sum lands in it
+        w(**l3_port(8, 2)),
+    ]
+    run(m, words)
+    assert m.lanes["L1"][5] == Vec(tuple(a + b for a, b in zip(A, B, strict=True)))
+    assert m.lanes["L3"][8] == Vec(tuple(0x1111 + b for b in B))
+
+
+def test_a_lane_store_in_the_word_of_os_port_stores_the_old_vector(m):
+    m.a[1] = Sv(0x60)
+    m.lanes["L3"][1] = Vec(A)
+    m.o[1] = Vec(B)
+    o_port = {"f296_301": 0x19, "f65_68": 1, "f252_254": 1, "f179_181": 1}
+    store = {"f302_307": 0x1A, "f100_104": 1, "f105_109": 0, "f1": 0, "f69_71": 1}
+    run(m, [w(**o_port, **store, f2_6=0), w(**store, f2_6=1)])
+    assert m.memory[0x60] == Vec(B)
+    assert m.memory[0x62] == Vec(A)
+
+
+def test_the_alu_bus_ors_a_product_with_the_ops_result(m):
+    m.g[11], m.g[9] = Sv(7), Sv(0x123)
+    words = [
+        op_word(0x49, 11, 9),
+        op_word(0x0B, 31, imm=0x1808, f272_273=1, f224_228=12),
+    ]
+    run(m, words)
+    assert m.g[12] == Sv(0x7F5 | 0x1808)
+
+
+def test_a_datum_reaches_a_word_whose_op_has_no_result(m):
+    src = m.boot.source("test", "a known local word")
+    m.boot.local.write(
+        LOCAL_BASE + 0x100, Bytes.of((0x4106).to_bytes(4, "little"), src)
+    )
+    m.g[5], m.g[11] = Sv(0), Sv(7)
+    brf = Word.from_fields(
+        {"ra": 11, "f272_273": 1, "f224_228": 12}, base=Word.ctl(1, 9, base=IDLE)
+    )
+    run(m, [op_word(0x1A, 5, imm=0x40), IDLE, IDLE, brf])
+    assert m.g[12].value == 0x4106
+
+
+@pytest.mark.parametrize(
+    ("ra", "r", "rb", "want"),
+    [
+        (0x80001234, 5, 0x80000000, 0x1239),
+        (0xFFFFFFF0, 0x20, 0x100, 0xFFFFFF10),
+        (2, -5, 0x12345, 0x12342),
+        (0x150, 3, 0x1FF, 0x153),
+        (0x1234, 0x707, 0xFFFFFFF3, 0x193B),
+    ],
+)
+def test_the_ring_step_takes_its_length_from_all_of_rb(m, ra, r, rb, want):
+    m.g[10], m.g[11], m.r[1] = Sv(ra), Sv(rb), Sv(r & 0xFFFFFFFF)
+    run(m, [op_word(0x47, 10, 11, f120_122=1, f272_273=1, f224_228=12)])
+    assert m.g[12].value == want
+
+
+def test_a_unit_bus_ors_a_late_result_with_the_next_words_own(m):
+    m.lanes["L1"][1] = Vec(A)
+    m.lanes["L1"][2] = Vec(B)
+    words = [
+        w(f285_291=0x34, f45_48=1, f49_52=2),  # a + b, on the bus one word later
+        w(f285_291=0x03, f45_48=1, f49_52=2, **l3_port(8, 2)),  # a & b, in its own word
+    ]
+    run(m, words)
+    want = tuple((a + b) | (a & b) for a, b in zip(A, B, strict=True))
+    assert m.lanes["L3"][8] == Vec(want)
