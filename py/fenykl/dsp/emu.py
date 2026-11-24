@@ -447,20 +447,28 @@ class Executor:
         self, tail: tuple[Word, ...], at: int, steps: list[Step], jumps: list[list[int]]
     ) -> None:
         """The words behind a halt that still run (`HALT_TAIL`), on a `datapath` only: plain
-        stepping ends at the halt. Measured with data words in program order: a pending jump,
-        or a control or halt word among them, raises; words past the program's end are not run."""
+        stepping ends at the halt. They run in program order and the job ends after them
+        (verified on the camera with data words; with the halt in a taken op 3's first delay
+        slot, the jump not taken; with an op 3 as the second of them, its jump not taken). A
+        jump due inside them, another control word or a halt among them raises; words past the
+        program's end are not run."""
         if self.datapath is None:
             return
-        if jumps and any(word.op != IDLE_OP for word in tail):
+        if any(left <= HALT_TAIL for left, _ in jumps) and any(
+            word.op != IDLE_OP for word in tail
+        ):
             raise UnknownSemantics(
-                at - 1, "halt", [], "a halt in a taken jump's delay slots"
+                at - 1, "halt", [], "a jump due among the words behind a halt"
             )
         for i, word in enumerate(tail, at):
-            if word.control or word.op == HALT_OP:
+            jump = word.control and word.op == 3 and i - at == 1
+            if (word.control and not jump) or word.op == HALT_OP:
                 raise UnknownSemantics(
                     i, op(word.op).name, [], "a control op behind a halt"
                 )
             note = self.datapath.execute(i, word, len(steps))
+            if jump:
+                note = "a jump behind a halt: the job ends first"
             steps.append(Step(i, word.op, False, word.operands, note=note))
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:

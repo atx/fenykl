@@ -99,7 +99,7 @@ def test_the_mask_chain_holds_one_word(m):
     assert m.f["F0"][4].value is None  # never written
 
 
-def test_the_reduction_register_from_the_third_word(m):
+def test_a_reduction_is_on_m_in_the_third_word_only(m):
     m.lanes["L3"][4] = Vec(B)
     red = w(f296_301=0x0, f65_68=4)  # unsigned max
     read = {"f276": 0, "f274_275": 3, "f272_273": 2}
@@ -114,7 +114,8 @@ def test_the_reduction_register_from_the_third_word(m):
         ],
     )
     assert m.g[1].value is None  # nothing on M at lag 1: the port wrote nothing
-    assert m.g[2] == Sv(max(B)) == m.g[3]
+    assert m.g[2] == Sv(max(B))
+    assert m.g[3] == Sv(None, I)  # gone at lag 4: the port wrote nothing
 
 
 def test_an_extract_reads_only_its_lane(m):
@@ -459,20 +460,20 @@ def test_a_job_starts_with_the_registers_the_job_before_left(m):
     assert later.memory[0x70] == Vec(B)
 
 
-def test_a_new_reduction_is_on_m_again_after_an_extract_hid_the_old_one(m):
+@pytest.mark.parametrize("lag", [4, 8, 30])
+@pytest.mark.parametrize("between", [None, "extract", "copy"])
+def test_a_reduction_is_not_on_m_past_its_first_word(m, lag, between):
     m.lanes["L3"][1] = Vec(A)
     m.r[0] = Sv(0xDEAD)
     reduce = w(f296_301=0x2, f65_68=1)
-    extract = w(f296_301=0xF, f65_68=1, f92_95=5, f31_34=1, f276=0, f274_275=3)
+    other = {
+        None: IDLE,
+        "extract": w(f296_301=0xF, f65_68=1, f92_95=5, f31_34=1, f276=0, f274_275=3),
+        "copy": w(f296_301=0x19, f65_68=1),
+    }[between]
     read = w(f276=0, f274_275=3, f270_271=2, f221_223=0)
-    run(
-        m, [reduce, *[IDLE] * 4, extract, IDLE, read]
-    )  # the old register: gone after the extract
+    run(m, [reduce, IDLE, other, *[IDLE] * (lag - 3), read])
     assert m.r[0] == Sv(0xDEAD, I)
-    start = 8
-    for t, word in enumerate([reduce, extract, IDLE, IDLE, read], start):
-        m.execute(t, word, t)
-    assert m.r[0] == Sv(sum(A))
 
 
 def test_an_extract_meets_the_reduction_register_in_its_first_word_only(m):
@@ -546,3 +547,53 @@ def test_os_port_under_5_keeps_its_content_at_inferred(m):
     m.o[2] = Vec(B)
     run(m, [w(f296_301=0x19, f65_68=1, f252_254=5, f179_181=2)])
     assert m.o[2] == Vec(B, I)
+
+
+def test_m_is_quiet_in_the_own_word_of_a_head_without_a_result_there(m):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.r[0] = Sv(0x0A5A)
+    read = {"f276": 0, "f274_275": 1, "f270_271": 2, "f221_223": 0}
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2, **read)])
+    assert m.r[0] == Sv(0x0A5A)
+
+
+def test_u_port_without_an_s3_head_writes_nothing(m):
+    m.u[5] = Vec(A)
+    run(m, [w(f232_233=1, f141_144=5)])
+    assert m.u[5] == Vec(A)
+
+
+def test_a_jump_second_behind_a_halt_is_not_taken():
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    words = (
+        halt,
+        inc(16),
+        control(3, 7),
+        inc(16),
+        inc(16),
+        inc(16),
+        IDLE,
+        inc(17),
+        halt,
+    )
+    m = stepped(list(words), g16=0, g17=0)
+    assert (m.g[16], m.g[17]) == (Sv(2), Sv(0))
+
+
+def test_a_halt_in_a_taken_jumps_first_slot_wins():
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    words = (
+        control(3, 9),
+        halt,
+        inc(16),
+        inc(16),
+        inc(16),
+        inc(16),
+        halt,
+        IDLE,
+        IDLE,
+        inc(17),
+        halt,
+    )
+    m = stepped(list(words), g16=0, g17=0)
+    assert (m.g[16], m.g[17]) == (Sv(3), Sv(0))

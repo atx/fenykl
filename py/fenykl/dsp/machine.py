@@ -27,7 +27,7 @@ new content). Buses carry values in the word they arrive in, counted in executed
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing;
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
-  word; S3's reductions from the third word after the head on, held.
+  word; S3's reductions in the third word after the head only.
 
 Strict throughout: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
 give is unknown (None), and a value from a rule below verified carries that tier. Values are 32-bit
@@ -272,9 +272,6 @@ class Machine:
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
-        self.extract_at: int | None = None
-        """The word of the last extract under M beside a reduction register past its first
-        word: that register was not on M afterwards (measured on the camera twice: inferred)."""
         self.last_head: int | None = None
         """The word of the last S head run."""
         self._u_write: tuple[int, Vec] | None = None
@@ -754,19 +751,14 @@ class Machine:
 
     def _m(self, index: int, word: Word, own: dict[str, Sv], t: int) -> Sv | object:
         """M's value under f274_275's unit `sel`: an own-word result (f274_275 chooses among
-        several), else the unit's held result; S3's held one is its reduction register, unknown
-        before the job's first reduction. A held result of another unit is not on M (inferred),
-        so beside one M's value is at most inferred."""
+        several), else the unit's held result; S3's held one is a reduction's result, on M in its
+        first word only. A held result of another unit is not on M (inferred), so beside one M's
+        value is at most inferred."""
         sel = M_UNITS[word["f274_275"]]
         held = dict(self.held_due.get(t, {}))
-        ready = [(w, v) for w, v in self.reductions if w <= t]
-        fresh = None
-        if ready:
-            w, v = max(ready, key=lambda x: x[0])
-            held["s3"] = v
-            fresh = v if w == t else None
-        elif sel == "s3":
-            held["s3"] = Sv(None)
+        fresh = next((v for w, v in reversed(self.reductions) if w == t), None)
+        if fresh is not None:
+            held["s3"] = fresh
         tier = I if any(u != sel for u in held if u != "s3") else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
@@ -780,18 +772,15 @@ class Machine:
             return Sv(None, I if before in S_NEXT_VALUES.get(sel, ()) else H)
         h = held.get(sel)
         if not own:
-            gone = self.extract_at is not None and all(
-                w <= self.extract_at for w, _ in ready
-            )
-            if sel == "s3" and ready and gone:
-                return Kept(I)
             if h is not None:
                 return _cap(h, tier)
-            # Nothing on M behind a head without a result there: verified one word after 97
-            # heads of all four units and two and three words after 16, earlier heads further
-            # back in every cell; with no head before in the job it is inferred.
-            quiet = self.last_head is not None and t > self.last_head
-            return Kept(tier if quiet else min(tier, I))
+            # Nothing on M beside or behind a head without a result there: verified in the
+            # head's own word and one word after under every unit, two and three words after
+            # 16 heads; with no head before in the job it is inferred. Under S3 past a
+            # reduction's first word, also with no reduction, it is inferred: the register was
+            # gone at 4, 8 and 30 words, found after the run.
+            quiet = self.last_head is not None and t >= self.last_head
+            return Kept(tier if quiet and sel != "s3" else min(tier, I))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
@@ -805,8 +794,6 @@ class Machine:
             if fresh is None:
                 # Beside a register older than its first word the extract comes alone
                 # (verified: four, five, eight and twenty words after the reduction head).
-                if ready:
-                    self.extract_at = t
                 return _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (verified).
             if v.value is None or fresh.value is None:
@@ -875,11 +862,7 @@ class Machine:
             put("O", word["f179_181"], _cap(self._lane_source(text, t), tier))
         u = word["f232_233"]
         if u == 1:
-            if word[HEAD_IDS["s3"]] == lookup(HEAD_IDS["s3"]).idle:
-                self._u_write = (
-                    word["f141_144"],
-                    Vec(UNKNOWN_VEC.lanes, H),
-                )  # no S3 head: open
+            # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
             if self._u_write is not None:
                 put("U", *self._u_write)
         elif u != lookup("f232_233").idle and u not in (0, 2):
