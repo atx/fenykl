@@ -1160,6 +1160,21 @@ def _lookup(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [b[(k & 16) + a[k]] if a[k] < 16 else 0 for k in range(LANE_COUNT)]
 
 
+def _block_select(size: int) -> LaneValue:
+    """Block j of `size` lanes := b's block a[j] where a[j] is a block number, else 0: the
+    block numbers sit in a's first lanes, one per output block."""
+    blocks = LANE_COUNT // size
+
+    def select(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        out: Lanes = []
+        for j in range(blocks):
+            src = a[j]
+            out += b[src * size : (src + 1) * size] if src < blocks else [0] * size
+        return out
+
+    return select
+
+
 def _lane_numbers(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return list(range(LANE_COUNT))
 
@@ -1354,7 +1369,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x45: _select(lambda a, c: [c["r"]] * LANE_COUNT),
         0x46: _select(lambda a, c: a),
         0x4B: lambda a, b, c: [c["s"] >> k & 1 for k in range(LANE_COUNT)],
-        **dict.fromkeys(range(0x60, 0x7F), _open),
+        **dict.fromkeys(range(0x60, 0x7F), lambda a, b, c: list(a)),
     },
     "s1": {
         0x00: _signed(lambda x, y, c: ~y),
@@ -1422,7 +1437,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x52: _unsigned(lambda x, y, c: _sat_u(x + y)),
         0x53: _B,
         **dict.fromkeys(range(0x55, 0x60), _open),
-        **dict.fromkeys(range(0x60, 0x7F), _open),
+        **dict.fromkeys(range(0x60, 0x7F), lambda a, b, c: list(b)),
     },
     "s2": {
         **dict.fromkeys((0x00, 0x01), _signed(lambda x, y, c: y * c["imm"])),
@@ -1440,7 +1455,9 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
     "s3": {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
-        **dict.fromkeys((0x06, 0x07, 0x08), _open),
+        0x06: _open,
+        0x07: _block_select(8),
+        0x08: _block_select(16),
         0x09: _lookup,
         0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
         0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
@@ -1475,8 +1492,8 @@ class LaneRule:
 
 _LANE_READS = {
     "s0": _reads(
-        none=(0x42, 0x43, 0x4B, *range(0x60, 0x7F)),
-        a=(0x26, 0x27),
+        none=(0x42, 0x43, 0x4B),
+        a=(0x26, 0x27, *range(0x60, 0x7F)),
         b=(
             *(0x08, 0x09, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x14, 0x15, 0x16, 0x17),
             *(0x1A, 0x1B, 0x34, 0x35, 0x36, 0x37, 0x3A, 0x3B, 0x3C, 0x3D, 0x41, 0x4D),
@@ -1484,7 +1501,7 @@ _LANE_READS = {
         ),
     ),
     "s1": _reads(
-        none=range(0x55, 0x7F),
+        none=range(0x55, 0x60),
         a=(0x39, 0x3A),
         b=(
             0x00,
@@ -1511,11 +1528,12 @@ _LANE_READS = {
             0x4F,
             0x50,
             0x53,
+            *range(0x60, 0x7F),
         ),
     ),
     "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
     "s3": _reads(
-        none=(0x06, 0x07, 0x08, 0x11, 0x14, 0x18),
+        none=(0x06, 0x11, 0x14, 0x18),
         b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
     ),
 }

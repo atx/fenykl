@@ -868,3 +868,18 @@ def test_s3_0x9_looks_b_up_in_each_half():
     out = lane_result("s3", 0x09, a, b, S3_NIBBLES)
     assert out[:4] == [103, 0, 0, 100]
     assert out[16:20] == [116, 131, 0, 118]
+
+
+def test_s3_0x7_and_0x8_select_blocks_of_b_by_a_s_first_lanes():
+    b = list(range(100, 132))
+    a = [3, 0, 15, 0xFFFF] + [1] * 28
+    assert lane_result("s3", 0x07, a, b, S3_NIBBLES) == [*b[24:32], *b[0:8], *[0] * 16]
+    assert lane_result("s3", 0x08, a, b, S3_NIBBLES) == [*[0] * 16, *b[0:16]]
+    a = [1, 1, 2, 0] + [9] * 28
+    assert lane_result("s3", 0x07, a, b, S3_NIBBLES) == [
+        *b[8:16],
+        *b[8:16],
+        *b[16:24],
+        *b[0:8],
+    ]
+    assert lane_result("s3", 0x08, a, b, S3_NIBBLES) == [*b[16:32], *b[16:32]]

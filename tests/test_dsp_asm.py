@@ -80,7 +80,7 @@ def test_listing_names_ops_targets_and_delay_slots():
         "1..4 | idle x4",
         "5..6   idle x2",
         "7   ret!  op_slot: f128_132=r1!",
-        "8 | op1f~ r2, #0xc",
+        "8 | op1f! r2, #0xc",
         "9 | call! -> 10! ctl_n=1!",
     ]
 
@@ -123,10 +123,10 @@ def test_listing_shows_data_ops_in_their_format():
     text = listing(Program((shift, IDLE, signed, IDLE, wide, IDLE, reg)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body[::2] == [
-        "0   op3f~ r2, r2, #5",
-        "2   op0c~ r3, #-7  op_slot: f120_122=r1!",
-        "4   op0b~ r1, #0x2468",
-        "6   op49~ r1, r2  op_slot: imm=4!",
+        "0   op3f! r2, r2, #5",
+        "2   op0c! r3, #-7  op_slot: f120_122=r1!",
+        "4   op0b! r1, #0x2468",
+        "6   op49! r1, r2  op_slot: imm=4!",
     ]
 
 

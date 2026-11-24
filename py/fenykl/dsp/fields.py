@@ -947,14 +947,16 @@ LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
     "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
     | _lags(1, V, range(0x08, 0x0E), 0x1E, 0x1F, range(0x20, 0x24), range(0x26, 0x2E))
     | _lags(1, V, range(0x34, 0x40), 0x1C)
-    | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
-    "s1": _lags(0, V, range(0xA), 0x53)
+    | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D)
+    | _lags(1, V, range(0x60, 0x7F)),
+    "s1": _lags(0, V, range(0xA), 0x53, range(0x60, 0x7F))
     | _lags(1, V, range(0xA, 0x41), range(0x47, 0x53)),
     "s2": _lags(1, V, range(0x7)) | _lags(0, V, 0x7, 0x8, 0x9, 0xA, 0xB, 0xD),
     "s3": _lags(1, V, range(0xA, 0xE))
     | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
     | _lags(1, V, 0x9)
-    | _lags(1, H, 0x6, 0x7, 0x8),
+    | _lags(1, V, 0x7, 0x8)
+    | _lags(1, H, 0x6),
 }
 """Words from a head to the one word whose lane port takes its result, with the tier, by head (verified on the camera,
 pre-registered with the rule's lanes at that lag and a sentinel at the other: per head one cell
@@ -967,8 +969,8 @@ units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then 
 0 and met (verified). S0's clamps 0x9..0xd and carry-in adds 0x1e, 0x2a..0x2d and S1's floor
 shifts 0x16..0x19, 0x1f..0x22 and carry-in heads 0x32, 0x3d..0x40 at 1: pre-registered on four
 lanes each (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
-one word later wrote nothing (measured). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
-their rows open). The other heads' lags
+one word later wrote nothing (measured). S3 0x7, 0x8 at 1 and S1 0x60..0x7e at 0, S0's at 1:
+pre-registered (verified); S3 0x6 at 1 (hypothesis: it gives 0). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
 LANE_VECTORS = 0x400
@@ -1205,9 +1207,11 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x4B: ("bit k of s: 1 or 0", V, ""),
         **_rows(
             range(0x60, 0x7F),
-            "a at f37_40 = 1; A or 0 at other register numbers, never that register",
-            H,
-            "the rule open",
+            "a of the unit's last head in the job, the value it read then (latched), 0 with "
+            "none",
+            V,
+            "pre-registered for every head at lag 1 and 0, the latch against a rewrite of the "
+            "register and at a job's start; the head's own nibbles are ignored",
         ),
     },
     "s1": {
@@ -1284,13 +1288,13 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             "in both; 0x55 once b in its own word right after an 0x53",
         ),
         **_rows(
-            range(0x61, 0x7E),
-            "0 in one run",
-            H,
-            "0x60, 0x61, 0x62, 0x6f, 0x70 and 0x7e gave b in later runs",
-        ),
-        **_rows(
-            (0x60, 0x61, 0x62, 0x6F, 0x70, 0x7E), "0 or b, on a state not identified", H
+            range(0x60, 0x7F),
+            "b of the unit's last head in the job that read b, the value it read then "
+            "(latched), 0 with none",
+            V,
+            "pre-registered for every head at lag 0 and 1, the latch against a rewrite of the "
+            "register, at a job's start and after a head that reads a only (which keeps it); "
+            "the head's own nibbles are ignored",
         ),
     },
     "s2": {
@@ -1330,13 +1334,20 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             NO_LANE_LAGS,
         ),
         **_rows(range(0x25, 0x3F), NO_LANE, V, NO_LANE_LAGS),
-        **_rows(
-            (0x06, 0x07, 0x08),
-            "a window of b's lanes, 0 in the others",
-            H,
-            "the window follows a's content, not the scalars nor the words around the head: "
-            "0x6 gave 0 on every operand pair; 0x7 a block of b in lanes 0..15, 0x8 a 16-lane "
-            "block of b in one half, or 0, by operands",
+        0x06: (
+            "0 in every lane",
+            V,
+            "pre-registered at lag 1 on fresh and extreme a (all 0xffff, all 0x8000, -k)",
+        ),
+        0x07: (
+            "lanes 8j..8j + 7 := b's 8-lane block a[j] where a[j] < 4, else 0, for j = 0..3",
+            V,
+            "a block select, pre-registered on fresh a against a[j] & 3",
+        ),
+        0x08: (
+            "lanes 16j..16j + 15 := b's 16-lane half a[j] where a[j] < 2, else 0, for j = 0, 1",
+            V,
+            "a block select, pre-registered on fresh a against a[j] & 1",
         ),
         0x09: (
             "b[(k & 16) + a[k]] where a[k] < 16, else 0",
