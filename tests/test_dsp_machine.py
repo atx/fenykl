@@ -860,3 +860,18 @@ def test_s1_0x60_gives_the_b_its_unit_last_read_latched(m):
     run(m, words)
     assert m.lanes["L3"][8] == Vec((0,) * 32)
     assert m.lanes["L3"][9] == Vec(tuple(A))
+
+
+@pytest.mark.parametrize("gap", [1, 4, 5])
+def test_two_divides_in_flight_are_inferred(m, gap):
+    """Two X1 0x1e heads `gap` words apart; G[5] and G[6] take the two quotients."""
+    m.b[1], m.b[2], m.b[3] = Sv(1000), Sv(7), Sv(10)
+    first = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
+    second = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 3}
+    words = [w(**first)] + [IDLE] * (gap + 4)
+    words[gap] = w(**second)
+    words[4] = w(f272_273=0, f224_228=5, **(second if gap == 4 else {}))
+    words[gap + 4] = w(f272_273=0, f224_228=6)
+    run(m, words)
+    tier = V if gap > 4 else I
+    assert m.g[5] == Sv(142, tier) and m.g[6] == Sv(100, tier)

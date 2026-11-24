@@ -857,17 +857,23 @@ second among them are not taken [verified, with no jump pending], a halt third e
 channel registers do not survive a job; a job with transfers and no stream raises). The engine
 sees only the values X1 0x1c hands [verified]: a key 0x21 | channel << 6 | register << 11 and one
 value, a block key 0x20 | channel << 6 and eight values (registers 0..7), or a command channel
-<< 6 | kind (0 load, 6 store, 1 nothing) and (from, to). Per channel r0 names the memory (1 the
+<< 6 | kind (0 load, 6 store, 1 nothing; that a 0x1d counts kind 1 is inferred, other kinds
+raise) and (from, to). Per channel r0 names the memory (1 the
 lane memory, 2 the local memory), r2 its elements per unit and r3 the units per row, r5 the
 elements per 16-byte DRAM line (the element width 128 / r5 bits), r6 the lines per row, r7 the
-rows, r1 and r4 the row pitches in bytes on the memory and the DRAM side; DRAM addresses are
-floored to 16 bytes, lane offsets to their vector [verified]. A command starts when handed, a
-0x1d waits for the oldest outstanding one, and what is outstanding completes at the job's end
-(`finish`, called by `Machine.between_jobs`) [verified]; a load's destination is unknown until
-then, a store takes its source when handed, and lane reads beside an outstanding command are a
-hypothesis. What was not measured takes the engine off script (`Engine.off`: the lane memory
-unknown, later destinations unknown). X1 0x1e is no transfer: its signed quotient a / b is on
-X1's result bus four words after the head [verified for a >= 0, b > 0].
+rows (verified up to 4 rows on a load, 2 on a store), r1 and r4 the row pitches in bytes on the
+memory and the DRAM side; DRAM addresses are floored to 16 bytes, lane offsets to their vector
+[verified]. A command starts when handed and a 0x1d waits for the oldest outstanding one
+[verified]; a lone 0x1d in a job that handed no command returns [inferred]; what is outstanding
+completes at the job's end (`finish`, called by `Machine.between_jobs`) [verified for a store,
+inferred for a load]. A load's destination is unknown until then and its DRAM source is read
+when handed; a store takes its source when handed [inferred where the source is rewritten
+before the store completes]; lane reads beside an outstanding command are a hypothesis; a
+command with a register not handed moves nothing [inferred]. What was not measured takes the
+engine off script (`Engine.off`: the lane memory unknown, later destinations unknown); a
+destination that cannot be bounded, and any value after the grammar is lost, raise. X1 0x1e is
+no transfer: its signed quotient a / b is on X1's result bus four words after the head
+[verified for a >= 0, b > 0 and one divide at a time; inferred with another in flight].
 
 ### Adding a semantic
 

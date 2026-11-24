@@ -586,7 +586,12 @@ class Machine:
             self.stream.transfer(self, index, head, b)
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
-            self.x1_due[t + DIVIDE_LAG] = _divide(a, b)
+            quotient = _divide(a, b)
+            if self.x1_due:
+                # Another divide in flight: only lone ones were measured.
+                self.x1_due = {k: _cap(q, I) for k, q in self.x1_due.items()}
+                quotient = _cap(quotient, I)
+            self.x1_due[t + DIVIDE_LAG] = quotient
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
         if head not in X_RULES[unit]:

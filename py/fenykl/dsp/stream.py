@@ -12,25 +12,28 @@ Grammar (verified): the values form groups, each starting with a key v.
 - v & 0x21 == 0x20: a block, the next eight values are registers 0..7 of channel v >> 6 & 3.
 - v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
-  offset, to a DRAM address), 1 moves nothing but counts as a command (verified). Other kinds
-  were not measured.
+  offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
+  (inferred: what follows it is capped at inferred). Other kinds were not measured and raise
+  `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
 
 Channel registers (four channels of eight; they do not survive from one job to the next: a
 command on a channel with a register not handed in this job moves nothing and completes,
+inferred: the lane memory, DRAM after a store and local memory after a load are then capped at
 inferred):
 
 - r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways);
 - r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
-  (verified; 0x10 writes zeros into the vectors on a load, verified); local memory 4 bytes or 2
+  (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
+  count that ends the load, `ZERO_FORMATS`, inferred otherwise); local memory 4 bytes or 2
   16-bit elements per 32-bit word (little-endian);
 - r3 units per row (vectors, or 32-bit words);
 - r1 the pitch between rows on the memory side in bytes (64 per vector);
 - r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
   line's remaining bits 0 (`LOAD_FORMATS`, `STORE_FORMATS`);
 - r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
-  loads at up to 4 rows, stores at 2 rows, more rows of a store inferred).
+  loads at up to 4 rows, stores at up to 2 rows; more rows inferred).
 
 Row k of a command runs at DRAM address + k r4 and memory offset + k r1. A DRAM address is floored
 to 16 bytes, a lane-memory offset to its vector, vectors counted modulo `fields.LANE_VECTORS`
@@ -45,19 +48,24 @@ side (r2 r3 < n) it never ends (verified).
 Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
 a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with no
 command outstanding never returns once the job has handed one, and returned in a job that had
-handed none (inferred, one job); commands still outstanding at the job's end complete. The
+handed none (inferred, one job: what follows it is capped at inferred); commands still
+outstanding at the job's end complete (verified for a store, inferred for a load). The
 emulator never predicts a racing read: a load's destination is unknown from its hand until its
-0x1d or the job's end (`finish`), a store takes its source as of the hand and writes DRAM at once,
-and the lane memory read while any command is outstanding is a hypothesis.
+0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a store handed after
+it runs after it), a store takes its source as of the hand and writes DRAM at once (inferred where
+the source is rewritten before the store completes: that race was not measured), and the lane
+memory read while any command is outstanding is a hypothesis.
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
-job and what later commands would write is unknown where its place is known (`off` says why).
+job and what later commands write is unknown (`off` says why). A command whose destination cannot
+be bounded, a value handed after the grammar is lost and a 0x1d among a command's values raise
+`UnknownSemantics`.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .emu import LOCAL_BASE, Boot, dram_alias
+from .emu import LOCAL_BASE, dram_alias
 from .fields import LANE_VECTORS, Confidence
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
 from .semantics import LANE_COUNT, LOCAL_BYTES, UnknownSemantics
@@ -78,8 +86,12 @@ REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12}
 """r5 on a load: bits per DRAM element, by value (verified on the camera; a 32-bit element's low
 16 bits reach a lane). Other values were not measured."""
-LANE_UNITS: dict[int, Confidence] = {0x20: V, 0x10: V}
-"""r2 on a lane-memory load: 0x20 one element per lane, 0x10 writes zeros (verified)."""
+LANE_UNITS: dict[int, Confidence] = {0x20: V, 0x10: I}
+"""r2 on a lane-memory load: 0x20 one element per lane (verified), 0x10 writes zeros into
+every lane (inferred, but see `ZERO_FORMATS`)."""
+ZERO_FORMATS = (0x04,)
+"""r5 measured under r2 0x10 on a lane-memory load with zeros named before the run, at
+r3 = ceil(r5 r6 / 16): zeros (verified at that count; bytes gave zeros unforeseen, inferred)."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -151,8 +163,11 @@ class Engine:
     key: Sv | None = None
     group: list[Sv] = field(default_factory=list)
     need: int = 0
-    outstanding: list[Callable[[Machine], None]] = field(default_factory=list)
-    """The completions of the commands handed and not yet waited for, oldest first."""
+    outstanding: list[Callable[[Machine, Confidence], None]] = field(
+        default_factory=list
+    )
+    """The completions of the commands handed and not yet waited for, oldest first, each
+    called with the cap on what it writes."""
     commands: int = 0
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); in a job that handed none it returned (inferred, one job)."""
@@ -170,6 +185,10 @@ class Engine:
         k = self.count
         self.count += 1
         where = f"transfer {k} (word {index})"
+        if self.lost and head != 0x1D:
+            raise UnknownSemantics(
+                index, "stream", [], f"{where}: a value after the grammar was lost"
+            )
         if self.lost:
             return
         if head == 0x1D:
@@ -186,9 +205,10 @@ class Engine:
         return H if self.outstanding else self.cap
 
     def finish(self, m: Machine) -> None:
-        """The job ends: the commands still outstanding complete."""
+        """The job ends: the commands still outstanding complete (inferred for loads: only a
+        store outstanding at the end was measured)."""
         while self.outstanding:
-            self.outstanding.pop(0)(m)
+            self.outstanding.pop(0)(m, min(self.cap, I))
 
     # ------------------------------------------------------------------ the grammar
 
@@ -227,11 +247,17 @@ class Engine:
 
     def _wait(self, m: Machine, index: int, where: str) -> None:
         if self.key is not None:
+            if self.key.value & 0x20 == 0:
+                raise UnknownSemantics(
+                    index, "x1 0x1d", [], f"{where}: a 0x1d inside a command's values"
+                )
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
             return
         if self.outstanding:
-            self.outstanding.pop(0)(m)
-        elif self.commands:
+            self.outstanding.pop(0)(m, self.cap)
+        elif not self.commands:
+            self.cap = min(self.cap, I)  # a lone 0x1d returns (inferred)
+        else:
             raise UnknownSemantics(
                 index, "x1 0x1d", [], "a 0x1d with no command outstanding never ends"
             )
@@ -248,30 +274,42 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
+        if cmd.kind not in (LOAD, NOTHING_MOVES, STORE):
+            raise UnknownSemantics(
+                cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
+            )
         self.commands += 1
         self.outstanding.append(_nothing)
         if cmd.kind == NOTHING_MOVES:
+            self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
+            return
+        if any(r is None for r in cmd.regs):
+            self._moves_nothing(m, cmd)
             return
         if self.off:
             self._spoil(m, cmd)
-            return
-        if cmd.kind not in (LOAD, STORE):
-            self._go_off(m, f"{cmd.where} command kind {cmd.kind:#x}: not measured")
-            self._spoil(m, cmd)
-            return
-        if any(r is None for r in cmd.regs):
-            self.cap = min(
-                self.cap, I
-            )  # a register not handed: nothing moves (inferred)
             return
         try:
             if cmd.kind == LOAD:
                 self.outstanding[-1] = self._load(m, cmd)
             else:
-                self._store(m, cmd)
+                self.outstanding[-1] = self._store(m, cmd)
         except _Off as e:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)
+
+    def _moves_nothing(self, m: Machine, cmd: _Command) -> None:
+        """A register not handed: nothing moves (inferred). What the command could reach, which
+        the unset registers would bound, is capped at inferred."""
+        self.cap = min(self.cap, I)
+        if cmd.kind == STORE:
+            for page in m.boot.dram.pages.values():
+                page.write(page.base, page.bytes.capped(I))
+            return
+        r0 = cmd.regs[0]
+        if r0 is None or r0.value != LANE_MEMORY:
+            local = m.boot.local.read(LOCAL_BASE, LOCAL_BYTES)
+            m.boot.local.write(LOCAL_BASE, local.capped(I))
 
     def _rows(
         self, cmd: _Command, memory: int
@@ -282,7 +320,7 @@ class Engine:
         rows = _known(r[7], "r7")
         if rows < 1:
             raise _Off("no rows: not measured")
-        tier = I if cmd.kind == STORE and rows > 2 else V
+        tier = I if rows > (2 if cmd.kind == STORE else 4) else V
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0
@@ -301,7 +339,7 @@ class Engine:
             raise _Off(f"local bytes {off:#x}..{off + n:#x}: not measured")
         return off
 
-    def _load(self, m: Machine, cmd: _Command) -> Callable[[Machine], None]:
+    def _load(self, m: Machine, cmd: _Command) -> Callable[[Machine, Confidence], None]:
         """Checks the load, makes its destination unknown and returns its completion."""
         r = cmd.regs
         memory = _known(r[0], "r0")
@@ -311,7 +349,7 @@ class Engine:
         bits = LOAD_FORMATS[r5]
         n = r5 * r6
         rows, tier = self._rows(cmd, memory)
-        tier = min([tier, cmd.tier, *(x.tier for x in r)])
+        tier = min([tier, self.cap, cmd.tier, *(x.tier for x in r)])
         if memory == LANE_MEMORY:
             if r2 not in LANE_UNITS:
                 raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
@@ -333,6 +371,8 @@ class Engine:
                 f"{cmd.where}: a load of {r3} units for {needed} never ends",
             )
         if memory == LANE_MEMORY:
+            if r2 != 0x10 or r5 not in ZERO_FORMATS or r3 != needed:
+                tier = min(tier, LANE_UNITS[r2])
             return self._lane_load(m, cmd, rows, bits, r6, r2, r3, tier)
         width = LOCAL_WIDTHS[r2]
         tier = min(tier, LOCAL_LOADS[(bits, width)])
@@ -346,13 +386,16 @@ class Engine:
                 held[at] = Vec(UNKNOWN_VEC.lanes)
         if not m.lanes_lost:
             m.memory.update(held)
+        # The queue runs in order: a store handed later writes DRAM after this load read it.
+        sources = [
+            _unpack(m.boot.read(dram, 16 * lines), bits, lines) for dram, _ in rows
+        ]
 
-        def complete(m: Machine) -> None:
+        def complete(m: Machine, cap: Confidence) -> None:
             if m.lanes_lost:
                 return
-            for dram, off in rows:
+            for (_, off), elements in zip(rows, sources, strict=True):
                 base = off // VECTOR_BYTES
-                elements = _unpack(m.boot.read(dram, 16 * lines), bits, lines)
                 for v in range(r3):
                     at = (base + v) % LANE_VECTORS
                     wrap = I if base + v >= LANE_VECTORS else V
@@ -361,7 +404,7 @@ class Engine:
                     if r2 != 0x20:
                         chunk = [(0, V)] * LANE_COUNT  # zeros (verified)
                     lanes = tuple(None if x is None else x & 0xFFFF for x, _ in chunk)
-                    t = min([tier, wrap, *(t for x, t in chunk if x is not None)])
+                    t = min([tier, cap, wrap, *(t for x, t in chunk if x is not None)])
                     # A vector written while the load ran raced it: not known.
                     racing = m.memory.get(at) is not held[at]
                     m.memory[at] = UNKNOWN_VEC if racing else Vec(lanes, t)
@@ -378,11 +421,13 @@ class Engine:
         loaded = m.boot.source(
             "stream load", "the stream engine's load to local memory"
         )
+        sources = [
+            _unpack(m.boot.read(dram, 16 * lines), bits, lines) for dram, _ in rows
+        ]
 
-        def complete(m: Machine) -> None:
+        def complete(m: Machine, cap: Confidence) -> None:
             nb = width // 8
-            for dram, off in rows:
-                elements = _unpack(m.boot.read(dram, 16 * lines), bits, lines)
+            for (_, off), elements in zip(rows, sources, strict=True):
                 out = Bytes.unknown(size, loaded)
                 for i, (x, t) in enumerate(elements[: r2 * r3]):
                     if x is None:
@@ -391,7 +436,7 @@ class Engine:
                     for b in range(nb):
                         out.data[nb * i + b] = data[b]
                         out.known[nb * i + b] = 1
-                        out.taint[nb * i + b] = min(tier, t)
+                        out.taint[nb * i + b] = min(tier, cap, t)
                 now = m.boot.local.read(LOCAL_BASE + off, size)
                 for i in range(size):
                     if now.src[i] != src:  # written while the load ran: raced
@@ -400,7 +445,10 @@ class Engine:
 
         return complete
 
-    def _store(self, m: Machine, cmd: _Command) -> None:
+    def _store(
+        self, m: Machine, cmd: _Command
+    ) -> Callable[[Machine, Confidence], None]:
+        """Writes the store's DRAM rows from its source as of now and returns its completion."""
         r = cmd.regs
         memory = _known(r[0], "r0")
         r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
@@ -409,7 +457,7 @@ class Engine:
         bits, ftier = STORE_FORMATS[r5]
         n = (128 // bits if bits else 0) * r6
         rows, tier = self._rows(cmd, memory)
-        tier = min([tier, ftier, cmd.tier, *(x.tier for x in r)])
+        tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
         if memory == LANE_MEMORY:
             if r2 != 0x20:
                 raise _Off(f"r2 {r2:#x} on a lane-memory store: not measured")
@@ -430,48 +478,81 @@ class Engine:
             nb = 4 // r2
             for _, off in rows:
                 self._local_offset(off, n * nb)
+        src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
+        taken = []
         for dram, off in rows:
             if memory == LOCAL_MEMORY:
-                element = _local_elements(
-                    m.boot.local.read(LOCAL_BASE + off, n * nb), nb
-                )
+                data = m.boot.local.read(LOCAL_BASE + off, n * nb)
+                taken.append(data)
+                element = _local_elements(data, nb)
             else:
+                taken.append(_lane_source(m, off, n))
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
-            out = pack(m.boot, bits, 16 * r6, element, tier, width)
+            out = pack(src, bits, 16 * r6, element, tier, width)
             m.boot.dram.write(dram_alias(dram), out)
             self.stored.append((dram, 16 * r6))
+
+        def complete(m: Machine, cap: Confidence) -> None:
+            if memory == LOCAL_MEMORY:
+                now = [m.boot.local.read(LOCAL_BASE + off, n * nb) for _, off in rows]
+                same = all(_same_bytes(a, b) for a, b in zip(now, taken, strict=True))
+            else:
+                now = [_lane_source(m, off, n) for _, off in rows]
+                same = not m.lanes_lost and all(
+                    x is y
+                    for a, b in zip(now, taken, strict=True)
+                    for x, y in zip(a, b)
+                )
+            if same:
+                return
+            # The source was rewritten while the store was queued: a race not measured.
+            for dram, _ in rows:
+                got = m.boot.read(dram, 16 * r6)
+                for i, owner in enumerate(got.src):
+                    if owner == src:
+                        got.taint[i] = min(got.taint[i], I)
+                m.boot.dram.write(dram_alias(dram), got)
+
+        return complete
 
     # ------------------------------------------------------------------ off script
 
     def _spoil(self, m: Machine, cmd: _Command) -> None:
-        """What a command the engine cannot run writes is not known: its destination, where
-        it is known, becomes unknown."""
+        """What a command the engine cannot run writes is not known: its destination becomes
+        unknown, and a destination that cannot be bounded raises."""
+        try:
+            self._spoil_reach(m, cmd)
+        except _Off as e:
+            raise UnknownSemantics(
+                cmd.index, "stream", [], f"{cmd.where} off script: {e}"
+            ) from e
+
+    def _spoil_reach(self, m: Machine, cmd: _Command) -> None:
         lost = m.boot.source("stream off script", self.off)
         r = cmd.regs
-        try:
-            rows = _known(r[7], "r7")
-            if cmd.kind == STORE:
-                lines = _known(r[6], "r6")
-                pitch = _known(r[4], "r4") if rows > 1 else 0
-                at = _known(cmd.to, "to")
-                for k in range(rows):
-                    dram = (at + k * pitch) & ~0xF
-                    m.boot.dram.write(dram_alias(dram), Bytes.unknown(16 * lines, lost))
-                return
-            if cmd.kind != LOAD or _known(r[0], "r0") == LANE_MEMORY:
-                return
-            size = 4 * _known(r[3], "r3")
-            pitch = _known(r[1], "r1") if rows > 1 else 0
-            at = _known(cmd.to, "to")
-        except _Off:
-            if cmd.kind == STORE:
-                self._spoil_stores(m)
+        rows = _known(r[7], "r7")
+        if rows < 1:
+            raise _Off("no rows")
+        if cmd.kind == STORE:
+            lines = _known(r[6], "r6")
+            pitch = _known(r[4], "r4") if rows > 1 else 0
+            at = _known(cmd.to, "a DRAM address")
+            for k in range(rows):
+                dram = (at + k * pitch) & ~0xF
+                m.boot.dram.write(dram_alias(dram), Bytes.unknown(16 * lines, lost))
             return
+        memory = _known(r[0], "r0")
+        if memory == LANE_MEMORY:
+            return  # the lane memory is lost already
+        if memory != LOCAL_MEMORY:
+            raise _Off(f"r0 {memory:#x}")
+        size = 4 * _known(r[3], "r3")
+        pitch = _known(r[1], "r1") if rows > 1 else 0
+        at = _known(cmd.to, "a memory offset")
         for k in range(rows):
-            off = (at + k * pitch) % LOCAL_BYTES
-            n = min(size, LOCAL_BYTES - off)
-            m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(n, lost))
+            off = self._local_offset(at + k * pitch, size)
+            m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, lost))
 
     def _spoil_stores(self, m: Machine) -> None:
         lost = m.boot.source("stream off script", self.off)
@@ -479,7 +560,7 @@ class Engine:
             m.boot.dram.write(dram_alias(dram), Bytes.unknown(n, lost))
 
 
-def _nothing(m: Machine) -> None:
+def _nothing(m: Machine, cap: Confidence) -> None:
     pass
 
 
@@ -503,6 +584,16 @@ def _unpack(data: Bytes, bits: int, lines: int) -> list[tuple[int | None, Confid
             else:
                 out.append((None, V))
     return out
+
+
+def _same_bytes(a: Bytes, b: Bytes) -> bool:
+    return a.data == b.data and a.known == b.known and a.src == b.src
+
+
+def _lane_source(m: Machine, off: int, n: int) -> list[Vec | None]:
+    """The vectors a lane-memory store of n elements from offset `off` reads."""
+    base = off // VECTOR_BYTES
+    return [m.memory.get((base + v) % LANE_VECTORS) for v in range(-(-n // LANE_COUNT))]
 
 
 def _local_elements(
@@ -537,7 +628,7 @@ def _lane_elements(
 
 
 def pack(
-    boot: Boot,
+    src: int,
     bits: int,
     n: int,
     element: Callable[[int], tuple[int | None, Confidence]],
@@ -546,8 +637,9 @@ def pack(
 ) -> Bytes:
     """n store bytes of the elements `element`(i) = (value or None, tier), `width` bits wide in
     the memory, at `bits` each: 128 // bits per 16-byte line, least significant first, the rest
-    of the line 0; bits 0 writes zeros. A byte is known when every element it draws on is known."""
-    out = Bytes.unknown(n, boot.source("store", "the stream engine's store"))
+    of the line 0; bits 0 writes zeros. A byte is known when every element it draws on is known;
+    every byte comes from source `src`."""
+    out = Bytes.unknown(n, src)
     per = 128 // bits if bits else 0
     mask = (1 << min(bits, width)) - 1
     for line in range(n // 16):

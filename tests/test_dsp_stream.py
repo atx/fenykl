@@ -37,9 +37,13 @@ def store(channel: int, frm: int, to: int) -> list[int]:
     return [channel << 6 | stream.STORE, frm, to]
 
 
-def drive(m: Machine, e: stream.Engine, values: list[int | None]) -> None:
+UNKNOWN = Sv(None)
+
+
+def drive(m: Machine, e: stream.Engine, values: list[int | Sv | None]) -> None:
     for k, v in enumerate(values):
-        e.transfer(m, k, 0x1D if v is WAIT else 0x1C, Sv(0 if v is WAIT else v))
+        value = Sv(0) if v is WAIT else v if isinstance(v, Sv) else Sv(v)
+        e.transfer(m, k, 0x1D if v is WAIT else 0x1C, value)
 
 
 def machine(data: bytes = b"") -> Machine:
@@ -174,6 +178,43 @@ def test_a_wait_with_nothing_outstanding():
         drive(m, e, [WAIT])
 
 
+@pytest.mark.parametrize(
+    ("r5", "r6", "r3", "tier"),
+    [(0x04, 8, 2, V), (0x04, 16, 2, I), (0x10, 2, 2, I), (0x08, 4, 2, I)],
+)
+def test_zeros_under_16_units_per_vector_are_verified_where_measured(r5, r6, r3, tier):
+    m, e = machine(bytes(range(1, 65))), stream.Engine()
+    regs = block(0, 1, 0, 0x10, r3, 0, r5, r6, 1)
+    drive(m, e, [*regs, *load(0, SRC, 0), WAIT])
+    assert m.memory[1].lanes == (0,) * 32 and m.memory[1].tier == tier
+
+
+def test_a_lone_wait_returns_at_inferred():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [WAIT, *lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT])
+    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == I
+    assert e.lane_tier() == I
+
+
+def test_a_command_that_moves_nothing_counts_at_inferred():
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), stream.NOTHING_MOVES, 0, 0, WAIT])
+    assert e.lane_tier() == I
+
+
+def test_a_load_of_more_than_four_rows_is_inferred():
+    m, e = machine(bytes(range(256)) * 2), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2, r7=5, r1=64, r4=64), *load(0, SRC, 0), WAIT])
+    assert m.memory[4].lanes[0] == 0 and m.memory[4].tier == I
+
+
+def test_a_load_completed_by_the_jobs_end_is_inferred():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0)])
+    e.finish(m)
+    assert m.memory[0].lanes[1] == 1 and m.memory[0].tier == I
+
+
 def test_a_loads_vectors_are_unknown_until_it_is_waited_for():
     m, e = machine(bytes(range(64))), stream.Engine()
     m.memory[0] = Vec(tuple(range(32)))
@@ -192,35 +233,113 @@ def test_a_vector_written_while_the_load_runs_is_unknown():
     assert m.memory[1].lanes == (None,) * 32
 
 
-def test_a_store_takes_its_source_when_handed():
+def test_a_load_reads_dram_before_a_store_handed_after_it():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    m.memory[5] = Vec(tuple(range(100, 132)))
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *store(0, 5 * 64, SRC)])
+    drive(m, e, [WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == V
+
+
+def test_a_load_reads_what_a_store_handed_before_it_wrote():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    m.memory[5] = Vec(tuple(range(100, 132)))
+    drive(m, e, [*lanes(0, 1, r6=2), *store(0, 5 * 64, SRC), *load(0, SRC, 0)])
+    drive(m, e, [WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(100, 132))
+
+
+def test_a_lane_source_rewritten_while_the_store_is_queued_is_inferred():
     m, e = machine(), stream.Engine()
     m.memory[0] = Vec(tuple(range(32)))
     drive(m, e, [*lanes(0, 1, r6=2), *store(0, 0, DST)])
     m.memory[0] = Vec((0,) * 32)
     drive(m, e, [WAIT])
-    assert bytes(m.boot.read(DST, 32).data) == bytes(range(32))
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
+def test_a_local_source_rewritten_while_the_store_is_queued_is_inferred():
+    m, e = machine(), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + 0x400, Bytes.of(bytes(range(32)), 0))
+    drive(m, e, [*block(0, 2, 0, 4, 8, 0, 0x10, 2, 1), *store(0, 0x400, DST)])
+    m.boot.local.write(LOCAL_BASE + 0x404, Bytes.of(bytes(4), 0))
+    drive(m, e, [WAIT])
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
+def test_a_store_whose_source_holds_still_stays_verified():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(32)))
+    drive(m, e, [*lanes(0, 1, r6=2), *store(0, 0, DST), WAIT])
+    assert set(m.boot.read(DST, 32).taint) == {V}
 
 
 def test_a_command_with_a_register_not_handed_moves_nothing():
     m, e = machine(bytes(64)), stream.Engine()
     m.memory[0] = Vec(tuple(range(32)))
+    m.boot.local.write(LOCAL_BASE, Bytes.of(bytes(4), 0))
     drive(m, e, [key(0, 3), 2, key(0, 6), 4, *load(0, SRC, 0), WAIT])
     assert m.memory[0].lanes == tuple(range(32))
     assert not e.off and e.lane_tier() == I
+    assert set(m.boot.local.read(LOCAL_BASE, 4).taint) == {I}
 
 
-def test_an_unmeasured_kind_goes_off_script():
+def test_a_store_with_a_register_not_handed_leaves_dram_inferred():
+    m, e = machine(), stream.Engine()
+    m.boot.put(DST, bytes(range(32)), "prefill")
+    drive(m, e, [key(0, 3), 1, key(0, 6), 2, *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
+def test_an_unmeasured_kind_raises():
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="kind 0x3"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x03, SRC, DST])
+
+
+def test_an_off_script_store_leaves_its_destination_unknown():
     m, e = machine(bytes(64)), stream.Engine()
-    m.memory[5] = Vec(tuple(range(32)))
-    drive(m, e, [*lanes(0, 1, r6=2), 0x03, SRC, 0, *store(0, 0, DST), WAIT, WAIT])
-    assert "kind 0x3" in e.off and not m.memory
-    assert not any(m.boot.read(DST, 32).known)
+    m.boot.put(DST, bytes(32), "prefill")
+    drive(m, e, [*lanes(0, 1, r5=0x0E, r6=2), *store(0, 0, DST), WAIT])
+    assert "format 0xe" in e.off and not any(m.boot.read(DST, 32).known)
+
+
+def test_a_local_load_after_going_off_script_leaves_its_destination_unknown():
+    m, e = machine(bytes(64)), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + 0x400, Bytes.of(bytes(64), 0))
+    local = block(1, 2, 0, 4, 0x10, 0, 0x10, 4, 1)
+    drive(m, e, [*lanes(0, 1, r5=0x0E, r6=2), *store(0, 0, DST), *local])
+    drive(m, e, [*load(1, SRC, 0x400), WAIT, WAIT])
+    assert e.off and not any(m.boot.local.read(LOCAL_BASE + 0x400, 64).known)
+
+
+def test_a_store_to_an_unknown_address_raises():
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="DRAM address unknown"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN)])
+
+
+def test_a_load_into_an_unknown_memory_raises():
+    m = machine(bytes(64))
+    regs = block(0, UNKNOWN, 0, 4, 0x10, 0, 0x10, 4, 1)
+    with pytest.raises(UnknownSemantics, match="r0 unknown"):
+        drive(m, stream.Engine(), [*regs, *load(0, SRC, 0x400)])
 
 
 def test_a_key_with_bits_outside_its_fields_loses_the_grammar():
     m, e = machine(bytes(64)), stream.Engine()
-    drive(m, e, [0x234, *lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT])
-    assert "bits outside" in e.off and e.lost and not e.outstanding
+    with pytest.raises(UnknownSemantics, match="grammar was lost"):
+        drive(m, e, [0x234, *block(0, 2, 0, 4, 0x10, 0, 0x10, 4, 1)])
+    assert "bits outside" in e.off and e.lost
+
+
+def test_a_wait_inside_a_commands_values_raises():
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="inside a command"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), stream.LOAD, SRC, WAIT])
 
 
 @pytest.mark.parametrize(
