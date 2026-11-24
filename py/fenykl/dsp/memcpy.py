@@ -26,6 +26,13 @@ A job that does not complete stores nothing, unless its outcome says that dst is
 (`Outcome.STORE_TIMEOUT`). A placement out of range, a register of unknown value or a load that
 may or may not have run makes its bytes UNKNOWN.
 
+The copy also carries own kernels in one job (verified on the camera, pre-registered, the model
+does not run them): its load is complete once word 74 has run (the lane memory's vectors 0, 1
+and 0x1ff held the source bytes between 74 and 75 at len 0x4000), own words between 74 and 75
+read and write the lane memory before the store (a dense layer of 32 neurons x 64 inputs and a
+16-bit fixed-point kernel came out exact, DRAM to DRAM), and words 0..78 followed by idles and a
+halt copy as the whole program does: word 79, the return, is not needed.
+
 The guard 45 skips the loop 50..57 in every job tested, so what is known of 50..57 alone was seen
 with the loop skipped: an edit of 28 or 45 together with one of 50..57 has the outcome of
 `_LOOP_ENTRIES`, where measured, and no semantics otherwise.
@@ -288,10 +295,11 @@ _CHANNELS: tuple[Channel, ...] = (
             Role(
                 "store format",
                 47,
-                "the store's element format, applied by the store, not the load: bytes at r6, "
-                "u8 -> u32 zero-extended at r14 and r29, a 10-bit pack or zeros at r21 (by "
-                "boot), zeros at the others; timeout at r9; the camera lost its link at r16, "
-                "r18, r19, r20, r24, r26, r27, r28 (not registered)",
+                "the store's element format, applied by the store, not the load: the number of "
+                "elements per 16-byte line (`_FORMATS`); bytes at r6, u8 -> u32 zero-extended "
+                "at r14 and r29, a 10-bit pack or zeros at r21 (by boot), zeros at the others; "
+                "timeout at r9; the camera lost its link at r16, r18, r19, r20, r24, r26, r27, "
+                "r28 (not registered)",
                 _table(None, timeout=(9,)),
                 use=Use.FORMAT,
             ),
@@ -419,12 +427,26 @@ _CHANNELS: tuple[Channel, ...] = (
 )
 """Channels cmd 0xF does not need (`needed=False`): idling their transfers has no effect, with
 len, dst and src changing between jobs. Word 57 is a holding transfer (head 0x1d) of its own
-register context and takes no slot."""
+register context and takes no slot.
 
-# Word 47's formats by register; r21's is a boot parameter. The format is the register's value
-# (measured on the camera, not pre-registered: inferred): 0x10, the stock r6's, each element's
-# low byte; 0x04 and 0x44 each element as a 32-bit little-endian word (whether all 16 bits
-# pass is not shown); 0x14 and 0x18 never complete (the job times out).
+What the transfers hand, read from the B file after each prefix of the program at one length
+(measured on the camera; the reading inferred): words 32 and 41 a header of the load and of the
+store side, the two apart in bit 6; 33..40 and 42..49 a group of eight values each, the same
+for both sides, len / 2, the element format and len among them; 59, 63..65 and 70..73 two
+(key, value) pairs of the load and of the store side, keys apart in bit 6, the second pair's
+value len / 16 (73's, the store count); 66..68 the load's command, source address and lane memory
+placement; 75..77 the store's command, lane memory offset and destination address. A transfer
+reads its register before the same word's port writes it (inferred). So 47 is the store's
+element format and 38 by position the load's (hypothesis): 38 on a register holding 8, alone
+or with 47 on 8 too, never ended (measured on the camera, one run each)."""
+
+# Word 47's formats by register; r21's is a boot parameter. The format is the register's value,
+# the number of elements per 16-byte line (verified on the camera, pre-registered, 1024..2048
+# 16-bit elements each at 8, 12 and 4): 0x10, the stock r6's, each element's low byte; 0x0c
+# each line 12 elements' low 10 bits, least significant first, the last byte 0; 0x08 each
+# element as 16 bits little-endian; 0x04 (and 0x44, measured) each element zero-extended to a
+# 32-bit word; 0x14 and 0x18 have no line and never complete (the job times out).
+
 _FORMATS: dict[int, str] = {
     6: "bytes",
     14: "u32",

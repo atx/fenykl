@@ -12,6 +12,10 @@ reads it gets UNKNOWN bytes, never guessed ones.
 `Executor.step` steps a job instead: a program counter that follows the control ops (calls,
 returns, branches and loop ends with their delay slots, the halt) and runs the data ops by the
 op slot's semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
+
+The emulator does not model time. On the camera a word of an own program takes about 5.2 ns,
+idle and compute words alike (measured: the call time against the pass count of two loops, one
+mostly idle, one with loads, multiplies and reductions; inferred).
 """
 
 from collections.abc import Callable
