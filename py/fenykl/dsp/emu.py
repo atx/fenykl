@@ -21,14 +21,13 @@ over three loop sizes, a per-pass cost not excluded) (measured on the camera; in
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Protocol
 
 from ..firmware import unpack_firmware
 from .fields import (
     DELAY_SLOTS,
-    IDLE_OP,
     OP_FIELD,
     Confidence,
     Kind,
@@ -311,6 +310,24 @@ class Link:
     """Pushed by a local op 3 (`Program.local_op3`), which has no return of its own."""
 
 
+def _nested(
+    pc: int, word: Word, step: Step, target: int | None, jumps: list[list[int]]
+) -> Step:
+    """`step` of control word `pc`, inferred at most when it stands in a taken jump's delay
+    slots or jumps into its own, but for the two shapes measured on the camera: a taken br in
+    the first slot of a br, and a loop end whose T is its own third slot."""
+    own = target is not None and pc < target <= pc + DELAY_SLOTS
+    if step.confidence is None or not (jumps or own):
+        return step
+    if jumps and not own and word.op == 2 and step.taken:
+        (left, _, outer), *others = jumps
+        if not others and left == DELAY_SLOTS and outer == 2:
+            return step
+    if not jumps and word.op == 0 and target == pc + 3:
+        return step
+    return replace(step, confidence=min(step.confidence, Confidence.INFERRED))
+
+
 class Executor:
     """Runs jobs on `boot`.
 
@@ -323,7 +340,9 @@ class Executor:
     halts at any word and call depth, the return stack unchecked; on a `datapath` the three
     words behind a halt still run (`HALT_TAIL`). `branching` decides ops 0..2; the default `Given()`
     decides none of them. A control op in another's delay slots jumps after its own four, and
-    so does a loop end whose T lies in its own slots (verified on the camera). On the camera
+    so does a loop end whose T lies in its own slots (verified on the camera for a br in a br's
+    first slot and a loop end into its third slot; other such shapes are stepped the same way,
+    their steps inferred at most). On the camera
     op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
     the stock convention: a call's delay slots hold 0x0b #(i + 5) on r1 (verified on the
     camera: op 4 through r1 and through r21, op 3 with and without a link word). With a
@@ -388,7 +407,7 @@ class Executor:
         stack: list[Link] = []
         visits: dict[int, int] = {}
         pc, slots = 0, 0
-        # [delay slots left, target] of each control op taken
+        # [delay slots left, target, op] of each control op taken
         jumps: list[list[int]] = []
         self._landing = []
         for _ in range(self.limit):
@@ -424,6 +443,7 @@ class Executor:
                     step, target = self._control(pc, visit, word, stack)
                 if self.datapath is not None:
                     self.datapath.execute(pc, word, len(steps))
+                step = _nested(pc, word, step, target, jumps)
                 steps.append(step)
                 if step.taken is None:
                     if self.strict:
@@ -440,7 +460,7 @@ class Executor:
                     pc = jump[1]
             jumps = [j for j in jumps if j[0]]
             if target is not None:
-                jumps.append([DELAY_SLOTS, target])
+                jumps.append([DELAY_SLOTS, target, word.op])
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
 
     def _behind_halt(
@@ -449,17 +469,15 @@ class Executor:
         """The words behind a halt that still run (`HALT_TAIL`), on a `datapath` only: plain
         stepping ends at the halt. They run in program order and the job ends after them
         (verified on the camera with data words; with the halt in a taken op 3's first delay
-        slot, the jump not taken; with an op 3 as the second of them, its jump not taken). A
-        jump due inside them, another control word or a halt among them raises; words past the
-        program's end are not run."""
+        slot, the jump not taken; with an op 3 as the second of them, its jump not taken). Any
+        other pending jump (it may run its target's words instead), another control word or a
+        halt among them raises; words past the program's end are not run."""
         if self.datapath is None:
             return
-        if any(left <= HALT_TAIL for left, _ in jumps) and any(
-            word.op != IDLE_OP for word in tail
+        if jumps and not (
+            len(jumps) == 1 and jumps[0][0] == DELAY_SLOTS and jumps[0][2] == 3
         ):
-            raise UnknownSemantics(
-                at - 1, "halt", [], "a jump due among the words behind a halt"
-            )
+            raise UnknownSemantics(at - 1, "halt", [], "a jump pending behind a halt")
         for i, word in enumerate(tail, at):
             jump = word.control and word.op == 3 and i - at == 1
             if (word.control and not jump) or word.op == HALT_OP:

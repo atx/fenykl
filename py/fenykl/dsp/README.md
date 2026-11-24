@@ -109,7 +109,7 @@ confidence and fact; `fields.op(value)` is total:
 | 2 | `br` | branch iff ra != 0, either way | verified |
 | 3 | `call` | a jump to T that writes no link; a call is an op 3 whose delay slots hold 0x0b #(i + 5) on r1 | verified |
 | 4 | `ret` | a jump to the word G[f128_132] names, r1 by the stock convention | verified |
-| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the three words behind it still run [verified]; word 5 of every stock program, where the call at word 0 returns | inferred |
+| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the three words behind it still run and the job ends [verified] (data words, an op 3 second among them and a halt in a taken op 3's first delay slot, neither jump taken; the emulator refuses other control words among them and other pending jumps); word 5 of every stock program, where the call at word 0 returns | inferred |
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
 | 127 | `idle` | no op | inferred |
 
@@ -437,7 +437,7 @@ loads are 0x1a 32-bit, 0x16 signed and 0x14 unsigned 16-bit, 0x10 unsigned and 0
 (register forms 0x1b, 0x17, 0x15, 0x11, 0x0f). A load's datum goes to no register by itself: it
 appears on the ALU result bus exactly three words after the load, where a word with
 f272_273 = 1 or f270_271 = 1 takes it; the bus ORs it with a data op's result and with a
-multiply's product arriving in that word, and a word with a branch, a store, a load or a
+multiply's product arriving in that word, and a word with a control op, a store, a load or a
 multiply takes it alone; consecutive loads deliver in consecutive words (verified by exact
 readout). Stepping records a
 load's read only and makes a store's bytes unknown, since R is not modelled; an access at an
@@ -782,10 +782,12 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
   and its ports' registers unknown. An undecided branch raises in
   strict mode and stops the run in lenient mode. Every taken control op jumps after its own
-  four following words, also a control op in another's delay slots and a loop end whose
-  target is one of its own slots [verified]. On the camera op 3 is a jump and op 4 jumps to
-  the word G[f128_132] names [verified]: with a `datapath` the stepper takes op 4's target
-  from that register (undecided while it is unknown) and keeps no stack.
+  four following words, also a control op in a taken control op's delay slots and one whose
+  target is one of its own slots [verified for a taken br in a br's first slot and a loop end
+  into its third slot; any other such step is inferred at most]. On the camera
+  op 3 is a jump and op 4 jumps to the word G[f128_132] names [verified]: with a `datapath` the
+  stepper takes op 4's target from that register (undecided while it is unknown) and keeps no
+  stack.
 - **Local op 3** (`Program.local_op3()`), plain stepping only: a forward op 3 after word 0 with
   no return between it and T, a jump on the camera. The plain stepper, which holds no link
   register, infers calls and returns with a stack of its own: such an op 3 runs as a call by
@@ -838,7 +840,7 @@ under every unit, two and three words after, and under S3 two to six words after
 no head since; inferred elsewhere and with no head before. An S3 extract ORs with a reduction in
 the reduction's first word and comes alone later [verified]. Behind a halt three words run and the
 job ends: an op 3 second among them or a taken op 3 whose first delay slot holds the halt does not
-jump [verified]; other control words there raise.
+jump [verified]; other control words there, and any other jump pending at the halt, raise.
 
 `stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
 against the stock copy's for the same request (`Transcript`, recorded by running program 16)

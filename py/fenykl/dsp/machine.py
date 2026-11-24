@@ -16,7 +16,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
   whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
-  whose bits are not nested);
+  whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
+  inferred for a product);
 - X0's and X1's results in their head's word; under the M strobe (f276 = 0) X0's result bus carries
   M's value instead, also beside an active X0 head (`fields.S_RESULTS`; verified on the camera
   through three ports, values whose bits are not nested);
@@ -485,7 +486,12 @@ class Machine:
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
-        parts = [v for v, _ in self.bus_due.get(t, [])]
+        # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.
+        capped = word.control and word.op in (3, 4)
+        parts = [
+            _cap(v, I) if capped and kind != "load" else v
+            for v, kind in self.bus_due.get(t, [])
+        ]
         if alu is not None:
             parts.append(alu)
         if not parts:

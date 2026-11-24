@@ -111,11 +111,12 @@ def test_a_reduction_is_on_m_in_the_third_word_only(m):
             IDLE,
             w(**read, f224_228=2),
             w(**read, f224_228=3),
+            w(**read, f224_228=4),
         ],
     )
     assert m.g[1].value is None  # nothing on M at lag 1: the port wrote nothing
     assert m.g[2] == Sv(max(B))
-    assert m.g[3] == Sv(None)  # gone at lag 4: the port wrote nothing
+    assert m.g[3] == m.g[4] == Sv(None)  # gone at lags 4 and 5: the port wrote nothing
 
 
 def test_an_extract_reads_only_its_lane(m):
@@ -343,18 +344,30 @@ def test_the_alu_bus_ors_a_product_with_the_ops_result(m):
     assert m.g[12] == Sv(0x7F5 | 0x1808)
 
 
-def test_a_datum_reaches_a_word_whose_op_has_no_result(m):
+@pytest.mark.parametrize(
+    ("code", "target", "load", "want"),
+    [
+        (1, 9, True, Sv(0x4106)),
+        (3, 9, True, Sv(0x4106)),
+        (4, None, True, Sv(0x4106)),
+        (3, 9, False, Sv(0x7F5, I)),  # a product in a jump word: not measured
+    ],
+)
+def test_an_arrival_reaches_a_control_word(m, code, target, load, want):
     src = m.boot.source("test", "a known local word")
     m.boot.local.write(
         LOCAL_BASE + 0x100, Bytes.of((0x4106).to_bytes(4, "little"), src)
     )
-    m.g[5], m.g[11] = Sv(0), Sv(7)
-    brf = Word.from_fields(
+    m.g[5], m.g[11], m.g[9] = Sv(0), Sv(7), Sv(0x123)
+    ctl = Word.from_fields(
         {"ra": 11, "f120_122": 0, "f272_273": 1, "f224_228": 12},
-        base=Word.ctl(1, 9, base=IDLE),
+        base=Word.ctl(code, target, base=IDLE),
     )
-    run(m, [op_word(0x1A, 5, imm=0x40), IDLE, IDLE, brf])
-    assert m.g[12].value == 0x4106
+    before = (
+        [op_word(0x1A, 5, imm=0x40), IDLE, IDLE] if load else [op_word(0x49, 11, 9)]
+    )
+    run(m, [*before, ctl])
+    assert m.g[12] == want
 
 
 @pytest.mark.parametrize(
@@ -598,3 +611,80 @@ def test_a_halt_in_a_taken_jumps_first_slot_wins():
     )
     m = stepped(list(words), g16=0, g17=0)
     assert (m.g[16], m.g[17]) == (Sv(3), Sv(0))
+
+
+@pytest.mark.parametrize("head", [0x1C, 0x22])
+def test_a_lane_shift_by_two_takes_in_two_of_us_lanes(m, head):
+    m.lanes["L3"][2] = Vec(B)
+    m.u[3] = Vec((0x77,) * 32)
+    shift = w(f296_301=head, f65_68=2, f92_95=2, f31_34=3, **l3_port(9, 0))
+    run(m, [shift])
+    assert m.lanes["L3"][9] == Vec((*B[2:], 0x77, 0x77))
+
+
+R0_UNDER = {"f276": 0, "f270_271": 2, "f221_223": 0}
+"""M's strobe with port 270 / 2 on R[0]; f274_275 picks the unit."""
+S1_AND = {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}
+"""S1's a & b: a lane result in its own word, nothing on M."""
+
+
+@pytest.mark.parametrize(
+    ("before", "unit", "tier"),
+    [
+        ([w(**S1_AND)], 1, V),  # the head's own unit
+        ([w(**S1_AND)], 0, V),
+        ([w(f296_301=0x19, f65_68=1)], 0, V),
+        ([w(**S1_AND, f296_301=0x19, f65_68=1)], 1, V),  # two units' heads
+        ([w(**S1_AND), IDLE], 0, V),
+        ([], 1, I),  # no head before in the job
+    ],
+)
+def test_nothing_on_m_behind_a_head_keeps_the_register(m, before, unit, tier):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.lanes["L3"][1] = Vec(B)
+    m.r[0] = Sv(0x0A5A)
+    run(m, [*before, w(**R0_UNDER, f274_275=unit)])
+    assert m.r[0] == Sv(0x0A5A, tier)
+
+
+@pytest.mark.parametrize(("x0", "tier"), [(False, V), (True, I)])
+def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0, tier):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.g[12] = Sv(0x0A5A)
+    x0_head = {"f302_307": 0x13, "f105_109": 8, "f2_6": 0x1E, "f1": 0} if x0 else {}
+    read = w(f276=0, f274_275=1, f272_273=2, f224_228=12, **x0_head)
+    run(m, [w(**S1_AND), IDLE, read])
+    assert m.g[12] == Sv(0x0A5A, tier)
+
+
+@pytest.mark.parametrize(
+    "jump",
+    [
+        [control(3, 7), IDLE],  # the halt in the second slot, only idle ops behind it
+        [control(2, 7, ra=30)],  # a taken br, not an op 3
+    ],
+)
+def test_a_halt_with_an_unmeasured_jump_pending_raises(jump):
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    words = [*jump, halt, *[IDLE] * 6]
+    with pytest.raises(UnknownSemantics, match="a jump pending behind a halt"):
+        stepped(words)
+
+
+def control_tiers(words: list[Word]) -> dict[int, Confidence | None]:
+    """The tier of each control word's step, by index."""
+    boot = Boot()
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    program = Program((*words, halt, *[IDLE] * 3))
+    flow = Executor(boot, datapath=Machine(boot)).step(Job(program, ()))
+    return {s.index: s.confidence for s in flow.steps if s.taken is not None}
+
+
+def test_a_jump_in_a_jumps_delay_slots_is_inferred():
+    words = [control(3, 8), control(3, 13), *[IDLE] * 12]
+    assert control_tiers(words) == {0: V, 1: I}
+
+
+@pytest.mark.parametrize(("target", "tier"), [(6, V), (2, I)])
+def test_a_jump_into_its_own_delay_slots_is_inferred(target, tier):
+    assert control_tiers([control(3, target), *[IDLE] * 5]) == {0: tier}
