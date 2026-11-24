@@ -743,6 +743,18 @@ def test_lane_function_table(unit, head, a, b, scalars, expect):
         ),
         (0x05, lanes(), lanes(l0=0x8000, l1=0x7FFF), {"t": 3}, {0: 0xFFFE, 1: 1}),
         (0x00, lanes(), lanes(l0=0xFFFF), {"imm": 3}, {0: 2}),
+        # A negative immediate multiplies as its 16 bits unsigned: 0x7fff x 0xffe2.
+        (0x00, lanes(), lanes(l0=0x7FFF, l1=1), {"imm": -30}, {0: 0x7FF0, 1: 0}),
+        (0x01, lanes(), lanes(l0=0xFFFF, l1=0x7FFF), {"imm": -30}, {0: 0, 1: 0xFFF1}),
+        (0x03, lanes(), lanes(l0=0xFFFF), {"t": 3}, {0: 2}),
+        (0x04, lanes(l0=0xFFFF), lanes(l0=0xFFFF), {}, {0: 0xFFFE}),
+        (
+            0x06,
+            lanes(l0=0xFFFF, l1=0x8000),
+            lanes(l0=0xFFFF, l1=0x7FFF),
+            {},
+            {0: 0, 1: 0xC000},
+        ),
     ],
 )
 def test_product_high_halves(head, a, b, scalars, high):
@@ -769,7 +781,7 @@ def test_heads_without_a_lane_result():
     assert lane_result("s3", 0x00, lanes(), lanes(), S3_NIBBLES) is None
     assert lane_result("s1", 0x54, lanes(), lanes(), {}) is None
     with pytest.raises(KeyError):
-        lane_result("s0", 0x1C, lanes(), lanes(), {})  # open
+        lane_result("s0", 0x4F, lanes(), lanes(), {})  # open
 
 
 @pytest.mark.parametrize(
@@ -848,3 +860,11 @@ def test_a_return_without_a_call_raises():
     job = Job(Program((Word.ctl(4), *[IDLE] * 4, HALT)), ())
     with pytest.raises(LinkError, match="word 0: .*a return without a call"):
         Executor(Boot()).step(job)
+
+
+def test_s3_0x9_looks_b_up_in_each_half():
+    a = [3, 16, 0x8000, 0] * 4 + [0, 15, 0x100, 2] * 4
+    b = list(range(100, 132))
+    out = lane_result("s3", 0x09, a, b, S3_NIBBLES)
+    assert out[:4] == [103, 0, 0, 100]
+    assert out[16:20] == [116, 131, 0, 118]

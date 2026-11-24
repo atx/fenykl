@@ -16,7 +16,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
   whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
-  whose bits are not nested);
+  whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
+  inferred for a product);
 - X0's and X1's results in their head's word; under the M strobe (f276 = 0) X0's result bus carries
   M's value instead, also beside an active X0 head (`fields.S_RESULTS`; verified on the camera
   through three ports, values whose bits are not nested);
@@ -27,7 +28,7 @@ new content). Buses carry values in the word they arrive in, counted in executed
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing;
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
-  word; S3's reductions from the third word after the head on, held.
+  word; S3's reductions in the third word after the head only.
 
 Strict throughout: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
 give is unknown (None), and a value from a rule below verified carries that tier. Values are 32-bit
@@ -47,6 +48,7 @@ from .fields import (
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
+    M_OTHER_OPEN,
     OP_FIELD,
     PB_FILES,
     PB_SOURCES,
@@ -180,6 +182,8 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
+S2_BY_T = (0x03, 0x05)
+"""S2's multiplies by t, whose high half depends on whether t is taken signed (open)."""
 LANE_PORT_FILE = {
     enable: next(
         f
@@ -272,12 +276,13 @@ class Machine:
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
-        self.extract_at: int | None = None
-        """The word of the last extract under M beside a reduction register past its first
-        word: that register was not on M afterwards (measured on the camera twice: inferred)."""
         self.last_head: int | None = None
         """The word of the last S head run."""
+        self.head_values: set[tuple[str, int]] = set()
+        """The (unit, head) pairs that ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
+        self.ceiling = V
+        """The tier cap of what the word being run leaves (`execute`)."""
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
@@ -326,8 +331,11 @@ class Machine:
 
     # ------------------------------------------------------------------ the word
 
-    def execute(self, index: int, word: Word, t: int) -> str:
-        """Run word `word` (program index `index`) as executed word number `t`; returns a note."""
+    def execute(self, index: int, word: Word, t: int, ceiling: Confidence = V) -> str:
+        """Run word `word` (program index `index`) as executed word number `t`; returns a note.
+        What it writes (registers, lane and local memory) is capped at `ceiling`: words whose
+        running at all was fitted."""
+        self.ceiling = ceiling
         if word.control and word.op < 4 and word["f120_122"] & 3:
             # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
             raise UnknownSemantics(
@@ -350,7 +358,7 @@ class Machine:
             x0bus = UNKNOWN if x0 is None else x0
         writes = self._ports(index, word, t, bus, x0bus, UNKNOWN if x1 is None else x1)
         for key, value in writes.items():
-            self._commit(key, value, t)
+            self._commit(key, _cap(value, ceiling), t)
         for due in (
             self.bus_due,
             self.load_due,
@@ -463,7 +471,7 @@ class Machine:
             )
         if code in STORES:
             datum = self._rd("R", word["f120_122"])
-            tier = min(datum.tier, ra.tier)
+            tier = min(datum.tier, ra.tier, self.ceiling)
             if datum.value is None:
                 self.boot.local.write(
                     LOCAL_BASE + addr, Bytes.unknown(width, self.store_src)
@@ -486,7 +494,12 @@ class Machine:
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
-        parts = [v for v, _ in self.bus_due.get(t, [])]
+        # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.
+        capped = word.control and word.op in (3, 4)
+        parts = [
+            _cap(v, I) if capped and kind != "load" else v
+            for v, kind in self.bus_due.get(t, [])
+        ]
         if alu is not None:
             parts.append(alu)
         if not parts:
@@ -515,6 +528,13 @@ class Machine:
         a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
         k = X_IMMEDIATES[unit].get(word.value)
         if unit == "x1" and head in TRANSFER_HEADS:
+            if self.ceiling < V:
+                raise UnknownSemantics(
+                    index,
+                    f"x1 {head:#x}",
+                    [],
+                    "a transfer in words run by a fitted rule",
+                )
             if self.stream is None:
                 raise UnknownSemantics(
                     index,
@@ -549,7 +569,9 @@ class Machine:
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
             return
         addr = lane_address(head, a.value, b.value if b.value is not None else 0, k)
-        tier = min(a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1])
+        tier = min(
+            a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1], self.ceiling
+        )
         if self.stream is not None:
             tier = min(tier, self.stream.lane_tier())
         if self.lanes_lost:
@@ -587,6 +609,9 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
+            if self.last_head != t:
+                self.head_values = set()
+            self.head_values.add((unit, head))
             self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
@@ -705,7 +730,11 @@ class Machine:
                 low = Vec(tuple(lanes), min(tier, sc.tier))
                 if unit == "s2" and head in S2_HIGH_HALVES:
                     hi = product_high(head, al, bl, sc)
-                    high = Vec(tuple(hi), min(tier, S2_HIGH_HALVES[head][1], sc.tier))
+                    htier = min(tier, S2_HIGH_HALVES[head][1], sc.tier)
+                    t_value = scalars["t"].value
+                    if head in S2_BY_T and t_value is not None and t_value & 0x8000:
+                        htier = min(htier, I)  # t was positive in every camera run
+                    high = Vec(tuple(hi), htier)
             except UnknownInput:
                 low = UNKNOWN_VEC
         lag = LANE_LAG[unit].get(head)
@@ -754,19 +783,14 @@ class Machine:
 
     def _m(self, index: int, word: Word, own: dict[str, Sv], t: int) -> Sv | object:
         """M's value under f274_275's unit `sel`: an own-word result (f274_275 chooses among
-        several), else the unit's held result; S3's held one is its reduction register, unknown
-        before the job's first reduction. A held result of another unit is not on M (inferred),
-        so beside one M's value is at most inferred."""
+        several), else the unit's held result; S3's held one is a reduction's result, on M in its
+        first word only. A held result of another unit is not on M (inferred), so beside one M's
+        value is at most inferred."""
         sel = M_UNITS[word["f274_275"]]
         held = dict(self.held_due.get(t, {}))
-        ready = [(w, v) for w, v in self.reductions if w <= t]
-        fresh = None
-        if ready:
-            w, v = max(ready, key=lambda x: x[0])
-            held["s3"] = v
-            fresh = v if w == t else None
-        elif sel == "s3":
-            held["s3"] = Sv(None)
+        fresh = next((v for w, v in reversed(self.reductions) if w == t), None)
+        if fresh is not None:
+            held["s3"] = fresh
         tier = I if any(u != sel for u in held if u != "s3") else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
@@ -780,33 +804,22 @@ class Machine:
             return Sv(None, I if before in S_NEXT_VALUES.get(sel, ()) else H)
         h = held.get(sel)
         if not own:
-            gone = self.extract_at is not None and all(
-                w <= self.extract_at for w, _ in ready
-            )
-            if sel == "s3" and ready and gone:
-                return Kept(I)
             if h is not None:
                 return _cap(h, tier)
-            # Nothing on M behind a head without a result there: verified one word after 97
-            # heads of all four units and two and three words after 16, earlier heads further
-            # back in every cell; with no head before in the job it is inferred.
-            quiet = self.last_head is not None and t > self.last_head
-            return Kept(tier if quiet else min(tier, I))
+            # Another unit's held result is not on M here (verified one word after its head).
+            return Kept(V if self._quiet(sel, t) else I)
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
             )
         if sel not in own:
-            # A lone own-word result under another unit's f274_275 (not measured).
-            v = next(iter(own.values()))
-            return _cap(v, H) if h is None else Sv(None, H)
+            # A lone own-word result under another unit's f274_275 is not on M (verified).
+            return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
         v = own[sel]
         if sel == "s3":
             if fresh is None:
                 # Beside a register older than its first word the extract comes alone
                 # (verified: four, five, eight and twenty words after the reduction head).
-                if ready:
-                    self.extract_at = t
                 return _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (verified).
             if v.value is None or fresh.value is None:
@@ -817,6 +830,23 @@ class Machine:
                 None, H
             )  # an own-word result beside its unit's held one: not measured
         return _cap(v, tier)
+
+    def _quiet(self, sel: str, t: int) -> bool:
+        """Whether "nothing on M" was measured for this case: in every word from two after a
+        head under every unit, also after a reduction (but its first word) with other heads
+        between; with one unit's heads in the word, in the head's own word and the next under
+        every unit (verified). Beside a head of `M_OTHER_OPEN` under another unit in its word and
+        the next, with two units' heads in one word and with no head in the job, it is
+        inferred."""
+        if self.last_head is None:
+            return False
+        if t - self.last_head >= 2:
+            return True
+        if len({u for u, _ in self.head_values}) > 1:
+            return False
+        return not any(
+            u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in self.head_values
+        )
 
     # ------------------------------------------------------------------ ports
 
@@ -867,7 +897,7 @@ class Machine:
             put(file, word[PORTS[enable]], _cap(self._lane_source(src[0], t), src[1]))
         v = word["f252_254"]
         if v in STORE_NOTHING:
-            kept[("O", word["f179_181"])] = I
+            kept[("O", word["f179_181"])] = V
         elif v != lookup("f252_254").idle:
             if v not in STORE_SOURCES:
                 raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
@@ -875,11 +905,7 @@ class Machine:
             put("O", word["f179_181"], _cap(self._lane_source(text, t), tier))
         u = word["f232_233"]
         if u == 1:
-            if word[HEAD_IDS["s3"]] == lookup(HEAD_IDS["s3"]).idle:
-                self._u_write = (
-                    word["f141_144"],
-                    Vec(UNKNOWN_VEC.lanes, H),
-                )  # no S3 head: open
+            # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
             if self._u_write is not None:
                 put("U", *self._u_write)
         elif u != lookup("f232_233").idle and u not in (0, 2):

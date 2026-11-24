@@ -1155,6 +1155,11 @@ def _open(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [None] * LANE_COUNT
 
 
+def _lookup(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    """Lane k := b[(k & 16) + a[k]] where a[k] < 16, else 0: a table lookup in each half."""
+    return [b[(k & 16) + a[k]] if a[k] < 16 else 0 for k in range(LANE_COUNT)]
+
+
 def _lane_numbers(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return list(range(LANE_COUNT))
 
@@ -1320,6 +1325,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x1A: _signed(lambda x, y, c: _sat_s(y - _sv(c, "s"))),
         0x1B: _signed(lambda x, y, c: _sat_s(y + _sv(c, "s"))),
         0x1D: _signed(lambda x, y, c: _round_even(x + y, 1)),
+        0x1C: _signed(lambda x, y, c: _round_even(y - x, 1)),
         **dict.fromkeys((0x1E, 0x2A), _CARRY_SAT_S),
         **dict.fromkeys((0x1F, 0x2B), _CARRY_WRAP),
         **dict.fromkeys((0x2C, 0x2D), _CARRY_SAT_U),
@@ -1428,12 +1434,14 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x09: _NEGATIVE,
         0x0A: _lane_numbers,
         0x0B: _NOT_NEGATIVE,
+        0x0C: None,
+        0x0E: None,
     },
     "s3": {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
         **dict.fromkeys((0x06, 0x07, 0x08), _open),
-        0x09: _open,
+        0x09: _lookup,
         0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
         0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
         0x0C: lambda a, b, c: [*b[1::2], *a[1::2]],
@@ -1457,14 +1465,12 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
 @dataclass(frozen=True)
 class LaneRule:
     """What an S unit's head value does to the lanes: `value` of (a, b, scalars), None for a
-    head that writes no lane result; `reads` the lane operands it reads ("a", "b"); `tier_at`
-    the tier of its result at the scalars (a row whose sub-domains have different tiers)."""
+    head that writes no lane result; `reads` the lane operands it reads ("a", "b")."""
 
     confidence: Confidence
     fact: str
     value: LaneValue | None
     reads: str = "ab"
-    tier_at: Callable[[Scalars], Confidence] | None = None
 
 
 _LANE_READS = {
@@ -1509,19 +1515,11 @@ _LANE_READS = {
     ),
     "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
     "s3": _reads(
-        none=(0x06, 0x07, 0x08, 0x09, 0x11, 0x14, 0x18),
+        none=(0x06, 0x07, 0x08, 0x11, 0x14, 0x18),
         b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
     ),
 }
 """The lane operands each S head's lane rule reads, from its rule; a head not listed reads both."""
-
-
-_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {
-    "s3": {0x22: lambda c: I if c["f92_95"] == 2 else V},
-}
-"""Per head a tier that depends on the word's scalars: S3 0x22 at f92_95 = 2 was measured, not
-pre-registered (0x1c was); every other count of the lane shifts and every nibble of S2 0x7 was
-pre-registered."""
 
 
 def _lane_rules(unit: str) -> dict[int, LaneRule]:
@@ -1543,7 +1541,6 @@ def _lane_rules(unit: str) -> dict[int, LaneRule]:
             f"{text}; {note}" if note else text,
             values[h],
             _LANE_READS[unit].get(h, "ab"),
-            _LANE_TIERS.get(unit, {}).get(h),
         )
         for h, (text, conf, note) in table.items()
     }
@@ -1555,10 +1552,7 @@ LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
 
 def lane_tier(unit: str, head: int, scalars: Scalars) -> Confidence:
     """The tier of S unit `unit`'s lane result at head value `head` on `scalars`."""
-    rule = LANE_RULES[unit][head]
-    if rule.tier_at is None:
-        return rule.confidence
-    return min(rule.confidence, rule.tier_at(scalars))
+    return LANE_RULES[unit][head].confidence
 
 
 def lane_result(
@@ -1590,7 +1584,11 @@ def lane_result(
 _HIGH_VALUES: dict[int, LaneValue] = {
     0x02: _unsigned(lambda x, y, c: x * _s16(y) >> 16),
     0x05: _signed(lambda x, y, c: y * _sv(c, "t") >> 16),
-    0x00: _unsigned(lambda x, y, c: y * _sv(c, "imm") >> 16),
+    0x00: _unsigned(lambda x, y, c: y * (c["imm"] & LANE_MASK) >> 16),
+    0x01: _signed(lambda x, y, c: y * _sv(c, "imm") >> 16),
+    0x03: _unsigned(lambda x, y, c: y * (c["t"] & LANE_MASK) >> 16),
+    0x04: _unsigned(lambda x, y, c: x * y >> 16),
+    0x06: _signed(lambda x, y, c: x * y >> 16),
 }
 if set(_HIGH_VALUES) != set(S2_HIGH_HALVES):
     raise ValueError(

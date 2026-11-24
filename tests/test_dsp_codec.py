@@ -156,7 +156,22 @@ def test_lane_tables_verified_rows():
         unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
         for unit, rows in LANE_FUNCTIONS.items()
     }
-    assert verified == {"s0": 71, "s1": 85, "s2": 13, "s3": 33}
+    assert verified == {"s0": 72, "s1": 85, "s2": 15, "s3": 60}
+
+
+def test_a_head_field_is_verified_once_every_value_has_a_verified_row():
+    # S2's fifteen values all have verified rows and lags; S0, S1, S3 still have open rows.
+    tiers = {
+        u: lookup(f"f{lo}_{hi}").confidence
+        for u, (lo, hi) in HEADS.items()
+        if u[0] == "s"
+    }
+    assert tiers == {
+        "s0": Confidence.INFERRED,
+        "s1": Confidence.INFERRED,
+        "s2": Confidence.VERIFIED,
+        "s3": Confidence.INFERRED,
+    }
 
 
 def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():

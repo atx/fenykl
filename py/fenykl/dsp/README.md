@@ -109,7 +109,7 @@ confidence and fact; `fields.op(value)` is total:
 | 2 | `br` | branch iff ra != 0, either way | verified |
 | 3 | `call` | a jump to T that writes no link; a call is an op 3 whose delay slots hold 0x0b #(i + 5) on r1 | verified |
 | 4 | `ret` | a jump to the word G[f128_132] names, r1 by the stock convention | verified |
-| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the three words behind it still run [verified]; word 5 of every stock program, where the call at word 0 returns | inferred |
+| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the next three words fetched behind it still run and the job ends [verified] (data words; a jump due among them redirects them, verified on op 4 in slots 2 and 3, fitted on op 3; a halt first or an op 3 / op 4 second among them is not taken; the emulator refuses other control words among them and unmeasured jump shapes); word 5 of every stock program, where the call at word 0 returns | inferred |
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
 | 127 | `idle` | no op | inferred |
 
@@ -164,7 +164,7 @@ S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar resu
 (f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
 [verified, pre-registered]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
 minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
-register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
+result on M's bus in the third word after the head and in no other [verified]; S2 0xc reads lane
 (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [verified, pre-registered]; S0's and S1's compare heads give a
 mask one word after the head (below).
 
@@ -290,8 +290,10 @@ imm16 = f76_79 << 12 | f37_40 << 8 | f23_30; S1 imm7 = sext7(f80_83 bits 3..2 <<
 do not enter S1's.
 
 A product's high half goes to S0's and S1's files through their first ports under 1
-(`fields.S2_HIGH_HALVES`): S2 0x5 is signed b x t and 0x2 the unsigned a x the signed b
-[verified], 0x0 the unsigned b x imm [inferred]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
+(`fields.S2_HIGH_HALVES`): of S2's seven multiplies 0x0 is the unsigned b x imm's 16 bits,
+0x1 the signed b x imm, 0x2 the unsigned a x the signed b, 0x3 the unsigned b x t, 0x4 the
+unsigned a x the unsigned b, 0x5 the signed b x t and 0x6 the signed a x the signed b
+[verified; with t's bit 15 set 0x3 and 0x5 inferred: t was positive in every run]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
 S1's a : b is the 32-bit product and S1 0x29 (or 0x10) gives it scaled, rounded and saturated:
 a fixed-point multiply by a scalar in three words [verified].
 
@@ -338,7 +340,7 @@ reaches all four first ports in one word [verified]. In the five stock programs 
 such a port write four words later, and none lacks its head (379 words; verified in the bytes).
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
-occur and left O as it was [inferred, measured], `fields.STORE_SOURCES`), the moves tried in the head's own word and the
+occur and leave O as it was [verified, pre-registered], `fields.STORE_SOURCES`), the moves tried in the head's own word and the
 arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head in
 the word of O's port write stores the old content, one to three words later the new content; a
 load one or two words after a store to the same vector reads it back, and a store up to three
@@ -437,7 +439,7 @@ loads are 0x1a 32-bit, 0x16 signed and 0x14 unsigned 16-bit, 0x10 unsigned and 0
 (register forms 0x1b, 0x17, 0x15, 0x11, 0x0f). A load's datum goes to no register by itself: it
 appears on the ALU result bus exactly three words after the load, where a word with
 f272_273 = 1 or f270_271 = 1 takes it; the bus ORs it with a data op's result and with a
-multiply's product arriving in that word, and a word with a branch, a store, a load or a
+multiply's product arriving in that word, and a word with a control op, a store, a load or a
 multiply takes it alone; consecutive loads deliver in consecutive words (verified by exact
 readout). Stepping records a
 load's read only and makes a store's bytes unknown, since R is not modelled; an access at an
@@ -782,10 +784,12 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
   and its ports' registers unknown. An undecided branch raises in
   strict mode and stops the run in lenient mode. Every taken control op jumps after its own
-  four following words, also a control op in another's delay slots and a loop end whose
-  target is one of its own slots [verified]. On the camera op 3 is a jump and op 4 jumps to
-  the word G[f128_132] names [verified]: with a `datapath` the stepper takes op 4's target
-  from that register (undecided while it is unknown) and keeps no stack.
+  four following words, also a control op in a taken control op's delay slots and one whose
+  target is one of its own slots [verified for a taken br in a br's first slot and a loop end
+  into its third slot; any other such step is inferred at most]. On the camera
+  op 3 is a jump and op 4 jumps to the word G[f128_132] names [verified]: with a `datapath` the
+  stepper takes op 4's target from that register (undecided while it is unknown) and keeps no
+  stack.
 - **Local op 3** (`Program.local_op3()`), plain stepping only: a forward op 3 after word 0 with
   no return between it and T, a jump on the camera. The plain stepper, which holds no link
   register, infers calls and returns with a stack of its own: such an op 3 runs as a call by
@@ -820,23 +824,30 @@ value in the word it arrives in and OR what arrives together: the op result in i
 product one word later, a local load's datum three words later, a lane load four words after its X0 head, a lane
 head's result `LANE_LAG` words after the head for that word only (a head without a measured lag
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
-reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
+reductions in the third word only. A port with nothing arriving writes nothing. Values are
 `Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
 of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e) without a
 stream, an unaligned local access, a store at an unknown address, two
 ports on one register and M combinations not measured raise `UnknownSemantics`; a head without a
-rule, or U's port beside a head whose U content is open, makes what it writes unknown. Across
+rule, or U's port beside a head whose U content is open, makes what it writes unknown; U's port
+with no S3 head writes nothing [verified]. Across
 the jobs of a boot the lane memory and every register file are carried (`Machine.between_jobs`;
 verified on the camera for each file); a program that runs between two jobs, and what of the
 lane memory survives it, are the caller's part. Operand use is declared per rule (`LaneRule.reads`,
-`XRule.reads`, `ScalarValue.reads`), and a row whose sub-domains have different tiers gives the
-tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
+`XRule.reads`, `ScalarValue.reads`). M under a unit after a head whose result there was not
 read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
 after an extract, which reads its own lane (measured); "nothing on M" behind a head
-without a result there is verified (one word after 97 heads, two and three words after 16, in
-all four units), inferred with no head before. An S3 extract ORs with the reduction register in that register's first word
-and comes alone later [verified]; after such a later extract the register is not on M
-[inferred].
+without a result there is verified from two words after a head on under every unit, also after
+a reduction (but its first word) with other heads between, and, with one unit's head in the
+word, in the head's own word and one word after under every unit, but under S0..S2 in an S3
+head's own word; inferred there, beside two units' heads in one word and with no head before.
+An S3 extract ORs with a reduction in the reduction's first word and comes alone later
+[verified]. Behind a halt the next three words fetched run and the job ends: a taken jump due
+among them puts its target's words there, one due after them is not taken (`TAIL_SHAPES`:
+verified for op 3 in slot 1 and op 4 in slots 2 and 3, inferred for op 3's fitted slots 2..4
+and op 4's slot 4, whose writes are capped at inferred); a halt first and an op 3 or op 4
+second among them are not taken [verified, with no jump pending], a halt third ends the job
+[inferred]; other control words there and other pending jumps raise.
 
 `stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
 against the stock copy's for the same request (`Transcript`, recorded by running program 16)

@@ -452,7 +452,13 @@ OPS: dict[int, Op] = {
         "word 11, inside the routine with the call's return pending, ended with status 0 and "
         "dst not written (verified on the camera, one run), so a halt needs no return and the "
         "return stack is not checked (inferred); three words behind a halt still run: of five "
-        "stores there the first three wrote (verified on the camera, pre-registered)",
+        "stores there the first three wrote, and the job ended after them also with an op 3 or op 4 "
+        "second or a halt first among them (verified on the camera, pre-registered); they are "
+        "the next three words fetched, so a taken jump due among them puts the target's words "
+        "there (verified on the camera with the halt in slot 2 or 3 of an op 4; fitted with "
+        "the halt in slot 2, 3 or 4 of an op 3) and one due after them is not taken (halt in "
+        "slot 1 of an op 3, verified); a halt third among them, a target's own, ended the job "
+        "(fitted)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
@@ -924,13 +930,14 @@ def _lags(
 LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
     "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
     | _lags(1, V, range(0x08, 0x0E), 0x1E, 0x1F, range(0x20, 0x24), range(0x26, 0x2E))
-    | _lags(1, V, range(0x34, 0x40))
+    | _lags(1, V, range(0x34, 0x40), 0x1C)
     | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
     "s1": _lags(0, V, range(0xA), 0x53)
     | _lags(1, V, range(0xA, 0x41), range(0x47, 0x53)),
     "s2": _lags(1, V, range(0x7)) | _lags(0, V, 0x7, 0x8, 0x9, 0xA, 0xB, 0xD),
     "s3": _lags(1, V, range(0xA, 0xE))
     | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
+    | _lags(1, V, 0x9)
     | _lags(1, H, 0x6, 0x7, 0x8),
 }
 """Words from a head to the one word whose lane port takes its result, with the tier, by head (verified on the camera,
@@ -994,8 +1001,8 @@ stock programs, 7 is idle. The heads tried into O, S3's lane number and broadcas
 and S1 0x04, are taken in the head's own word, the arithmetic heads tried one word after it, as
 at the lane ports (`LANE_LAG`)."""
 STORE_NOTHING = (5, 6)
-"""Values of f252_254 under which O kept its content, beside a result of every S unit and with
-none (measured on the camera, not pre-registered: inferred)."""
+"""Values of f252_254 under which O keeps its content, beside a result of every S unit and with
+none (verified on the camera, pre-registered on a second register and other heads)."""
 X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
@@ -1031,8 +1038,8 @@ U_PORT_FACT = (
     "With each enable value 0..2, from a word with one value on all three scalar buses and no "
     "S head, it wrote nothing to lanes 0 / 1 of L3, nor to L3 under 1 beside any S3 head "
     "(verified on the camera). The enable of U's port U[f141_144] beside an S3 head: 1 writes, "
-    "0 and 2 write nothing (verified on the camera, pre-registered against a known value in "
-    "U[5]); U is `LANE_THIRD_FILE`"
+    "0 and 2 write nothing, and with no S3 head in the word 1 writes nothing (verified on the "
+    "camera, pre-registered against a known value in U); U is `LANE_THIRD_FILE`"
 )
 LANE_OPERANDS = (
     "a and b are the unit's two lane operands (`LANE_FILES`) lane by lane, read as signed or "
@@ -1149,6 +1156,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x17: ("min_s(b, s)", V, ""),
         0x1A: ("sat_s(b - s)", V, ""),
         0x1B: ("sat_s(b + s)", V, ""),
+        0x1C: (f"(b - a) / 2, {TIES}", V, ""),
         0x1D: (f"(a + b) / 2, {TIES}", V, ""),
         **_rows((0x1E, 0x2A), "sat_s(a + b + c)", V, CARRY_IN),
         **_rows((0x1F, 0x2B), "a + b + c, wrapping", V, CARRY_IN),
@@ -1295,6 +1303,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x09: ("0xffff where b < 0, else 0", V, ""),
         0x0A: ("the lane number 0..31", V, ""),
         0x0B: ("0xffff where b >= 0, else 0", V, ""),
+        **_rows((0x0C, 0x0E), NO_LANE, V, NO_LANE_LAGS + " and in both"),
     },
     "s3": {
         **_rows(
@@ -1303,16 +1312,20 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             NO_LANE_LAGS,
         ),
-        **_rows(range(0x25, 0x3F), NO_LANE, I),
+        **_rows(range(0x25, 0x3F), NO_LANE, V, NO_LANE_LAGS),
         **_rows(
             (0x06, 0x07, 0x08),
             "a window of b's lanes, 0 in the others",
             H,
-            "the window depends on a state not identified: in one run at lag 1 0x6 gave 0 in "
-            "all lanes, 0x7 b in lanes 9..15 and 0x8 b in lanes 16..31; earlier runs gave b or 0 "
-            "by run",
+            "the window follows a's content, not the scalars nor the words around the head: "
+            "0x6 gave 0 on every operand pair; 0x7 a block of b in lanes 0..15, 0x8 a 16-lane "
+            "block of b in one half, or 0, by operands",
         ),
-        0x09: ("b's lanes 0..2, then 0", H, "0 in an earlier run; the rule open"),
+        0x09: (
+            "b[(k & 16) + a[k]] where a[k] < 16, else 0",
+            V,
+            "a table lookup in each 16-lane half",
+        ),
         0x0A: ("lanes 2k, 2k + 1 := b[k], a[k] for k = 0..15", V, ""),
         0x0B: ("lanes 2k, 2k + 1 := b[16 + k], a[16 + k] for k = 0..15", V, ""),
         0x0C: ("b's odd lanes, then a's odd lanes", V, ""),
@@ -1372,7 +1385,15 @@ listed are open; `LANE_OPERANDS` names the operands."""
 S2_HIGH_HALVES: dict[int, LaneRow] = {
     0x02: ("bits 16..31 of the unsigned a x the signed b", V, ""),
     0x05: ("bits 16..31 of the signed b x t", V, ""),
-    0x00: ("bits 16..31 of the unsigned b x imm", I, ""),
+    0x00: (
+        "bits 16..31 of the unsigned b x imm's 16 bits (sext7, then unsigned)",
+        V,
+        "",
+    ),
+    0x01: ("bits 16..31 of the signed b x the signed imm", V, ""),
+    0x03: ("bits 16..31 of the unsigned b x t", V, ""),
+    0x04: ("bits 16..31 of the unsigned a x the unsigned b", V, ""),
+    0x06: ("bits 16..31 of the signed a x the signed b", V, ""),
 }
 """Where S2's multiplies are known whole: the high half of the 32-bit product, which the first
 ports of L0 and L1 take under enable 1 one word after the head (`LANE_SOURCES`). With the low
@@ -1380,9 +1401,13 @@ half taken by f159_162 / 1 in the same word, S1's double-width shifts of a : b n
 product (verified on the camera for 0x5 on all 32 lanes, pre-registered: a fixed-point multiply
 by a scalar, rounded and saturated, in three words). 0x2's signedness was pre-registered on 16-bit
 edge operands and met on all 32 lanes, and through 0x2's low and high halves and S3 0x5 a signed
-dot product came out exact (verified on the camera); 0x0's was refitted on all 32 lanes where an
-operand is negative (inferred); what separates 0x2 / 0x4 / 0x6, 0x3 / 0x5 and 0x0 / 0x1 is open
-(hypothesis: the operands' signedness)."""
+dot product came out exact (verified on the camera). The pairs differ in the operands'
+signedness: 0x0 / 0x1 and 0x3 / 0x5 unsigned / signed b, 0x4 / 0x2 / 0x6 unsigned a x unsigned
+b, unsigned a x signed b, signed a x signed b; under a negative immediate 0x0 multiplies by its
+16 bits taken unsigned, 0x1 by the signed value (fitted on all 32 lanes of 16-bit edge
+operands, then pre-registered on swapped operands and immediates -1 / -30 and met, both halves
+of all seven multiplies: verified on the camera). t was positive in every run, so whether
+0x3 / 0x5 take it signed is open."""
 LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
     "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", V),
     "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", V),
@@ -1409,8 +1434,8 @@ S_NONE = {
 }
 """Where not every other head value was read."""
 REDUCTION = (
-    "of the 32 lanes of L3[f65_68], on M's bus from the third word after the head on, where it stays: a result "
-    "register (verified, pre-registered)"
+    "of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other (verified, "
+    "pre-registered)"
 )
 
 
@@ -1545,6 +1570,13 @@ camera)."""
 
 S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
 """S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+M_OTHER_OPEN = {
+    "s0": frozenset({0x40, *range(0x47, 0x60)}) - {0x4B, 0x4D},
+    "s1": frozenset(range(0x55, 0x60)),
+}
+"""S heads beside which M under another unit's f274_275, in the head's word and the next, was
+not read; beside every other head it was, and nothing was on M there (verified on the camera,
+pre-registered)."""
 S_NEXT_VALUES = {
     "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
 }
@@ -1892,6 +1924,22 @@ def _s_values(unit: str) -> dict[int, str]:
     return values
 
 
+def _head_tier(unit: str, idle: int) -> Confidence:
+    """Verified when every value but the idle one has a verified lane row and, where it writes
+    a lane, a verified lag; inferred otherwise."""
+    lo, hi = HEADS[unit]
+    rows, lags = LANE_FUNCTIONS[unit], LANE_LAG[unit]
+    for h in range(1 << (hi - lo + 1)):
+        if h == idle:
+            continue
+        row = rows.get(h)
+        if row is None or row[1] != V:
+            return I
+        if row[0] != NO_LANE and (h not in lags or lags[h][1] != V):
+            return I
+    return V
+
+
 def _head(unit: str, idle: int, fact: str) -> Field:
     lo, hi = HEADS[unit]
     base = (
@@ -1904,9 +1952,10 @@ def _head(unit: str, idle: int, fact: str) -> Field:
         f"{'has' if len(S_RESULTS[unit]) == 1 else 'have'} a scalar result (`S_RESULTS`), "
         f"{S_NONE.get(unit, 'the others none')} (measured on the camera)"
     )
+    tier = _head_tier(unit, idle)
     lanes = (
         "Its values select lane functions, each tagged by value (`LANE_FUNCTIONS`); the unit: "
-        f"{LANE_ROLES[unit]} (inferred)"
+        f"{LANE_ROLES[unit]} ({'verified: every value has a verified row and lag' if tier == V else 'inferred'})"
     )
     return Field(
         lo,
@@ -1914,7 +1963,7 @@ def _head(unit: str, idle: int, fact: str) -> Field:
         Kind.OPCODE,
         unit,
         idle,
-        I,
+        tier,
         f"{base}. {fact}. {lanes}. {scalar}",
         values=_s_values(unit),
     )
@@ -2244,7 +2293,7 @@ FIELDS: tuple[Field, ...] = (
             0: "S0's result, and its held mask one word after the head (verified)",
             1: "S1's result, and its held mask one word after the head (verified)",
             2: "S2's result in the head's own word (verified)",
-            3: "S3's result, and a held reduction from the third word after the head (verified)",
+            3: "S3's result, and a reduction in the third word after the head (verified)",
         },
     ),
     Field(
@@ -2259,7 +2308,7 @@ FIELDS: tuple[Field, ...] = (
         "head's own word only; under 1 that port wrote nothing, and M or the port one or two "
         "words after the head took nothing (verified on the camera by exact readout, "
         "pre-registered). S3's reductions 0x0..0x5 are the exception: their result is on the "
-        "bus from the third word after the head on and stays (verified on the camera, "
+        "bus in the third word after the head only (verified on the camera, "
         "pre-registered), OR-ed with an extract's lane in the same word (measured); and S0's and "
         "S1's compare and carry masks, on the bus one word after the head under f274_275 = 0 "
         "and 1 (verified on the camera, pre-registered), two words after S0 0x20 no longer "
@@ -2588,7 +2637,7 @@ RING_STEP = (
 LOAD_DATUM = (
     "a load's datum goes to no register by itself: it appears on the ALU result bus exactly "
     "three words after the load, where a word with f272_273 = 1 or f270_271 = 1 takes it, also "
-    "a word with a branch, a store, a load or a multiply; the bus ORs it with the result of a "
+    "a word with a control op, a store, a load or a multiply; the bus ORs it with the result of a "
     "data op or of op 0 in that word and with a product arriving there (verified on the camera, "
     "pre-registered on values whose bits are not nested); consecutive loads deliver in "
     f"consecutive words ({EXACT})"
