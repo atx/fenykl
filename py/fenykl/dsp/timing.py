@@ -39,27 +39,28 @@ REPEAT = Cost(
     "a word executed again, in a loop: 5.37 ns, measured on idle words; scalar local loads, "
     "X1's divide, X0 lane-memory loads and taken branches with their delay slots cost the same "
     "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
-    "idle words at 5.2 to 5.4 ns in passes of 64 to 2000 words, and in passes that jump 1088 "
+    "idle words at 5.2 to 5.3 ns in passes of 64 to 1024 words, and in passes that jump 1088 "
     "words away and back by op 2 or op 3 (verified on the camera, pre-registered: no loop "
-    "buffer and no cache smaller than the 2048-word image); "
+    "buffer and no cache smaller than 1024 words; passes of 2000 words measured faster, 4.6 "
+    "ns, below the registered range); passes over 106 words were timed with idle words only; "
     "S3 reductions likewise (fitted)",
 )
 REPEAT_I = Cost(
     REPEAT.us,
     I,
-    "a word executed again outside the measured passes (a pass under 9 or over 2000 words, or "
+    "a word executed again outside the measured passes (a pass under 9 or over 1024 words, or "
     "with an op 4 since the word's last run), or with an S unit's head: S3 reductions "
     "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
     "more than an idle word)",
 )
-PASSES = range(9, 2001)
+PASSES = range(9, 1025)
 """Executed words between two runs of a word in the loops timed on the camera."""
 FIRST = Cost(
     0.062,
-    V,
+    I,
     "a word's first execution: 62 ns, the slope over straight-line jobs of 190 to 2000 words "
-    "(fitted), within a pre-registered 50 to 75 ns in straight-line runs of 0 to 1900 idle "
-    "words (65 to 73 ns) and in the intercepts of loops of 64 to 2000 words per pass; words "
+    "(fitted); straight-line runs of 0 to 1900 idle words later gave 65 to 73 ns (within a "
+    "pre-registered 50 to 75 ns), so the figure may be low by up to 15 % for long runs; words "
     "of ALU ops cost the same as idle words (verified on the camera); paid when the word runs, "
     "not for the image's length: a word branched over costs nothing (verified on the camera)",
 )

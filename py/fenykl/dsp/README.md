@@ -117,8 +117,9 @@ confidence and fact; `fields.op(value)` is total:
 5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, 0x2d, 0x39, 0x3b and 0x45 never occur in the
 stock programs. The seven run on the camera as data ops (`fields.UNSEEN_FORMATS`, exact readout on eight operand
 sets each): 0x22 ra <= imm16 unsigned, 0x26 / 0x27 max / min(ra, imm16) unsigned (imm16 zero-extended), 0x2d
-min(ra, rb) unsigned, 0x39 ra ^ rb, 0x45 the ring step with s = ra + 1 and L = rb [verified]; 0x3b ra & ~rb
-[inferred: fitted, one of the candidates named before the run].
+min(ra, rb) unsigned, 0x39 ra ^ rb, 0x45 the ring step with s = ra + 1 and L = rb [verified]; 0x22, 0x26
+and 0x27 [inferred: matched, but only with ra above imm16]; 0x3b ra & ~rb [inferred: fitted, one of the
+candidates named before the run].
 Ops 0..4 are the control ops (`CONTROL_OPS`, `word.control`), and
 f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 | bits 128..132 <<
 8, an absolute word index into the program (`word.target`, None for other words): T follows its
@@ -932,16 +933,15 @@ as the job's completion time against loop pass counts, minimum over repeats:
 
 - **job**: 98.4 us per job, the interrupt and callback path [inferred: the loops' verified
   intercept of 101 us less the first runs of their 42 words];
-- **first runs**: 62 ns for each word index the first time it runs [verified: the straight-line
-  slope fitted, then 65 to 73 ns in a pre-registered 50 to 75 ns range; words of ALU ops cost
+- **first runs**: 62 ns for each word index the first time it runs [inferred: the straight-line
+  slope fitted; later straight runs gave 65 to 73 ns, so it may be low by up to 15 %; words of ALU ops cost
   as idle words, so a straight-line run is fetch-bound whatever it computes; a word branched
   over costs nothing];
-- **repeats**: 5.37 ns for each later execution 9 to 2000 executed words after the word's last,
+- **repeats**: 5.37 ns for each later execution 9 to 1024 executed words after the word's last,
   with no op 4 between [verified in loops of 9 to 106 words for idle words, scalar local loads,
   X1's divide, X0 lane loads and taken branches with their slots, and for idle words in loops
-  of 64 to 2000 words and in loops that jump 1088 words away and back by op 2 or op 3: a word
-  once fetched stays for the rest of the job, with no loop buffer and no cache smaller than
-  the 2048-word image to evict it]; other repeats, and repeated
+  of 64 to 1024 words and in loops that jump 1088 words away and back by op 2 or op 3: no loop
+  buffer and no cache under 1024 words; 2000-word passes measured at 4.6 ns]; other repeats, and repeated
   words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
   not timed];
 - **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and

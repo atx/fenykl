@@ -113,14 +113,14 @@ def test_a_loops_words_are_counted_and_tiered():
     head's three are inferred."""
     e = loop(4, head=True)
     parts = {p.name: (p.us, p.tier) for p in e.parts}
-    assert parts["first runs"] == (11 * FIRST.us, V)
+    assert parts["first runs"] == (11 * FIRST.us, I)
     assert parts["repeats"] == (27 * REPEAT.us, V)
     assert parts["inferred repeats"] == (3 * REPEAT_I.us, I)
     assert e.tier == I
 
 
-def test_passes_up_to_2000_words_repeat_at_the_verified_rate():
-    e = loop(1500)
+def test_passes_up_to_1024_words_repeat_at_the_verified_rate():
+    e = loop(900)
     assert {p.name for p in e.parts} == {"job", "first runs", "repeats"}
 
 

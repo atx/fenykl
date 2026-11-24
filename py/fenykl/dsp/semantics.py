@@ -756,6 +756,11 @@ _UNSEEN = (
     "pre-registered, eight operand sets of both signs; no result one word later, the operands "
     "unchanged)"
 )
+_UNSEEN_ONE_SIDE = (
+    "a data op value never used in the stock programs (inferred: pre-registered and matched on "
+    "eight operand sets, but ra exceeded imm16 in all eight, so the compare's other side and "
+    "the max / min's other operand were not exercised)"
+)
 _UNSEEN_FITTED = (
     "a data op value never used in the stock programs (fitted on the camera by exact readout, "
     "eight operand sets of both signs, one of the candidates named before the run; the operands "
@@ -971,28 +976,26 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
     ),
     0x22: OpSemantics(
-        V,
-        f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN})",
-        _imm("ra <=u c", lambda a, c: _flag(_u32(a) <= c), V),
+        I,
+        f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
+        _imm("ra <=u c", lambda a, c: _flag(_u32(a) <= c), I),
     ),
     0x26: OpSemantics(
-        V,
-        f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN})",
-        _imm("maxu(ra, c)", lambda a, c: max(_u32(a), c), V),
+        I,
+        f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
+        _imm("maxu(ra, c)", lambda a, c: max(_u32(a), c), I),
     ),
     0x27: OpSemantics(
-        V,
-        f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN})",
-        _imm("minu(ra, c)", lambda a, c: min(_u32(a), c), V),
+        I,
+        f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
+        _imm("minu(ra, c)", lambda a, c: min(_u32(a), c), I),
     ),
     0x2D: OpSemantics(
         V,
         f"min(ra, rb) unsigned ({_UNSEEN})",
         _e("minu(ra, rb)", lambda a, b: min(_u32(a), _u32(b)), V),
     ),
-    0x39: OpSemantics(
-        V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b, V)
-    ),
+    0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b, V)),
     0x3B: OpSemantics(
         I, f"ra & ~rb ({_UNSEEN_FITTED})", _e("ra & ~rb", lambda a, b: a & ~b, I)
     ),
