@@ -13,7 +13,10 @@ Grammar (verified): the values form groups, each starting with a key v.
 - v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
   offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
-  (inferred: what follows it is capped at inferred). Other kinds were not measured and raise
+  (inferred: what follows it is capped at inferred), 2 a load as kind 0 (measured once: 32
+  bytes from a DRAM address into the lane-memory vector its "to" names, eight lanes read back;
+  what follows it is capped at inferred), 4 a store as kind 6 (measured once: vector "from"'s
+  low bytes to the DRAM address "to", 32 bytes). Other kinds were not measured and raise
   `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
@@ -56,9 +59,12 @@ rest wait in the engine and run as 0x1d's free room: 32 loads handed, then 32 0x
 (verified) and the loads read back had landed (measured); with no 0x1d the 20th to 32nd had not
 run 8 us later (measured). So a 0x1d counts the commands handed, run or held (inferred). A
 command of kind 2 counted for a 0x1d in one job (measured: a load joined, then kind 2, then a
-0x1d that returned); what kind 2 moves is not measured (it stored nothing to DRAM). The emulator
-queues commands without the 19-entry limit, which changes only when a held load lands, not what
-it writes. The emulator never predicts a racing read: a load's destination is unknown from its
+0x1d that returned) and in another loaded 32 bytes from its "from" into the vector its "to"
+names, as kind 0 does (measured; the vector its "from" names kept its content). The emulator
+queues the held commands as the engine does, up to `DEPTH` = 44 outstanding (40 and 44
+completed, measured); 48 outstanding wedged the job twice, also with only 44 0x1d after them, so
+the depth is 44..47 and an overflow kills the job (inferred): more than 44 raises. The 19
+running at once change only when a held load lands, not what it writes. The emulator never predicts a racing read: a load's destination is unknown from its
 hand until its 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a
 store handed after it runs after it), a store takes its source as of the hand and writes DRAM at
 once (inferred where the source is rewritten before the store completes: that race was not
@@ -71,7 +77,7 @@ be bounded, a value handed after the grammar is lost and a 0x1d among a command'
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .emu import LOCAL_BASE, dram_alias
 from .fields import LANE_VECTORS, Confidence
@@ -84,6 +90,16 @@ H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 CHANNELS, REGISTERS = 4, 8
 LOAD, NOTHING_MOVES, STORE = 0, 1, 6
 """The command kinds measured."""
+KIND_AS = {2: LOAD, 4: STORE}
+"""Kinds measured once each to move data as another kind: 2 as a load, 4 as a store, each in
+one job of the `KIND_AS_SHAPE` (what follows them is capped at inferred)."""
+KIND_AS_SHAPE = (1, None, 0x20, 1, None, 0x10, 2, 1)
+"""Registers 0..7 of the one shape kinds 2 and 4 ran in (None: any): the lane memory, byte
+elements, one vector, two 16-byte lines, one row. Another shape raises `UnknownSemantics`."""
+DEPTH = 44
+"""Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
+(measured); 48 wedged the job twice, also with only 44 0x1d after them, so the depth is 44..47
+and handing past it kills the job (inferred). More than `DEPTH` raises `UnknownSemantics`."""
 LANE_MEMORY, LOCAL_MEMORY = 1, 2
 """r0's values: the DSP-side memory."""
 VECTOR_BYTES = 64
@@ -297,9 +313,27 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
+        if cmd.kind in KIND_AS:
+            shape = tuple(None if r is None else r.value for r in cmd.regs)
+            if any(w is not None and v != w for v, w in zip(shape, KIND_AS_SHAPE)):
+                raise UnknownSemantics(
+                    cmd.index,
+                    "stream",
+                    [],
+                    f"{cmd.where}: command kind {cmd.kind:#x} outside the one shape it ran in",
+                )
+            self.cap = min(self.cap, I)
+            cmd = replace(cmd, kind=KIND_AS[cmd.kind])
         if cmd.kind not in (LOAD, NOTHING_MOVES, STORE):
             raise UnknownSemantics(
                 cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
+            )
+        if len(self.outstanding) >= DEPTH:
+            raise UnknownSemantics(
+                cmd.index,
+                "stream",
+                [],
+                f"{cmd.where}: more than {DEPTH} commands outstanding: the camera wedged at 48",
             )
         self.commands += 1
         self.outstanding.append(_nothing)

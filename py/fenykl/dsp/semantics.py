@@ -500,6 +500,8 @@ class OpValue:
     f: Callable[[int, int], int | None]
     tier: Confidence
     form: str
+    scope: Callable[[int, int], Confidence] | None = None
+    """The tier by operands where it is weaker than `tier` (a side of the rule never run)."""
 
     def __call__(self, word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
@@ -517,7 +519,10 @@ class OpValue:
         assert args.imm is not None
         c = args.imm
         named = self.text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
-        return _result(word, named, (slot[args.ra],), lambda a: self.f(a, c), self.tier)
+        scope = None if self.scope is None else lambda a: self.scope(a, c)
+        return _result(
+            word, named, (slot[args.ra],), lambda a: self.f(a, c), self.tier, scope
+        )
 
     @property
     def reads_ra(self) -> bool:
@@ -751,6 +756,30 @@ LOCAL_STORES_RB = {code + 1: width for code, width in LOCAL_STORES.items()}
 """The register forms, each its immediate form's op + 1: the byte address is ra + width x rb."""
 
 
+_UNSEEN = (
+    "a data op value never used in the stock programs (verified on the camera by exact readout, "
+    "pre-registered, eight operand sets of both signs; no result one word later, the operands "
+    "unchanged)"
+)
+_UNSEEN_ONE_SIDE = (
+    "a data op value never used in the stock programs (inferred where ra > imm16 unsigned: "
+    "pre-registered and matched on eight operand sets, all with ra above imm16; a hypothesis "
+    "where ra <= imm16, the side never run)"
+)
+
+
+def _ra_above(a: int, c: int) -> Confidence:
+    """The scope of 0x22 / 0x26 / 0x27: only ra > imm16 unsigned was run."""
+    return I if _u32(a) > c else H
+
+
+_UNSEEN_FITTED = (
+    "a data op value never used in the stock programs (fitted on the camera by exact readout, "
+    "eight operand sets of both signs, one of the candidates named before the run; the operands "
+    "unchanged)"
+)
+
+
 OP_SEMANTICS: dict[int, OpSemantics] = {
     IDLE_OP: OpSemantics(
         I,
@@ -957,6 +986,36 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         V,
         f"1 if ra < c signed, else 0; c = imm16 sign-extended ({EXACT})",
         _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
+    ),
+    0x22: OpSemantics(
+        I,
+        f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
+        OpValue("ra <=u c", lambda a, c: _flag(_u32(a) <= c), I, "c", _ra_above),
+    ),
+    0x26: OpSemantics(
+        I,
+        f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
+        OpValue("maxu(ra, c)", lambda a, c: max(_u32(a), c), I, "c", _ra_above),
+    ),
+    0x27: OpSemantics(
+        I,
+        f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
+        OpValue("minu(ra, c)", lambda a, c: min(_u32(a), c), I, "c", _ra_above),
+    ),
+    0x2D: OpSemantics(
+        V,
+        f"min(ra, rb) unsigned ({_UNSEEN})",
+        _e("minu(ra, rb)", lambda a, b: min(_u32(a), _u32(b)), V),
+    ),
+    0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b, V)),
+    0x3B: OpSemantics(
+        I, f"ra & ~rb ({_UNSEEN_FITTED})", _e("ra & ~rb", lambda a, b: a & ~b, I)
+    ),
+    0x45: OpSemantics(
+        V,
+        "the ring pointer step as 0x44's with s = zext(ra) + 1 and L = rb, all 32 bits of rb "
+        f"({_UNSEEN})",
+        _e("ring step ra + 1, L rb", lambda a, b: _ring_step(_u32(a) + 1, _u32(b)), V),
     ),
     0x23: OpSemantics(
         V,

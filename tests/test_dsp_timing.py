@@ -119,6 +119,13 @@ def test_a_loops_words_are_counted_and_tiered():
     assert e.tier == I
 
 
+def test_passes_up_to_1024_words_repeat_at_the_verified_rate_for_idle_words_only():
+    """A 906-word pass: its 905 idle words repeat verified, its loop word inferred."""
+    parts = {p.name: p.us for p in loop(900).parts}
+    idle, other = parts["repeats"] / REPEAT.us, parts["inferred repeats"] / REPEAT_I.us
+    assert round(idle) == 905 * round(other) and round(other) > 0
+
+
 def test_passes_shorter_than_the_measured_loops_are_inferred():
     e = loop(0)
     assert {p.name for p in e.parts} == {"job", "first runs", "inferred repeats"}

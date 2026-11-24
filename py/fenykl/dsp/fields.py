@@ -363,7 +363,8 @@ OP_FACT = (
     "the op, one 7-bit field in every word (verified in the bytes of the five stock programs and "
     "across later firmware versions of the same family): 0..4 the control ops with f229 clear, 7 "
     "halt, 8..73 data ops, 127 idle; 5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, "
-    "0x2d, 0x39, 0x3b and 0x45 never occur. Bits 17, 18 set with 128, "
+    "0x2d, 0x39, 0x3b and 0x45 never occur (those seven run on the camera as data ops: "
+    "`UNSEEN_FORMATS`). Bits 17, 18 set with 128, "
     "273, 318 and 319 clear, once read as a control signature, is a coincidence of fields that "
     "several ops share; the word it marks at the end of programs 6, 0xC and 0xF is data op 0x1f "
     "in a return's delay slot, its 13-bit immediate (f15_22 | f128_132 << 8) a multiple of 4 in all "
@@ -487,7 +488,8 @@ def op(value: int) -> Op:
     name = f"op{value:02x}"
     if value in FORMATS:
         fmt = FORMATS[value]
-        fact = f"{DATA_OP_FACT}; family {fmt.family.name} ({FAMILY_BASIS}): {fmt.family.fact}"
+        basis = UNSEEN_FORMAT_FACTS.get(value, FAMILY_BASIS)
+        fact = f"{DATA_OP_FACT}; family {fmt.family.name} ({basis}): {fmt.family.fact}"
         if value in MEANINGS:
             fact += f"; {MEANINGS[value]}"
         return Op(name, DATA_OP_CONFIDENCE, fact, fmt)
@@ -2881,6 +2883,33 @@ def _formats(families: tuple[Family, ...]) -> dict[int, Format]:
 
 
 FORMATS = _formats(FAMILIES)
+_FAMILY = {family.name: family for family in FAMILIES}
+UNSEEN_FORMATS = {
+    0x22: Format(_FAMILY["D"], 16, False),
+    0x26: Format(_FAMILY["D"], 16, False),
+    0x27: Format(_FAMILY["D"], 16, False),
+    **{value: Format(_FAMILY["E"], 0, False) for value in (0x2D, 0x39, 0x3B, 0x45)},
+}
+"""The data op values that never occur in the stock programs, with the operand format their
+results on eight operand sets read through (`UNSEEN_FORMAT_FACTS`: both readings were given to
+each op)."""
+_E_UNSEEN = (
+    "never occurs in the stock programs; ra and rb as family E reads them, f120_122 without "
+    "effect (verified on the camera by exact readout, eight operand sets)"
+)
+UNSEEN_FORMAT_FACTS = {
+    0x22: "never occurs in the stock programs; ra read (verified on the camera by exact "
+    "readout); the immediate never affected a result (every result 0, ra above it in all eight "
+    "sets), so its imm16 reading, zero-extension and f120_122 bits are a hypothesis",
+    0x26: "never occurs in the stock programs; ra read (verified on the camera by exact "
+    "readout); the immediate never affected a result (every result ra), so its imm16 reading, "
+    "zero-extension and f120_122 bits are a hypothesis",
+    0x27: "never occurs in the stock programs; ra and imm16 = imm | f128_132 << 8 | f120_122 "
+    "<< 13 zero-extended (verified on the camera by exact readout: every result the immediate, "
+    "0x8e12 and 0xefff among them)",
+    **{value: _E_UNSEEN for value in (0x2D, 0x39, 0x3B, 0x45)},
+}
+FORMATS |= UNSEEN_FORMATS
 
 
 def is_control(word: int) -> bool:

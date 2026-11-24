@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from .emu import Flow, Job, Stop
-from .fields import CONTROL_OPS, Confidence, lookup
+from .fields import CONTROL_OPS, IDLE_OP, Confidence, lookup
 from .machine import HEAD_IDS
 from .stream import LANE_MEMORY, LOAD, LOCAL_MEMORY, STORE, Engine, Event
 
@@ -39,24 +39,34 @@ REPEAT = Cost(
     "a word executed again, in a loop: 5.37 ns, measured on idle words; scalar local loads, "
     "X1's divide, X0 lane-memory loads and taken branches with their delay slots cost the same "
     "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
+    "idle words at 5.2 to 5.3 ns in passes of 64 to 1024 words, and in passes that jump 1088 "
+    "words away and back by op 2 or op 3 (verified on the camera, pre-registered: no loop "
+    "buffer and no cache smaller than 1024 words; passes of 2000 words measured faster, 4.6 "
+    "ns, below the registered range); in passes of 107 to 1024 words only idle words were "
+    "timed, so other words there repeat at `REPEAT_I`; "
     "S3 reductions likewise (fitted)",
 )
 REPEAT_I = Cost(
     REPEAT.us,
     I,
-    "a word executed again outside the measured passes (a pass under 9 or over 106 words, or "
-    "with an op 3 or op 4 since the word's last run), or with an S unit's head: S3 reductions "
+    "a word executed again outside the measured passes (a pass under 9 words, over 106 for a "
+    "word that is not idle, over 1024 for an idle word, or "
+    "with an op 4 since the word's last run), or with an S unit's head: S3 reductions "
     "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
     "more than an idle word)",
 )
 PASSES = range(9, 107)
-"""Executed words between two runs of a word in the loops timed on the camera."""
+"""Executed words between two runs of a word in the loops timed on the camera, any word class."""
+IDLE_PASSES = range(9, 1025)
+"""Likewise for idle words."""
 FIRST = Cost(
     0.062,
     I,
     "a word's first execution: 62 ns, the slope over straight-line jobs of 190 to 2000 words "
-    "(fitted); paid when the word runs, not for the image's length: a word branched over costs "
-    "nothing (verified on the camera)",
+    "(fitted); straight-line runs of 0 to 1900 idle words later gave 65 to 73 ns (within a "
+    "pre-registered 50 to 75 ns), so the figure may be low by up to 15 % for long runs; words "
+    "of ALU ops cost the same as idle words (verified on the camera); paid when the word runs, "
+    "not for the image's length: a word branched over costs nothing (verified on the camera)",
 )
 S_UNITS = ("s0", "s1", "s2", "s3")
 
@@ -113,7 +123,9 @@ RATES: dict[tuple[int, int, int, int], Rate] = {
 handed and joined by a 0x1d, with r3 the units its r5 r6 elements fill. Other shapes have no
 time."""
 QUEUE = 16
-"""Commands handed and not yet waited for that all ran (verified); of 32 only the first 19 ran."""
+"""Commands handed and not yet waited for whose times are known: 16 ran with no 0x1d (verified);
+past 19 the engine holds commands until a 0x1d frees room, and its depth is 44..47 (44
+completed, 48 wedged the job: `stream.DEPTH`); how long held commands take was not timed."""
 OVERLAP = (
     "the stream engine: one for all channels, its commands run one after another from their "
     "hand-off (two 8 KiB loads on two channels took about as long as one 16 KiB load: fitted); "
@@ -191,7 +203,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
     for e in engine.events:
         events.setdefault(e.t, []).append(e)
     words = job.program.words
-    # Each index's last executed word and the count of ops 3 and 4 run up to it.
+    # Each index's last executed word and the count of op 4 returns run up to it.
     last: dict[int, tuple[int, int]] = {}
     links = 0
     flow_tier = V
@@ -205,14 +217,14 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
         if before is None:
             cost = FIRST
         elif (
-            t - before[0] not in PASSES
+            t - before[0] not in (IDLE_PASSES if step.op == IDLE_OP else PASSES)
             or links != before[1]
             or any(words[step.index][HEAD_IDS[u]] != _idle(u) for u in S_UNITS)
         ):
             cost = REPEAT_I
         else:
             cost = REPEAT
-        links += step.op in (3, 4)
+        links += step.op == 4
         last[step.index] = (t, links)
         counts[cost] += 1
         now += cost.us
