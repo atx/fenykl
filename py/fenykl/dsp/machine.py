@@ -63,6 +63,7 @@ from .fields import (
     S_NEXT_NONE,
     S_NEXT_VALUES,
     S_OWN_OPEN,
+    STORE_NOTHING,
     STORE_SOURCES,
     TRANSFER_HEADS,
     X0_LANE_LOADS,
@@ -199,9 +200,12 @@ LANE_UNIT = {
 
 @dataclass
 class Carry:
-    """What one job leaves to the next of the same boot: the lane memory above the copy's buffer."""
+    """What one job leaves to the next of the same boot: the lane memory and every register file
+    (verified on the camera: a job read what the job before had written into G, R, A, B, F0..F3,
+    the four lane files, U, O and a lane-memory vector), each file by its name."""
 
     lane_memory: dict[int, Vec] = field(default_factory=dict)
+    registers: dict[str, list] = field(default_factory=dict)
 
 
 class _Scalars(Mapping):
@@ -262,6 +266,8 @@ class Machine:
         self.u = [UNKNOWN_VEC] * 16
         self.o = [UNKNOWN_VEC] * 8
         self.memory: dict[int, Vec] = dict(carry.lane_memory) if carry else {}
+        for name, regs in (carry.registers if carry else {}).items():
+            self._file(name)[:] = regs
         self.bus_due: dict[int, list[tuple[Sv, str]]] = {}
         self.load_due: dict[int, list[Vec]] = {}
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
@@ -274,7 +280,9 @@ class Machine:
         self.store_src = boot.source("local store", "an own program's family A store")
 
     def between_jobs(self) -> Carry:
-        return Carry({} if self.lanes_lost else dict(self.memory))
+        names = ("G", "A", "B", "R", *self.f, *self.lanes, "U", "O")
+        registers = {name: list(self._file(name)) for name in names}
+        return Carry({} if self.lanes_lost else dict(self.memory), registers)
 
     def lose_lanes(self) -> None:
         """The lane memory is not known from now on (the copy engine's activity is not)."""
@@ -849,7 +857,9 @@ class Machine:
                 continue  # wrote nothing from any S head (measured on the camera)
             put(file, word[PORTS[enable]], _cap(self._lane_source(src[0], t), src[1]))
         v = word["f252_254"]
-        if v != lookup("f252_254").idle:
+        if v in STORE_NOTHING:
+            kept[("O", word["f179_181"])] = I
+        elif v != lookup("f252_254").idle:
             if v not in STORE_SOURCES:
                 raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
             text, tier = STORE_SOURCES[v]

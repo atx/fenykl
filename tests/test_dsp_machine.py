@@ -442,3 +442,17 @@ def test_a_loop_end_into_its_own_slots_runs_them_again():
     words = [loop, inc(16), inc(17), inc(18), inc(19), inc(20)]
     m = stepped(words, r8=3, r16=0, r17=0, r18=0, r19=0, r20=0)
     assert [m.g[r].value for r in (8, 16, 17, 18, 19, 20)] == [2, 1, 1, 2, 2, 1]
+
+
+def test_a_job_starts_with_the_registers_the_job_before_left(m):
+    m.g[16], m.r[3], m.f["F2"][5] = Sv(0x7110), Sv(0x7203), Sv(0x7525)
+    m.lanes["L1"][6], m.u[6], m.o[3] = Vec(A), Vec(B), Vec(A)
+    m.memory[0x70] = Vec(B)
+    later = Machine(Boot(), m.between_jobs())
+    assert (later.g[16], later.r[3], later.f["F2"][5]) == (
+        Sv(0x7110),
+        Sv(0x7203),
+        Sv(0x7525),
+    )
+    assert (later.lanes["L1"][6], later.u[6], later.o[3]) == (Vec(A), Vec(B), Vec(A))
+    assert later.memory[0x70] == Vec(B)

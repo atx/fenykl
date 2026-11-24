@@ -451,8 +451,8 @@ OPS: dict[int, Op] = {
         "0 returns (inferred); at any word and call depth: program 16 with word 5 in place of "
         "word 11, inside the routine with the call's return pending, ended with status 0 and "
         "dst not written (verified on the camera, one run), so a halt needs no return and the "
-        "return stack is not checked (inferred); of four stores behind an own halt the first three "
-        "wrote and the fourth did not (measured on the camera, one run: inferred)",
+        "return stack is not checked (inferred); three words behind a halt still run: of five "
+        "stores there the first three wrote (verified on the camera, pre-registered)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
@@ -989,10 +989,13 @@ STORE_SOURCES: dict[int, tuple[str, Confidence]] = {
     4: (S0_RESULT, V),
 }
 """What f252_254 writes to O[f179_181] by value, with its tier (verified on the camera,
-pre-registered, 11 groups of 32 lanes exact); 5 and 6 never occur in the stock programs and
-were not run, 7 is idle. The heads tried into O, S3's lane number and broadcast, S2's pass of b
+pre-registered, 11 groups of 32 lanes exact); 5 and 6 (`STORE_NOTHING`) never occur in the
+stock programs, 7 is idle. The heads tried into O, S3's lane number and broadcast, S2's pass of b
 and S1 0x04, are taken in the head's own word, the arithmetic heads tried one word after it, as
 at the lane ports (`LANE_LAG`)."""
+STORE_NOTHING = (5, 6)
+"""Values of f252_254 under which O kept its content, beside a result of every S unit and with
+none (measured on the camera, not pre-registered: inferred)."""
 X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
@@ -1640,13 +1643,13 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f31_34": (
-        I,
+        V,
         (
             "S3's: bit 2 is bit 4 of the lane 0x10 inserts (verified on the camera: inserts at "
             "lanes 0..31 read back as built) and 0xe / 0xf extract; bits 3..2 are bits 5..4 of "
             "S3 0x11's immediate (verified on the camera, pre-registered on fresh values); "
-            "0x17 ignores it (verified on the camera, pre-registered at two values) and 0x16 "
-            "too (inferred, fitted); as a whole the register of U that the lane "
+            "0x16 and 0x17 ignore it (verified on the camera, pre-registered at two values "
+            "each); as a whole the register of U that the lane "
             "shifts read (verified on the camera, pre-registered: U[3] and U[9] read back by "
             f"number through 0x1b): {LANE_THIRD_FILE}"
         ),
