@@ -147,12 +147,12 @@ def test_program_13_tap_loads_reach_the_file_s2_reads(items):
 
 
 def test_lane_tables_verified_rows():
-    # The rows whose pre-registered lanes all matched on the camera: 93 heads.
+    # The rows whose pre-registered lanes all matched on the camera in either of two runs.
     verified = {
         unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
         for unit, rows in LANE_FUNCTIONS.items()
     }
-    assert verified == {"s0": 29, "s1": 35, "s2": 11, "s3": 18}
+    assert verified == {"s0": 39, "s1": 67, "s2": 13, "s3": 19}
 
 
 def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():

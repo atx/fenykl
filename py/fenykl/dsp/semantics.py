@@ -33,6 +33,7 @@ from .fields import (
     LANE_FUNCTIONS,
     NO_LANE,
     PR_SOURCES,
+    S2_HIGH_HALVES,
     X_FUNCTIONS,
     X_IMMEDIATES,
     Confidence,
@@ -1153,7 +1154,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x3D: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "s"))),
         0x3E: _unsigned(lambda x, y, c: _sat_u(y - x)),
         0x3F: _unsigned(lambda x, y, c: _sat_u(x + y)),
-        **dict.fromkeys(range(0x60, 0x7F), _A),
+        **dict.fromkeys(range(0x60, 0x7F), _open),
     },
     "s1": {
         0x00: _signed(lambda x, y, c: ~y),
@@ -1236,7 +1237,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
         0x06: _ZERO,
-        0x07: _B,
+        0x07: lambda a, b, c: [*b[:16], *[0] * 16],
         0x08: _B,
         0x09: _open,
         0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
@@ -1310,6 +1311,28 @@ def lane_result(
     if rule.value is None:
         return None
     return [None if v is None else v & LANE_MASK for v in rule.value(a, b, scalars)]
+
+
+_HIGH_VALUES: dict[int, LaneValue] = {
+    0x02: _unsigned(lambda x, y, c: x * _s16(y) >> 16),
+    0x05: _signed(lambda x, y, c: y * _sv(c, "t") >> 16),
+    0x00: _unsigned(lambda x, y, c: y * _sv(c, "imm") >> 16),
+}
+if set(_HIGH_VALUES) != set(S2_HIGH_HALVES):
+    raise ValueError(
+        "high halves and fields.S2_HIGH_HALVES differ in their head values"
+    )
+
+
+def product_high(
+    head: int, a: Sequence[int], b: Sequence[int], scalars: Scalars
+) -> Lanes:
+    """The high halves of S2's 32-bit products at head value `head` (`fields.S2_HIGH_HALVES`),
+    which the first ports of L0 and L1 take under enable 1; `lane_result` gives the low halves.
+    Raises KeyError at a head whose high half is not known."""
+    if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
+        raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
+    return [v & LANE_MASK for v in _HIGH_VALUES[head](a, b, scalars)]
 
 
 @dataclass(frozen=True)

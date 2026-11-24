@@ -37,10 +37,13 @@ def test_assemble_warns_only_about_hypothesis_fields():
         warnings.simplefilter("error")
         assemble([Word(x1=X1(xreg=3)), IDLE])
     with pytest.warns(
-        HypothesisFieldWarning, match=r"2 hypothesis fields: f0, f80_83$"
+        HypothesisFieldWarning, match=r"2 hypothesis fields: f80_83, f179_181$"
     ):
         assemble(
-            [Word.from_fields({"xreg": 3, "f0": 1}), Word.from_fields({"f80_83": 0})]
+            [
+                Word.from_fields({"xreg": 3, "f179_181": 1}),
+                Word.from_fields({"f80_83": 0}),
+            ]
         )
 
 

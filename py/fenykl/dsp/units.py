@@ -92,8 +92,8 @@ _UNITS = (
             "the bytes (f234_235 for f145_146 a hypothesis); the ports of f255..f264 write the "
             "scalar files F0..F3 that the S heads read, each enable value a source "
             "(`fields.SCALAR_FILES`, verified on the camera by exact readout); those of "
-            "f236..f251 write the lane files L0..L3, each enable value an S unit's lane result "
-            "(`fields.LANE_SOURCES`, verified on the camera for L2 and L3); f232_233's is open; "
+            "f236..f251 write the lane files L0..L3, each enable value an S result "
+            "(`fields.LANE_SOURCES`, verified on the camera but some values); f232_233's is open; "
             "ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),

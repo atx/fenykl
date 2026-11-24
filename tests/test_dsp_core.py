@@ -21,6 +21,7 @@ from fenykl.dsp.semantics import (
     UnknownSemantics,
     destinations,
     lane_result,
+    product_high,
     x_result,
 )
 from fenykl.dsp.state import Reg
@@ -522,6 +523,7 @@ S3_NIBBLES = {
         ),
         ("s2", 0x00, lanes(), lanes(l0=3), {"imm": 10}, {0: 30}),
         ("s2", 0x0B, lanes(), lanes(l0=0x8000, l1=0x7FFF), {}, {0: 0, 1: 0xFFFF}),
+        ("s3", 0x07, lanes(), lanes(l15=5, l16=6), {}, {15: 5, 16: 0}),
         (
             "s3",
             0x0A,
@@ -587,6 +589,40 @@ S3_NIBBLES = {
 def test_lane_function_table(unit, head, a, b, scalars, expect):
     got = lane_result(unit, head, a, b, scalars)
     assert {k: got[k] for k in expect} == expect
+
+
+@pytest.mark.parametrize(
+    "head, a, b, scalars, high",
+    [
+        # Unsigned a x signed b: 0xffff x 2 is 0x1fffe, not -2.
+        (
+            0x02,
+            lanes(l0=0xFFFF, l1=0xFFFF),
+            lanes(l0=2, l1=0xFFFF),
+            {},
+            {0: 1, 1: 0xFFFF},
+        ),
+        (0x05, lanes(), lanes(l0=0x8000, l1=0x7FFF), {"t": 3}, {0: 0xFFFE, 1: 1}),
+        (0x00, lanes(), lanes(l0=0xFFFF), {"imm": 3}, {0: 2}),
+    ],
+)
+def test_product_high_halves(head, a, b, scalars, high):
+    got = product_high(head, a, b, scalars)
+    assert {k: got[k] for k in high} == high
+
+
+def test_multiply_then_narrow():
+    # S2 0x5 b x t, its halves into S1's a and b, then S1's double-width shift by 2: rounded
+    # ties to even (0x1d; 18 / 4 -> 4) and saturated (0x29).
+    b = lanes(l0=0x7FFF, l1=0x8000, l2=6, l3=1)
+
+    def narrow(head, t):
+        high = product_high(0x05, lanes(), b, {"t": t})
+        low = lane_result("s2", 0x05, lanes(), b, {"t": t})
+        return lane_result("s1", head, high, low, {"t": 2})[:4]
+
+    assert narrow(0x1D, 3) == [0x5FFF, 0xA000, 4, 1]
+    assert narrow(0x29, 0x7FFF) == [0x7FFF, 0x8000, 0x7FFF, 0x2000]
 
 
 def test_heads_without_a_lane_result():
