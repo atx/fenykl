@@ -1295,6 +1295,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x09: ("0xffff where b < 0, else 0", V, ""),
         0x0A: ("the lane number 0..31", V, ""),
         0x0B: ("0xffff where b >= 0, else 0", V, ""),
+        **_rows((0x0C, 0x0E), NO_LANE, V, NO_LANE_LAGS + " and in both"),
     },
     "s3": {
         **_rows(
@@ -1904,6 +1905,22 @@ def _s_values(unit: str) -> dict[int, str]:
     return values
 
 
+def _head_tier(unit: str, idle: int) -> Confidence:
+    """Verified when every value but the idle one has a verified lane row and, where it writes
+    a lane, a verified lag; inferred otherwise."""
+    lo, hi = HEADS[unit]
+    rows, lags = LANE_FUNCTIONS[unit], LANE_LAG[unit]
+    for h in range(1 << (hi - lo + 1)):
+        if h == idle:
+            continue
+        row = rows.get(h)
+        if row is None or row[1] != V:
+            return I
+        if row[0] != NO_LANE and (h not in lags or lags[h][1] != V):
+            return I
+    return V
+
+
 def _head(unit: str, idle: int, fact: str) -> Field:
     lo, hi = HEADS[unit]
     base = (
@@ -1916,9 +1933,10 @@ def _head(unit: str, idle: int, fact: str) -> Field:
         f"{'has' if len(S_RESULTS[unit]) == 1 else 'have'} a scalar result (`S_RESULTS`), "
         f"{S_NONE.get(unit, 'the others none')} (measured on the camera)"
     )
+    tier = _head_tier(unit, idle)
     lanes = (
         "Its values select lane functions, each tagged by value (`LANE_FUNCTIONS`); the unit: "
-        f"{LANE_ROLES[unit]} (inferred)"
+        f"{LANE_ROLES[unit]} ({'verified: every value has a verified row and lag' if tier == V else 'inferred'})"
     )
     return Field(
         lo,
@@ -1926,7 +1944,7 @@ def _head(unit: str, idle: int, fact: str) -> Field:
         Kind.OPCODE,
         unit,
         idle,
-        I,
+        tier,
         f"{base}. {fact}. {lanes}. {scalar}",
         values=_s_values(unit),
     )

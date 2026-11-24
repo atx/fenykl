@@ -1428,6 +1428,8 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x09: _NEGATIVE,
         0x0A: _lane_numbers,
         0x0B: _NOT_NEGATIVE,
+        0x0C: None,
+        0x0E: None,
     },
     "s3": {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
