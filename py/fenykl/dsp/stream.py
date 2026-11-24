@@ -13,7 +13,9 @@ Grammar (verified): the values form groups, each starting with a key v.
 - v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
   offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
-  (inferred: what follows it is capped at inferred). Other kinds were not measured and raise
+  (inferred: what follows it is capped at inferred), 2 a load as kind 0 (measured once: 32
+  bytes from a DRAM address into the lane-memory vector its "to" names, eight lanes read back;
+  what follows it is capped at inferred). Other kinds were not measured and raise
   `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
@@ -56,7 +58,8 @@ rest wait in the engine and run as 0x1d's free room: 32 loads handed, then 32 0x
 (verified) and the loads read back had landed (measured); with no 0x1d the 20th to 32nd had not
 run 8 us later (measured). So a 0x1d counts the commands handed, run or held (inferred). A
 command of kind 2 counted for a 0x1d in one job (measured: a load joined, then kind 2, then a
-0x1d that returned); what kind 2 moves is not measured (it stored nothing to DRAM). The emulator
+0x1d that returned) and in another loaded 32 bytes from its "from" into the vector its "to"
+names, as kind 0 does (measured; the vector its "from" names kept its content). The emulator
 queues commands without the 19-entry limit, which changes only when a held load lands, not what
 it writes. The emulator never predicts a racing read: a load's destination is unknown from its
 hand until its 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a
@@ -82,7 +85,7 @@ from .state import Bytes
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 CHANNELS, REGISTERS = 4, 8
-LOAD, NOTHING_MOVES, STORE = 0, 1, 6
+LOAD, NOTHING_MOVES, LOAD_2, STORE = 0, 1, 2, 6
 """The command kinds measured."""
 LANE_MEMORY, LOCAL_MEMORY = 1, 2
 """r0's values: the DSP-side memory."""
@@ -297,7 +300,7 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
-        if cmd.kind not in (LOAD, NOTHING_MOVES, STORE):
+        if cmd.kind not in (LOAD, NOTHING_MOVES, LOAD_2, STORE):
             raise UnknownSemantics(
                 cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
             )
@@ -306,6 +309,8 @@ class Engine:
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
+        if cmd.kind == LOAD_2:
+            self.cap = min(self.cap, I)  # a load as kind 0's: one job
         if any(r is None for r in cmd.regs):
             self._moves_nothing(m, cmd)
             return
@@ -313,7 +318,7 @@ class Engine:
             self._spoil(m, cmd)
             return
         try:
-            if cmd.kind == LOAD:
+            if cmd.kind in (LOAD, LOAD_2):
                 self.outstanding[-1] = self._load(m, cmd)
             else:
                 self.outstanding[-1] = self._store(m, cmd)

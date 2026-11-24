@@ -312,6 +312,12 @@ def test_a_store_with_a_register_not_handed_leaves_dram_inferred():
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
 
 
+def test_kind_2_loads_as_kind_0_at_inferred():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), 0x02, SRC, 0x40, WAIT])
+    assert m.memory[1].lanes == tuple(range(32)) and e.lane_tier() == I
+
+
 def test_an_unmeasured_kind_raises():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="kind 0x3"):
