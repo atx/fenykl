@@ -162,8 +162,8 @@ STORE_SETTLE = 3
 the write's own word stores the old content (inferred); 1 and 2 words were not measured."""
 DELIVERING_OPS = (IDLE_OP, 1)
 """Ops of a word that a delivery on the ALU bus reaches: the idle op and brf, which has no result
-of its own (the stock copy's brf took a load's datum into G through 272 / 1, verified on the camera
-by prefix dumps)."""
+of its own (the stock copy's brf took a load's datum into G through 272 / 1, measured on the camera
+by prefix dumps: inferred, so a datum delivered into a brf word is at most inferred)."""
 HALF = 1 << 16
 
 
@@ -464,7 +464,7 @@ class Machine:
         if word.op not in DELIVERING_OPS and due:
             return UNKNOWN  # a delivery into a word with another op: not measured
         if len(due) == 1:
-            return due[0][0]
+            return due[0][0] if word.op == IDLE_OP else _cap(due[0][0], I)
         if due:
             return UNKNOWN
         return NOTHING
@@ -751,7 +751,7 @@ class Machine:
         if sel not in own:
             # A lone own-word result under another unit's f274_275 (not measured).
             v = next(iter(own.values()))
-            return _cap(v, min(tier, I)) if h is None else Sv(None, H)
+            return _cap(v, H) if h is None else Sv(None, H)
         v = own[sel]
         if sel == "s3":
             if fresh is None:

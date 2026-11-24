@@ -1341,7 +1341,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             "pre-registered at 3 and 13 on all 32 lanes, at 4 on lanes 0..27 and (0x1c) at 2 on "
             "lanes 0..29; at 14 as 0x1b too on all 32 lanes, measured, not pre-registered "
-            "(inferred); the tier is 0x1b's at the count; an earlier "
+            "(inferred); the result takes the lower of this tier and 0x1b's at the count; an earlier "
             "run fitted all three heads alike at every count (inferred), the other counts not "
             "pre-registered for these two heads; they differ from 0x1b in what U's port takes "
             "beside them "
