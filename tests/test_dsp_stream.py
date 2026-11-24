@@ -318,6 +318,14 @@ def test_kind_2_loads_as_kind_0_at_inferred():
     assert m.memory[1].lanes == tuple(range(32)) and e.lane_tier() == I
 
 
+def test_kind_4_stores_as_kind_6_at_inferred():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    m.boot.put(DST, bytes(32), "prefill")
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, 0x04, 0, DST, WAIT])
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
 def test_an_unmeasured_kind_raises():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="kind 0x3"):

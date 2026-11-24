@@ -15,7 +15,8 @@ Grammar (verified): the values form groups, each starting with a key v.
   offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
   (inferred: what follows it is capped at inferred), 2 a load as kind 0 (measured once: 32
   bytes from a DRAM address into the lane-memory vector its "to" names, eight lanes read back;
-  what follows it is capped at inferred). Other kinds were not measured and raise
+  what follows it is capped at inferred), 4 a store as kind 6 (measured once: vector "from"'s
+  low bytes to the DRAM address "to", 32 bytes). Other kinds were not measured and raise
   `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
@@ -74,7 +75,7 @@ be bounded, a value handed after the grammar is lost and a 0x1d among a command'
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .emu import LOCAL_BASE, dram_alias
 from .fields import LANE_VECTORS, Confidence
@@ -85,7 +86,10 @@ from .state import Bytes
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 CHANNELS, REGISTERS = 4, 8
-LOAD, NOTHING_MOVES, LOAD_2, STORE = 0, 1, 2, 6
+LOAD, NOTHING_MOVES, STORE = 0, 1, 6
+KIND_AS = {2: LOAD, 4: STORE}
+"""Kinds measured once each to move data as another kind: 2 as a load, 4 as a store (32 bytes,
+one job each; what follows them is capped at inferred)."""
 """The command kinds measured."""
 LANE_MEMORY, LOCAL_MEMORY = 1, 2
 """r0's values: the DSP-side memory."""
@@ -300,7 +304,10 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
-        if cmd.kind not in (LOAD, NOTHING_MOVES, LOAD_2, STORE):
+        if cmd.kind in KIND_AS:
+            self.cap = min(self.cap, I)
+            cmd = replace(cmd, kind=KIND_AS[cmd.kind])
+        if cmd.kind not in (LOAD, NOTHING_MOVES, STORE):
             raise UnknownSemantics(
                 cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
             )
@@ -309,8 +316,6 @@ class Engine:
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
-        if cmd.kind == LOAD_2:
-            self.cap = min(self.cap, I)  # a load as kind 0's: one job
         if any(r is None for r in cmd.regs):
             self._moves_nothing(m, cmd)
             return
@@ -318,7 +323,7 @@ class Engine:
             self._spoil(m, cmd)
             return
         try:
-            if cmd.kind in (LOAD, LOAD_2):
+            if cmd.kind == LOAD:
                 self.outstanding[-1] = self._load(m, cmd)
             else:
                 self.outstanding[-1] = self._store(m, cmd)
