@@ -97,7 +97,7 @@ _UNITS = (
             "of the first ports, a lane memory load (`fields.LANE_SOURCES`, verified on the "
             "camera); f252_254's writes the store file O (`fields.STORE_FILE`, verified on the "
             "camera); f232_233's the third lane file U, beside an S3 head "
-            "(`fields.LANE_THIRD_FILE`, verified on the camera under 1, inferred under 0 and 2); "
+            "(`fields.LANE_THIRD_FILE`, verified on the camera: 1 writes, 0 and 2 do not); "
             "ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
