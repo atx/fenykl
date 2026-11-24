@@ -1112,6 +1112,16 @@ def _sv(c: Scalars, key: str) -> int:
     return _s16(c[key])
 
 
+def _select(other: Callable[[Sequence[int], Scalars], Sequence[int]]) -> LaneValue:
+    """b where bit k of S0's 32-bit scalar s is set, else lane k of `other`(a, scalars)."""
+
+    def value(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        alt = other(a, c)
+        return [b[k] if c["s"] >> k & 1 else alt[k] for k in range(LANE_COUNT)]
+
+    return value
+
+
 _A = _signed(lambda x, y, c: x)
 _B = _signed(lambda x, y, c: y)
 _ZERO = _signed(lambda x, y, c: 0)
@@ -1165,6 +1175,14 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x3D: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "s"))),
         0x3E: _unsigned(lambda x, y, c: _sat_u(y - x)),
         0x3F: _unsigned(lambda x, y, c: _sat_u(x + y)),
+        0x41: _unsigned(lambda x, y, c: y),
+        0x4D: _unsigned(lambda x, y, c: y),
+        0x42: _unsigned(lambda x, y, c: c["imm"]),
+        0x43: _unsigned(lambda x, y, c: c["r"]),
+        0x44: _select(lambda a, c: [c["imm"]] * LANE_COUNT),
+        0x45: _select(lambda a, c: [c["r"]] * LANE_COUNT),
+        0x46: _select(lambda a, c: a),
+        0x4B: lambda a, b, c: [c["s"] >> k & 1 for k in range(LANE_COUNT)],
         **dict.fromkeys(range(0x60, 0x7F), _open),
     },
     "s1": {
@@ -1310,7 +1328,8 @@ def lane_result(
     the rule does not predict it (the open heads give 32). Raises KeyError at a head value
     without a rule.
 
-    `scalars` holds what the rules read, by unit: S0 "s" (F0[f72_75]) and "imm"; S1 "t"
+    `scalars` holds what the rules read, by unit: S0 "s" (F0[f72_75], whose 32 bits the select
+    heads read as a lane mask), "r" (F0[f76_79]) and "imm"; S1 "t"
     (F1[f84_87]) and "imm"; S2 "t" (F2[f88_91]) and "imm" (0x0 / 0x1's multiplier); S3 the
     nibbles "f31_34", "f65_68", "f92_95", "f96_99" and "index" = F3[f92_95], "value" =
     F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), a

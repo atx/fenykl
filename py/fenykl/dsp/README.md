@@ -58,7 +58,7 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
 | `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3 (verified but some values), f252_254's the store file O, f232_233's open | verified (the pairing) |
 | `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
-| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held, not the S unit select (measured), its function open | hypothesis |
+| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held: in the head's own word no S unit select (measured), for a held result the unit (inferred) | hypothesis |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
@@ -155,14 +155,16 @@ pre-registered; f256_257 / 2, f258 / 0 and f263_264's three were measured once, 
 pre-registered [inferred], as was S3 0x24 = F3[f96_99]. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
 each load, on the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar
 result on X0's result bus, where f272_273 = 2 takes it in the head's own word [verified];
-f274_275 does not select the S unit [measured], its function open. Under M, S0 0x52, S1 0x54,
+f274_275 does not select the S unit in the head's own word [measured]; for a result held past
+its head it names the unit, 0 S0, 3 S3 [inferred; 1 and 2 not run]. Under M, S0 0x52, S1 0x54,
 S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result
 (`fields.S_RESULTS`; of S0's 0x40..0x5f only 0x52 read): S3 0xe / 0xf extract lane f92_95 + 16 x
 (f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
 [inferred, fitted; 0xf verified on all 32 lanes of built vectors]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
 minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
 register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
-(f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred].
+(f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred]; S0's compare heads give a mask one
+word after the head (below).
 
 #### Lanes
 
@@ -186,15 +188,36 @@ f31_34, fills the lanes S3's lane shifts move in [inferred].
 
 The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
 its expectation was registered before the run and met on all lanes of two constructed 32-lane
-vectors of edge and random values (138 heads: S0 39, S1 67, S2 13, S3 19), inferred where it was
-fitted. In short, S0 adds, subtracts, compares and takes absolute differences, with
+vectors of edge and random values (138 heads: S0 39, S1 67, S2 13, S3 19), or for S0's four
+select heads under two masks, inferred where it was fitted. In short, S0 adds, subtracts, compares and takes absolute differences, with
 neighbour-lane forms (a[k+1]); S1 has logic, shifts by its immediate or t, saturating left
 shifts, double-width shifts of the 32-bit a : b and min / max / add with a scalar; S2
 multiplies (a x b, b x t and b x an immediate, low 16 bits) and gives sign masks and the lane
 number; S3 moves, interleaves, splits odd / even lanes, inserts a lane, broadcasts F3[f96_99]
 or a 14-bit immediate and gives the lane number. Halvings and rounded shifts round ties to even
 (met at counts 1..3; at count 10 no operand lane was a tie). Some heads add 1 in some lanes, or
-select by lane: a per-lane condition input, not identified [hypothesis].
+select by lane by a condition not identified [hypothesis].
+
+Lane masks (`fields.LANE_MASKS`): S0's per-lane condition is a 32-bit mask in a scalar
+register of F0, bit k for lane k.
+
+- **Select** [verified, pre-registered under two masks]: with bit = bit k of F0[f72_75], S0 0x46
+  gives bit ? b : a, 0x45 bit ? b : F0[f76_79], 0x44 bit ? b : imm16, and 0x4b the bit as 0 / 1;
+  a lane port (or O under 4) takes them in the head's own word. 0x41 and 0x4d gave b, 0x42
+  imm16 and 0x43 F0[f76_79] in every lane under one mask [inferred]. None of these heads hangs
+  the engine.
+- **Compare** [inferred, one run, fitted]: S0 0x24 / 0x25 (a != b / a == b), 0x32 / 0x33
+  (a < b / a >= b unsigned), 0x2e / 0x2f (b against imm16 unsigned), 0x30 / 0x31 (b against a
+  register of F0 unsigned), 0x1f and 0x2c (the carry of a + b) and 0x2a (the signed overflow of
+  a + b) put a mask, bit k from lane k, on M's bus one word after the head, in a word with M
+  under f274_275 = 0 and no head (`fields.S_RESULTS`).
+- **Into F0** [verified in the bytes]: in the stock programs every S0 0x13 is followed by a word
+  with M under f274_275 = 0 and F0's port f182_185 under f255 = 0, the mask going into F0 where
+  f72_75 can name it.
+
+So a mask can be computed, kept, combined by the scalar ALU and applied: compare, M, F0, select.
+Every link is measured, but the chain as a whole has not been run in one program.
+`semantics.lane_result` evaluates the select heads with the mask as the scalar "s".
 
 The immediates by field (`fields.LANE_IMMEDIATES`, fitted: inferred): S0
 imm16 = f76_79 << 12 | f37_40 << 8 | f23_30; S1 imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1

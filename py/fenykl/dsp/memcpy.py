@@ -99,12 +99,13 @@ computes (inferred: the scale that read as immediates and results scaled by 16 t
 two roles, and that exact readout of own programs on the camera does not show). The address
 role takes plain byte addresses.
 
-The values the stock transfers hand explain the scale (inferred, a camera readout of the B file
-at the transfer words at one length): at len 0x400 the count (word 73) hands 0x40, so the count
-is in 16-byte units; the load placement (68) and the store offset (76) hand 0, and their older
-register sweeps fit an address in bytes of the lane memory's 16-bit elements, 64 per vector,
-value >> 6 the vector modulo 0x400 (`fields.LANE_MEMORY`). For those two roles the model's 16 x
-value, taken / 32 to a multiple of 32, is the same rule: 32 source bytes per vector."""
+The values the transfers hand explain the scale. The load placement (68) and the store offset
+(76) are addresses in bytes of the lane memory's 16-bit elements, 64 per vector, value >> 6 the
+vector (`fields.LANE_MEMORY`): own values 0x1000 and 0x1800 placed the store's source at vector
+0x40 and the load at vector 0x60 (verified on the camera, pre-registered, byte-exact). For those
+two roles the model's 16 x value, taken / 32 to a multiple of 32, is the same rule: 32 source
+bytes per vector. The count (73) hands 0x40 at len 0x400, so it is in 16-byte units (inferred,
+a camera readout of the B file at the transfer words at one length)."""
 ENGINE_OPERANDS = (
     (
         2,
@@ -324,7 +325,9 @@ _CHANNELS: tuple[Channel, ...] = (
                 "load enable",
                 66,
                 "a load at r1, r3, r4, r5, r10, r12, r13, r17; no load (the held buffer is "
-                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8",
+                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8; on a register "
+                "holding 1 the copy skips its load and stores the lane memory as it is "
+                "(verified on the camera, a pre-registered pipeline)",
                 _table(
                     None,
                     ok=(1, 3, 4, 5, 10, 12, 13, 17),
@@ -347,7 +350,9 @@ _CHANNELS: tuple[Channel, ...] = (
                 "load offset",
                 68,
                 "the buffer index of the load: buffer[i + o] = S[i], o = value / 32 truncated "
-                "to 32 bytes (towards zero, hypothesis for negative values)",
+                "to 32 bytes (`READOUT`, verified); the address counts modulo the lane memory "
+                "(inferred), which the model does not wrap: it truncates a negative value "
+                "towards zero (hypothesis)",
                 use=Use.LOAD_OFFSET,
                 load=True,
             ),
@@ -395,7 +400,9 @@ _CHANNELS: tuple[Channel, ...] = (
                 "store offset",
                 76,
                 "the buffer index of the store: dst[i] = buffer[i + o], o = value / 32 rounded "
-                "down to 32 bytes (hypothesis for negative values)",
+                "down to 32 bytes (`READOUT`, verified); the address counts modulo the lane "
+                "memory (inferred), which the model does not wrap: it rounds a negative value "
+                "down (hypothesis)",
                 use=Use.STORE_OFFSET,
                 beyond=H,  # its other registers ran only at 1 KiB
             ),
@@ -413,7 +420,10 @@ _CHANNELS: tuple[Channel, ...] = (
 len, dst and src changing between jobs. Word 57 is a holding transfer (head 0x1d) of its own
 register context and takes no slot."""
 
-# Word 47's formats by register; r21's is a boot parameter.
+# Word 47's formats by register; r21's is a boot parameter. The format is the register's value
+# (measured on the camera, not pre-registered: inferred): 0x10, the stock r6's, each element's
+# low byte; 0x04 and 0x44 each element as a 32-bit little-endian word (whether all 16 bits
+# pass is not shown); 0x14 and 0x18 never complete (the job times out).
 _FORMATS: dict[int, str] = {
     6: "bytes",
     14: "u32",

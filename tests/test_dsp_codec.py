@@ -156,7 +156,7 @@ def test_lane_tables_verified_rows():
         unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
         for unit, rows in LANE_FUNCTIONS.items()
     }
-    assert verified == {"s0": 39, "s1": 67, "s2": 13, "s3": 19}
+    assert verified == {"s0": 43, "s1": 67, "s2": 13, "s3": 19}
 
 
 def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():
@@ -186,6 +186,20 @@ def test_every_x0_load_has_its_port_write_four_words_later(items):
         assert {i + LOAD_LAG for i in heads} == takes, item
         loads += len(heads)
     assert loads == 379
+
+
+def test_every_stock_s0_0x13_hands_its_mask_to_f0_through_m(items):
+    # The next word puts S0's held result on X0's bus (M under 0) and F0's port takes it.
+    seen = 0
+    for item, data in items.items():
+        words = decode_item(data, STOCK[item]).words
+        for i, word in enumerate(words):
+            if word["f278_284"] != 0x13:
+                continue
+            nxt = words[i + 1]
+            assert (nxt["f276"], nxt["f274_275"], nxt["f255"]) == (0, 0, 0), (item, i)
+            seen += 1
+    assert seen == 18
 
 
 def test_the_store_file_enable_has_rows_only_for_the_values_run():

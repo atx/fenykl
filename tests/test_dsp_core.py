@@ -586,6 +586,23 @@ S3_NIBBLES = {
             {1: None, 2: 6},
         ),
         ("s3", 0x22, lanes(), lanes(l0=6), S3_NIBBLES | {"f92_95": 7}, {0: 6, 31: 0}),
+        # The select heads read all 32 bits of s as a lane mask, bit k for lane k.
+        *(
+            (
+                "s0",
+                head,
+                lanes(l0=1, l1=2, l16=3, l31=4),
+                [0x100 + k for k in range(32)],
+                {"s": 0x80010001, "r": 0x1234, "imm": 0xABCD},
+                {0: 0x100, 1: other[0], 16: 0x110, 31: 0x11F, 30: other[1]},
+            )
+            for head, other in (
+                (0x46, (2, 0)),
+                (0x45, (0x1234,) * 2),
+                (0x44, (0xABCD,) * 2),
+            )
+        ),
+        ("s0", 0x4B, lanes(), lanes(), {"s": 0x80000002}, {0: 0, 1: 1, 30: 0, 31: 1}),
     ],
 )
 def test_lane_function_table(unit, head, a, b, scalars, expect):

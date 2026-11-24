@@ -887,7 +887,7 @@ one (verified in the bytes), so idling f244_245 = 0 in program 13 drops a load (
 0x19, 0x22, S2 0x8) in the head's own word and an arithmetic result exactly one word after the
 head (`LANE_LAG`)."""
 LANE_LAG: dict[str, dict[int, int]] = {
-    "s0": {0x08: 1, 0x1F: 1, 0x20: 1, 0x29: 1},
+    "s0": {0x08: 1, 0x1F: 1, 0x20: 1, 0x29: 1, 0x44: 0, 0x45: 0, 0x46: 0, 0x4B: 0},
     "s1": {0x0E: 1, 0x10: 1, 0x33: 1, 0x3C: 1},
     "s2": {0x01: 1, 0x05: 1, 0x08: 0},
     "s3": {0x0A: 1, 0x0C: 1, 0x18: 0, 0x19: 0, 0x22: 0},
@@ -977,6 +977,7 @@ LANE_OPERANDS = (
     "a and b are the unit's two lane operands (`LANE_FILES`) lane by lane, read as signed or "
     "unsigned 16-bit values as the rule says; a[k+1] is the next lane; s, t the unit's scalar "
     "(S0 F0[f72_75], S1 F1[f84_87], S2 F2[f88_91]) and imm its immediate, n a shift count; "
+    "bit k of s is bit k of S0's whole 32-bit scalar, for lane k (`LANE_MASKS`); "
     "sat_s / sat_u saturate to the signed / unsigned 16-bit range, max_u / min_u compare "
     "unsigned, the others signed; a result is its low 16 bits; (a : b) is the 32-bit value "
     "with a the high half"
@@ -1003,6 +1004,20 @@ TIES_AT_10 = (
     "up is not excluded"
 )
 WIDE_FLOOR = "1 more in some lanes on the camera, as the carry forms: the lanes are not predicted"
+ONE_MASK = (
+    "measured under one mask, not pre-registered: no select seen on these operands"
+)
+LANE_MASKS = (
+    "S0's per-lane condition is a 32-bit mask in a scalar register: its select heads 0x44, 0x45, "
+    "0x46 and 0x4b read bit k of F0[f72_75] for lane k (verified on the camera, pre-registered "
+    "under two masks, 32 lanes exact per group, a = L0[f37_40], b = L0[f41_44]); a lane port, "
+    "or O under 4, takes their result in the head's own word, one and two words later nothing "
+    "(`LANE_LAG`). S0's compare heads make such a mask, bit k from lane k, which M puts on X0's "
+    "result bus one word after the head (`S_RESULTS`, inferred); in the stock programs every S0 "
+    "0x13 is followed by a word with M under f274_275 = 0 and F0's port f182_185 under f255 = 0, "
+    "so the mask goes into F0 (verified in the bytes, 18 of 18 words). The whole chain, compare, "
+    "M, F0 and a select, has not been run in one program"
+)
 LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
     "s0": {
         0x00: ("sat_s(|a[k+1] - b|) in lanes 0..30", V, NEXT_BLOCK),
@@ -1048,6 +1063,13 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x3D: ("sat_u(b + s)", V, ""),
         0x3E: ("sat_u(b - a)", V, ""),
         0x3F: ("sat_u(a + b)", V, ""),
+        **_rows((0x41, 0x4D), "b", I, ONE_MASK),
+        0x42: ("imm", I, ONE_MASK),
+        0x43: ("F0[f76_79]", I, ONE_MASK),
+        0x44: ("b where bit k of s is set, else imm", V, ""),
+        0x45: ("b where bit k of s is set, else F0[f76_79]", V, ""),
+        0x46: ("b where bit k of s is set, else a", V, ""),
+        0x4B: ("bit k of s: 1 or 0", V, ""),
         **_rows(
             range(0x60, 0x7F),
             "a at f37_40 = 1; A or 0 at other register numbers, never that register",
@@ -1229,14 +1251,42 @@ by nibble, then met at one nibble setting pre-registered, f31_34 bit 3 not pre-r
 (inferred). Register nibbles double as immediate bits: S0's f37_40 (a)
 and f76_79, S1's f84_87 (t), S2's f53_56 (a) and f88_91 (t)."""
 
-S_NONE = {"s0": "0..0x3f and 0x60..0x7f none"}
+S_NONE = {
+    "s0": "the others of 0..0x3f and 0x60..0x7f none; 0x8..0xd, 0x1e, 0x2b and 0x2d none one word "
+    "after the head under f274_275 = 0 either"
+}
 """Where not every other head value was read."""
 REDUCTION = (
     "of the 32 lanes of L3[f65_68], on M's bus from the third word after the head on, where it stays: a result "
     "register (verified, pre-registered)"
 )
+COMPARE_MASK = (
+    "a 32-bit mask, bit k from lane k, on M's bus one word after the head, in a word with no S "
+    "head under f274_275 = 0; in the head's own word, two words after it and one word after it "
+    "under f274_275 = 3 none (inferred: one run, fitted against candidate masks; `LANE_MASKS`)"
+)
 S_RESULTS: dict[str, dict[int, str]] = {
-    "s0": {0x52: f"F0[f76_79] ({EXACT})"},
+    "s0": {
+        0x52: f"F0[f76_79] ({EXACT})",
+        0x24: f"a != b, {COMPARE_MASK}",
+        0x25: f"a == b, {COMPARE_MASK}",
+        0x32: f"a < b unsigned, {COMPARE_MASK}",
+        0x33: f"a >= b unsigned, {COMPARE_MASK}",
+        0x2E: f"b > imm unsigned (> against >= not separated), {COMPARE_MASK}",
+        0x2F: f"b <= imm unsigned (<= against < not separated), {COMPARE_MASK}",
+        0x30: f"b > a register of F0 unsigned (f72_75's or f76_79's, > against >= not "
+        f"separated), {COMPARE_MASK}",
+        0x31: f"b <= a register of F0 unsigned (f72_75's or f76_79's, <= against < not "
+        f"separated), {COMPARE_MASK}",
+        0x1F: f"the carry of a + b, {COMPARE_MASK}",
+        0x2C: f"the carry of a + b, {COMPARE_MASK}",
+        0x2A: f"the signed overflow of a + b, {COMPARE_MASK}",
+        **{
+            h: f"{'all ones' if h in (0x12, 0x18) else 'zero'} on the operands tried, a compare "
+            f"whose operand is not identified, {COMPARE_MASK}"
+            for h in (0x12, 0x13, 0x18, 0x19)
+        },
+    },
     "s1": {0x54: f"F1[f84_87] ({EXACT})"},
     "s2": {
         0xC: "lane (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60], sign-extended (inferred, "
@@ -1259,8 +1309,8 @@ S_RESULTS: dict[str, dict[int, str]] = {
     },
 }
 """The S head values with a scalar result under the M strobe (which values have one: measured on
-the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read; the rules'
-tiers in the text). A reduction's register and an extract's lane in the same word reach the bus
+the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read, in the head's
+own word, and for S0's compare masks one word after it; the rules' tiers in the text). A reduction's register and an extract's lane in the same word reach the bus
 OR-ed (measured on the camera)."""
 
 
@@ -1408,10 +1458,12 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f72_75": (
-        I,
+        V,
         (
             "s, the register of F0 that S0's lane heads read as their scalar (`LANE_OPERANDS`; "
-            "inferred: S0's pre-registered function table at one register)"
+            "inferred: S0's pre-registered function table at one register) and whose 32 bits "
+            "the select heads read as a lane mask (verified on the camera, pre-registered at two "
+            f"registers holding two masks): {LANE_MASKS}"
         ),
     ),
     "f76_79": (
@@ -1904,7 +1956,7 @@ FIELDS: tuple[Field, ...] = (
     Field(
         274,
         275,
-        Kind.RAW,
+        Kind.ROUTE,
         "m",
         0,
         I,
@@ -1913,8 +1965,15 @@ FIELDS: tuple[Field, ...] = (
         f"changes under it: a mode of the compute group (hypothesis); {_c2_fact(274, 275)}. "
         "In the stock words it is 0 beside S0 head 0x52, 1 beside S1 0x54, 2 beside S2 0xe and "
         "3 beside S3 0x17 (verified in the bytes), but it does not select the S unit: a head's "
-        "result passed under M at each of 0..3 (measured on the camera, one head per word; the "
-        "selection reading pre-registered and refuted). What it selects is open",
+        "result passed under M at each of 0..3 in the head's own word (measured on the camera, "
+        "one head per word; the selection reading pre-registered and refuted). One word after "
+        "an S0 compare head, in a word with no S head, 0 put the compare mask on the bus and 3 "
+        "nothing, and S3's reductions were read under 3: it names the unit whose held result M "
+        "puts out, 0 S0, 3 S3 (inferred: one run; 1 and 2 not run there; `LANE_MASKS`)",
+        values={
+            0: "S0's held result, a compare mask (inferred)",
+            3: "S3's held result, a reduction (inferred)",
+        },
     ),
     Field(
         276,
@@ -1929,7 +1988,9 @@ FIELDS: tuple[Field, ...] = (
         "words after the head took nothing (verified on the camera by exact readout, "
         "pre-registered). S3's reductions 0x0..0x5 are the exception: their result is on the "
         "bus from the third word after the head on and stays (verified on the camera, "
-        "pre-registered), OR-ed with an extract's lane in the same word (measured)",
+        "pre-registered), OR-ed with an extract's lane in the same word (measured); and S0's "
+        "compare masks, on the bus one word after the head under f274_275 = 0 (inferred, "
+        "`LANE_MASKS`)",
         values={
             0: "an S head's scalar result on X0's result bus (verified)",
             1: "idle",
@@ -1943,7 +2004,9 @@ FIELDS: tuple[Field, ...] = (
         "which is active alone in 5 % of its words, and both track f41_44 (inferred: one op "
         "field, possibly an op and a modifier); f23_30 is active only where it is. Of "
         "0x40..0x5f only 0x52 was read: a job of all 32 values under M timed out in the driver, "
-        "which value stalls is not separated (measured on the camera)",
+        "which value stalls is not separated (measured on the camera); 0x41..0x46, 0x4b and "
+        "0x4d run in own programs without hanging the engine (measured on the camera). "
+        f"{LANE_MASKS}",
     ),
     _head(
         "s1",
