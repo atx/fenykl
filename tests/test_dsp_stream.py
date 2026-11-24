@@ -178,6 +178,17 @@ def test_a_wait_with_nothing_outstanding():
         drive(m, e, [WAIT])
 
 
+@pytest.mark.parametrize(
+    ("r5", "r6", "r3", "tier"),
+    [(0x10, 2, 2, V), (0x04, 8, 2, V), (0x08, 4, 2, I), (0x10, 4, 2, I)],
+)
+def test_zeros_under_16_units_per_vector_are_verified_where_measured(r5, r6, r3, tier):
+    m, e = machine(bytes(range(1, 65))), stream.Engine()
+    regs = block(0, 1, 0, 0x10, r3, 0, r5, r6, 1)
+    drive(m, e, [*regs, *load(0, SRC, 0), WAIT])
+    assert m.memory[1].lanes == (0,) * 32 and m.memory[1].tier == tier
+
+
 def test_a_lone_wait_returns_at_inferred():
     m, e = machine(bytes(range(64))), stream.Engine()
     drive(m, e, [WAIT, *lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT])
