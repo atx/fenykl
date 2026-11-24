@@ -852,8 +852,8 @@ boots (verified on the camera). A register a port writes in word t is read by a 
 t + 1 (verified on the camera, pre-registered against a sentinel in the register, five pairs:
 L3 through f250_251 = 0 (S3 0x18's result) then S3 0x19, L2 through f244_245 = 0 (a load) then
 S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2; L0 written by S0's
-port then read by S0, L1 by S1's then S1); a head in the port's own word, and U, were not
-measured."""
+port then read by S0, L1 by S1's then S1); a head in the port's own word reads the old
+content, in every lane file and in U (verified on the camera, pre-registered)."""
 LANE_THIRD_FILE = (
     "U, a third kind of lane register file, 16 registers named by f31_34 (verified on the "
     "camera, pre-registered: sixteen values written through f141_144 = 0..15 read back by "

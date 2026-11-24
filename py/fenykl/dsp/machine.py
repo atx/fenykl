@@ -202,7 +202,8 @@ LANE_UNIT = {
 class Carry:
     """What one job leaves to the next of the same boot: the lane memory and every register file
     (verified on the camera: a job read what the job before had written into G, R, A, B, F0..F3,
-    the four lane files, U, O and a lane-memory vector), each file by its name."""
+    the four lane files, U, O and a lane-memory vector), each file by its name. A program
+    that runs between the two jobs changes what it writes: replaying it is the caller's part."""
 
     lane_memory: dict[int, Vec] = field(default_factory=dict)
     registers: dict[str, list] = field(default_factory=dict)
@@ -271,9 +272,11 @@ class Machine:
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
-        self.reduction_gone = False
-        """An extract under M came after the reduction register's first word: the register was
-        not on M afterwards (measured on the camera twice: inferred)."""
+        self.extract_at: int | None = None
+        """The word of the last extract under M beside a reduction register past its first
+        word: that register was not on M afterwards (measured on the camera twice: inferred)."""
+        self.last_head: int | None = None
+        """The word of the last S head run."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -580,6 +583,7 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
+            self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
                 self.open_m.setdefault(t, set()).add(unit)
@@ -599,7 +603,6 @@ class Machine:
                 value = Sv(None)
             if rule.held:
                 self.reductions.append((t + rule.lag, value))
-                self.reduction_gone = False
             elif rule.lag == 0:
                 own[unit] = value
             else:
@@ -773,12 +776,17 @@ class Machine:
             return Sv(None, I if before in S_NEXT_VALUES.get(sel, ()) else H)
         h = held.get(sel)
         if not own:
-            if sel == "s3" and self.reduction_gone:
+            gone = self.extract_at is not None and all(
+                w <= self.extract_at for w, _ in ready
+            )
+            if sel == "s3" and ready and gone:
                 return Kept(I)
             if h is not None:
                 return _cap(h, tier)
-            # Nothing on M two and three words after a head (verified in all four units).
-            return Kept(tier)
+            # Nothing on M when the last head is two or more words back (verified in all four
+            # units at two and three words, earlier heads further back in every cell).
+            quiet = self.last_head is not None and t - self.last_head >= 2
+            return Kept(tier if quiet else min(tier, I))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
@@ -792,7 +800,8 @@ class Machine:
             if fresh is None:
                 # Beside a register older than its first word the extract comes alone
                 # (verified: four, five, eight and twenty words after the reduction head).
-                self.reduction_gone = bool(ready)
+                if ready:
+                    self.extract_at = t
                 return _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (verified).
             if v.value is None or fresh.value is None:
@@ -887,8 +896,11 @@ class Machine:
         if not due:
             return NOTHING
         if text == S2_HIGH:
-            high = due[-1][1] if len(due) == 1 else None
-            return UNKNOWN_VEC if high is None else high
+            if len(due) > 1:
+                return Vec(
+                    UNKNOWN_VEC.lanes, H
+                )  # two high halves in one word: not measured
+            return UNKNOWN_VEC if due[0][1] is None else due[0][1]
         low = due[0][0]
         for other, _ in due[1:]:
             # A lag-1 result and the next word's lag-0 result on one bus: OR-ed (verified).

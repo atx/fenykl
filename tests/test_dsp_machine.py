@@ -12,6 +12,7 @@ from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import (
     LANE_RULES,
     X_RULES,
+    UnknownSemantics,
     lane_result,
     s_result,
     x_result,
@@ -456,3 +457,92 @@ def test_a_job_starts_with_the_registers_the_job_before_left(m):
     )
     assert (later.lanes["L1"][6], later.u[6], later.o[3]) == (Vec(A), Vec(B), Vec(A))
     assert later.memory[0x70] == Vec(B)
+
+
+def test_a_new_reduction_is_on_m_again_after_an_extract_hid_the_old_one(m):
+    m.lanes["L3"][1] = Vec(A)
+    m.r[0] = Sv(0xDEAD)
+    reduce = w(f296_301=0x2, f65_68=1)
+    extract = w(f296_301=0xF, f65_68=1, f92_95=5, f31_34=1, f276=0, f274_275=3)
+    read = w(f276=0, f274_275=3, f270_271=2, f221_223=0)
+    run(
+        m, [reduce, *[IDLE] * 4, extract, IDLE, read]
+    )  # the old register: gone after the extract
+    assert m.r[0] == Sv(0xDEAD, I)
+    start = 8
+    for t, word in enumerate([reduce, extract, IDLE, IDLE, read], start):
+        m.execute(t, word, t)
+    assert m.r[0] == Sv(sum(A))
+
+
+def test_an_extract_meets_the_reduction_register_in_its_first_word_only(m):
+    m.lanes["L3"][1] = Vec(A)
+    reduce = w(f296_301=0x2, f65_68=1)
+    extract = w(
+        f296_301=0xF,
+        f65_68=1,
+        f92_95=5,
+        f31_34=1,
+        f276=0,
+        f274_275=3,
+        f270_271=2,
+        f221_223=0,
+    )
+    run(m, [reduce, IDLE, IDLE, extract])
+    assert m.r[0] == Sv(A[5] | sum(A))
+    run(m, [reduce, IDLE, IDLE, IDLE, extract])
+    assert m.r[0] == Sv(A[5])
+
+
+def test_m_keeps_the_port_register_two_words_after_a_head(m):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.r[0] = Sv(0x0A5A)
+    read = w(f276=0, f274_275=1, f270_271=2, f221_223=0)
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2), IDLE, read])
+    assert m.r[0] == Sv(0x0A5A)
+
+
+def test_m_replaces_an_active_x0_heads_result(m):
+    m.f["F0"][5] = Sv(0x1C3)
+    word = w(
+        f278_284=0x52,
+        f76_79=5,
+        f276=0,
+        f274_275=0,
+        f302_307=0x13,
+        f105_109=8,
+        f2_6=0x1E,
+        f1=0,
+    )
+    run(m, [Word.from_fields({"f272_273": 2, "f224_228": 12}, base=word)])
+    assert m.g[12] == Sv(0x1C3)
+
+
+def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    boot = Boot()
+    m = Machine(boot)
+    m.g[30], m.g[16] = Sv(1), Sv(0)
+    Executor(boot, datapath=m).step(Job(Program((halt, *[inc(16)] * 4)), ()))
+    assert m.g[16] == Sv(3)
+    with pytest.raises(UnknownSemantics, match="a control op behind a halt"):
+        boot = Boot()
+        Executor(boot, datapath=Machine(boot)).step(
+            Job(Program((halt, control(2, 0, ra=1))), ())
+        )
+
+
+def test_the_machine_refuses_a_control_word_with_f120_122_low_bits():
+    boot = Boot()
+    job = Job(
+        Program((Word.ctl(3, 1, base=IDLE), IDLE)), ()
+    )  # the idle word's f120_122 is 7
+    with pytest.raises(UnknownSemantics, match="f120_122 bits 0..1"):
+        Executor(boot, datapath=Machine(boot)).step(job)
+
+
+def test_os_port_under_5_keeps_its_content_at_inferred(m):
+    m.lanes["L3"][1] = Vec(A)
+    m.o[2] = Vec(B)
+    run(m, [w(f296_301=0x19, f65_68=1, f252_254=5, f179_181=2)])
+    assert m.o[2] == Vec(B, I)

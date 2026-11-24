@@ -26,7 +26,16 @@ from enum import Enum
 from typing import Protocol
 
 from ..firmware import unpack_firmware
-from .fields import DELAY_SLOTS, OP_FIELD, Confidence, Kind, Operands, lookup, op
+from .fields import (
+    DELAY_SLOTS,
+    IDLE_OP,
+    OP_FIELD,
+    Confidence,
+    Kind,
+    Operands,
+    lookup,
+    op,
+)
 from .program import Program
 from .semantics import (
     LOCAL_BYTES,
@@ -307,11 +316,12 @@ class Executor:
 
     `run` runs a job of `model`'s program and has the model apply its trace. `step` steps a
     job's program through its control flow from word 0, with no model: a program counter that
-    follows the control ops (`fields.OPS`, inferred): a call at i goes to T and returns to
-    i + 5, a return goes back there, brf / br / a loop end go to T when `branching` takes them;
+    follows the control ops (`fields.OPS`): a call at i goes to T and returns to
+    i + 5, a return goes back there (the plain stepper's reading of the stock convention,
+    inferred), brf / br / a loop end go to T when `branching` takes them;
     every control op has four delay slots that run before its transfer takes effect, and op 7
-    halts at once at any word and call depth, the return stack unchecked (whether a halt has
-    delay slots of its own is open). `branching` decides ops 0..2; the default `Given()`
+    halts at any word and call depth, the return stack unchecked; on a `datapath` the three
+    words behind a halt still run (`HALT_TAIL`). `branching` decides ops 0..2; the default `Given()`
     decides none of them. A control op in another's delay slots jumps after its own four, and
     so does a loop end whose T lies in its own slots (verified on the camera). On the camera
     op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
@@ -394,7 +404,9 @@ class Executor:
             slots = max(slots - 1, 0)
             if word.op == HALT_OP:
                 steps.append(Step(pc, word.op, slot, confidence=op(HALT_OP).confidence))
-                self._behind_halt(words[pc + 1 : pc + 1 + HALT_TAIL], pc + 1, steps)
+                self._behind_halt(
+                    words[pc + 1 : pc + 1 + HALT_TAIL], pc + 1, steps, jumps
+                )
                 return Flow(steps, Stop.HALT)
             target = None
             if not word.control:
@@ -431,16 +443,25 @@ class Executor:
                 jumps.append([DELAY_SLOTS, target])
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
 
-    def _behind_halt(self, tail: tuple[Word, ...], at: int, steps: list[Step]) -> None:
-        """The data words behind a halt that still run (`HALT_TAIL`), on a `datapath` only:
-        plain stepping ends at the halt."""
+    def _behind_halt(
+        self, tail: tuple[Word, ...], at: int, steps: list[Step], jumps: list[list[int]]
+    ) -> None:
+        """The words behind a halt that still run (`HALT_TAIL`), on a `datapath` only: plain
+        stepping ends at the halt. Measured with data words in program order: a pending jump,
+        or a control or halt word among them, raises; words past the program's end are not run."""
         if self.datapath is None:
             return
+        if jumps and any(word.op != IDLE_OP for word in tail):
+            raise UnknownSemantics(
+                at - 1, "halt", [], "a halt in a taken jump's delay slots"
+            )
         for i, word in enumerate(tail, at):
             if word.control or word.op == HALT_OP:
-                continue
+                raise UnknownSemantics(
+                    i, op(word.op).name, [], "a control op behind a halt"
+                )
             note = self.datapath.execute(i, word, len(steps))
-            steps.append(Step(i, word.op, True, word.operands, note=note))
+            steps.append(Step(i, word.op, False, word.operands, note=note))
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
         t, conf = word.target, op(word.op).confidence
@@ -459,6 +480,22 @@ class Executor:
         falls through or is undecided)."""
         name, conf = op(word.op).name, op(word.op).confidence
         t = word.target
+        if word.op == 3 and self.datapath is not None:
+            return Step(
+                i, word.op, target=t, taken=True, note="jump", confidence=conf
+            ), t
+        if word.op == 4 and self.datapath is not None:
+            to, tier = self.datapath.link(word)
+            reg = f"r{word['f128_132']}"
+            if to is None:
+                return Step(
+                    i, word.op, note=f"{reg} undecided: its value is unknown"
+                ), None
+            return Step(
+                i, word.op, taken=True, note=f"to {to}, {reg}", confidence=tier
+            ), to
+        # Without a datapath the stepper infers the link from the stock convention.
+        conf = min(conf, Confidence.INFERRED)
         if word.op == 3:
             back = i + DELAY_SLOTS + 1
             stack.append(Link(back))
@@ -470,13 +507,6 @@ class Executor:
                 note=f"returns to {back}",
                 confidence=conf,
             ), t
-        if word.op == 4 and self.datapath is not None:
-            to, tier = self.datapath.link(word)
-            if to is not None:
-                if stack:
-                    stack.pop()
-                note = f"to {to}, r{word['f128_132']}"
-                return Step(i, word.op, taken=True, note=note, confidence=tier), to
         if word.op == 4:
             if not stack:
                 raise LinkError(i, name, [], "a return without a call")

@@ -1516,9 +1516,12 @@ _LANE_READS = {
 """The lane operands each S head's lane rule reads, from its rule; a head not listed reads both."""
 
 
-_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {}
-"""Per head a tier that depends on the word's scalars; none since every count of the lane shifts
-and every nibble of S2 0x7 was pre-registered."""
+_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {
+    "s3": {0x22: lambda c: I if c["f92_95"] == 2 else V},
+}
+"""Per head a tier that depends on the word's scalars: S3 0x22 at f92_95 = 2 was measured, not
+pre-registered (0x1c was); every other count of the lane shifts and every nibble of S2 0x7 was
+pre-registered."""
 
 
 def _lane_rules(unit: str) -> dict[int, LaneRule]:
