@@ -111,10 +111,12 @@ def test_the_reduction_register_from_the_third_word(m):
             IDLE,
             w(**read, f224_228=2),
             w(**read, f224_228=3),
+            w(**read, f224_228=4),
         ],
     )
     assert m.g[1].value is None  # nothing on M at lag 1: the port wrote nothing
     assert m.g[2] == Sv(max(B)) == m.g[3]
+    assert m.g[4] == Sv(max(B), I)  # past the words it was read in
 
 
 def test_an_extract_reads_only_its_lane(m):

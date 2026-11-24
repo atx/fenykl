@@ -820,7 +820,8 @@ value in the word it arrives in and OR what arrives together: the op result in i
 product one word later, a local load's datum three words later, a lane load four words after its X0 head, a lane
 head's result `LANE_LAG` words after the head for that word only (a head without a measured lag
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
-reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
+reductions from the third word on, held (verified in the register's first two words, inferred
+later: a lapse is not ruled out). A port with nothing arriving writes nothing. Values are
 `Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
 of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e) without a
 stream, an unaligned local access, a store at an unknown address, two

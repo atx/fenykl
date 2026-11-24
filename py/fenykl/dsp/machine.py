@@ -27,7 +27,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing;
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
-  word; S3's reductions from the third word after the head on, held.
+  word; S3's reductions from the third word after the head on, held (verified in the register's
+  first two words, inferred later).
 
 Strict throughout: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
 give is unknown (None), and a value from a rule below verified carries that tier. Values are 32-bit
@@ -770,7 +771,8 @@ class Machine:
         fresh = None
         if ready:
             w, v = max(ready, key=lambda x: x[0])
-            held["s3"] = v
+            # The register was read in its first two words; a later lapse is not ruled out.
+            held["s3"] = v if t <= w + 1 else _cap(v, I)
             fresh = v if w == t else None
         elif sel == "s3":
             held["s3"] = Sv(None)
