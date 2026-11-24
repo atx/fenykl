@@ -1308,7 +1308,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             NO_LANE_LAGS,
         ),
-        **_rows(range(0x25, 0x3F), NO_LANE, I),
+        **_rows(range(0x25, 0x3F), NO_LANE, V, NO_LANE_LAGS),
         **_rows(
             (0x06, 0x07, 0x08),
             "a window of b's lanes, 0 in the others",
