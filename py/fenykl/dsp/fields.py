@@ -2897,16 +2897,13 @@ _E_UNSEEN = (
     "never occurs in the stock programs; ra and rb as family E reads them, f120_122 without "
     "effect (verified on the camera by exact readout, eight operand sets)"
 )
+_D_UNSEEN = (
+    "never occurs in the stock programs; ra and imm16 = imm | f128_132 << 8 | f120_122 << 13 "
+    "zero-extended (verified on the camera by exact readout: two jobs with ra below, equal to "
+    "and above imm16, imm16 0x8000 and 0xffff against ra 0x8000, 0xffff8000 and 0x10000)"
+)
 UNSEEN_FORMAT_FACTS = {
-    0x22: "never occurs in the stock programs; ra read (verified on the camera by exact "
-    "readout); the immediate never affected a result (every result 0, ra above it in all eight "
-    "sets), so its imm16 reading, zero-extension and f120_122 bits are a hypothesis",
-    0x26: "never occurs in the stock programs; ra read (verified on the camera by exact "
-    "readout); the immediate never affected a result (every result ra), so its imm16 reading, "
-    "zero-extension and f120_122 bits are a hypothesis",
-    0x27: "never occurs in the stock programs; ra and imm16 = imm | f128_132 << 8 | f120_122 "
-    "<< 13 zero-extended (verified on the camera by exact readout: every result the immediate, "
-    "0x8e12 and 0xefff among them)",
+    **{value: _D_UNSEEN for value in (0x22, 0x26, 0x27)},
     **{value: _E_UNSEEN for value in (0x2D, 0x39, 0x3B, 0x45)},
 }
 FORMATS |= UNSEEN_FORMATS

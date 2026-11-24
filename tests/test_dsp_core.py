@@ -330,15 +330,24 @@ def test_and_mask_sign_extends_imm16():
         (0x41, Operands(ra=2, rb=3), -0x1400, 1, -0xA00, "V"),  # arithmetic
         (0x42, Operands(ra=2, rb=3), -0x10, 4, 0x0FFFFFFF, "V"),  # logical
         (0x43, Operands(ra=2, rb=3), 0x10, 0x21, 0x20, "V"),
-        # The seven values unused in stock code; 0x22 / 0x26 / 0x27 ran with ra > imm16 only.
-        (0x22, Operands(ra=2, imm=0x0B00), 0x24681234, None, 0, "I"),
-        (0x22, Operands(ra=2, imm=0x0B00), 0x10, None, 1, "H"),
-        (0x26, Operands(ra=2, imm=0x8E12), 0xDB97EDCB, None, 0xDB97EDCB, "I"),
-        (0x26, Operands(ra=2, imm=0x8E12), 0x10, None, 0x8E12, "H"),
-        (0x27, Operands(ra=2, imm=0xEFFF), 0x24681234, None, 0xEFFF, "I"),
+        # The seven values unused in stock code; imm16 zero-extended on both sides of ra.
+        (0x22, Operands(ra=2, imm=0x0B00), 0x24681234, None, 0, "V"),
+        (0x22, Operands(ra=2, imm=0x0B00), 0xB00, None, 1, "V"),  # equal
+        (
+            0x22,
+            Operands(ra=2, imm=0x8000),
+            0xFFFF8000,
+            None,
+            0,
+            "V",
+        ),  # not sign-extended
+        (0x26, Operands(ra=2, imm=0x8E12), 0xDB97EDCB, None, 0xDB97EDCB, "V"),
+        (0x26, Operands(ra=2, imm=0x8E12), 0x10, None, 0x8E12, "V"),
+        (0x27, Operands(ra=2, imm=0xEFFF), 0x24681234, None, 0xEFFF, "V"),
+        (0x27, Operands(ra=2, imm=0xFFFF), 0x8000, None, 0x8000, "V"),
         (0x2D, Operands(ra=2, rb=3), 0xFFFFFFF3, 0x1234, 0x1234, "V"),  # unsigned
         (0x39, Operands(ra=2, rb=3), 0x24681234, 0x1234, 0x24680000, "V"),
-        (0x3B, Operands(ra=2, rb=3), 0xFFFFFFF3, 0x1234, 0xFFFFEDC3, "I"),
+        (0x3B, Operands(ra=2, rb=3), 0xFFFFFFF3, 0x1234, 0xFFFFEDC3, "V"),
         (0x45, Operands(ra=2, rb=3), 0x24681234, 0x210, 0x24681235 - 0x210, "V"),
         (0x45, Operands(ra=2, rb=3), 5, 0x210, 6, "V"),
     ],

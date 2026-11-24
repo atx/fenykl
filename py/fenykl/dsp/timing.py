@@ -41,8 +41,9 @@ REPEAT = Cost(
     "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
     "idle words at 5.2 to 5.3 ns in passes of 64 to 1024 words, and in passes that jump 1088 "
     "words away and back by op 2 or op 3 (verified on the camera, pre-registered: no loop "
-    "buffer and no cache smaller than 1024 words; passes of 2000 words measured faster, 4.6 "
-    "ns, below the registered range); in passes of 107 to 1024 words only idle words were "
+    "buffer and no cache smaller than 1024 words; passes of 2000 words 5.24 ns from four "
+    "totals, and a 900-word straight run repeated after 900 other words at the repeat rate, "
+    "pre-registered); in passes of 107 to 2000 words only idle words were "
     "timed, so other words there repeat at `REPEAT_I`; "
     "S3 reductions likewise (fitted)",
 )
@@ -50,23 +51,36 @@ REPEAT_I = Cost(
     REPEAT.us,
     I,
     "a word executed again outside the measured passes (a pass under 9 words, over 106 for a "
-    "word that is not idle, over 1024 for an idle word, or "
+    "word that is not idle, over 2000 for an idle word, or "
     "with an op 4 since the word's last run), or with an S unit's head: S3 reductions "
     "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
     "more than an idle word)",
 )
 PASSES = range(9, 107)
 """Executed words between two runs of a word in the loops timed on the camera, any word class."""
-IDLE_PASSES = range(9, 1025)
+IDLE_PASSES = range(9, 2001)
 """Likewise for idle words."""
 FIRST = Cost(
-    0.062,
+    0.064,
     I,
-    "a word's first execution: 62 ns, the slope over straight-line jobs of 190 to 2000 words "
-    "(fitted); straight-line runs of 0 to 1900 idle words later gave 65 to 73 ns (within a "
-    "pre-registered 50 to 75 ns), so the figure may be low by up to 15 % for long runs; words "
-    "of ALU ops cost the same as idle words (verified on the camera); paid when the word runs, "
-    "not for the image's length: a word branched over costs nothing (verified on the camera)",
+    "a word's first execution: 64 ns, the slope over straight-line jobs of 200 to 1000 idle "
+    "words (fitted; earlier runs of 0 to 1900 words gave 62 to 70 ns, all within a "
+    "pre-registered 50 to 75 ns); words of ALU ops cost the same as idle words (verified on "
+    "the camera); paid when the word runs, not for the image's length: a word branched over "
+    "costs nothing unless it shares a fetch line with a word that runs (`LINE`)",
+)
+LINE = 8
+"""Words per fetch line, aligned to image indices that are multiples of 8: the words of a
+line that runs but that the job never executes cost `UNRUN` each (inferred: chains of
+8-word blocks every 16 words cost nothing extra at offsets 0 and 8 and about 6.5 words per
+block at offsets 4 and 12, pre-registered as one of the line sizes named; blocks every 10
+and 12 words fit the line within a word per block; every 24 and 64 words they cost 2 to 5
+words per block more than the lines predict, unexplained)."""
+UNRUN = Cost(
+    0.064,
+    I,
+    "a word never executed in a fetch line some word of which runs: the first-run rate "
+    "(fitted: an extra line measured 0.82 of eight first runs)",
 )
 S_UNITS = ("s0", "s1", "s2", "s3")
 
@@ -252,6 +266,13 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
             unknown=f"{len(ends)} commands outstanding at the halt: whether the job waits "
             "for them was not timed"
         )
+    run = {i for i in last}
+    unrun = sum(
+        1
+        for line in {i // LINE for i in run}
+        for i in range(line * LINE, min(line * LINE + LINE, len(words)))
+        if i not in run
+    )
     parts = [Part("job", JOB.us, JOB.tier)]
     parts += [
         Part(name, n * c.us, min(c.tier, flow_tier))
@@ -262,6 +283,10 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
         )
         if (n := counts[c])
     ]
+    if unrun:
+        parts.append(
+            Part("unrun line words", unrun * UNRUN.us, min(UNRUN.tier, flow_tier))
+        )
     if joined:
         parts.append(Part("stream waits", waited, min(I, flow_tier)))
     return Estimate(tuple(parts))

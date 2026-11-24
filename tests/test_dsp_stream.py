@@ -326,17 +326,56 @@ def test_kind_4_stores_as_kind_6_at_inferred():
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
 
 
-@pytest.mark.parametrize("kind", [2, 4])
-def test_kinds_2_and_4_outside_their_one_shape_raise(kind):
+@pytest.mark.parametrize("kind", [2, 3, 4, 5, 7, 8])
+def test_kinds_outside_their_shapes_raise(kind):
     m = machine(bytes(256))
-    with pytest.raises(UnknownSemantics, match="outside the one shape"):
-        drive(m, stream.Engine(), [*lanes(0, 4, r6=8), kind, SRC, DST, WAIT])
+    with pytest.raises(UnknownSemantics, match="outside the shapes it ran in"):
+        drive(m, stream.Engine(), [*lanes(0, 5, r6=10), kind, SRC, DST, WAIT])
 
 
-def test_kind_8_raises():
+def test_kind_2_loads_16_bit_elements_verified():
+    m, e = (
+        machine(b"".join(k.to_bytes(2, "little") for k in range(32))),
+        stream.Engine(),
+    )
+    drive(m, e, [*lanes(0, 1, r5=8, r6=4), 0x02, SRC, 0x40, WAIT])
+    assert m.memory[1].lanes == tuple(range(32)) and e.lane_tier() == V
+
+
+def test_kind_2_loads_three_rows_at_their_pitches():
+    m, e = machine(bytes(k & 0xFF for k in range(0x300))), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2, r7=3, r1=0x80, r4=0x100), 0x02, SRC, 0, WAIT])
+    assert [m.memory[v].lanes[0] for v in (0, 2, 4)] == [0, 0, 0] and 1 not in m.memory
+    assert m.memory[2].lanes == tuple(range(32))
+
+
+def test_kind_4_rows_raise():
     m = machine(bytes(64))
-    with pytest.raises(UnknownSemantics, match="kind 0x8"):
-        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x08, SRC, DST, WAIT])
+    with pytest.raises(UnknownSemantics, match="outside the shapes"):
+        drive(
+            m,
+            stream.Engine(),
+            [*lanes(0, 1, r6=2, r7=2, r1=0x40, r4=0x100), 0x04, 0, DST, WAIT],
+        )
+
+
+@pytest.mark.parametrize("kind", [3, 5, 7])
+def test_kinds_3_5_and_7_move_nothing_at_inferred(kind):
+    m, e = machine(bytes(range(64))), stream.Engine()
+    m.memory[0] = Vec((7,) * 32, V)
+    drive(m, e, [*lanes(0, 1, r6=2), kind, SRC, 0, WAIT])
+    assert m.memory[0].lanes == (7,) * 32 and e.cap == I
+
+
+@pytest.mark.parametrize(("r3", "r5", "r6"), [(1, 0x10, 2), (1, 8, 4), (4, 0x10, 8)])
+def test_kind_8_fills_r3_vectors_with_the_low_16_bits_of_from(r3, r5, r6):
+    m, e = machine(), stream.Engine()
+    m.boot.put(DST, bytes(32), "prefill")
+    drive(m, e, [*lanes(0, r3, r5=r5, r6=r6), 0x08, 0x12FCB800, 0x40 * 5, WAIT])
+    for v in range(5, 5 + r3):
+        assert m.memory[v].lanes == (0xB800,) * 32 and m.memory[v].tier == V
+    assert 5 + r3 not in m.memory
+    assert bytes(m.boot.read(DST, 32).data) == bytes(32)
 
 
 def test_more_commands_outstanding_than_the_depth_raise():
@@ -350,8 +389,8 @@ def test_more_commands_outstanding_than_the_depth_raise():
 
 def test_an_unmeasured_kind_raises():
     m = machine(bytes(64))
-    with pytest.raises(UnknownSemantics, match="kind 0x3"):
-        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x03, SRC, DST])
+    with pytest.raises(UnknownSemantics, match="kind 0x9"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x09, SRC, DST])
 
 
 def test_an_off_script_store_leaves_its_destination_unknown():
@@ -457,3 +496,13 @@ def test_transfers_through_the_machine_carry_their_tier():
         m.execute(t, w(f308_312=head, f115_119=0 if v is WAIT else regs[v]), t)
     got = m.boot.read(DST, 64)
     assert all(got.known) and set(got.taint) == {I}
+
+
+def test_kind_4_stores_three_vectors_as_kind_6_at_inferred():
+    m, e = machine(bytes(k & 0xFF for k in range(96))), stream.Engine()
+    m.boot.put(DST, bytes(128), "prefill")
+    drive(m, e, [*lanes(0, 3, r6=6), *load(0, SRC, 0), WAIT, 0x04, 0, DST, WAIT])
+    got = m.boot.read(DST, 128)
+    assert bytes(got.data) == bytes(range(96)) + bytes(32) and set(got.taint[:96]) == {
+        I
+    }

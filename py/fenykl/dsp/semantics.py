@@ -761,22 +761,16 @@ _UNSEEN = (
     "pre-registered, eight operand sets of both signs; no result one word later, the operands "
     "unchanged)"
 )
-_UNSEEN_ONE_SIDE = (
-    "a data op value never used in the stock programs (inferred where ra > imm16 unsigned: "
-    "pre-registered and matched on eight operand sets, all with ra above imm16; a hypothesis "
-    "where ra <= imm16, the side never run)"
+_UNSEEN_PAIRS = (
+    "a data op value never used in the stock programs (fitted on eight operand sets, then "
+    "verified on the camera by exact readout, pre-registered, in two jobs of eight sets whose "
+    "operands hold every bit pair in both orders, bit 31 included; the operands unchanged)"
 )
-
-
-def _ra_above(a: int, c: int) -> Confidence:
-    """The scope of 0x22 / 0x26 / 0x27: only ra > imm16 unsigned was run."""
-    return I if _u32(a) > c else H
-
-
-_UNSEEN_FITTED = (
-    "a data op value never used in the stock programs (fitted on the camera by exact readout, "
-    "eight operand sets of both signs, one of the candidates named before the run; the operands "
-    "unchanged)"
+_UNSEEN_IMM = (
+    "a data op value never used in the stock programs (verified on the camera by exact readout, "
+    "pre-registered, in two jobs of twelve operand sets each with ra below, equal to and above "
+    "imm16, imm16 at and above 0x8000 against ra values that tell zero- from sign-extension, "
+    "every imm16 bit set and clear; the operands unchanged)"
 )
 
 
@@ -988,19 +982,19 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
     ),
     0x22: OpSemantics(
-        I,
-        f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
-        OpValue("ra <=u c", lambda a, c: _flag(_u32(a) <= c), I, "c", _ra_above),
+        V,
+        f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN_IMM})",
+        OpValue("ra <=u c", lambda a, c: _flag(_u32(a) <= c), V, "c"),
     ),
     0x26: OpSemantics(
-        I,
-        f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
-        OpValue("maxu(ra, c)", lambda a, c: max(_u32(a), c), I, "c", _ra_above),
+        V,
+        f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_IMM})",
+        OpValue("maxu(ra, c)", lambda a, c: max(_u32(a), c), V, "c"),
     ),
     0x27: OpSemantics(
-        I,
-        f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_ONE_SIDE})",
-        OpValue("minu(ra, c)", lambda a, c: min(_u32(a), c), I, "c", _ra_above),
+        V,
+        f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_IMM})",
+        OpValue("minu(ra, c)", lambda a, c: min(_u32(a), c), V, "c"),
     ),
     0x2D: OpSemantics(
         V,
@@ -1009,7 +1003,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     ),
     0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b, V)),
     0x3B: OpSemantics(
-        I, f"ra & ~rb ({_UNSEEN_FITTED})", _e("ra & ~rb", lambda a, b: a & ~b, I)
+        V, f"ra & ~rb ({_UNSEEN_PAIRS})", _e("ra & ~rb", lambda a, b: a & ~b, V)
     ),
     0x45: OpSemantics(
         V,
