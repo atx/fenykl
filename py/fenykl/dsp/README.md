@@ -832,9 +832,9 @@ lane memory survives it, are the caller's part. Operand use is declared per rule
 `XRule.reads`, `ScalarValue.reads`), and a row whose sub-domains have different tiers gives the
 tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
 read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
-after an extract, which reads its own lane (measured); "nothing on M" two or more words after
-the last S head is verified (two and three words after heads of all four units), inferred with
-no head before. An S3 extract ORs with the reduction register in that register's first word
+after an extract, which reads its own lane (measured); "nothing on M" behind a head
+without a result there is verified (one word after 97 heads, two and three words after 16, in
+all four units), inferred with no head before. An S3 extract ORs with the reduction register in that register's first word
 and comes alone later [verified]; after such a later extract the register is not on M
 [inferred].
 

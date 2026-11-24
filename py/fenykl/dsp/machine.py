@@ -783,9 +783,10 @@ class Machine:
                 return Kept(I)
             if h is not None:
                 return _cap(h, tier)
-            # Nothing on M when the last head is two or more words back (verified in all four
-            # units at two and three words, earlier heads further back in every cell).
-            quiet = self.last_head is not None and t - self.last_head >= 2
+            # Nothing on M behind a head without a result there: verified one word after 97
+            # heads of all four units and two and three words after 16, earlier heads further
+            # back in every cell; with no head before in the job it is inferred.
+            quiet = self.last_head is not None and t > self.last_head
             return Kept(tier if quiet else min(tier, I))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
