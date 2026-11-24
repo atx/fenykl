@@ -634,7 +634,7 @@ S1_AND = {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}
         ([w(**S1_AND)], 1, V),  # the head's own unit
         ([w(**S1_AND)], 0, V),
         ([w(f296_301=0x19, f65_68=1)], 0, V),
-        ([w(**S1_AND, f296_301=0x19, f65_68=1)], 1, V),  # two units' heads
+        ([w(**S1_AND, f296_301=0x19, f65_68=1)], 1, I),  # two units' heads
         ([w(**S1_AND), IDLE], 0, V),
         ([], 1, I),  # no head before in the job
     ],
@@ -657,18 +657,26 @@ def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0,
     assert m.g[12] == Sv(0x0A5A, tier)
 
 
+PENDING = "a jump pending behind a halt"
+
+
 @pytest.mark.parametrize(
-    "jump",
+    ("before", "behind", "match"),
     [
-        [control(3, 7), IDLE],  # the halt in the second slot, only idle ops behind it
-        [control(2, 7, ra=30)],  # a taken br, not an op 3
+        (
+            [control(3, 7), IDLE],
+            [],
+            PENDING,
+        ),  # the halt in the second slot, idle behind it
+        ([control(2, 7, ra=30)], [], PENDING),  # a taken br, not an op 3
+        # The two measured shapes together: a halt in an op 3's first slot, an op 3 behind it.
+        ([control(3, 9)], [IDLE, control(3, 9)], "a control op behind a halt"),
     ],
 )
-def test_a_halt_with_an_unmeasured_jump_pending_raises(jump):
+def test_a_halt_in_an_unmeasured_jump_shape_raises(before, behind, match):
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
-    words = [*jump, halt, *[IDLE] * 6]
-    with pytest.raises(UnknownSemantics, match="a jump pending behind a halt"):
-        stepped(words)
+    with pytest.raises(UnknownSemantics, match=match):
+        stepped([*before, halt, *behind, *[IDLE] * 6])
 
 
 def control_tiers(words: list[Word]) -> dict[int, Confidence | None]:

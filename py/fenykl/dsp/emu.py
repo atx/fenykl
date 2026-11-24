@@ -469,8 +469,8 @@ class Executor:
         """The words behind a halt that still run (`HALT_TAIL`), on a `datapath` only: plain
         stepping ends at the halt. They run in program order and the job ends after them
         (verified on the camera with data words; with the halt in a taken op 3's first delay
-        slot, the jump not taken; with an op 3 as the second of them, its jump not taken). Any
-        other pending jump (it may run its target's words instead), another control word or a
+        slot, the jump not taken; with an op 3 as the second of them, its jump not taken; each
+        alone). Any other pending jump (it may run its target's words instead), another control word or a
         halt among them raises; words past the program's end are not run."""
         if self.datapath is None:
             return
@@ -479,7 +479,7 @@ class Executor:
         ):
             raise UnknownSemantics(at - 1, "halt", [], "a jump pending behind a halt")
         for i, word in enumerate(tail, at):
-            jump = word.control and word.op == 3 and i - at == 1
+            jump = word.control and word.op == 3 and i - at == 1 and not jumps
             if (word.control and not jump) or word.op == HALT_OP:
                 raise UnknownSemantics(
                     i, op(word.op).name, [], "a control op behind a halt"

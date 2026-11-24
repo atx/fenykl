@@ -835,12 +835,13 @@ lane memory survives it, are the caller's part. Operand use is declared per rule
 `XRule.reads`, `ScalarValue.reads`). M under a unit after a head whose result there was not
 read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
 after an extract, which reads its own lane (measured); "nothing on M" behind a head
-without a result there is verified in the head's own word under its own unit, one word after
-under every unit, two and three words after, and under S3 two to six words after a reduction with
-no head since; inferred elsewhere and with no head before. An S3 extract ORs with a reduction in
+without a result there is verified in the head's own word under its own unit and one word after
+under every unit (one unit's head in that word), two and three words after, and under S3 two to
+six words after a reduction with no head since; inferred elsewhere and with no head before. An S3 extract ORs with a reduction in
 the reduction's first word and comes alone later [verified]. Behind a halt three words run and the
 job ends: an op 3 second among them or a taken op 3 whose first delay slot holds the halt does not
-jump [verified]; other control words there, and any other jump pending at the halt, raise.
+jump [verified, each alone]; other control words there, and any other jump pending at the halt,
+raise.
 
 `stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
 against the stock copy's for the same request (`Transcript`, recorded by running program 16)

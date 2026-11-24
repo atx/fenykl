@@ -813,14 +813,18 @@ class Machine:
 
     def _quiet(self, sel: str, t: int) -> bool:
         """Whether "nothing on M" was measured for this case: under S0..S2 in the head's own word
-        under its own unit, one word after under every unit, two and three words after; under
-        S3 two to six words after a reduction with no head since. Elsewhere it is inferred."""
+        under its own unit and one word after under every unit, each with one unit's head in that
+        word; two and three words after; under S3 two to six words after a reduction with no head
+        since. Elsewhere it is inferred."""
         if self.last_head is None:
             return False
         if sel == "s3":
             last = max((w - 3 for w, _ in self.reductions), default=None)
             return last == self.last_head and 2 <= t - last <= 6
-        return t > self.last_head or sel in self.head_units
+        if t - self.last_head >= 2:
+            return True
+        lone = len(self.head_units) == 1
+        return lone and (t > self.last_head or sel in self.head_units)
 
     # ------------------------------------------------------------------ ports
 
