@@ -156,7 +156,7 @@ def test_lane_tables_verified_rows():
         unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
         for unit, rows in LANE_FUNCTIONS.items()
     }
-    assert verified == {"s0": 43, "s1": 67, "s2": 13, "s3": 19}
+    assert verified == {"s0": 71, "s1": 85, "s2": 13, "s3": 33}
 
 
 def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():
