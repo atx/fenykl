@@ -1370,13 +1370,11 @@ class LaneMemory:
 
     def copy_in(self, vector: int, data: bytes) -> None:
         """The stock copy's load: byte i, zero-extended, to lane i % 32 of vector + i // 32;
-        a last partial vector's other lanes are kept (not measured)."""
+        a last partial vector's other lanes are unknown (not measured)."""
         for start in range(0, len(data), LANE_COUNT):
             address = vector + start // LANE_COUNT
-            lanes = self.load(address)
-            chunk = data[start : start + LANE_COUNT]
-            lanes[: len(chunk)] = chunk
-            self.store(address, lanes)
+            chunk = list(data[start : start + LANE_COUNT])
+            self.store(address, chunk + [None] * (LANE_COUNT - len(chunk)))
 
     def copy_out(self, vector: int, length: int) -> list[int | None]:
         """The stock copy's store of `length` bytes from `vector` on: each element's low 8 bits,

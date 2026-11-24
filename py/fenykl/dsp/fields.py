@@ -911,11 +911,11 @@ LANE_MEMORY = (
     "source byte, zero-extended, source byte 32 n at vector n lane 0 at placement 0, and its "
     "store writes each element's low 8 bits (verified on the camera, pre-registered: a stock "
     "copy in, an own vector program, a stock copy out, exact on 512 + 512 + 4096 bytes). "
-    "Timing: a store head in the same word as O's port write stores the old content of O, one "
-    "three words after the write the new content (verified, pre-registered); a load one word "
-    "after a store to the same vector reads the stored vector, and four loads in consecutive "
-    "words land in four consecutive port words (measured on the camera, not pre-registered: "
-    "inferred)"
+    "Timing: a store head three words after O's port write stores the new content (verified, "
+    "pre-registered); one in the same word as the write stores the old content of O, a load one "
+    "word after a store to the same vector reads the stored vector, and four loads in "
+    "consecutive words land in four consecutive port words (measured on the camera, not "
+    "pre-registered: inferred)"
 )
 STORE_FILE = (
     "O, the store file: eight lane registers of 32 lanes of 16 bits, written by the grid B port "

@@ -75,7 +75,7 @@ On the camera, ownership predicts use in one direction (`fields.UNIT_FACTS`, pro
 433 and 439): idling the nibbles whose owner is active in the word gives the effect of idling the
 whole grid, byte for byte, and idling the held nibbles of idle owners has none (32 nibbles, in
 three sets, at their idle values). An active owner is not sufficient: port f202_205 and X0's
-f69_71 are inert there (X0's head at 439 is no store, the one head that reads f69_71).
+f69_71 are inert there (X0's head at 439 is no store head).
 
 ## Fields
 
@@ -173,7 +173,7 @@ unit's lane heads read a and b from it through its two lane nibbles, and the two
 
 | file | unit | a, b | first port (enable): 0, 1, 2 | second port (enable): 0, 1, 2 |
 |---|---|---|---|---|
-| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): a load, S2's high half, S0 [inferred] | f151_154 (f238_239): S3, S2's low half, S1 |
+| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): a load [inferred], S2's high half [inferred], S0 [inferred] | f151_154 (f238_239): S3, S2's low half, S1 |
 | L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): a load [inferred], S2's high half, S0 [inferred] | f159_162 (f242_243): S3, S2's low half, S1 [inferred] |
 | L2 | S2 | f53_56, f57_60 | f163_166 (f244_245): a load, S0, nothing seen | f167_170 (f246_247): S3, S2's low half, S1 |
 | L3 | S3 | f61_64, f65_68 | f171_174 (f248_249): a load, S0, nothing seen | f175_178 (f250_251): S3, S2's low half, S1 |
@@ -241,10 +241,10 @@ such a port write four words later, and none lacks its head (379 words; verified
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
 occur and were not run, `fields.STORE_SOURCES`), a move in the head's own word and an arithmetic
-result one word after it, and a store head writes O[f69_71] [verified]. A store head in the
-same word as O's port write stores the old content, three words later the new [verified]; a load
-one word after a store to the same vector reads it back, and four loads in consecutive words
-land in four consecutive port words [inferred]. Each head and its even / odd twin showed no
+result one word after it, and a store head writes O[f69_71] [verified]. A store head three
+words after O's port write stores the new content [verified]; one in the same word as the write
+stores the old content, a load one word after a store to the same vector reads it back, and four
+loads in consecutive words land in four consecutive port words [inferred]. Each head and its even / odd twin showed no
 difference in address, lanes, element width or scalar result, and none writes A back
 [inferred]; what the low head bit selects is open [hypothesis: the handshake with the copy
 engine's streams].
