@@ -55,7 +55,7 @@ _UNITS = (
         (
             u,
             u.upper(),
-            I,
+            V if u == "s2" else I,  # every S2 head's row and lag verified
             _HEAD.format(u.upper(), *HEADS[u]),
             (f"f{HEADS[u][0]}_{HEADS[u][1]}",),
         )

@@ -54,7 +54,7 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `op_slot` | op f313_319 | imm, ra, rb (f128_132), f120_122, f229 | scalar and control ops | verified |
 | `s0` | f278_284 | grid A 37, 41, 72, 76; f23_30 | compute slot: add, compare, neighbour lanes on L0 | inferred |
 | `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot: logic, shifts, min / max on L1 | inferred |
-| `s2` | f292_295 | grid A 53, 57, 88 | compute slot: multiply on L2 | inferred |
+| `s2` | f292_295 | grid A 53, 57, 88 | compute slot: multiply on L2 | verified (every head's row and lag) |
 | `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot: moves, insert, extract, reductions on L3 | inferred |
 | `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A, and the lane memory's loads and stores (f69_71 the store's register of O) | verified |
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
@@ -110,7 +110,7 @@ confidence and fact; `fields.op(value)` is total:
 | 3 | `call` | a jump to T that writes no link; a call is an op 3 whose delay slots hold 0x0b #(i + 5) on r1 | verified |
 | 4 | `ret` | a jump to the word G[f128_132] names, r1 by the stock convention | verified |
 | 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the next three words fetched behind it still run and the job ends [verified] (data words; a jump due among them redirects them, verified on op 4 in slots 2 and 3, fitted on op 3; a halt first or an op 3 / op 4 second among them is not taken; the emulator refuses other control words among them and unmeasured jump shapes); word 5 of every stock program, where the call at word 0 returns | inferred |
-| 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
+| 8..73 | `opNN` | a data op (NN in hex); what the measured ones compute is `semantics.OP_SEMANTICS`, each at its own tier (listings mark them by it), the rest open | per op |
 | 127 | `idle` | no op | inferred |
 
 5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, 0x2d, 0x39, 0x3b and 0x45 never occur.
@@ -192,7 +192,9 @@ S1's logic heads, S2's passes, sign masks and lane number and S3's moves, insert
 lane shifts; one word later
 every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); no head class
 predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], one word
-later nothing; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
+later nothing; S3 0x7 / 0x8 (block selects of b by a's first lanes) one word later and S1
+0x60..0x7e in the head's word, S0's one word later (their unit's latched operand) [verified,
+pre-registered]; S3 0x6 gives 0 one word later, its lag otherwise open [hypothesis]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word reads the old content, in every lane file and in U [verified, pre-registered].
@@ -427,7 +429,8 @@ nothing (`semantics.MULTIPLY_LAG`); what sets 0x48 apart is open, and stepping r
 product without delivering it. Inferred: 0x32 abs(rb), 0x2c max unsigned, 0x42 ra >> (rb & 31)
 logical, 0x1e / 0x1f ra - imm16, ra + imm16 and 0x23 ra < imm16 unsigned with imm16
 zero-extended, 0x0a ra | (imm16 << 16), 0x3e / 0x3f / 0x40 ra >> imm5 arithmetic, logical and
-ra << imm5 (ra shifted, not rb).
+ra << imm5 (ra shifted, not rb): verified on the camera since (pre-registered), as
+`OP_SEMANTICS` rates them.
 
 Family A is local memory, 0x2000 bytes with a stack at its top and r0 the stack pointer, at the
 byte address ra + w x imm13 modulo 0x2000 (`semantics.LOCAL_BYTES`), imm13 signed (verified by
@@ -778,7 +781,8 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   ports (`semantics.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
   the operands three words on, unknown until then; exact readout shows the next word reading a
   272 / 1 write, which these latencies do not model yet), and the idle op does nothing in the
-  slot. A
+  slot. This is the stepper's own model; with `machine.Machine` as its datapath the loads
+  deliver, the stores write, and results reach their ports at the measured lags (`machine.py`). A
   result with an open destination (no port, or another enable value) raises in strict mode and
   makes the open ports' registers unknown in lenient mode. Every other op has no semantics:
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra

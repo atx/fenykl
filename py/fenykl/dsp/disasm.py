@@ -17,6 +17,7 @@ from collections.abc import Iterator, Mapping
 
 from .fields import CONTROL_FLAG, IDLE_OP, OP_FIELD, TARGET, Field, Kind, Operands, op
 from .program import Program
+from .semantics import OP_SEMANTICS
 from .units import UNITS
 from .word import IDLE, Word
 
@@ -46,7 +47,9 @@ def operand_text(args: Operands) -> str:
 def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
     """The op, operands and target part of `word` and the ids of the fields it stands for."""
     meaning = op(word.op)
-    head = meaning.name + (meaning.confidence.mark if marks else "")
+    sem = OP_SEMANTICS.get(word.op)
+    tier = meaning.confidence if sem is None else sem.confidence
+    head = meaning.name + (tier.mark if marks else "")
     shown = {OP_FIELD.id}
     if meaning.format is not None:
         head += f" {operand_text(meaning.format.decode(word.value))}"
