@@ -19,6 +19,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
+| `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
 | `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
 | `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
@@ -256,7 +257,7 @@ a fixed-point multiply by a scalar in three words [verified].
 
 `semantics.lane_result(unit, head, a, b, scalars)` evaluates a row on 32 lanes, a None lane
 where the row does not predict it, and `semantics.product_high(head, a, b, scalars)` the high
-halves. The emulator does not run the S heads or these files.
+halves. `machine.Machine` runs them ("The datapath executor").
 
 X0 and X1 are two copies of one ALU (`fields.X_FUNCTIONS`, verified by exact readout): X0's head
 f302_307 on a = A[f100_104], b = A[f105_109], K = f105_109 << 6 | f2_6 << 1 | f1 (11 bits); X1's
@@ -309,7 +310,7 @@ pack's bit order inferred]; 13 is no line count: the store writes zeros over the
 [verified, pre-registered]; 16-bit lanes also leave as bytes, interleaved by S3 0xa /
 0xb with a shift by 8 [verified]. `semantics.LaneMemory` holds the content by
 vector (`load`, `store`, `copy_in`, `copy_out`) and `semantics.lane_address(head, a, b, k)`
-gives a head's vector; the emulator runs neither.
+gives a head's vector; `machine.Machine` runs both.
 
 What can be written today: an own loop of 16 passes, each incrementing an index into G and A,
 loading two vectors into L2 through X0 0x1d, multiplying them with S2 0x2, putting the product's
@@ -740,6 +741,34 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
 Stepping models neither the register transfers nor the datapath, so it says which words run in
 which order, not what they move. `fenykl dsp flow [--len N] [--branch I=0|1]` prints the copy's
 flow.
+
+### The datapath executor
+
+```python
+from fenykl.dsp.machine import Machine
+
+boot = Boot()
+m = Machine(boot)  # or Machine(boot, carry): what an earlier job of the boot left
+Executor(boot, datapath=m, limit=5_000_000).step(commands.copy(program, src, dst, n))
+boot.local.read(LOCAL_BASE + 0x40, 4)  # what the program stored, known or not, with its tier
+```
+
+`Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,
+a `Branching`, to decide ops 0..2 on G[ra]). One clock rule: every unit reads the state from
+before the word and every port write lands at its end; a head that reads a register a port
+writes in its own word gets the old value at hypothesis. Buses carry a value in the word it
+arrives in: the op result in its word, a product one word later, a local load's datum three
+words later (a data op in that word wins), a lane load four words after its X0 head, a lane
+head's result `LANE_LAG` words after the head for that word only (a head without a measured lag
+at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
+reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
+`Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
+of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e, the copy
+engine's streams, not modelled), an unaligned local access, a store at an unknown address, two
+ports on one register and M combinations not measured raise `UnknownSemantics`; a head without a
+rule, or U's port beside a head whose U content is open, makes what it writes unknown. Across
+the jobs of a boot only the lane memory from vector 0x40 on is carried (`Machine.between_jobs`):
+the copy's buffer below it is rewritten between jobs.
 
 ### Adding a semantic
 
