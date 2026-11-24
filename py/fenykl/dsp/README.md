@@ -19,6 +19,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
+| `stream.py` | `CopyStream`: the copy engine's load and store as X1's transfers program them |
 | `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
 | `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
@@ -190,8 +191,8 @@ below, the port in one word only: in its own word S0's selects,
 S1's logic heads, S2's passes, sign masks and lane number and S3's moves, inserts, broadcast and
 lane shifts; one word later
 every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); no head class
-predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], the next
-word not excluded; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
+predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], one word
+later nothing; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word, and U, were not measured.
@@ -801,7 +802,9 @@ from fenykl.dsp.machine import Machine
 boot = Boot()
 m = Machine(boot)  # or Machine(boot, carry): what an earlier job of the boot left
 Executor(boot, datapath=m, limit=5_000_000).step(commands.copy(program, src, dst, n))
-boot.local.read(LOCAL_BASE + 0x40, 4)  # what the program stored, known or not, with its tier
+boot.local.read(
+    LOCAL_BASE + 0x40, 4
+)  # what the program stored, known or not, with its tier
 ```
 
 `Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,
@@ -814,12 +817,21 @@ head's result `LANE_LAG` words after the head for that word only (a head without
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
 reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
 `Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
-of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e, the copy
-engine's streams, not modelled), an unaligned local access, a store at an unknown address, two
+of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e) without a
+stream, an unaligned local access, a store at an unknown address, two
 ports on one register and M combinations not measured raise `UnknownSemantics`; a head without a
 rule, or U's port beside a head whose U content is open, makes what it writes unknown. Across
-the jobs of a boot only the lane memory from vector 0x40 on is carried (`Machine.between_jobs`):
-the copy's buffer below it is rewritten between jobs.
+the jobs of a boot the lane memory is carried (`Machine.between_jobs`); what of it survives
+between jobs is the caller's policy. Operand use is declared per rule (`LaneRule.reads`,
+`XRule.reads`, `ScalarValue.reads`), and a row whose sub-domains have different tiers gives the
+tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
+read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`).
+
+`stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
+against the stock copy's for the same request (`Transcript`, recorded by running program 16)
+and runs its load (src bytes into the lane memory, complete after word 74's 0x1d) and its store
+(`STORE_FORMATS`, word 78's 0x1d) into DRAM; a value never varied on the camera takes the job
+off script (lane memory unknown, no store).
 
 ### Adding a semantic
 

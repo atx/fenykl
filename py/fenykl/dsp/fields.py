@@ -933,8 +933,8 @@ S0's selects 0x41..0x46, 0x4b and 0x4d, S1's logic heads 0x00..0x09 and 0x53, S2
 and 0xd, sign masks 0x9 / 0xb and lane number 0xa, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
 S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd. No head class predicts the lag across
 units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then pre-registered at
-0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified), the
-next word not excluded (an earlier run read a there too). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
+0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
+one word later wrote nothing (measured). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
 their rows open). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
@@ -1329,7 +1329,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             (
                 "down by 1..4 (f92_95 = 15..12) pre-registered on all 32 lanes; up by 1..4 "
-                "pre-registered on lanes 24..31, up by 2 also on all 32 lanes (with U's lanes "
+                "pre-registered on lanes 24..31, up by 2 also on 30 lanes (with U's lanes "
                 "0..3 holding b's own lanes 0..3), lanes 0..23 at 1, 3 and 4 the rule's "
                 "(inferred); U's register named by f31_34 (verified: two registers read back by "
                 "number); f92_95 = 5..11 b (measured, the pre-registered shift missed: inferred)"
@@ -1337,10 +1337,11 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         ),
         **_rows(
             (0x1C, 0x22),
-            "as 0x1b at f92_95 = 3, 4 and 13; other counts not predicted",
+            "as 0x1b at f92_95 = 2, 3, 4 and 13; other counts not predicted",
             V,
-            "pre-registered at 3 and 13 on all 32 lanes and at 4 on lanes 0..27; at 2 and 14 "
-            "as 0x1b too on all 32 lanes, measured, not pre-registered (inferred); an earlier "
+            "pre-registered at 3 and 13 on all 32 lanes, at 4 on lanes 0..27 and (0x1c) at 2 on "
+            "lanes 0..29; at 14 as 0x1b too on all 32 lanes, measured, not pre-registered "
+            "(inferred); the result takes the lower of this tier and 0x1b's at the count; an earlier "
             "run fitted all three heads alike at every count (inferred), the other counts not "
             "pre-registered for these two heads; they differ from 0x1b in what U's port takes "
             "beside them "
@@ -1401,6 +1402,29 @@ REDUCTION = (
 )
 
 
+@dataclass(frozen=True)
+class ScalarRow:
+    """An S head's scalar result on M: its rule, its tier, the word after the head it is on M
+    from (`lag`) and whether it stays there (`held`) or is there for that word only."""
+
+    text: str
+    tier: Confidence
+    lag: int
+    held: bool = False
+
+
+def _own(text: str, tier: Confidence = V) -> ScalarRow:
+    return ScalarRow(text, tier, 0)
+
+
+def _next(text: str, tier: Confidence = V) -> ScalarRow:
+    return ScalarRow(text, tier, 1)
+
+
+def _held(text: str, tier: Confidence = V) -> ScalarRow:
+    return ScalarRow(text, tier, 3, held=True)
+
+
 def _mask(held: int, tried: int) -> str:
     """A compare head's scalar result, which M puts out under f274_275 = `held`; `tried` the
     head read under the other values."""
@@ -1413,74 +1437,91 @@ def _mask(held: int, tried: int) -> str:
 
 
 S0_MASK, S1_MASK = _mask(0, 0x32), _mask(1, 0x45)
-S_RESULTS: dict[str, dict[int, str]] = {
+S_RESULTS: dict[str, dict[int, ScalarRow]] = {
     "s0": {
-        0x52: f"F0[f76_79] ({EXACT})",
-        0x24: f"a != b, {S0_MASK}",
-        0x25: f"a == b, {S0_MASK}",
-        0x32: f"a < b unsigned, {S0_MASK}",
-        0x33: f"a >= b unsigned, {S0_MASK}",
-        0x2E: f"b > imm unsigned, {S0_MASK}",
-        0x2F: f"b <= imm unsigned, {S0_MASK}",
-        0x30: f"b > s unsigned, {S0_MASK}",
-        0x31: f"b <= s unsigned, {S0_MASK}",
-        0x12: f"b != imm, {S0_MASK}",
-        0x13: f"b == imm, {S0_MASK}",
-        0x18: f"b != s, {S0_MASK}",
-        0x19: f"b == s, {S0_MASK}",
-        0x20: f"the carry of a + b, {S0_MASK}",
-        0x1F: f"the carry of a + b + c, {S0_MASK}",
-        0x2C: f"the carry of a + b + c, {S0_MASK}",
-        0x2A: f"the signed overflow of a + b + c, {S0_MASK}",
-        0x22: f"a < b signed, {S0_MASK}",
-        0x23: f"a >= b signed, {S0_MASK}",
-        0x16: f"b > s signed, {S0_MASK}",
-        0x17: f"b <= s signed, {S0_MASK}",
-        0x0E: f"b > imm signed, {S0_MASK}",
-        0x0F: f"b <= imm signed, {S0_MASK}",
+        0x52: _own(f"F0[f76_79] ({EXACT})"),
+        0x24: _next(f"a != b, {S0_MASK}"),
+        0x25: _next(f"a == b, {S0_MASK}"),
+        0x32: _next(f"a < b unsigned, {S0_MASK}"),
+        0x33: _next(f"a >= b unsigned, {S0_MASK}"),
+        0x2E: _next(f"b > imm unsigned, {S0_MASK}"),
+        0x2F: _next(f"b <= imm unsigned, {S0_MASK}"),
+        0x30: _next(f"b > s unsigned, {S0_MASK}"),
+        0x31: _next(f"b <= s unsigned, {S0_MASK}"),
+        0x12: _next(f"b != imm, {S0_MASK}"),
+        0x13: _next(f"b == imm, {S0_MASK}"),
+        0x18: _next(f"b != s, {S0_MASK}"),
+        0x19: _next(f"b == s, {S0_MASK}"),
+        0x20: _next(f"the carry of a + b, {S0_MASK}"),
+        0x1F: _next(f"the carry of a + b + c, {S0_MASK}"),
+        0x2C: _next(f"the carry of a + b + c, {S0_MASK}"),
+        0x2A: _next(f"the signed overflow of a + b + c, {S0_MASK}"),
+        0x22: _next(f"a < b signed, {S0_MASK}"),
+        0x23: _next(f"a >= b signed, {S0_MASK}"),
+        0x16: _next(f"b > s signed, {S0_MASK}"),
+        0x17: _next(f"b <= s signed, {S0_MASK}"),
+        0x0E: _next(f"b > imm signed, {S0_MASK}"),
+        0x0F: _next(f"b <= imm signed, {S0_MASK}"),
     },
     "s1": {
-        0x54: f"F1[f84_87] ({EXACT})",
-        0x34: f"the carry of a + b, {S1_MASK}",
-        0x33: f"the carry of a + b + c, {S1_MASK}",
-        0x3F: f"the carry of a + b + c, {S1_MASK}",
-        0x3D: f"the signed overflow of a + b + c, {S1_MASK}",
-        0x2E: f"a < b signed, {S1_MASK}",
-        0x2F: f"a >= b signed, {S1_MASK}",
-        0x2C: f"b > t signed, {S1_MASK}",
-        0x2D: f"b <= t signed, {S1_MASK}",
-        0x2A: f"b > imm signed, {S1_MASK}",
-        0x2B: f"b <= imm signed, {S1_MASK}",
-        0x12: "a 32-bit word that fits a mask of the lanes the shift saturated, on M's bus one "
-        "word after the head under f274_275 = 1 (measured on the camera, fitted: inferred)",
-        0x41: f"b > imm unsigned, {S1_MASK}",
-        0x42: f"b <= imm unsigned, {S1_MASK}",
-        0x43: f"b > t unsigned, {S1_MASK}",
-        0x44: f"b <= t unsigned, {S1_MASK}",
-        0x45: f"a < b unsigned, {S1_MASK}",
-        0x46: f"a >= b unsigned, {S1_MASK}",
+        0x54: _own(f"F1[f84_87] ({EXACT})"),
+        0x34: _next(f"the carry of a + b, {S1_MASK}"),
+        0x33: _next(f"the carry of a + b + c, {S1_MASK}"),
+        0x3F: _next(f"the carry of a + b + c, {S1_MASK}"),
+        0x3D: _next(f"the signed overflow of a + b + c, {S1_MASK}"),
+        0x2E: _next(f"a < b signed, {S1_MASK}"),
+        0x2F: _next(f"a >= b signed, {S1_MASK}"),
+        0x2C: _next(f"b > t signed, {S1_MASK}"),
+        0x2D: _next(f"b <= t signed, {S1_MASK}"),
+        0x2A: _next(f"b > imm signed, {S1_MASK}"),
+        0x2B: _next(f"b <= imm signed, {S1_MASK}"),
+        0x12: _next(
+            "a 32-bit word that fits a mask of the lanes the shift saturated, on M's bus one "
+            "word after the head under f274_275 = 1 (measured on the camera, fitted: inferred)",
+            I,
+        ),
+        0x41: _next(f"b > imm unsigned, {S1_MASK}"),
+        0x42: _next(f"b <= imm unsigned, {S1_MASK}"),
+        0x43: _next(f"b > t unsigned, {S1_MASK}"),
+        0x44: _next(f"b <= t unsigned, {S1_MASK}"),
+        0x45: _next(f"a < b unsigned, {S1_MASK}"),
+        0x46: _next(f"a >= b unsigned, {S1_MASK}"),
     },
     "s2": {
-        0xC: "lane (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60], sign-extended (verified on the "
-        "camera, pre-registered, 38 cells; the other bits of the two nibbles without effect)",
-        0xE: f"F2[f88_91] ({EXACT}); not held: one word after the head none under any f274_275",
+        0xC: _own(
+            "lane (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60], sign-extended (verified on the "
+            "camera, pre-registered, 38 cells; the other bits of the two nibbles without effect)"
+        ),
+        0xE: _own(
+            f"F2[f88_91] ({EXACT}); not held: one word after the head none under any f274_275"
+        ),
     },
     "s3": {
-        0x0: f"the unsigned maximum {REDUCTION}",
-        0x1: f"the unsigned minimum {REDUCTION}",
-        0x2: f"the sum, the lanes zero-extended, {REDUCTION}",
-        0x3: f"the signed maximum, sign-extended, {REDUCTION}",
-        0x4: f"the signed minimum, sign-extended, {REDUCTION}",
-        0x5: f"the sum, the lanes sign-extended, {REDUCTION}",
-        0xE: "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], zero-extended (verified on the "
-        "camera, pre-registered)",
-        0xF: "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], sign-extended (verified: built "
-        "vectors read back on all 32 lanes)",
-        0x16: "lane F3[f92_95] & 31 of L3[f65_68], zero-extended (verified on the camera, "
-        "pre-registered, indices of 32 and up included)",
-        0x17: "lane F3[f92_95] & 31 of L3[f65_68], sign-extended (verified on the camera, "
-        "pre-registered, indices of 32 and up included)",
-        0x24: "F3[f96_99] (verified on the camera, pre-registered on three sources)",
+        0x0: _held(f"the unsigned maximum {REDUCTION}"),
+        0x1: _held(f"the unsigned minimum {REDUCTION}"),
+        0x2: _held(f"the sum, the lanes zero-extended, {REDUCTION}"),
+        0x3: _held(f"the signed maximum, sign-extended, {REDUCTION}"),
+        0x4: _held(f"the signed minimum, sign-extended, {REDUCTION}"),
+        0x5: _held(f"the sum, the lanes sign-extended, {REDUCTION}"),
+        0xE: _own(
+            "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], zero-extended (verified on the "
+            "camera, pre-registered)"
+        ),
+        0xF: _own(
+            "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], sign-extended (verified: built "
+            "vectors read back on all 32 lanes)"
+        ),
+        0x16: _own(
+            "lane F3[f92_95] & 31 of L3[f65_68], zero-extended (verified on the camera, "
+            "pre-registered, indices of 32 and up included)"
+        ),
+        0x17: _own(
+            "lane F3[f92_95] & 31 of L3[f65_68], sign-extended (verified on the camera, "
+            "pre-registered, indices of 32 and up included)"
+        ),
+        0x24: _own(
+            "F3[f96_99] (verified on the camera, pre-registered on three sources)"
+        ),
     },
 }
 """The S head values with a scalar result under the M strobe (which values have one: measured on
@@ -1488,6 +1529,23 @@ the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read,
 own word, and one word after it on S0's 0..0x3f and S1's 0..0x5f; the rules' tiers in the text). A
 reduction's register and an extract's lane in the same word reach the bus OR-ed (measured on the
 camera)."""
+
+
+S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
+"""S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+S_NEXT_NONE = {
+    "s0": frozenset(range(0x40)),
+    "s1": frozenset(range(0x60))
+    - {0x13, 0x14, 0x15, 0x16, 0x17, 0x1A, 0x1B, 0x1D, 0x1E, 0x1F, 0x20},
+    "s2": frozenset({0x0E}),
+    "s3": frozenset(range(0x06)),
+}
+"""S heads without a held row in `S_RESULTS` that put nothing on M one word after the head
+under their unit's f274_275 (measured on the camera; S3's reductions: their register from the
+third word on). One word after any other head, M under its unit is not known: S1 0x13, 0x1a,
+0x1b, 0x14, 0x15, 0x1d, 0x1e, 0x16, 0x17, 0x1f and 0x20 put a value there that is not fitted,
+and S0 0x40.., S1 0x60.., S2 and S3 were not read there. Under another unit's f274_275 a held
+result is not on M (verified for S0 0x32 and S1 0x45, inferred for the others)."""
 
 
 def _written(file: str, enable: str, reader: str) -> str:
@@ -1812,7 +1870,7 @@ def _s_values(unit: str) -> dict[int, str]:
             text, tier, note = lanes[h]
             parts.append(f"lanes: {text} ({TAG[tier]}{'; ' + note if note else ''})")
         if h in scalars:
-            parts.append(f"scalar: {scalars[h]}")
+            parts.append(f"scalar: {scalars[h].text}")
         values[h] = "; ".join(parts)
     return values
 
