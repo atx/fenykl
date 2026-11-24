@@ -138,6 +138,15 @@ def test_a_local_store_of_16_bit_elements_writes_their_low_bytes():
     assert bytes(m.boot.read(DST, 32).data) == bytes(range(0, 64, 2))
 
 
+def test_32_bit_elements_through_local_memory_keep_their_high_halves():
+    data = bytes(range(0x40, 0x80))
+    m, e = machine(data), stream.Engine()
+    words = block(0, 2, 0, 1, 0x10, 0, 4, 4, 1)
+    drive(m, e, [*words, *load(0, SRC, 0x400), WAIT, *store(0, 0x400, DST), WAIT])
+    assert bytes(m.boot.local.read(LOCAL_BASE + 0x400, 64).data) == data
+    assert bytes(m.boot.read(DST, 64).data) == data
+
+
 def test_a_load_of_more_units_than_its_elements_never_ends():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="never ends"):

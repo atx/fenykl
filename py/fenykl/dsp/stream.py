@@ -80,20 +80,25 @@ LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12}
 16 bits reach a lane). Other values were not measured."""
 LANE_UNITS: dict[int, Confidence] = {0x20: V, 0x10: V}
 """r2 on a lane-memory load: 0x20 one element per lane, 0x10 writes zeros (verified)."""
-LOCAL_WIDTHS = {4: 8, 2: 16}
+LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
     (8, 8): V,
     (8, 16): V,
     (16, 8): V,
-    (16, 16): I,
+    (16, 16): V,
+    (32, 32): V,
 }
 """(DRAM element bits, local element bits) measured on a local-memory load (verified): bytes to
-bytes, bytes zero-extended to 16 bits, 16-bit elements truncated to their low byte; 16-bit
-elements to 16 bits inferred (one readout, not pre-registered). Other pairs were not measured."""
-LOCAL_STORES: dict[tuple[int, int], Confidence] = {(4, 0x10): V, (2, 0x10): V}
+bytes, bytes zero-extended to 16 bits, 16-bit elements truncated to their low byte, 16-bit and
+32-bit elements unchanged. Other pairs were not measured."""
+LOCAL_STORES: dict[tuple[int, int], Confidence] = {
+    (4, 0x10): V,
+    (2, 0x10): V,
+    (1, 0x04): V,
+}
 """(r2, r5) measured on a store from local memory (verified): bytes copied, 16-bit elements
-truncated to their low byte. Other pairs were not measured."""
+truncated to their low byte, 32-bit elements copied. Other pairs were not measured."""
 
 STORE_FORMATS: dict[int, tuple[int, Confidence]] = {
     0x10: (8, V),
@@ -432,7 +437,8 @@ class Engine:
                 )
             else:
                 element = _lane_elements(m, off, r5)
-            out = pack(m.boot, bits, 16 * r6, element, tier)
+            width = 8 * nb if memory == LOCAL_MEMORY else 16
+            out = pack(m.boot, bits, 16 * r6, element, tier, width)
             m.boot.dram.write(dram_alias(dram), out)
             self.stored.append((dram, 16 * r6))
 
@@ -536,13 +542,14 @@ def pack(
     n: int,
     element: Callable[[int], tuple[int | None, Confidence]],
     tier: Confidence,
+    width: int = 16,
 ) -> Bytes:
-    """n store bytes of the elements `element`(i) = (value or None, tier) at `bits` each: 128 //
-    bits per 16-byte line, least significant first, the rest of the line 0; bits 0 writes
-    zeros. A byte is known when every element it draws on is known."""
+    """n store bytes of the elements `element`(i) = (value or None, tier), `width` bits wide in
+    the memory, at `bits` each: 128 // bits per 16-byte line, least significant first, the rest
+    of the line 0; bits 0 writes zeros. A byte is known when every element it draws on is known."""
     out = Bytes.unknown(n, boot.source("store", "the stream engine's store"))
     per = 128 // bits if bits else 0
-    mask = (1 << min(bits, 16)) - 1
+    mask = (1 << min(bits, width)) - 1
     for line in range(n // 16):
         elements = [element(line * per + k) for k in range(per)]
         acc = 0
