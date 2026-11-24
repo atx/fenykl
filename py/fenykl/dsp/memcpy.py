@@ -27,7 +27,7 @@ A job that does not complete stores nothing, unless its outcome says that dst is
 may or may not have run makes its bytes UNKNOWN.
 
 The copy also carries own kernels in one job (verified on the camera, pre-registered; this model
-does not run them, `machine.Machine` with `stream.CopyStream` does): its load is complete once word 74 has run (three vectors read, 8 lanes
+does not run them, `machine.Machine` with `stream.Engine` does): its load is complete once word 74 has run (three vectors read, 8 lanes
 each, 0, 1 and 0x1ff, held the source bytes between 74 and 75 at len 0x4000: the sequencer
 waits for the engine, or the load is faster than a few words), own words between 74 and 75
 read and write the lane memory before the store (a dense layer of 32 neurons x 64 inputs and a

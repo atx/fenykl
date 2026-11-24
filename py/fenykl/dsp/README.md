@@ -19,7 +19,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
-| `stream.py` | `CopyStream`: the copy engine's load and store as X1's transfers program them |
+| `stream.py` | `Engine`: the stream engine's channel registers, loads and stores as X1's transfers program them |
 | `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
 | `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
@@ -349,8 +349,8 @@ words land in four consecutive port words [inferred]. The lane memory keeps
 its content across jobs within a boot [verified, pre-registered: vectors 0x40..0x7f read back after
 later jobs]. Each head and its even / odd twin showed no
 difference in address, lanes, element width or scalar result, and none writes A back
-[inferred]; what the low head bit selects is open [hypothesis: the handshake with the copy
-engine's streams].
+[inferred]; what the low head bit selects is open [it is no wait on the stream engine: a load
+head beside a load in flight read the old content either way, measured].
 
 The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's load puts
 source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
@@ -826,7 +826,7 @@ head's result `LANE_LAG` words after the head for that word only (a head without
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
 reductions in the third word only. A port with nothing arriving writes nothing. Values are
 `Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
-of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e) without a
+of what made it. Strict: an op without semantics, a transfer (X1 0x1c, 0x1d) without a
 stream, an unaligned local access, a store at an unknown address, two
 ports on one register and M combinations not measured raise `UnknownSemantics`; a head without a
 rule, or U's port beside a head whose U content is open, makes what it writes unknown; U's port
@@ -849,11 +849,21 @@ and op 4's slot 4, whose writes are capped at inferred); a halt first and an op 
 second among them are not taken [verified, with no jump pending], a halt third ends the job
 [inferred]; other control words there and other pending jumps raise.
 
-`stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
-against the stock copy's for the same request (`Transcript`, recorded by running program 16)
-and runs its load (src bytes into the lane memory, complete after word 74's 0x1d) and its store
-(`STORE_FORMATS`, word 78's 0x1d) into DRAM; a value never varied on the camera takes the job
-off script (lane memory unknown, no store).
+`stream.py` gives X1's transfers to the stream engine (`Engine`, a fresh one per job: its
+channel registers do not survive a job; a job with transfers and no stream raises). The engine
+sees only the values X1 0x1c hands [verified]: a key 0x21 | channel << 6 | register << 11 and one
+value, a block key 0x20 | channel << 6 and eight values (registers 0..7), or a command channel
+<< 6 | kind (0 load, 6 store, 1 nothing) and (from, to). Per channel r0 names the memory (1 the
+lane memory, 2 the local memory), r2 its elements per unit and r3 the units per row, r5 the
+elements per 16-byte DRAM line (the element width 128 / r5 bits), r6 the lines per row, r7 the
+rows, r1 and r4 the row pitches in bytes on the memory and the DRAM side; DRAM addresses are
+floored to 16 bytes, lane offsets to their vector [verified]. A command starts when handed, a
+0x1d waits for the oldest outstanding one, and what is outstanding completes at the job's end
+(`finish`, called by `Machine.between_jobs`) [verified]; a load's destination is unknown until
+then, a store takes its source when handed, and lane reads beside an outstanding command are a
+hypothesis. What was not measured takes the engine off script (`Engine.off`: the lane memory
+unknown, later destinations unknown). X1 0x1e is no transfer: its signed quotient a / b is on
+X1's result bus four words after the head [verified for a >= 0, b > 0].
 
 ### Adding a semantic
 

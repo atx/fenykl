@@ -18,7 +18,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
   whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
   inferred for a product);
-- X0's and X1's results in their head's word; under the M strobe (f276 = 0) X0's result bus carries
+- X0's and X1's results in their head's word, X1 0x1e's quotient four words after it
+  (`fields.DIVIDE_LAG`); under the M strobe (f276 = 0) X0's result bus carries
   M's value instead, also beside an active X0 head (`fields.S_RESULTS`; verified on the camera
   through three ports, values whose bits are not nested);
 - a lane head's result on its unit's bus for exactly one word, `fields.LANE_LAG` words after the head
