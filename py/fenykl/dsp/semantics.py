@@ -1123,6 +1123,17 @@ def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [*[None] * -n, *b[:n]]
 
 
+SHIFT_COUNTS = (3, 4, 13)
+"""The counts f92_95 at which S3 0x1c and 0x22 were pre-registered as 0x1b."""
+
+
+def _counted_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    """`_lane_shift` at `SHIFT_COUNTS` only; other counts are not predicted."""
+    if c["f92_95"] not in SHIFT_COUNTS:
+        return [None] * LANE_COUNT
+    return _lane_shift(a, b, c)
+
+
 def _n(c: Scalars) -> int:
     return c["imm"] & 15
 
@@ -1149,9 +1160,69 @@ def _select(other: Callable[[Sequence[int], Scalars], Sequence[int]]) -> LaneVal
     return value
 
 
-_A = _signed(lambda x, y, c: x)
+def _carry_in(f: Callable[[int, int, int], int], signed: bool) -> LaneValue:
+    """f(a, b, c) with c bit k of the 32-bit carry-in mask "r" for lane k."""
+
+    def value(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        conv = _s16 if signed else int
+        return [
+            f(conv(x), conv(y), c["r"] >> k & 1)
+            for k, (x, y) in enumerate(zip(a, b, strict=True))
+        ]
+
+    return value
+
+
+def _clamp(lo: Callable[[int], int], hi: Callable[[int, Scalars], int]) -> LaneValue:
+    """clamp(b, lo(h), h) with h = hi(a, scalars) signed; a lane whose bound h is negative is not
+    predicted."""
+
+    def value(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        out: Lanes = []
+        for x, y in zip(a, b, strict=True):
+            h = hi(_s16(x), c)
+            out.append(None if h < 0 else min(max(_s16(y), lo(h)), h))
+        return out
+
+    return value
+
+
+def _wrapped_clamp(neg: Callable[[int, int], int]) -> LaneValue:
+    """S0 0xa / 0xd on signed lanes: for b >= 0, b where b - a has its 16-bit sign bit set,
+    else a; for b < 0, neg(a, b)."""
+
+    def lane(x: int, y: int, c: Scalars) -> int:
+        if y < 0:
+            return neg(x, y)
+        return y if (y - x) & 0x8000 else x
+
+    return _signed(lane)
+
+
+def _floor_carry(n: Callable[[Scalars], int]) -> LaneValue:
+    """((a : b) >> n) + c with c bit k of the carry-in mask "r" for lane k."""
+
+    def value(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        return [
+            ((_s16(x) << 16 | y) >> n(c)) + (c["r"] >> k & 1)
+            for k, (x, y) in enumerate(zip(a, b, strict=True))
+        ]
+
+    return value
+
+
+def _zero(h: int) -> int:
+    return 0
+
+
+def _not(h: int) -> int:
+    return ~h
+
+
+_CARRY_SAT_S = _carry_in(lambda x, y, k: _sat_s(x + y + k), signed=True)
+_CARRY_WRAP = _carry_in(lambda x, y, k: x + y + k, signed=False)
+_CARRY_SAT_U = _carry_in(lambda x, y, k: _sat_u(x + y + k), signed=False)
 _B = _signed(lambda x, y, c: y)
-_ZERO = _signed(lambda x, y, c: 0)
 _ABS_DIFF = _signed(lambda x, y, c: _sat_s(abs(x - y)))
 _SUB = _signed(lambda x, y, c: _sat_s(y - x))
 _ADD = _signed(lambda x, y, c: _sat_s(x + y))
@@ -1171,7 +1242,12 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x28: _SUB,
         0x07: _ADD,
         0x29: _ADD,
-        **dict.fromkeys(range(0x08, 0x0E), _open),
+        0x08: _clamp(_zero, lambda x, c: _sv(c, "imm")),
+        0x09: _clamp(_zero, lambda x, c: _sv(c, "s")),
+        0x0A: _wrapped_clamp(lambda x, y: 0),
+        0x0B: _clamp(_not, lambda x, c: _sv(c, "imm")),
+        0x0C: _clamp(_not, lambda x, c: _sv(c, "s")),
+        0x0D: _wrapped_clamp(lambda x, y: ~x if (y + x + 1) & 0x8000 else y),
         0x0E: _signed(lambda x, y, c: max(y, _sv(c, "imm"))),
         0x0F: _signed(lambda x, y, c: min(y, _sv(c, "imm"))),
         0x10: _signed(lambda x, y, c: _sat_s(y - _sv(c, "imm"))),
@@ -1184,7 +1260,9 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x1A: _signed(lambda x, y, c: _sat_s(y - _sv(c, "s"))),
         0x1B: _signed(lambda x, y, c: _sat_s(y + _sv(c, "s"))),
         0x1D: _signed(lambda x, y, c: _round_even(x + y, 1)),
-        **dict.fromkeys((0x1E, 0x1F, 0x2A, 0x2B, 0x2C, 0x2D), _open),
+        **dict.fromkeys((0x1E, 0x2A), _CARRY_SAT_S),
+        **dict.fromkeys((0x1F, 0x2B), _CARRY_WRAP),
+        **dict.fromkeys((0x2C, 0x2D), _CARRY_SAT_U),
         0x20: _signed(lambda x, y, c: x + y),
         0x22: _signed(lambda x, y, c: max(x, y)),
         0x23: _signed(lambda x, y, c: min(x, y)),
@@ -1232,11 +1310,11 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x10: _wide(lambda v, c: _sat_s(_round_even(v, _n(c)))),
         **dict.fromkeys((0x11, 0x12), _unsigned(lambda x, y, c: _sat_u(y << _n(c)))),
         **dict.fromkeys((0x14, 0x15), _wide(lambda v, c: _round_even(v, _n(c)))),
-        **dict.fromkeys(range(0x16, 0x1A), _open),
+        **dict.fromkeys(range(0x16, 0x1A), _floor_carry(_n)),
         **dict.fromkeys((0x1A, 0x1C), _unsigned(lambda x, y, c: _sat_u(y << _t(c)))),
         **dict.fromkeys((0x1B, 0x23), _signed(lambda x, y, c: _sat_s(y << _t(c)))),
         **dict.fromkeys((0x1D, 0x1E), _wide(lambda v, c: _round_even(v, _t(c)))),
-        **dict.fromkeys(range(0x1F, 0x23), _open),
+        **dict.fromkeys(range(0x1F, 0x23), _floor_carry(_t)),
         0x24: _signed(lambda x, y, c: y << _t(c)),
         0x25: _unsigned(lambda x, y, c: y >> _t(c)),
         0x26: _signed(lambda x, y, c: y >> _t(c)),
@@ -1251,7 +1329,9 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x2F: _signed(lambda x, y, c: min(x, y)),
         0x30: _signed(lambda x, y, c: _sat_s(y - _sv(c, "imm"))),
         0x31: _signed(lambda x, y, c: _sat_s(y + _sv(c, "imm"))),
-        **dict.fromkeys((0x32, 0x33, *range(0x3D, 0x41)), _open),
+        **dict.fromkeys((0x32, 0x3D), _CARRY_SAT_S),
+        **dict.fromkeys((0x33, 0x3E), _CARRY_WRAP),
+        **dict.fromkeys((0x3F, 0x40), _CARRY_SAT_U),
         0x34: _signed(lambda x, y, c: x + y),
         0x35: _signed(lambda x, y, c: _round_even(y + _sv(c, "t"), 1)),
         0x36: _signed(lambda x, y, c: _sat_s(y - _sv(c, "t"))),
@@ -1274,14 +1354,15 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x50: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "t"))),
         0x51: _unsigned(lambda x, y, c: _sat_u(y - x)),
         0x52: _unsigned(lambda x, y, c: _sat_u(x + y)),
-        **dict.fromkeys((0x53, *range(0x55, 0x60)), _B),
+        0x53: _B,
+        **dict.fromkeys(range(0x55, 0x60), _open),
         **dict.fromkeys(range(0x60, 0x7F), _open),
     },
     "s2": {
         **dict.fromkeys((0x00, 0x01), _signed(lambda x, y, c: y * c["imm"])),
         **dict.fromkeys((0x02, 0x04, 0x06), _signed(lambda x, y, c: x * y)),
         **dict.fromkeys((0x03, 0x05), _signed(lambda x, y, c: y * c["t"])),
-        0x07: _A,
+        0x07: lambda a, b, c: list(b if c["f88_91"] & 2 else a),
         0x08: _B,
         0x0D: _B,
         0x09: _NEGATIVE,
@@ -1291,9 +1372,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
     "s3": {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
-        0x06: _ZERO,
-        0x07: lambda a, b, c: [*b[:16], *[0] * 16],
-        0x08: _B,
+        **dict.fromkeys((0x06, 0x07, 0x08), _open),
         0x09: _open,
         0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
         0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
@@ -1309,7 +1388,8 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x15: lambda a, b, c: _insert(b, c["index"], c["value"]),
         0x18: lambda a, b, c: [c["value"]] * LANE_COUNT,
         **dict.fromkeys((0x19, 0x20, 0x21, 0x23), _B),
-        **dict.fromkeys((0x1B, 0x1C, 0x22), _lane_shift),
+        0x1B: _lane_shift,
+        **dict.fromkeys((0x1C, 0x22), _counted_shift),
     },
 }
 
@@ -1356,11 +1436,14 @@ def lane_result(
     without a rule.
 
     `scalars` holds what the rules read, by unit: S0 "s" (F0[f72_75], whose 32 bits the select
-    heads read as a lane mask), "r" (F0[f76_79]) and "imm"; S1 "t"
-    (F1[f84_87]) and "imm"; S2 "t" (F2[f88_91]) and "imm" (0x0 / 0x1's multiplier); S3 the
+    heads read as a lane mask), "r" (F0[f76_79], whose 32 bits the carry-in heads read as their
+    carry-in mask) and "imm"; S1 "t" (F1[f84_87]), "r" (F1[f80_83], the carry-in mask of the carry-in heads and the
+    floor shifts) and "imm"; S2 "t" (F2[f88_91]), "imm" (0x0 / 0x1's multiplier) and the
+    nibble "f88_91" (0x7's choice); S3 the
     nibbles "f31_34", "f65_68", "f92_95", "f96_99" and "index" = F3[f92_95], "value" =
     F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), but
-    S0's select heads read all 32 bits of "s" as the lane mask; a shift count enters as imm & 15
+    the select heads read all 32 bits of "s" and the carry-in heads and S1's floor shifts all
+    32 of "r" as a lane mask; a shift count enters as imm & 15
     or t & 15."""
     if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
         raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
