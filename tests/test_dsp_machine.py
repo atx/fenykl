@@ -765,3 +765,12 @@ def test_a_jump_in_a_jumps_delay_slots_is_inferred():
 @pytest.mark.parametrize(("target", "tier"), [(6, V), (2, I)])
 def test_a_jump_into_its_own_delay_slots_is_inferred(target, tier):
     assert control_tiers([control(3, target), *[IDLE] * 5]) == {0: tier}
+
+
+@pytest.mark.parametrize(("t", "tier"), [(3, V), (0x8003, I)])
+def test_s2s_high_half_by_a_negative_t_is_inferred(m, t, tier):
+    m.lanes["L2"][1], m.lanes["L2"][2] = Vec(A), Vec(B)
+    m.f["F2"][4] = Sv(t)
+    head = w(f292_295=0x3, f53_56=1, f57_60=2, f88_91=4)
+    run(m, [head, w(f236_237=1, f147_150=9)])
+    assert m.lanes["L0"][9].tier == tier

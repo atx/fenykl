@@ -181,6 +181,8 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
+S2_BY_T = (0x03, 0x05)
+"""S2's multiplies by t, whose high half depends on whether t is taken signed (open)."""
 LANE_PORT_FILE = {
     enable: next(
         f
@@ -727,7 +729,11 @@ class Machine:
                 low = Vec(tuple(lanes), min(tier, sc.tier))
                 if unit == "s2" and head in S2_HIGH_HALVES:
                     hi = product_high(head, al, bl, sc)
-                    high = Vec(tuple(hi), min(tier, S2_HIGH_HALVES[head][1], sc.tier))
+                    htier = min(tier, S2_HIGH_HALVES[head][1], sc.tier)
+                    t_value = scalars["t"].value
+                    if head in S2_BY_T and t_value is not None and t_value & 0x8000:
+                        htier = min(htier, I)  # t was positive in every camera run
+                    high = Vec(tuple(hi), htier)
             except UnknownInput:
                 low = UNKNOWN_VEC
         lag = LANE_LAG[unit].get(head)
