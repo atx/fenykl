@@ -848,9 +848,10 @@ LANE_THIRD_FILE = (
     "0..n-1 (verified on the camera, pre-registered, 0x1b), a shift down by m = 1..4 its bottom m "
     "lanes from U's lanes 4-m..3 (inferred, fitted). Its port is f141_144 under f232_233 = 1, "
     "beside an S3 head, which decides what U takes, not its lane result: after 0x1f and 0x21 U's "
-    "lanes 0..3 held b's lanes 0..3, the next vector's first lanes for a shift up, after 0x1b, "
-    "0x1e and 0x20 b's lanes 28..31, the previous vector's last lanes for a shift down (verified "
-    "on the camera, pre-registered, lanes 0..3 read back as the top lanes of S3 0x1b by 4); each "
+    "lanes 0..3 held b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31 (verified on the "
+    "camera, pre-registered, lanes 0..3 read back as the top lanes of S3 0x1b by 4): the next "
+    "vector's first lanes for a shift up, the previous vector's last lanes for a shift down "
+    "(inferred); each "
     "cell wrote and read the same register number, so that f141_144 and f31_34 name the same "
     "register rests on the fit (inferred); under 0 and 2 beside 0x1f U kept its content "
     "(measured on the camera, one head, one register, lanes 0..3: inferred); 0x18, 0x19, 0x22 "
@@ -900,9 +901,9 @@ LANE_LAG: dict[str, dict[int, int]] = {
 (verified on the camera, a sentinel written only at that lag: S1 0x00..0x09 at the head's word
 and the next only, 16 lanes; the others with the head not held and, held, at every lag from 1).
 At 0: S3's moves 0x18 / 0x19, its lane shift 0x22, S2's pass 0x8, S1's logic heads and S0's
-selects 0x44..0x4b; at 1: the arithmetic and shift heads timed, S0's select 0x08 and S3's
-shuffles 0xa / 0xc. No head class predicts the lag; the other heads' lags are open (hypothesis:
-as their nearest timed relative)."""
+selects 0x44, 0x45, 0x46 and 0x4b; at 1: the arithmetic and shift heads timed, S0's select
+0x08 and S3's shuffles 0xa / 0xc. No head class predicts the lag; the other heads' lags are
+open (hypothesis: as their nearest timed relative)."""
 
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
@@ -1223,13 +1224,15 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         **_rows((0x19, 0x20, 0x21, 0x23), "b", V),
         0x1B: (
             (
-                "b moved up by n = f92_95 = 1..4: lane k := b[k + n], the top n lanes "
-                "U[f31_34]'s lanes 0..n-1"
+                "b moved up by n = f92_95 = 1..4: lane k := b[k + n], the top n lanes U's "
+                "lanes 0..n-1"
             ),
             V,
             (
-                "1..4 pre-registered on lanes 24..31; n = 5..11 b (measured: the pre-registered "
-                "shift missed); n = 12..15 down by m = 16 - n: lane k := b[k - m], the bottom m "
+                "1..4 pre-registered on lanes 24..31, the tier covering n = 1..4 only; U's "
+                "register named by f31_34 (inferred: every cell used one register); n = 5..11 b "
+                "(measured, the pre-registered shift missed: inferred); n = 12..15 down by "
+                "m = 16 - n: lane k := b[k - m], the bottom m "
                 "lanes U's lanes 4-m..3 (inferred, fitted)"
             ),
         ),
@@ -1428,7 +1431,7 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
     ),
     "f141_144": (I, f"The register of U its port writes; {LANE_THIRD_FILE}"),
     "f23_30": (
-        V,
+        I,
         (
             "Bits 7..0 of S0's 16-bit lane immediate (`LANE_IMMEDIATES`; verified on the camera, "
             "pre-registered on fresh values; bit 5 was 0 in all three, so it rests on the fit)"
@@ -1484,10 +1487,11 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f57_60": (
-        V,
+        I,
         (
-            "b, the register of L2 that S2's lane heads read second (`LANE_FILES`), and the register "
-            "S2 head 0xc reads a lane of (inferred, fitted)"
+            "b, the register of L2 that S2's lane heads read second (`LANE_FILES`; pre-registered "
+            "at registers 2, 4, 6 and 13), and the register S2 head 0xc reads a lane of "
+            "(inferred, fitted)"
         ),
     ),
     "f61_64": (
@@ -1539,7 +1543,7 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f88_91": (
-        V,
+        I,
         (
             f"Under S2 head 0xe the register of F2 it returns ({EXACT}); t, the scalar S2's lane "
             "heads read (verified on the camera by S2's pre-registered function table). Its bits "
@@ -1549,15 +1553,15 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f92_95": (
-        V,
+        I,
         (
             "S3's lane select: the lane itself under 0xe, 0xf and 0x10 (with f31_34 bit 2 as bit "
             "4), the register of F3 whose value is the lane under 0x15, 0x16 and 0x17 (& 31 "
             "under 0x16 / 0x17) (verified on the camera: inserts at lanes 0..31 read back as "
             "built, the writers pre-registered by nibble); bits 3..0 of 0x11's immediate "
             "(verified on the camera, pre-registered); the signed shift count of 0x1b, 0x1c and "
-            "0x22, used at -4..+4 and 5..11 no shift (`LANE_FUNCTIONS`: up verified for 0x1b, "
-            "the rest inferred)"
+            "0x22, used at -4..+4 and 5..11 no shift (`LANE_FUNCTIONS`: up by 1..4 verified for "
+            "0x1b, pre-registered; the rest inferred)"
         ),
     ),
     "f96_99": (
