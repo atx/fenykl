@@ -845,3 +845,18 @@ def test_x1_divides_onto_its_bus_four_words_after_the_head(
         assert m.g[5] == Sv(0x5A)  # nothing on the bus in the head's own word
     else:
         assert m.g[5].value is None  # an idle X1's bus is not known
+
+
+@pytest.mark.parametrize("gap", [1, 4, 5])
+def test_two_divides_in_flight_are_inferred(m, gap):
+    """Two X1 0x1e heads `gap` words apart; G[5] and G[6] take the two quotients."""
+    m.b[1], m.b[2], m.b[3] = Sv(1000), Sv(7), Sv(10)
+    first = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
+    second = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 3}
+    words = [w(**first)] + [IDLE] * (gap + 4)
+    words[gap] = w(**second)
+    words[4] = w(f272_273=0, f224_228=5, **(second if gap == 4 else {}))
+    words[gap + 4] = w(f272_273=0, f224_228=6)
+    run(m, words)
+    tier = V if gap > 4 else I
+    assert m.g[5] == Sv(142, tier) and m.g[6] == Sv(100, tier)
