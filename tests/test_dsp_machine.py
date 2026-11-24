@@ -817,3 +817,31 @@ def test_quiet_m_beside_an_unread_head_stays_inferred(m, head, later, tier):
         words = [w(f278_284=head), *[IDLE] * (later - 1), w(**read)]
     run(m, words)
     assert m.r[0] == Sv(0x0A5A, tier)
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "quotient", "tier"),
+    [
+        (1000, 7, 142, V),
+        (7, 1000, 0, V),
+        (-1000 & 0xFFFFFFFF, 7, -142 & 0xFFFFFFFF, I),
+        (1000, 0, None, V),
+    ],
+)
+@pytest.mark.parametrize("lag", [0, 3, 4, 5])
+def test_x1_divides_onto_its_bus_four_words_after_the_head(
+    m, a, b, quotient, tier, lag
+):
+    """G[5] := X1's result (f272_273 = 0) at `lag` words after X1 0x1e on B[1] / B[2]."""
+    m.b[1], m.b[2], m.g[5] = Sv(a), Sv(b), Sv(0x5A)
+    head = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
+    port = {"f272_273": 0, "f224_228": 5}
+    words = [w(**head)] + [IDLE] * 5
+    words[lag] = w(**port, **(head if lag == 0 else {}))
+    run(m, words)
+    if lag == 4:
+        assert m.g[5] == Sv(quotient, tier)
+    elif lag == 0:
+        assert m.g[5] == Sv(0x5A)  # nothing on the bus in the head's own word
+    else:
+        assert m.g[5].value is None  # an idle X1's bus is not known

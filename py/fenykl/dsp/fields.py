@@ -567,8 +567,14 @@ pre-registered values on operands that separate the compares, X1 139 of 155; the
 on those misses then matched 100 of 100 pre-registered values on fresh operands, on both units
 with K's top bit set)."""
 NO_RESULT = "no result on the ALU bus"
-TRANSFER_HEADS = (0x1C, 0x1D, 0x1E)
-"""X1's register-transfer forms: no result, no R, G or B register changed."""
+TRANSFER_HEADS = (0x1C, 0x1D)
+"""X1's transfers to the stream engine (`stream.Engine`): 0x1c hands B[f115_119], 0x1d waits for
+one command; no result, no R, G or B register changed."""
+DIVIDE_HEAD, DIVIDE_LAG = 0x1E, 4
+"""X1 0x1e divides a by b, signed, truncated toward zero, and puts the 32-bit quotient on X1's
+result bus exactly `DIVIDE_LAG` executed words after the head, nothing in its own word (verified
+on the camera, pre-registered, for a >= 0 and b > 0 at lags 0..8; a negative dividend inferred
+from one pair; b <= 0 not measured)."""
 X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x16: ("~a & b", V, ""),
     0x17: ("~a & ~b", V, ""),
@@ -576,7 +582,15 @@ X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x19: ("a | b", V, ""),
     0x1A: ("a & b", V, ""),
     0x1B: ("~b", V, ""),
-    **{h: (f"{NO_RESULT}: a register transfer", V, "") for h in TRANSFER_HEADS},
+    **{
+        h: (f"{NO_RESULT}: a transfer to the stream engine", V, "")
+        for h in TRANSFER_HEADS
+    },
+    DIVIDE_HEAD: (
+        f"{NO_RESULT} in its own word: a / b signed on X1's result bus {DIVIDE_LAG} words later",
+        V,
+        "a negative dividend inferred, b <= 0 not measured",
+    ),
 }
 X0_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x16: (NO_RESULT, V, ""),

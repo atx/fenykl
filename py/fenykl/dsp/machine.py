@@ -42,6 +42,8 @@ from typing import Protocol
 from .emu import LOCAL_BASE, Boot
 from .fields import (
     ALU_BUS,
+    DIVIDE_HEAD,
+    DIVIDE_LAG,
     HEADS,
     LANE_FILES,
     LANE_IMMEDIATES,
@@ -155,6 +157,17 @@ def _s32(v: int) -> int:
     return v - (1 << 32) if v & 0x80000000 else v
 
 
+def _divide(a: Sv, b: Sv) -> Sv:
+    """X1 0x1e: a / b signed, truncated toward zero (`fields.DIVIDE_HEAD`); b <= 0 was not
+    measured."""
+    tier = min(a.tier, b.tier)
+    if a.value is None or b.value is None or _s32(b.value) <= 0:
+        return Sv(None, tier)
+    n, d = _s32(a.value), _s32(b.value)
+    q = abs(n) // d
+    return Sv((-q if n < 0 else q) & M32, min(tier, I if n < 0 else V))
+
+
 def _sext(v: int, bits: int) -> int:
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
 
@@ -240,13 +253,16 @@ def _own_word(unit: str, head: int) -> bool:
 
 
 class Stream(Protocol):
-    """The copy engine's side of X1's transfer heads (`stream.CopyStream`)."""
+    """The stream engine's side of X1's transfer heads (`stream.Engine`)."""
 
     def transfer(self, m: "Machine", index: int, head: int, value: Sv) -> None:
         """Transfer `head` of word `index` hands `value` (B[f115_119]) to the engine."""
 
     def lane_tier(self) -> Confidence:
         """The tier of the lane memory's content for own words at the stream's position."""
+
+    def finish(self, m: "Machine") -> None:
+        """The job ends: what the engine still has to do completes."""
 
 
 class Machine:
@@ -272,6 +288,8 @@ class Machine:
         for name, regs in (carry.registers if carry else {}).items():
             self._file(name)[:] = regs
         self.bus_due: dict[int, list[tuple[Sv, str]]] = {}
+        self.x1_due: dict[int, Sv] = {}
+        """X1 0x1e's quotients on X1's result bus, by word."""
         self.load_due: dict[int, list[Vec]] = {}
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
@@ -289,12 +307,15 @@ class Machine:
         self.store_src = boot.source("local store", "an own program's family A store")
 
     def between_jobs(self) -> Carry:
+        """The job's end: the stream's outstanding commands complete, and what it leaves."""
+        if self.stream is not None:
+            self.stream.finish(self)
         names = ("G", "A", "B", "R", *self.f, *self.lanes, "U", "O")
         registers = {name: list(self._file(name)) for name in names}
         return Carry({} if self.lanes_lost else dict(self.memory), registers)
 
     def lose_lanes(self) -> None:
-        """The lane memory is not known from now on (the copy engine's activity is not)."""
+        """The lane memory is not known from now on (the stream engine's activity is not)."""
         self.lanes_lost = True
         self.memory.clear()
 
@@ -356,11 +377,20 @@ class Machine:
             )
         else:
             x0bus = UNKNOWN if x0 is None else x0
-        writes = self._ports(index, word, t, bus, x0bus, UNKNOWN if x1 is None else x1)
+        quotient = self.x1_due.get(t)
+        if quotient is not None:
+            # A divide's quotient beside an X1 head with a result of its own: not measured.
+            x1bus = quotient if x1 is None else Sv(None, min(quotient.tier, x1.tier))
+        elif x1 is None and word[HEAD_IDS["x1"]] == DIVIDE_HEAD:
+            x1bus = NOTHING  # a divide drives nothing in its own word (verified)
+        else:
+            x1bus = UNKNOWN if x1 is None else x1
+        writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
             self._commit(key, _cap(value, ceiling), t)
         for due in (
             self.bus_due,
+            self.x1_due,
             self.load_due,
             self.lane_due,
             self.held_due,
@@ -540,10 +570,12 @@ class Machine:
                     index,
                     f"x1 {head:#x}",
                     [],
-                    "a transfer to the copy engine: no stream",
+                    "a transfer to the stream engine: no stream",
                 )
             self.stream.transfer(self, index, head, b)
             return None
+        if unit == "x1" and head == DIVIDE_HEAD:
+            self.x1_due[t + DIVIDE_LAG] = _divide(a, b)
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
         if head not in X_RULES[unit]:
@@ -851,7 +883,7 @@ class Machine:
     # ------------------------------------------------------------------ ports
 
     def _ports(
-        self, index: int, word: Word, t: int, bus, x0bus, x1: Sv
+        self, index: int, word: Word, t: int, bus, x0bus, x1
     ) -> dict[tuple[str, int], object]:
         writes: dict[tuple[str, int], object] = {}
         kept: dict[tuple[str, int], Confidence] = {}
