@@ -1542,10 +1542,14 @@ camera)."""
 
 S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
 """S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+S_NEXT_VALUES = {
+    "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
+}
+"""S heads that put a value on M one word after the head that is not fitted (measured on the
+camera under their unit's f274_275)."""
 S_NEXT_NONE = {
     "s0": frozenset(range(0x40)),
-    "s1": frozenset(range(0x60))
-    - {0x13, 0x14, 0x15, 0x16, 0x17, 0x1A, 0x1B, 0x1D, 0x1E, 0x1F, 0x20},
+    "s1": frozenset(range(0x60)) - S_NEXT_VALUES["s1"],
     "s2": frozenset({0x0E}),
     "s3": frozenset(range(0x06)),
 }

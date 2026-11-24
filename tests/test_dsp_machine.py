@@ -246,7 +246,23 @@ def test_m_after_a_head_whose_next_word_is_open(m):
     m.f["F1"][3] = Sv(0x1234)
     head = w(f285_291=0x13, f45_48=1, f49_52=1)
     run(m, [head, w(f276=0, f274_275=1, f258=0, f190_193=3)])
-    assert m.f["F1"][3] == Sv(None, Confidence.HYPOTHESIS)
+    assert m.f["F1"][3] == Sv(None, I)
+
+
+def test_an_own_word_result_after_an_open_head_is_unknown(m):
+    """S1 0x13's value one word later is not fitted, so 0x54's own result does not stand alone."""
+    m.lanes["L1"][1] = Vec(A)
+    m.f["F1"][4] = Sv(0x55AA)
+    head = w(f285_291=0x13, f45_48=1, f49_52=1)
+    own = w(f285_291=0x54, f84_87=4, f276=0, f274_275=1, f258=0, f190_193=3)
+    run(m, [head, own])
+    assert m.f["F1"][3].value is None
+
+
+def test_a_lone_own_word_result_under_another_unit_is_a_hypothesis(m):
+    m.f["F1"][4] = Sv(0x55AA)
+    run(m, [w(f285_291=0x54, f84_87=4, f276=0, f274_275=0, f258=0, f190_193=3)])
+    assert m.f["F1"][3] == Sv(0x55AA, Confidence.HYPOTHESIS)
 
 
 def test_another_units_held_mask_is_not_on_m(m):

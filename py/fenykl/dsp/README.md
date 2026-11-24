@@ -828,7 +828,9 @@ the jobs of a boot the lane memory is carried (`Machine.between_jobs`); what of 
 between jobs is the caller's policy. Operand use is declared per rule (`LaneRule.reads`,
 `XRule.reads`, `ScalarValue.reads`), and a row whose sub-domains have different tiers gives the
 tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
-read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`).
+read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
+after an extract, which reads its own lane (measured); "nothing on M" two or more words after S
+heads is inferred, verified only after S0 0x20.
 
 `stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
 against the stock copy's for the same request (`Transcript`, recorded by running program 16)
