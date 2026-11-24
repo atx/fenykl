@@ -274,6 +274,8 @@ class Machine:
         self.reductions: list[tuple[int, Sv]] = []
         self.last_head: int | None = None
         """The word of the last S head run."""
+        self.head_units: set[str] = set()
+        """The units whose heads ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -584,6 +586,9 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
+            if self.last_head != t:
+                self.head_units = set()
+            self.head_units.add(unit)
             self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
@@ -801,10 +806,15 @@ class Machine:
         return _cap(v, tier)
 
     def _quiet(self, sel: str, t: int) -> bool:
-        """Whether "nothing on M" was measured for this case: under every unit in a head's own
-        word and in every later word, also after a reduction (but its first word) with other
-        heads between (verified). With no head in the job it is inferred."""
-        return self.last_head is not None
+        """Whether "nothing on M" was measured for this case: in a head's own word under S3 and,
+        beside an S0..S2 head, under every unit; in every later word under every unit, also
+        after a reduction (but its first word) with other heads between (verified). Under
+        S0..S2 in the own word of S3 heads alone, and with no head in the job, it is inferred."""
+        if self.last_head is None:
+            return False
+        if t == self.last_head and sel != "s3" and self.head_units == {"s3"}:
+            return False
+        return True
 
     # ------------------------------------------------------------------ ports
 

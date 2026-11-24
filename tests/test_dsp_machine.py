@@ -645,3 +645,11 @@ def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
         [halt, inc(16), control(4, f128_132=20), inc(16), inc(16)], g16=0, g20=0
     )
     assert m.g[16] == Sv(2)
+
+
+def test_m_under_s0_in_an_s3_heads_own_word_is_quiet_at_inferred(m):
+    m.lanes["L3"][1] = Vec(A)
+    m.r[0] = Sv(0x0A5A)
+    read = {"f276": 0, "f274_275": 0, "f270_271": 2, "f221_223": 0}
+    run(m, [w(f296_301=0x19, f65_68=1, **read)])
+    assert m.r[0] == Sv(0x0A5A, I)

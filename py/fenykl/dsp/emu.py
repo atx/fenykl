@@ -449,12 +449,13 @@ class Executor:
     ) -> None:
         """The three words the sequencer fetches behind a halt still run (`HALT_TAIL`), on a
         `datapath` only: plain stepping ends at the halt. The job ends after them. A taken jump
-        due among them redirects the fetch: with the halt in slot k of a taken op 3 the tail
-        is slots k + 1..4, then the target's words (k = 2, 3, 4; with k = 1 the jump is due
-        after the tail and not taken). An op 3 or op 4 as the second tail word is not taken, a
-        halt among them (measured first and third) changes nothing (all verified on the
-        camera). Other control words in the tail raise; words past the program's end are not
-        run."""
+        due among them redirects the fetch: with the halt in slot 2 or 3 of a taken op 4 the
+        tail is the remaining slots, then the target's words (verified on the camera; slots 2
+        to 4 of an op 3 fitted, slot 4 putting all three tail words at the target); with the
+        halt in slot 1 the jump is due after the tail and not taken (verified). An op 3 or op 4
+        as the second tail word is not taken and a halt as the first changes nothing
+        (verified); a halt as the third, the target's own (fitted), changes nothing. Other
+        control words or halts in the tail raise; words past the program's end are not run."""
         if self.datapath is None:
             return
         pending = [list(jump) for jump in jumps]
@@ -473,7 +474,7 @@ class Executor:
                 return
             word = words[i]
             passive = (word.control and word.op in (3, 4) and n == 1) or (
-                word.op == HALT_OP
+                word.op == HALT_OP and n != 1
             )
             if (word.control or word.op == HALT_OP) and not passive:
                 raise UnknownSemantics(
