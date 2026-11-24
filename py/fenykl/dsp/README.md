@@ -474,6 +474,26 @@ Listings start every non-idle word with its op name and confidence mark, follow 
 with `-> T`, and mark delay slots with `|` after the index; `fenykl dsp fields` prints T's
 definition, the op meanings and the delay-slot rule after the table.
 
+### Timing and state across jobs
+
+Not modelled by the emulator; measured with the job's completion time against loop pass counts.
+
+- A word inside a loop costs about 5.3 ns, whatever it holds: idle words, scalar local loads, X1's
+  divide, S3's reductions, X0 vector loads and taken branches over their slots all cost the same
+  within 1.5 ns [verified, pre-registered]. A straight-line word costs about 62 ns the first time
+  it runs; a word branched over costs nothing. A job adds about 100 us (the interrupt path), and
+  single jobs jitter by up to 1.5 ms, so timings take the minimum over repeats.
+- The stream engine moves about 2.2 KiB per us for byte loads and stores alike, with well under
+  1 us per command besides the bytes; commands on different channels run one after the other; at
+  least 16 commands can be handed before the first 0x1d [inferred from pass-count slopes; the
+  queue of 16 verified].
+- Nothing clears the DSP's state between jobs: every register file (G, R, A, B, F0..F3, the lane
+  files, U, O), the lane memory and local memory keep their content from one job to the next,
+  except what the next job's own words write; a stock copy of n bytes overwrites lane-memory
+  vectors 0..ceil(n / 32) - 1 and its own registers [verified, pre-registered]. After power-up
+  they hold SRAM content, stable within a boot and a few bits apart between boots [verified].
+  The stream engine's channel registers are the exception: they do not survive a job (`stream`).
+
 ## Confidence
 
 `verified` (read on the camera or in the bytes), `inferred` (one step beyond), `hypothesis`. A

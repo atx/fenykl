@@ -35,9 +35,10 @@ inferred):
 - r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
   loads at up to 4 rows, stores at up to 2 rows; more rows inferred).
 
-Row k of a command runs at DRAM address + k r4 and memory offset + k r1. A DRAM address is floored
-to 16 bytes, a lane-memory offset to its vector, vectors counted modulo `fields.LANE_VECTORS`
-(verified; the wrap inferred). A load row fills r3 units from its n = r5 r6 elements; with more
+Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch handed as 0xfffffe00 steps
+back; verified on loads) and memory offset + k r1. A row's DRAM address is floored to 16 bytes (a
+load's pitch of 0x208 steps 0x200, verified), a lane-memory offset to its vector, vectors counted
+modulo `fields.LANE_VECTORS` (verified; the wrap inferred). A load row fills r3 units from its n = r5 r6 elements; with more
 units than ceil(n / r2) the transfer never ends, with fewer it fills r3 units and ends
 (verified). Lane memory: element i goes to lane i % 32 of vector i / 32, its low 16 bits, the
 lanes beyond n 0 (verified). Local memory: element i goes to element i, zero-extended or
@@ -327,9 +328,14 @@ class Engine:
         if rows > 1:
             pitch, dpitch = _known(r[1], "r1"), _known(r[4], "r4")
             unit = VECTOR_BYTES if memory == LANE_MEMORY else 4
-            if pitch % unit or dpitch % 16:
-                raise _Off(f"pitches {pitch:#x}, {dpitch:#x}: not measured")
-        out = [((dram + k * dpitch) & ~0xF, mem + k * pitch) for k in range(rows)]
+            if pitch % unit:
+                raise _Off(f"memory pitch {pitch:#x}: not measured")
+            if dpitch % 16 and cmd.kind == STORE:
+                raise _Off(f"DRAM pitch {dpitch:#x} on a store: not measured")
+            if dpitch % 16 and rows > 2:
+                # Two rows cannot tell a floored pitch from floored row addresses.
+                tier = min(tier, I)
+        out = [((dram + k * dpitch) & 0xFFFFFFF0, mem + k * pitch) for k in range(rows)]
         return out, tier
 
     def _local_offset(self, off: int, n: int) -> int:

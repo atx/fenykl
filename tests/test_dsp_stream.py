@@ -106,6 +106,24 @@ def test_rows_step_by_their_pitches():
     assert set(m.memory) == {0, 1, 0x18, 0x19}
 
 
+def test_a_row_address_is_floored_after_the_pitch_and_wraps_at_32_bits():
+    data = bytes(range(256)) * 4
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, 2, r6=4, r7=2, r1=0x600, r4=0x208), *load(0, SRC, 0), WAIT])
+    assert m.memory[0x18].lanes == tuple(data[0x200:0x220])
+    m, e = machine(data), stream.Engine()
+    drive(
+        m,
+        e,
+        [
+            *lanes(0, 2, r6=4, r7=2, r1=0x600, r4=0xFFFFFE00),
+            *load(0, SRC + 0x200, 0),
+            WAIT,
+        ],
+    )
+    assert m.memory[0x18].lanes == tuple(data[0:0x20])
+
+
 def test_the_dram_address_and_the_vector_offset_are_floored():
     data = bytes(range(64))
     m, e = machine(data), stream.Engine()
