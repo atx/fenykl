@@ -812,9 +812,7 @@ class Machine:
         S0..S2 in the own word of S3 heads alone, and with no head in the job, it is inferred."""
         if self.last_head is None:
             return False
-        if t == self.last_head and sel != "s3" and self.head_units == {"s3"}:
-            return False
-        return True
+        return not (t == self.last_head and sel != "s3" and self.head_units == {"s3"})
 
     # ------------------------------------------------------------------ ports
 

@@ -452,7 +452,11 @@ OPS: dict[int, Op] = {
         "word 11, inside the routine with the call's return pending, ended with status 0 and "
         "dst not written (verified on the camera, one run), so a halt needs no return and the "
         "return stack is not checked (inferred); three words behind a halt still run: of five "
-        "stores there the first three wrote, and the job ended after them also with an op 3 second among them or with the halt in a taken op 3's first delay slot (verified on the camera, pre-registered)",
+        "stores there the first three wrote, and the job ended after them also with an op 3 or op 4 "
+        "second or a halt first among them (verified on the camera, pre-registered); they are "
+        "the next three words fetched, so a taken jump due among them puts the target's words "
+        "there (verified on the camera with the halt in slot 2 or 3 of an op 4, fitted for "
+        "slot 4) and one due after them is not taken (halt in slot 1, verified)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
