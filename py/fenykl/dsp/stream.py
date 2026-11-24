@@ -13,7 +13,7 @@ Grammar (verified): the values form groups, each starting with a key v.
 - v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
   offset, to a DRAM address), 1 moves nothing but counts as a command (verified). Other kinds
-  were not measured.
+  were not measured and raise `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
 
@@ -52,7 +52,9 @@ it runs after it), a store takes its source as of the hand and writes DRAM at on
 memory read while any command is outstanding is a hypothesis.
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
-job and what later commands would write is unknown where its place is known (`off` says why).
+job and what later commands write is unknown (`off` says why). A command whose destination cannot
+be bounded, a value handed after the grammar is lost and a 0x1d among a command's values raise
+`UnknownSemantics`.
 """
 
 from collections.abc import Callable
@@ -171,6 +173,10 @@ class Engine:
         k = self.count
         self.count += 1
         where = f"transfer {k} (word {index})"
+        if self.lost and head != 0x1D:
+            raise UnknownSemantics(
+                index, "stream", [], f"{where}: a value after the grammar was lost"
+            )
         if self.lost:
             return
         if head == 0x1D:
@@ -228,6 +234,10 @@ class Engine:
 
     def _wait(self, m: Machine, index: int, where: str) -> None:
         if self.key is not None:
+            if self.key.value & 0x20 == 0:
+                raise UnknownSemantics(
+                    index, "x1 0x1d", [], f"{where}: a 0x1d inside a command's values"
+                )
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
             return
         if self.outstanding:
@@ -249,21 +259,21 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
+        if cmd.kind not in (LOAD, NOTHING_MOVES, STORE):
+            raise UnknownSemantics(
+                cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
+            )
         self.commands += 1
         self.outstanding.append(_nothing)
         if cmd.kind == NOTHING_MOVES:
-            return
-        if self.off:
-            self._spoil(m, cmd)
-            return
-        if cmd.kind not in (LOAD, STORE):
-            self._go_off(m, f"{cmd.where} command kind {cmd.kind:#x}: not measured")
-            self._spoil(m, cmd)
             return
         if any(r is None for r in cmd.regs):
             self.cap = min(
                 self.cap, I
             )  # a register not handed: nothing moves (inferred)
+            return
+        if self.off:
+            self._spoil(m, cmd)
             return
         try:
             if cmd.kind == LOAD:
@@ -451,33 +461,40 @@ class Engine:
     # ------------------------------------------------------------------ off script
 
     def _spoil(self, m: Machine, cmd: _Command) -> None:
-        """What a command the engine cannot run writes is not known: its destination, where
-        it is known, becomes unknown."""
+        """What a command the engine cannot run writes is not known: its destination becomes
+        unknown, and a destination that cannot be bounded raises."""
+        try:
+            self._spoil_reach(m, cmd)
+        except _Off as e:
+            raise UnknownSemantics(
+                cmd.index, "stream", [], f"{cmd.where} off script: {e}"
+            ) from e
+
+    def _spoil_reach(self, m: Machine, cmd: _Command) -> None:
         lost = m.boot.source("stream off script", self.off)
         r = cmd.regs
-        try:
-            rows = _known(r[7], "r7")
-            if cmd.kind == STORE:
-                lines = _known(r[6], "r6")
-                pitch = _known(r[4], "r4") if rows > 1 else 0
-                at = _known(cmd.to, "to")
-                for k in range(rows):
-                    dram = (at + k * pitch) & ~0xF
-                    m.boot.dram.write(dram_alias(dram), Bytes.unknown(16 * lines, lost))
-                return
-            if cmd.kind != LOAD or _known(r[0], "r0") == LANE_MEMORY:
-                return
-            size = 4 * _known(r[3], "r3")
-            pitch = _known(r[1], "r1") if rows > 1 else 0
-            at = _known(cmd.to, "to")
-        except _Off:
-            if cmd.kind == STORE:
-                self._spoil_stores(m)
+        rows = _known(r[7], "r7")
+        if rows < 1:
+            raise _Off("no rows")
+        if cmd.kind == STORE:
+            lines = _known(r[6], "r6")
+            pitch = _known(r[4], "r4") if rows > 1 else 0
+            at = _known(cmd.to, "a DRAM address")
+            for k in range(rows):
+                dram = (at + k * pitch) & ~0xF
+                m.boot.dram.write(dram_alias(dram), Bytes.unknown(16 * lines, lost))
             return
+        memory = _known(r[0], "r0")
+        if memory == LANE_MEMORY:
+            return  # the lane memory is lost already
+        if memory != LOCAL_MEMORY:
+            raise _Off(f"r0 {memory:#x}")
+        size = 4 * _known(r[3], "r3")
+        pitch = _known(r[1], "r1") if rows > 1 else 0
+        at = _known(cmd.to, "a memory offset")
         for k in range(rows):
-            off = (at + k * pitch) % LOCAL_BYTES
-            n = min(size, LOCAL_BYTES - off)
-            m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(n, lost))
+            off = self._local_offset(at + k * pitch, size)
+            m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, lost))
 
     def _spoil_stores(self, m: Machine) -> None:
         lost = m.boot.source("stream off script", self.off)
