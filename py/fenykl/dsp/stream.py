@@ -47,8 +47,9 @@ a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred
 command outstanding never returns once the job has handed one, and returned in a job that had
 handed none (inferred, one job); commands still outstanding at the job's end complete. The
 emulator never predicts a racing read: a load's destination is unknown from its hand until its
-0x1d or the job's end (`finish`), a store takes its source as of the hand and writes DRAM at once,
-and the lane memory read while any command is outstanding is a hypothesis.
+0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a store handed after
+it runs after it), a store takes its source as of the hand and writes DRAM at once, and the lane
+memory read while any command is outstanding is a hypothesis.
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
 job and what later commands would write is unknown where its place is known (`off` says why).
@@ -346,13 +347,16 @@ class Engine:
                 held[at] = Vec(UNKNOWN_VEC.lanes)
         if not m.lanes_lost:
             m.memory.update(held)
+        # The queue runs in order: a store handed later writes DRAM after this load read it.
+        sources = [
+            _unpack(m.boot.read(dram, 16 * lines), bits, lines) for dram, _ in rows
+        ]
 
         def complete(m: Machine) -> None:
             if m.lanes_lost:
                 return
-            for dram, off in rows:
+            for (_, off), elements in zip(rows, sources, strict=True):
                 base = off // VECTOR_BYTES
-                elements = _unpack(m.boot.read(dram, 16 * lines), bits, lines)
                 for v in range(r3):
                     at = (base + v) % LANE_VECTORS
                     wrap = I if base + v >= LANE_VECTORS else V
@@ -378,11 +382,13 @@ class Engine:
         loaded = m.boot.source(
             "stream load", "the stream engine's load to local memory"
         )
+        sources = [
+            _unpack(m.boot.read(dram, 16 * lines), bits, lines) for dram, _ in rows
+        ]
 
         def complete(m: Machine) -> None:
             nb = width // 8
-            for dram, off in rows:
-                elements = _unpack(m.boot.read(dram, 16 * lines), bits, lines)
+            for (_, off), elements in zip(rows, sources, strict=True):
                 out = Bytes.unknown(size, loaded)
                 for i, (x, t) in enumerate(elements[: r2 * r3]):
                     if x is None:

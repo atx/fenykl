@@ -201,6 +201,22 @@ def test_a_store_takes_its_source_when_handed():
     assert bytes(m.boot.read(DST, 32).data) == bytes(range(32))
 
 
+def test_a_load_reads_dram_before_a_store_handed_after_it():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    m.memory[5] = Vec(tuple(range(100, 132)))
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *store(0, 5 * 64, SRC)])
+    drive(m, e, [WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == V
+
+
+def test_a_load_reads_what_a_store_handed_before_it_wrote():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    m.memory[5] = Vec(tuple(range(100, 132)))
+    drive(m, e, [*lanes(0, 1, r6=2), *store(0, 5 * 64, SRC), *load(0, SRC, 0)])
+    drive(m, e, [WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(100, 132))
+
+
 def test_a_command_with_a_register_not_handed_moves_nothing():
     m, e = machine(bytes(64)), stream.Engine()
     m.memory[0] = Vec(tuple(range(32)))
