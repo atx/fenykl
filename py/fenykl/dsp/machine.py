@@ -857,35 +857,31 @@ class Machine:
         sel = M_UNITS[word["f274_275"]]
         held = dict(self.held_due.get(t, {}))
         ready = [(w, v) for w, v in self.reductions if w <= t]
+        fresh = None
         if ready:
-            v = max(ready, key=lambda x: x[0])[1]
-            if any(w > t for w, _ in self.reductions):
-                v = _cap(v, I)
+            w, v = max(ready, key=lambda x: x[0])
             held["s3"] = v
+            fresh = v if w == t else None
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
         h = held.get(sel)
-        if len(own) > 1:
-            if sel not in own:
-                raise UnknownSemantics(
-                    index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
-                )
-            v = own[sel]
-        elif own:
-            unit, v = next(iter(own.items()))
-            if h is None:
-                return v
-            if unit != sel:
-                raise UnknownSemantics(
-                    index, "m", [], f"{unit}'s own-word result beside {sel}'s held one"
-                )
-        else:
+        if not own:
             return NOTHING if h is None else h
-        if h is None:
-            return v
-        if v.value is None or h.value is None:
-            return Sv(None)
-        return Sv(v.value | h.value, min(v.tier, h.tier, I))
+        if len(own) > 1 and sel not in own:
+            raise UnknownSemantics(
+                index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
+            )
+        unit, v = (sel, own[sel]) if sel in own else next(iter(own.items()))
+        if unit == "s3" and fresh is not None:
+            # A reduction's register on its first word, OR-ed with an extract's lane (measured).
+            if v.value is None or fresh.value is None:
+                return Sv(None)
+            return Sv(v.value | fresh.value, min(v.tier, fresh.tier, I))
+        if h is not None and unit != sel and sel != "s3":
+            raise UnknownSemantics(
+                index, "m", [], f"{unit}'s own-word result beside {sel}'s held one"
+            )
+        return v
 
     # ------------------------------------------------------------------ ports
 
