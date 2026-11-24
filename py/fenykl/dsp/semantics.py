@@ -1576,7 +1576,11 @@ def lane_result(
 _HIGH_VALUES: dict[int, LaneValue] = {
     0x02: _unsigned(lambda x, y, c: x * _s16(y) >> 16),
     0x05: _signed(lambda x, y, c: y * _sv(c, "t") >> 16),
-    0x00: _unsigned(lambda x, y, c: y * _sv(c, "imm") >> 16),
+    0x00: _unsigned(lambda x, y, c: y * (c["imm"] & LANE_MASK) >> 16),
+    0x01: _signed(lambda x, y, c: y * _sv(c, "imm") >> 16),
+    0x03: _unsigned(lambda x, y, c: y * (c["t"] & LANE_MASK) >> 16),
+    0x04: _unsigned(lambda x, y, c: x * y >> 16),
+    0x06: _signed(lambda x, y, c: x * y >> 16),
 }
 if set(_HIGH_VALUES) != set(S2_HIGH_HALVES):
     raise ValueError(

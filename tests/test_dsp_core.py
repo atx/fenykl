@@ -743,6 +743,18 @@ def test_lane_function_table(unit, head, a, b, scalars, expect):
         ),
         (0x05, lanes(), lanes(l0=0x8000, l1=0x7FFF), {"t": 3}, {0: 0xFFFE, 1: 1}),
         (0x00, lanes(), lanes(l0=0xFFFF), {"imm": 3}, {0: 2}),
+        # A negative immediate multiplies as its 16 bits unsigned: 0x7fff x 0xffe2.
+        (0x00, lanes(), lanes(l0=0x7FFF, l1=1), {"imm": -30}, {0: 0x7FF0, 1: 0}),
+        (0x01, lanes(), lanes(l0=0xFFFF, l1=0x7FFF), {"imm": -30}, {0: 0, 1: 0xFFF1}),
+        (0x03, lanes(), lanes(l0=0xFFFF), {"t": 3}, {0: 2}),
+        (0x04, lanes(l0=0xFFFF), lanes(l0=0xFFFF), {}, {0: 0xFFFE}),
+        (
+            0x06,
+            lanes(l0=0xFFFF, l1=0x8000),
+            lanes(l0=0xFFFF, l1=0x7FFF),
+            {},
+            {0: 0, 1: 0xC000},
+        ),
     ],
 )
 def test_product_high_halves(head, a, b, scalars, high):
