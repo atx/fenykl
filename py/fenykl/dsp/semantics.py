@@ -22,6 +22,7 @@ of the two X units and `LANE_RULES` the lane functions of the four S units (`lan
 these.
 """
 
+import re
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -487,35 +488,56 @@ def _result(
     return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
 
 
-def _e(
-    text: str, f: Value, tier: Confidence = V
-) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A family E op on (ra, rb); f120_122 has no effect on it."""
+@dataclass(frozen=True)
+class OpValue:
+    """A computing op's rule: f(ra, rb) (`form` "rb", a family E op; f120_122 has no effect on
+    it) or f(ra, c) (`form` "c", c the immediate as its format decodes it, sign- or
+    zero-extended). Called as an `OpSemantics.run` it evaluates over register intervals;
+    `exact` gives the 32-bit result on exact operands (None where the rule is open)."""
 
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    text: str
+    f: Callable[[int, int], int | None]
+    tier: Confidence
+    form: str
+
+    def __call__(self, word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
-        assert args is not None and args.rb is not None
-        named = text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
-        if args.ra == args.rb:
-            return _result(word, named, (slot[args.ra],), lambda a: f(a, a), tier)
-        return _result(word, named, (slot[args.ra], slot[args.rb]), f, tier)
-
-    return run
-
-
-def _imm(
-    text: str, f: Callable[[int, int], int | None], tier: Confidence
-) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """An op on ra and c, the immediate as its format decodes it (sign- or zero-extended)."""
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        args = word.operands
-        assert args is not None and args.imm is not None
+        assert args is not None
+        if self.form == "rb":
+            assert args.rb is not None
+            named = self.text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
+            if args.ra == args.rb:
+                return _result(
+                    word, named, (slot[args.ra],), lambda a: self.f(a, a), self.tier
+                )
+            return _result(
+                word, named, (slot[args.ra], slot[args.rb]), self.f, self.tier
+            )
+        assert args.imm is not None
         c = args.imm
-        named = text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
-        return _result(word, named, (slot[args.ra],), lambda a: f(a, c), tier)
+        named = self.text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
+        return _result(word, named, (slot[args.ra],), lambda a: self.f(a, c), self.tier)
 
-    return run
+    @property
+    def reads_ra(self) -> bool:
+        return re.search(r"\bra\b", self.text) is not None
+
+    def exact(self, ra: int, rb: int | None, c: int | None) -> int | None:
+        second = rb if self.form == "rb" else c
+        if second is None:
+            raise ValueError(f"{self.text}: no {self.form} operand")
+        v = self.f(ra, second)
+        return None if v is None else _u32(v)
+
+
+def _e(text: str, f: Callable[[int, int], int | None], tier: Confidence = V) -> OpValue:
+    """A family E op on (ra, rb)."""
+    return OpValue(text, f, tier, "rb")
+
+
+def _imm(text: str, f: Callable[[int, int], int | None], tier: Confidence) -> OpValue:
+    """An op on ra and c."""
+    return OpValue(text, f, tier, "c")
 
 
 def _const(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
@@ -699,6 +721,16 @@ def _multiply(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
 
 
 _EXACT_RULE = f"{EXACT}; 32-bit wrap"
+LOCAL_LOADS = {
+    0x1A: (4, False),
+    0x16: (2, True),
+    0x14: (2, False),
+    0x10: (1, False),
+    0x0E: (1, True),
+}
+"""The family A loads by op: (width in bytes, sign-extended)."""
+LOCAL_STORES = {0x18: 4, 0x12: 2, 0x0C: 1}
+"""The family A stores by op: the width in bytes of R[f120_122]'s low bits they write."""
 
 
 OP_SEMANTICS: dict[int, OpSemantics] = {
@@ -717,13 +749,8 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
             "read only",
             _local_load(width),
         )
-        for code, width, fmt in (
-            (0x1A, 4, "a"),
-            (0x16, 2, "a signed"),
-            (0x14, 2, "an unsigned"),
-            (0x10, 1, "an unsigned"),
-            (0x0E, 1, "a signed"),
-        )
+        for code, (width, signed) in LOCAL_LOADS.items()
+        for fmt in ("a" if width == 4 else "a signed" if signed else "an unsigned",)
     },
     **{
         code: OpSemantics(
@@ -733,7 +760,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
             "the R file is not modelled, so the bytes become unknown",
             _local_store(width),
         )
-        for code, width in ((0x18, 4), (0x12, 2), (0x0C, 1))
+        for code, width in LOCAL_STORES.items()
     },
     0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})", _and_mask),
     0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})", _const),

@@ -32,6 +32,7 @@ from .semantics import (
     LOCAL_BYTES,
     OP_SEMANTICS,
     OTHER_FILES,
+    Branch,
     Branching,
     Given,
     OpSemantics,
@@ -189,6 +190,24 @@ class Model(Protocol):
     def apply(self, emu: "Executor", job: Job, trace: Trace) -> JobResult: ...
 
 
+class Datapath(Protocol):
+    """What runs a word's units under `Executor.step` (`machine.Machine`): `execute` runs word
+    `word` at program index `index` as executed word number `t` and returns a note; as a
+    `Branching` it decides the conditional control ops, before the control word's own units
+    run."""
+
+    def execute(self, index: int, word: Word, t: int) -> str: ...
+
+    def decide(
+        self,
+        index: int,
+        visit: int,
+        word: Word,
+        slot: RegisterFile,
+        transfer: RegisterFile,
+    ) -> Branch: ...
+
+
 class Stop(Enum):
     HALT = "halt"
     UNDECIDED = "a conditional control op the branching hypothesis does not decide"
@@ -313,11 +332,13 @@ class Executor:
         ops: dict[int, OpSemantics] | None = None,
         limit: int = 100_000,
         local_op3_jump: bool = False,
+        datapath: "Datapath | None" = None,
     ) -> None:
         self.boot, self.model, self.strict, self.limit = boot, model, strict, limit
         self.local_op3_jump = local_op3_jump
         self.sequencer = sequencer or Sequencer()
-        self.branching = branching or Given()
+        self.datapath = datapath
+        self.branching = branching or datapath or Given()
         self.ops = OP_SEMANTICS if ops is None else ops
         self._landing: list[tuple[int, RegisterFile, int, Reg | None]] = []
         """Results in flight: (step count they land at, set, register, value)."""
@@ -358,7 +379,11 @@ class Executor:
                 )
                 return Flow(steps, Stop.HALT)
             if not word.control:
-                steps.append(self._data(pc, word, slots > 0, len(steps)))
+                if self.datapath is None:
+                    steps.append(self._data(pc, word, slots > 0, len(steps)))
+                else:
+                    note = self.datapath.execute(pc, word, len(steps))
+                    steps.append(Step(pc, word.op, slots > 0, word.operands, note=note))
                 if slots:
                     slots -= 1
                     if slots == 0 and pending is not None:
@@ -376,6 +401,8 @@ class Executor:
                 step, pending = self._local_op3(pc, word, stack)
             else:
                 step, pending = self._control(pc, visit, word, stack)
+            if self.datapath is not None:
+                self.datapath.execute(pc, word, len(steps))
             steps.append(step)
             if step.taken is None:
                 if self.strict:

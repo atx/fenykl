@@ -902,51 +902,30 @@ such a port write (or O's, `STORE_SOURCES`) four words later and no such write l
 (verified in the bytes), so idling f244_245 = 0 in program 13 drops a load (inferred). Enable 2
 of f244_245 / f248_249 wrote nothing from any S head. A port takes a head's result at the lag
 `LANE_LAG` gives for the heads timed."""
-LANE_LAG: dict[str, dict[int, int]] = {
-    "s0": {
-        **dict.fromkeys(
-            (
-                *range(0x09),
-                *range(0x0E, 0x12),
-                *range(0x14, 0x18),
-                0x1A,
-                0x1B,
-                0x1D,
-                0x1F,
-                *range(0x20, 0x24),
-                *range(0x26, 0x2A),
-                *range(0x34, 0x40),
-            ),
-            1,
-        ),
-        **dict.fromkeys((*range(0x41, 0x47), 0x4B, 0x4D), 0),
-    },
-    "s1": {
-        **dict.fromkeys((*range(0x0A), 0x53), 0),
-        **dict.fromkeys(
-            (
-                *range(0x0A, 0x16),
-                *range(0x1A, 0x1F),
-                *range(0x23, 0x32),
-                0x33,
-                *range(0x34, 0x3D),
-                *range(0x47, 0x53),
-            ),
-            1,
-        ),
-    },
-    "s2": {
-        **dict.fromkeys(range(0x07), 1),
-        **dict.fromkeys((0x07, *range(0x08, 0x0C), 0x0D), 0),
-    },
-    "s3": {
-        **dict.fromkeys((0x06, 0x07, 0x08, *range(0x0A, 0x0E)), 1),
-        **dict.fromkeys(
-            (*range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, *range(0x20, 0x24)), 0
-        ),
-    },
+
+
+def _lags(
+    lag: int, tier: Confidence, *heads: int | range
+) -> dict[int, tuple[int, Confidence]]:
+    out = {}
+    for h in heads:
+        out |= dict.fromkeys(h if isinstance(h, range) else (h,), (lag, tier))
+    return out
+
+
+LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
+    "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
+    | _lags(1, V, 0x08, 0x1F, range(0x20, 0x24), range(0x26, 0x2A), range(0x34, 0x40))
+    | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
+    "s1": _lags(0, V, range(0xA), 0x53)
+    | _lags(1, V, range(0xA, 0x16), range(0x1A, 0x1F), range(0x23, 0x32))
+    | _lags(1, V, 0x33, range(0x34, 0x3D), range(0x47, 0x53)),
+    "s2": _lags(1, V, range(0x7)) | _lags(0, V, 0x7, 0x8, 0x9, 0xA, 0xB, 0xD),
+    "s3": _lags(1, V, range(0xA, 0xE))
+    | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
+    | _lags(1, H, 0x6, 0x7, 0x8),
 }
-"""Words from a head to the one word whose lane port takes its result (verified on the camera,
+"""Words from a head to the one word whose lane port takes its result, with the tier, by head (verified on the camera,
 pre-registered with the rule's lanes at that lag and a sentinel at the other: per head one cell
 with the unit's port in the head's word only and one in the next word only, 32 lanes each). A
 port at the other lag writes nothing: a result is on its unit's bus for exactly one word. At 0:
