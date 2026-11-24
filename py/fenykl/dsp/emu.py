@@ -21,7 +21,7 @@ over three loop sizes, a per-pass cost not excluded) (measured on the camera; in
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Protocol
 
@@ -200,11 +200,13 @@ class Model(Protocol):
 
 class Datapath(Protocol):
     """What runs a word's units under `Executor.step` (`machine.Machine`): `execute` runs word
-    `word` at program index `index` as executed word number `t` and returns a note; as a
-    `Branching` it decides the conditional control ops, before the control word's own units
-    run."""
+    `word` at program index `index` as executed word number `t`, what it leaves capped at
+    `ceiling`, and returns a note; as a `Branching` it decides the conditional control ops,
+    before the control word's own units run."""
 
-    def execute(self, index: int, word: Word, t: int) -> str: ...
+    def execute(
+        self, index: int, word: Word, t: int, ceiling: Confidence = V
+    ) -> str: ...
 
     def link(self, word: Word) -> tuple[int | None, Confidence]:
         """The word an op 4 jumps to, G[f128_132], with its tier (None: not known)."""
@@ -298,6 +300,30 @@ def _run(a: Step, b: Step) -> str:
 
 HALT_OP = 7
 
+TAIL_SHAPES: dict[tuple[int, int], Confidence] = {
+    (3, 1): V,
+    (3, 2): I,
+    (3, 3): I,
+    (3, 4): I,
+    (4, 2): V,
+    (4, 3): V,
+    (4, 4): I,
+}
+"""The tier of the words behind a halt in delay slot k of a taken jump, by (op, k). They are
+the next three words fetched: in slot 1 the jump falls due after them and is not taken
+(verified on the camera for op 3); in slots 2 and 3 of an op 4 the rest of the slots, then the
+target's words (verified on the camera, pre-registered); op 3's slots 2..4 were fitted, and
+slot 4 of an op 4 rests on that fit (inferred). Other ops and slots raise."""
+PASSIVE_BEHIND_HALT: dict[tuple[int, int], Confidence] = {
+    (HALT_OP, 0): V,
+    (3, 1): V,
+    (4, 1): V,
+    (HALT_OP, 2): I,
+}
+"""Control words in the tail behind a halt that change nothing, by (op, position 0..2): a halt
+first, an op 3 or op 4 second, not taken (verified on the camera, each with no jump pending);
+a halt third, a jump target's own (fitted: inferred)."""
+
 
 class LinkError(UnknownSemantics):
     """A return that pops no link of its own call: none at all, or one a local op 3 pushed."""
@@ -310,6 +336,24 @@ class Link:
     """Pushed by a local op 3 (`Program.local_op3`), which has no return of its own."""
 
 
+def _nested(
+    pc: int, word: Word, step: Step, target: int | None, jumps: list[list[int]]
+) -> Step:
+    """`step` of control word `pc`, inferred at most when it stands in a taken jump's delay
+    slots or jumps into its own, but for the two shapes measured on the camera: a taken br in
+    the first slot of a br, and a loop end whose T is its own third slot."""
+    own = target is not None and pc < target <= pc + DELAY_SLOTS
+    if step.confidence is None or not (jumps or own):
+        return step
+    if jumps and not own and word.op == 2 and step.taken:
+        (left, _, outer), *others = jumps
+        if not others and left == DELAY_SLOTS and outer == 2:
+            return step
+    if not jumps and word.op == 0 and target == pc + 3:
+        return step
+    return replace(step, confidence=min(step.confidence, Confidence.INFERRED))
+
+
 class Executor:
     """Runs jobs on `boot`.
 
@@ -319,10 +363,12 @@ class Executor:
     i + 5, a return goes back there (the plain stepper's reading of the stock convention,
     inferred), brf / br / a loop end go to T when `branching` takes them;
     every control op has four delay slots that run before its transfer takes effect, and op 7
-    halts at any word and call depth, the return stack unchecked; on a `datapath` the three
-    words behind a halt still run (`HALT_TAIL`). `branching` decides ops 0..2; the default `Given()`
+    halts at any word and call depth, the return stack unchecked; on a `datapath` the next three
+    words fetched behind a halt still run (`HALT_TAIL`, `TAIL_SHAPES`). `branching` decides ops 0..2; the default `Given()`
     decides none of them. A control op in another's delay slots jumps after its own four, and
-    so does a loop end whose T lies in its own slots (verified on the camera). On the camera
+    so does a loop end whose T lies in its own slots (verified on the camera for a br in a br's
+    first slot and a loop end into its third slot; other such shapes are stepped the same way,
+    their steps inferred at most). On the camera
     op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
     the stock convention: a call's delay slots hold 0x0b #(i + 5) on r1 (verified on the
     camera: op 4 through r1 and through r21, op 3 with and without a link word). With a
@@ -387,7 +433,7 @@ class Executor:
         stack: list[Link] = []
         visits: dict[int, int] = {}
         pc, slots = 0, 0
-        # [delay slots left, target] of each control op taken
+        # [delay slots left, target, op] of each control op taken
         jumps: list[list[int]] = []
         self._landing = []
         for _ in range(self.limit):
@@ -421,6 +467,7 @@ class Executor:
                     step, target = self._control(pc, visit, word, stack)
                 if self.datapath is not None:
                     self.datapath.execute(pc, word, len(steps))
+                step = _nested(pc, word, step, target, jumps)
                 steps.append(step)
                 if step.taken is None:
                     if self.strict:
@@ -437,7 +484,7 @@ class Executor:
                     pc = jump[1]
             jumps = [j for j in jumps if j[0]]
             if target is not None:
-                jumps.append([DELAY_SLOTS, target])
+                jumps.append([DELAY_SLOTS, target, word.op])
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
 
     def _behind_halt(
@@ -449,15 +496,21 @@ class Executor:
     ) -> None:
         """The three words the sequencer fetches behind a halt still run (`HALT_TAIL`), on a
         `datapath` only: plain stepping ends at the halt. The job ends after them. A taken jump
-        due among them redirects the fetch: with the halt in slot 2 or 3 of a taken op 4 the
-        tail is the remaining slots, then the target's words (verified on the camera; slots 2
-        to 4 of an op 3 fitted, slot 4 putting all three tail words at the target); with the
-        halt in slot 1 the jump is due after the tail and not taken (verified). An op 3 or op 4
-        as the second tail word is not taken and a halt as the first changes nothing
-        (verified); a halt as the third, the target's own (fitted), changes nothing. Other
-        control words or halts in the tail raise; words past the program's end are not run."""
+        due among them redirects the fetch to its target's words, one due after them is not
+        taken; the tail's tier follows the jump's shape (`TAIL_SHAPES`), other pending jumps
+        raise. Control words and halts in the tail are passive where measured
+        (`PASSIVE_BEHIND_HALT`) and raise elsewhere; words past the program's end are not run."""
         if self.datapath is None:
             return
+        ceiling = V
+        if jumps:
+            (left, _, code), *others = jumps
+            shape = TAIL_SHAPES.get((code, DELAY_SLOTS + 1 - left))
+            if others or shape is None:
+                raise UnknownSemantics(
+                    at - 1, "halt", [], "a jump pending behind a halt"
+                )
+            ceiling = shape
         pending = [list(jump) for jump in jumps]
 
         def fetched(nxt: int) -> int:
@@ -473,20 +526,29 @@ class Executor:
             if i >= len(words):
                 return
             word = words[i]
-            passive = (word.control and word.op in (3, 4) and n == 1) or (
-                word.op == HALT_OP and n != 1
-            )
-            if (word.control or word.op == HALT_OP) and not passive:
+            if not (word.control or word.op == HALT_OP):
+                note = self.datapath.execute(i, word, len(steps), ceiling)
+                steps.append(Step(i, word.op, False, word.operands, note=note))
+                i = fetched(i + 1)
+                continue
+            passive = PASSIVE_BEHIND_HALT.get((word.op, n))
+            # Measured with no jump pending, but for the third word's halt (on a target).
+            if passive is None or (jumps and n != HALT_TAIL - 1):
                 raise UnknownSemantics(
                     i, op(word.op).name, [], "a control op behind a halt"
                 )
-            if passive:
-                if word.op != HALT_OP:
-                    self.datapath.execute(i, word, len(steps))
-                note = "behind a halt: not taken"
-            else:
-                note = self.datapath.execute(i, word, len(steps))
-            steps.append(Step(i, word.op, False, word.operands, note=note))
+            if word.op != HALT_OP:
+                self.datapath.execute(i, word, len(steps), ceiling)
+            steps.append(
+                Step(
+                    i,
+                    word.op,
+                    False,
+                    word.operands,
+                    note="behind a halt: not taken",
+                    confidence=min(passive, ceiling),
+                )
+            )
             i = fetched(i + 1)
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:

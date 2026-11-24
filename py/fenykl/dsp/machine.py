@@ -16,7 +16,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
   whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
-  whose bits are not nested);
+  whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
+  inferred for a product);
 - X0's and X1's results in their head's word; under the M strobe (f276 = 0) X0's result bus carries
   M's value instead, also beside an active X0 head (`fields.S_RESULTS`; verified on the camera
   through three ports, values whose bits are not nested);
@@ -277,6 +278,8 @@ class Machine:
         self.head_units: set[str] = set()
         """The units whose heads ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
+        self.ceiling = V
+        """The tier cap of what the word being run leaves (`execute`)."""
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
@@ -325,8 +328,11 @@ class Machine:
 
     # ------------------------------------------------------------------ the word
 
-    def execute(self, index: int, word: Word, t: int) -> str:
-        """Run word `word` (program index `index`) as executed word number `t`; returns a note."""
+    def execute(self, index: int, word: Word, t: int, ceiling: Confidence = V) -> str:
+        """Run word `word` (program index `index`) as executed word number `t`; returns a note.
+        What it writes (registers, lane and local memory) is capped at `ceiling`: words whose
+        running at all was fitted."""
+        self.ceiling = ceiling
         if word.control and word.op < 4 and word["f120_122"] & 3:
             # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
             raise UnknownSemantics(
@@ -349,7 +355,7 @@ class Machine:
             x0bus = UNKNOWN if x0 is None else x0
         writes = self._ports(index, word, t, bus, x0bus, UNKNOWN if x1 is None else x1)
         for key, value in writes.items():
-            self._commit(key, value, t)
+            self._commit(key, _cap(value, ceiling), t)
         for due in (
             self.bus_due,
             self.load_due,
@@ -462,7 +468,7 @@ class Machine:
             )
         if code in STORES:
             datum = self._rd("R", word["f120_122"])
-            tier = min(datum.tier, ra.tier)
+            tier = min(datum.tier, ra.tier, self.ceiling)
             if datum.value is None:
                 self.boot.local.write(
                     LOCAL_BASE + addr, Bytes.unknown(width, self.store_src)
@@ -485,7 +491,12 @@ class Machine:
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
-        parts = [v for v, _ in self.bus_due.get(t, [])]
+        # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.
+        capped = word.control and word.op in (3, 4)
+        parts = [
+            _cap(v, I) if capped and kind != "load" else v
+            for v, kind in self.bus_due.get(t, [])
+        ]
         if alu is not None:
             parts.append(alu)
         if not parts:
@@ -514,6 +525,13 @@ class Machine:
         a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
         k = X_IMMEDIATES[unit].get(word.value)
         if unit == "x1" and head in TRANSFER_HEADS:
+            if self.ceiling < V:
+                raise UnknownSemantics(
+                    index,
+                    f"x1 {head:#x}",
+                    [],
+                    "a transfer in words run by a fitted rule",
+                )
             if self.stream is None:
                 raise UnknownSemantics(
                     index,
@@ -548,7 +566,9 @@ class Machine:
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
             return
         addr = lane_address(head, a.value, b.value if b.value is not None else 0, k)
-        tier = min(a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1])
+        tier = min(
+            a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1], self.ceiling
+        )
         if self.stream is not None:
             tier = min(tier, self.stream.lane_tier())
         if self.lanes_lost:
@@ -806,11 +826,17 @@ class Machine:
         return _cap(v, tier)
 
     def _quiet(self, sel: str, t: int) -> bool:
-        """Whether "nothing on M" was measured for this case: in a head's own word under S3 and,
-        beside an S0..S2 head, under every unit; in every later word under every unit, also
-        after a reduction (but its first word) with other heads between (verified). Under
-        S0..S2 in the own word of S3 heads alone, and with no head in the job, it is inferred."""
+        """Whether "nothing on M" was measured for this case: in every word from two after a
+        head under every unit, also after a reduction (but its first word) with other heads
+        between; with one unit's head in the word, in the head's own word under S3 and, beside
+        an S0..S2 head, under every unit, and one word after under every unit (verified). With
+        two units' heads in one word, under S0..S2 in the own word of an S3 head and with no
+        head in the job, it is inferred."""
         if self.last_head is None:
+            return False
+        if t - self.last_head >= 2:
+            return True
+        if len(self.head_units) > 1:
             return False
         return not (t == self.last_head and sel != "s3" and self.head_units == {"s3"})
 

@@ -455,8 +455,10 @@ OPS: dict[int, Op] = {
         "stores there the first three wrote, and the job ended after them also with an op 3 or op 4 "
         "second or a halt first among them (verified on the camera, pre-registered); they are "
         "the next three words fetched, so a taken jump due among them puts the target's words "
-        "there (verified on the camera with the halt in slot 2 or 3 of an op 4, fitted for "
-        "slot 4) and one due after them is not taken (halt in slot 1, verified)",
+        "there (verified on the camera with the halt in slot 2 or 3 of an op 4; fitted with "
+        "the halt in slot 2, 3 or 4 of an op 3) and one due after them is not taken (halt in "
+        "slot 1 of an op 3, verified); a halt third among them, a target's own, ended the job "
+        "(fitted)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
@@ -2622,7 +2624,7 @@ RING_STEP = (
 LOAD_DATUM = (
     "a load's datum goes to no register by itself: it appears on the ALU result bus exactly "
     "three words after the load, where a word with f272_273 = 1 or f270_271 = 1 takes it, also "
-    "a word with a branch, a store, a load or a multiply; the bus ORs it with the result of a "
+    "a word with a control op, a store, a load or a multiply; the bus ORs it with the result of a "
     "data op or of op 0 in that word and with a product arriving there (verified on the camera, "
     "pre-registered on values whose bits are not nested); consecutive loads deliver in "
     f"consecutive words ({EXACT})"
