@@ -20,6 +20,7 @@ A key with bits set outside these fields was not measured.
 
 Channel registers (four channels of eight; they do not survive from one job to the next: a
 command on a channel with a register not handed in this job moves nothing and completes,
+inferred: the lane memory, DRAM after a store and local memory after a load are then capped at
 inferred):
 
 - r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways);
@@ -278,9 +279,7 @@ class Engine:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
         if any(r is None for r in cmd.regs):
-            self.cap = min(
-                self.cap, I
-            )  # a register not handed: nothing moves (inferred)
+            self._moves_nothing(m, cmd)
             return
         if self.off:
             self._spoil(m, cmd)
@@ -293,6 +292,19 @@ class Engine:
         except _Off as e:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)
+
+    def _moves_nothing(self, m: Machine, cmd: _Command) -> None:
+        """A register not handed: nothing moves (inferred). What the command could reach, which
+        the unset registers would bound, is capped at inferred."""
+        self.cap = min(self.cap, I)
+        if cmd.kind == STORE:
+            for page in m.boot.dram.pages.values():
+                page.write(page.base, page.bytes.capped(I))
+            return
+        r0 = cmd.regs[0]
+        if r0 is None or r0.value != LANE_MEMORY:
+            local = m.boot.local.read(LOCAL_BASE, LOCAL_BYTES)
+            m.boot.local.write(LOCAL_BASE, local.capped(I))
 
     def _rows(
         self, cmd: _Command, memory: int

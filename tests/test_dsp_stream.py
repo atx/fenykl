@@ -273,6 +273,14 @@ def test_a_command_with_a_register_not_handed_moves_nothing():
     assert not e.off and e.lane_tier() == I
 
 
+def test_a_store_with_a_register_not_handed_leaves_dram_inferred():
+    m, e = machine(), stream.Engine()
+    m.boot.put(DST, bytes(range(32)), "prefill")
+    drive(m, e, [key(0, 3), 1, key(0, 6), 2, *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
 def test_an_unmeasured_kind_raises():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="kind 0x3"):
