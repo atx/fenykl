@@ -328,7 +328,10 @@ planes)."""
 PORT_WRITES = (("f163_166", "f244_245", 0), ("f167_170", "f246_247", 1))
 """The operand register write ports: (nibble, enable, the enable's active value)."""
 COEFFICIENT_WRITE = ("f198_201", "f261_262", 2)
-"""The coefficient register write port: C[nibble] := the load latch (hypothesis)."""
+"""The coefficient register write port: C[nibble] := the load latch (hypothesis). On the camera
+with own programs this port under 2 writes the ALU bus, which carries a load's datum three words
+on, to register f198_201 of the scalar file F2 that S2 head 0xe reads (inferred,
+`fields.PB_SOURCES`); that C is F2 is a hypothesis."""
 
 Item = tuple[str, int]
 """A state item: ("R", n) an operand register, ("C", n) a coefficient register, ("latch", 0)

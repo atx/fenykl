@@ -4,17 +4,24 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp.fields import (
+    ALU_BUS,
     CONTROL_FLAG,
     CONTROL_OPS,
     DATA_OPS,
     FIELDS,
     FORMATS,
+    HEADS,
     IDLE_OP,
     IDLE_VALUE,
+    PB_FILES,
+    PB_SOURCES,
+    PORTS,
+    SCALAR_READS,
     STAIRCASE,
     WORD_BITS,
     X_IMMEDIATES,
     Operands,
+    lookup,
     op,
 )
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
@@ -96,6 +103,43 @@ def test_program_16_route_staircase(items):
         start = STAIRCASE[f.lo]
         assert words[start - 1][f.id] != 0, f.id
         assert {w[f.id] for w in words[start:]} == {0}, f.id
+
+
+def _head_id(unit: str) -> str:
+    lo, hi = HEADS[unit]
+    return f"f{lo}_{hi}"
+
+
+def test_program_16_reads_each_scalar_register_the_word_before_wrote(items):
+    # Every scalar read head runs under M, one word after a port wrote its file's register.
+    words = decode_item(items[16], STOCK[16]).words
+    reads = []
+    for i, w in enumerate(words):
+        for unit, (head, file, nibble) in SCALAR_READS.items():
+            if w[_head_id(unit)] != head:
+                continue
+            reads.append(i)
+            assert w["f276"] == 0, i
+            before = words[i - 1]
+            writes = [
+                before[PORTS[e]]
+                for e, f in PB_FILES.items()
+                if f == file and before[e] != lookup(e).idle
+            ]
+            assert writes == [w[nibble]], i
+    assert reads == [20, 30, 60]
+
+
+def test_program_13_tap_loads_reach_the_file_s2_reads(items):
+    # The ALU bus port of S2's file writes, at each tap load's datum word, the register the
+    # matching S2 word four words on reads.
+    words = decode_item(items[13], STOCK[13]).words
+    _, file, nibble = SCALAR_READS["s2"]
+    (enable,) = (e for e, f in PB_FILES.items() if f == file)
+    (bus,) = (v for v, src in PB_SOURCES[enable].items() if src == ALU_BUS)
+    for i in range(435, 439):
+        assert words[i][enable] == bus, i
+        assert words[i][PORTS[enable]] == words[i + 4][nibble], i
 
 
 def test_control_word_targets_lie_inside_their_program(items):

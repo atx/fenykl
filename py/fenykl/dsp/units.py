@@ -86,8 +86,10 @@ _UNITS = (
         V,
         (
             "17 ports, one enable in 232..264 for each grid B nibble, the pairing verified in "
-            "the bytes (f234_235 for f145_146 a hypothesis); ports, with the S heads and M the "
-            "compute group (hypothesis)"
+            "the bytes (f234_235 for f145_146 a hypothesis); the ports of f255..f264 write the "
+            "scalar files F0..F3 that the S heads read (`fields.SCALAR_FILES`, verified on the "
+            "camera by exact readout, the source per enable value inferred); what the others "
+            "write is open; ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
     ),
@@ -107,7 +109,11 @@ _UNITS = (
         "m",
         "M",
         H,
-        "the held 2-bit value f274_275 under the active-low strobe f276: a compute-group mode",
+        (
+            "the held 2-bit value f274_275 under the active-low strobe f276, which puts an S "
+            "head's scalar result on X0's result bus (verified on the camera by exact readout); "
+            "f274_275 does not select the S unit (measured on the camera), its function open"
+        ),
         ("f276",),
     ),
     (

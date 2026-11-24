@@ -29,6 +29,11 @@ f265_266 (f206_210); B, X1's operands, written by the ports f267_268 (f211_215) 
 (f216_220). X0 and X1 are two copies of one ALU beside the op slot (`X_FUNCTIONS`). A data op
 writes no register by itself: its result goes on the ALU result bus, and each PR port's enable
 value selects its source, the bus or X0's or X1's result (`PR_SOURCES`).
+
+The compute side has four files of 32-bit scalar registers, F0..F3 (`SCALAR_FILES`): grid B ports
+write them from the same three sources (`PB_SOURCES`), and S heads read them (`SCALAR_READS`);
+under the M strobe f276 = 0 an S head's scalar result goes on X0's result bus. S3's lane heads
+read one 16-bit lane of a lane register of 32 lanes.
 """
 
 from collections.abc import Mapping
@@ -167,9 +172,8 @@ def _ctl(
 
 
 GRID_FACT = (
-    "grid field, a source or path select (all-ones = none); 0 is its most common value in "
-    "the compute sections; boundaries from segmentation and the lag-110 repeat of grid A "
-    "in grid B"
+    "grid field, a source or path select{}; 0 is its most common value in the compute "
+    "sections; boundaries from segmentation and the lag-110 repeat of grid A in grid B"
 )
 # Program 16 sets these grid nibbles to 0 in a staircase and holds them to its end.
 STAIRCASE = {194: 19, 84: 20, 198: 29, 88: 30, 182: 59, 76: 60}
@@ -183,24 +187,34 @@ GRID_PAIR = (
 
 
 def _grid(lo: int, hi: int, unit: str, extra: str) -> Field:
-    fact = GRID_PAIR if hi - lo == 1 else GRID_FACT
+    confidence, scalar = SCALAR_NIBBLES.get(_fid(lo, hi), (H, ""))
+    # Where the nibble names a register, 15 is not known to mean none.
+    none = confidence is H
+    fact = (
+        GRID_PAIR
+        if hi - lo == 1
+        else GRID_FACT.format(" (all-ones = none)" if none else "")
+    )
     if lo in STAIRCASE:
         fact += (
-            f"; program 16 sets it to 0 from word {STAIRCASE[lo]} on, held to the end "
-            "(the plain pass-through a copy needs, hypothesis)"
+            f"; program 16 sets it to 0 from word {STAIRCASE[lo]} on, held to the end: "
+            "register 0 of a scalar file, written by a grid B port and read by the next word's "
+            "S head (`SCALAR_FILES`, verified in the bytes)"
         )
     if lo == 76:
         fact += f"; {F76_FACT}"
     fact += f". {extra[0].upper()}{extra[1:]}"
+    if scalar:
+        fact += f". {scalar}"
     return Field(
         lo,
         hi,
         Kind.ROUTE,
         unit,
         (1 << (hi - lo + 1)) - 1,
-        H,
+        confidence,
         fact,
-        values={0xF: "none"} if hi - lo == 3 else {},
+        values={0xF: "none"} if hi - lo == 3 and none else {},
     )
 
 
@@ -742,6 +756,159 @@ def _pr_values(enable: str, idle: int) -> dict[int, str]:
     } | {idle: "idle"}
 
 
+PB_FILES = {
+    "f255": "F0",
+    "f256_257": "F0",
+    "f259_260": "F1",
+    "f261_262": "F2",
+    "f263_264": "F3",
+}
+"""The scalar file each of these grid B ports writes, at the register its nibble names."""
+PB_SOURCES: dict[str, dict[int, str | None]] = {
+    "f255": {0: "X0's result"},
+    "f256_257": {0: "X1's result", 1: ALU_BUS},
+    "f259_260": {0: "X1's result", 1: ALU_BUS, 2: None},
+    "f261_262": {0: "X0's result", 1: "X1's result", 2: ALU_BUS},
+}
+"""What the grid B ports of the scalar files write by enable value (inferred: measured on the
+camera, one exact value per cell from a word whose ALU bus, X0 result and X1 result differ, only
+that the written value is one of the three pre-registered; None: no write seen). f256_257 = 2
+was not run; f263_264's sources are not separated. Under an X0 source with X0 idle the port
+stores a value that is no result of the word (measured on the camera)."""
+SCALAR_FILES = (
+    "F0..F3, four files of 32-bit registers on the compute side, numbered by a nibble: the grid "
+    "B ports of f255 and f256_257 (F0), f259_260 (F1), f261_262 (F2) and f263_264 (F3) write "
+    "them, and S heads read them from the next word on (`SCALAR_READS`). Registers 0, 3 and 5 "
+    "of F1 held three values at once, a 32-bit value came back whole, and a write to F0, F1 or "
+    f"F2 left the other two files' register 0 as it was ({EXACT})"
+)
+SCALAR_READS: dict[str, tuple[int, str, str]] = {
+    "s0": (0x52, "F0", "f76_79"),
+    "s1": (0x54, "F1", "f84_87"),
+    "s2": (0xE, "F2", "f88_91"),
+}
+"""The S heads that return a scalar register: (head value, file, the nibble naming the register),
+the result file[nibble] (verified on the camera by exact readout, through the M strobe and port
+f272_273 = 2)."""
+
+
+def _pb_values(enable: str, idle: int) -> dict[int, str]:
+    to = PB_FILES[enable]
+    return {
+        v: "no write seen (inferred)" if src is None else f"{src} to {to} (inferred)"
+        for v, src in PB_SOURCES.get(enable, {}).items()
+    } | {idle: "idle"}
+
+
+LANES = (
+    "a lane register holds 32 lanes of 16 bits: under S3 0x16 index i and i + 32 read one lane, "
+    "0x17 is 0x16 sign-extended from bit 15, and 0xe / 0xf at f92_95 = k equal 0x16 / 0x17 at "
+    f"index k ({EXACT}, pre-registered). Its contents were written by no own word, equal over "
+    "a boot and nearly equal between boots, a few bits apart: unwritten power-up state "
+    "(inferred)"
+)
+S2_0XC = (
+    "S2 head 0xc's 16-bit sign-extended result follows the nibbles f53_56, f57_60 and f88_91 "
+    "(measured on the camera); its rule is open"
+)
+S3_0X24 = (
+    "S3 head 0x24 returns a scalar register named by f61_64 or f96_99, the two not separated, "
+    "its file open (measured on the camera); neither changed S3's lane heads"
+)
+
+
+def _pb(enable: str) -> str:
+    port = (
+        f"the enable of the grid B port that writes {PB_FILES[enable]}[{PORTS[enable]}]"
+    )
+    if enable in PB_SOURCES:
+        return f"{port} (`SCALAR_FILES`), its value the source (`PB_SOURCES`)"
+    return f"{port} (`SCALAR_FILES`); its sources by value are not separated"
+
+
+ZEXT = "zero-extended from 16 bits (inferred, fitted)"
+SEXT = "sign-extended from 16 bits (inferred, fitted)"
+S_RESULTS: dict[str, dict[int, str]] = {
+    "s0": {0x52: f"F0[f76_79] ({EXACT})"},
+    "s1": {0x54: f"F1[f84_87] ({EXACT})"},
+    "s2": {
+        0xC: "a 16-bit sign-extended result, its rule open",
+        0xE: f"F2[f88_91] ({EXACT})",
+    },
+    "s3": {
+        0xE: f"lane f92_95 of the lane register f65_68, {ZEXT}",
+        0xF: f"lane f92_95 of the lane register f65_68, {SEXT}",
+        0x16: f"lane F3[f92_95] & 31 of the lane register f65_68, {ZEXT}",
+        0x17: f"lane F3[f92_95] & 31 of the lane register f65_68, {SEXT}",
+        0x24: "a scalar register named by f61_64 or f96_99, its file open",
+    },
+}
+"""The S head values with a scalar result under the M strobe (which values have one: measured on
+the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read; the rules'
+tiers in the text)."""
+LANE_PORT_FACT = (
+    "With each enable value 0..2, from a word with one value on all three scalar buses and no "
+    "S head, it wrote nothing to lanes 0 / 1 of the lane registers S3's f65_68 reads (verified "
+    "on the camera, the S side idle); what it writes and from where is open (hypothesis: S "
+    "heads' lane results)"
+)
+F2_TAPS = (
+    "Program 13's tap loads at words 432..435 reach F2 so: their datum words 435..438 have "
+    "f261_262 = 2 (the ALU bus) on registers 3, 2, 4, 5, the ones f88_91 names at 439..442 "
+    "(verified in the bytes)"
+)
+F3_LANE = (
+    "The register of F3 that f263_264 writes: writing it changed what S3 head 0x17 returns "
+    "(measured on the camera), and S3 heads 0x16 / 0x17 read F3[f92_95] & 31 as their lane "
+    "(inferred, fitted)"
+)
+S2_NIBBLE = (
+    f"Under S2 head 0xe the register of F2 it returns ({EXACT}); under S2 head 0xc the 16-bit "
+    "result follows the nibble itself, constant over F2's content (measured on the camera, "
+    "rule open)"
+)
+LANE_SELECT = (
+    "S3's lane select: under S3 heads 0xe / 0xf the lane itself, under 0x16 / 0x17 the "
+    "register of F3 whose value & 31 is the lane (inferred, fitted on the camera)"
+)
+LANE_REGISTER = (
+    "The lane register S3 heads 0xe, 0xf, 0x16 and 0x17 read (inferred, fitted on the camera: "
+    f"0, 1, 2, 3 and 15 named five different registers); {LANES}"
+)
+S3_F31 = (
+    "Under S3 heads 0xe / 0xf, 15 gave lane 16 (one point) and 0..3 changed nothing (measured "
+    "on the camera)"
+)
+
+
+def _written(file: str, enable: str, reader: str) -> str:
+    return f"The register of {file} that {enable} writes, {reader}; {SCALAR_FILES}"
+
+
+SCALAR_NIBBLES: dict[str, tuple[Confidence, str]] = {
+    "f182_185": (V, _written("F0", "f255", "which S0 head 0x52 reads through f76_79")),
+    "f186_189": (V, _written("F0", "f256_257", "the file f182_185's port writes too")),
+    "f194_197": (
+        V,
+        _written("F1", "f259_260", "which S1 head 0x54 reads through f84_87"),
+    ),
+    "f198_201": (
+        V,
+        f"{_written('F2', 'f261_262', 'which S2 head 0xe reads through f88_91')}. {F2_TAPS}",
+    ),
+    "f202_205": (I, F3_LANE),
+    "f76_79": (V, f"Under S0 head 0x52 the register of F0 it returns ({EXACT})"),
+    "f84_87": (V, f"Under S1 head 0x54 the register of F1 it returns ({EXACT})"),
+    "f88_91": (V, S2_NIBBLE),
+    "f92_95": (I, LANE_SELECT),
+    "f65_68": (I, LANE_REGISTER),
+    **dict.fromkeys(("f53_56", "f57_60"), (H, S2_0XC)),
+    **dict.fromkeys(("f61_64", "f96_99"), (H, S3_0X24)),
+    "f31_34": (H, S3_F31),
+}
+"""The grid nibbles the S heads' scalar results tell about: their tier and what they name."""
+
+
 def _fid(lo: int, hi: int) -> str:
     return f"f{lo}" if lo == hi else f"f{lo}_{hi}"
 
@@ -800,7 +967,21 @@ def _head(unit: str, idle: int, fact: str) -> Field:
         f"head of compute slot {unit.upper()}: its grid A operands change mostly in words "
         f"where it is active, {OWNERSHIP}; {_c2_fact(lo, hi)}"
     )
-    return Field(lo, hi, Kind.OPCODE, unit, idle, I, f"{base}. {fact}")
+    results = ", ".join(f"{v:#x}" for v in S_RESULTS[unit])
+    scalar = (
+        f"Under the M strobe of its {1 << (hi - lo + 1)} values {results} have a scalar result "
+        f"(`S_RESULTS`), the others none (measured on the camera)"
+    )
+    return Field(
+        lo,
+        hi,
+        Kind.OPCODE,
+        unit,
+        idle,
+        I,
+        f"{base}. {fact}. {scalar}",
+        values=S_RESULTS[unit],
+    )
 
 
 def _grid_a(lo: int, hi: int) -> Field:
@@ -983,7 +1164,7 @@ FIELDS: tuple[Field, ...] = (
         "pb",
         3,
         "f232 is never clear without f233; active together with S3 (f296_301) in 1928 of its "
-        "1940 active words, so its port cannot be told apart from S3 in the bytes",
+        f"1940 active words, so its port cannot be told apart from S3 in the bytes. {LANE_PORT_FACT}",
     ),
     Field(
         234,
@@ -995,16 +1176,20 @@ FIELDS: tuple[Field, ...] = (
         f"{RARE}; the candidate enable of f145_146: active in 18 words, all with f145_146 set, "
         "and in 10 of its 17 changes (hypothesis)",
     ),
-    _enable(236, 237, "pb", 3, WORD504_NONE),
-    _enable(238, 239, "pb", 3, WORD504_NONE),
-    *(_enable(lo, lo + 1, "pb", 3) for lo in range(240, 252, 2)),
+    _enable(236, 237, "pb", 3, f"{WORD504_NONE}. {LANE_PORT_FACT}"),
+    _enable(238, 239, "pb", 3, f"{WORD504_NONE}. {LANE_PORT_FACT}"),
+    *(_enable(lo, lo + 1, "pb", 3, LANE_PORT_FACT) for lo in range(240, 252, 2)),
     _enable(252, 254, "pb", 7, f"values 0..4 and the idle 7 only; {WORD504_NONE}"),
-    _enable(255, 255, "pb", 1),
-    _enable(256, 257, "pb", 3),
+    _enable(255, 255, "pb", 1, _pb("f255"), _pb_values("f255", 1)),
+    _enable(256, 257, "pb", 3, _pb("f256_257"), _pb_values("f256_257", 3)),
     _enable(258, 258, "pb", 1),
-    _enable(259, 260, "pb", 3, X0_PATH),
-    _enable(261, 262, "pb", 3, X0_PATH),
-    _enable(263, 264, "pb", 3),
+    _enable(
+        259, 260, "pb", 3, f"{X0_PATH}; {_pb('f259_260')}", _pb_values("f259_260", 3)
+    ),
+    _enable(
+        261, 262, "pb", 3, f"{X0_PATH}; {_pb('f261_262')}", _pb_values("f261_262", 3)
+    ),
+    _enable(263, 264, "pb", 3, _pb("f263_264"), _pb_values("f263_264", 3)),
     _enable(
         265,
         266,
@@ -1084,7 +1269,11 @@ FIELDS: tuple[Field, ...] = (
         I,
         "the value under the active-low strobe f276: f274_276 takes 4 (idle) and 0..3, 7 in 38 "
         f"words, never 5 or 6, {OWNERSHIP}; held, in runs of median 8 words, and no field "
-        f"changes under it: a mode of the compute group (hypothesis); {_c2_fact(274, 275)}",
+        f"changes under it: a mode of the compute group (hypothesis); {_c2_fact(274, 275)}. "
+        "In the stock words it is 0 beside S0 head 0x52, 1 beside S1 0x54, 2 beside S2 0xe and "
+        "3 beside S3 0x17 (verified in the bytes), but it does not select the S unit: a head's "
+        "result passed under M at each of 0..3 (measured on the camera, one head per word; the "
+        "selection reading pre-registered and refuted). What it selects is open",
     ),
     Field(
         276,
@@ -1092,8 +1281,16 @@ FIELDS: tuple[Field, ...] = (
         Kind.FLAG,
         "m",
         1,
-        I,
-        f"the active-low strobe of f274_275 (0 = active); {_c2_fact(276, 276)}",
+        V,
+        f"the active-low strobe M of f274_275 (0 = active); {_c2_fact(276, 276)}. Under 0 an S "
+        "head's scalar result goes on X0's result bus, where port f272_273 = 2 takes it, in the "
+        "head's own word only; under 1 that port wrote nothing, and M or the port one or two "
+        "words after the head took nothing (verified on the camera by exact readout, "
+        "pre-registered)",
+        values={
+            0: "an S head's scalar result on X0's result bus (verified)",
+            1: "idle",
+        },
     ),
     _const(277, 277),
     _head(
@@ -1101,7 +1298,9 @@ FIELDS: tuple[Field, ...] = (
         0x7F,
         "Merged from 278..280 and 281..284: the low part is never active without the high part, "
         "which is active alone in 5 % of its words, and both track f41_44 (inferred: one op "
-        "field, possibly an op and a modifier); f23_30 is active only where it is",
+        "field, possibly an op and a modifier); f23_30 is active only where it is. Of "
+        "0x40..0x5f only 0x52 was read: a job of all 32 values under M timed out in the driver, "
+        "which value stalls is not separated (measured on the camera)",
     ),
     _head(
         "s1",
@@ -1120,7 +1319,8 @@ FIELDS: tuple[Field, ...] = (
         0x3F,
         "Merged from 296..297 and 298..301: the low part is never active without the high part, "
         "which is active alone in 26 % of its words, and both track f65_68 (inferred: one op "
-        f"field, possibly an op and a modifier); {WORD504}",
+        f"field, possibly an op and a modifier); {WORD504}. 0xe, 0xf, 0x16 and 0x17 read one "
+        f"16-bit lane of a lane register; {LANES}",
     ),
     _ctl(
         302,
@@ -1247,7 +1447,7 @@ UNIT_FACTS = {
     "camera on a flat source; predicted from that and met on an x-varying one, one run each)",
 }
 """Camera facts of single fields on the units (`units.py`): ownership predicts use."""
-CAMERA_TIERS = {"f244_245": V, "f248_249": I, "f41_44": I, "f76_79": I}
+CAMERA_TIERS = {"f244_245": V, "f248_249": I, "f41_44": I}
 """Fields whose tier the camera raised above the bytes': an idled enable equal to idling its
 port or its word (verified), a nibble acting as one select value (inferred, post hoc)."""
 FIELDS = tuple(

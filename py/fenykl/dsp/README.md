@@ -56,9 +56,9 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot | inferred |
 | `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A | inferred (verified but f69_71, which changed no result) |
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports (hypothesis) | verified (the pairing) |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3 (verified), the others open | verified (the pairing) |
 | `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
-| `m` | f276 (active low) | f274_275 | a held mode of the compute group | hypothesis |
+| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held, not the S unit select (measured), its function open | hypothesis |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
@@ -138,6 +138,30 @@ and X1 are their heads' results in the port's own word. A data op writes no regi
 its result goes on the ALU bus, which also carries a load's datum three words after the load and
 a multiply's product one word after the multiply. The emulator models G (`Boot.slot`) and B
 (`Boot.regs`).
+
+The compute side has four more files, F0..F3, of 32-bit scalar registers numbered by a nibble
+(`fields.SCALAR_FILES`, verified by exact readout), written by grid B ports and read by S heads
+from the next word on:
+
+| file | read by | written by (port, register) |
+|---|---|---|
+| F0 | S0 head 0x52, F0[f76_79] | f255 on f182_185: 0 X0; f256_257 on f186_189: 0 X1, 1 the ALU bus |
+| F1 | S1 head 0x54, F1[f84_87] | f259_260 on f194_197: 0 X1, 1 the ALU bus, 2 no write seen |
+| F2 | S2 head 0xe, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
+| F3 | S3 heads 0x16 / 0x17, as a lane index (inferred) | f263_264 on f202_205, its sources not separated |
+
+The sources per enable value (`fields.PB_SOURCES`) are inferred: one exact value per cell.
+Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after each load, on
+the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar result on X0's
+result bus, where f272_273 = 2 takes it in the head's own word [verified]; f274_275 does not
+select the S unit [measured], its function open. Under M, S0 0x52, S1 0x54, S2 0xc and 0xe and S3
+0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result (`fields.S_RESULTS`; of S0's
+0x40..0x5f only 0x52 read). S3's 0xe..0x17 read one 16-bit lane of a lane register of 32 lanes, the register
+f65_68, the lane f92_95 itself (0xe / 0xf) or F3[f92_95] & 31 (0x16 / 0x17), zero- / sign-extended
+[the lane width verified, the selects inferred]; S2 0xc's and S3 0x24's rules are open. The grid
+B lane ports f232..f251, driven from the scalar buses with the S side idle, wrote nothing to
+lanes 0 / 1 of the lane registers S3 reads [verified for that one condition]. The emulator does
+not run the S heads or these files.
 
 X0 and X1 are two copies of one ALU (`fields.X_FUNCTIONS`, verified by exact readout): X0's head
 f302_307 on a = A[f100_104], b = A[f105_109], K = f105_109 << 6 | f2_6 << 1 | f1 (11 bits); X1's

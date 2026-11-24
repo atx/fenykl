@@ -22,9 +22,10 @@ from fenykl.dsp.word import IDLE, Word
 
 def test_slots_rebuild_program_16():
     # The DSL rebuilds the copy from slots read off the firmware's program: no stock word is
-    # restated in the code.
+    # restated in the code. No field it sets is a hypothesis any more.
     stock = stock_programs(stock_image("em10ii"))[16]
-    with pytest.warns(HypothesisFieldWarning):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         built = assemble(Word(**w.slots()) for w in stock.words)
     assert len(built) == len(stock)
     for index, (a, b) in enumerate(zip(built.words, stock.words)):
