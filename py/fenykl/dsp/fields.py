@@ -1374,13 +1374,13 @@ S2_HIGH_HALVES: dict[int, LaneRow] = {
     0x05: ("bits 16..31 of the signed b x t", V, ""),
     0x00: (
         "bits 16..31 of the unsigned b x imm's 16 bits (sext7, then unsigned)",
-        I,
+        V,
         "",
     ),
-    0x01: ("bits 16..31 of the signed b x imm", I, ""),
-    0x03: ("bits 16..31 of the unsigned b x t", I, ""),
-    0x04: ("bits 16..31 of the unsigned a x the unsigned b", I, ""),
-    0x06: ("bits 16..31 of the signed a x the signed b", I, ""),
+    0x01: ("bits 16..31 of the signed b x the signed imm", V, ""),
+    0x03: ("bits 16..31 of the unsigned b x t", V, ""),
+    0x04: ("bits 16..31 of the unsigned a x the unsigned b", V, ""),
+    0x06: ("bits 16..31 of the signed a x the signed b", V, ""),
 }
 """Where S2's multiplies are known whole: the high half of the 32-bit product, which the first
 ports of L0 and L1 take under enable 1 one word after the head (`LANE_SOURCES`). With the low
@@ -1389,11 +1389,12 @@ product (verified on the camera for 0x5 on all 32 lanes, pre-registered: a fixed
 by a scalar, rounded and saturated, in three words). 0x2's signedness was pre-registered on 16-bit
 edge operands and met on all 32 lanes, and through 0x2's low and high halves and S3 0x5 a signed
 dot product came out exact (verified on the camera). The pairs differ in the operands'
-signedness: 0x0 / 0x1, 0x3 / 0x5 unsigned / signed b, 0x4 / 0x2 / 0x6 unsigned a x unsigned b,
-unsigned a x signed b, signed a x signed b (fitted on all 32 lanes of 16-bit edge operands, one
-alternative left in each by those operands; inferred). Under a negative immediate 0x0 multiplies
-by its 16 bits taken unsigned, not by the signed value (fitted on all 32 lanes; inferred); t was
-positive in every run, so whether 0x3 / 0x5 take it signed is open."""
+signedness: 0x0 / 0x1 and 0x3 / 0x5 unsigned / signed b, 0x4 / 0x2 / 0x6 unsigned a x unsigned
+b, unsigned a x signed b, signed a x signed b; under a negative immediate 0x0 multiplies by its
+16 bits taken unsigned, 0x1 by the signed value (fitted on all 32 lanes of 16-bit edge
+operands, then pre-registered on swapped operands and immediates -1 / -30 and met, both halves
+of all seven multiplies: verified on the camera). t was positive in every run, so whether
+0x3 / 0x5 take it signed is open."""
 LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
     "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", V),
     "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", V),
