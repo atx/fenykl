@@ -452,8 +452,9 @@ class Executor:
         due among them redirects the fetch: with the halt in slot k of a taken op 3 the tail
         is slots k + 1..4, then the target's words (k = 2, 3, 4; with k = 1 the jump is due
         after the tail and not taken). An op 3 or op 4 as the second tail word is not taken, a
-        second halt as the first changes nothing (all verified on the camera). Other control
-        words or halts in the tail raise; words past the program's end are not run."""
+        halt among them (measured first and third) changes nothing (all verified on the
+        camera). Other control words in the tail raise; words past the program's end are not
+        run."""
         if self.datapath is None:
             return
         pending = [list(jump) for jump in jumps]
@@ -472,7 +473,7 @@ class Executor:
                 return
             word = words[i]
             passive = (word.control and word.op in (3, 4) and n == 1) or (
-                word.op == HALT_OP and n == 0
+                word.op == HALT_OP
             )
             if (word.control or word.op == HALT_OP) and not passive:
                 raise UnknownSemantics(
