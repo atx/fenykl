@@ -130,6 +130,16 @@ camera, pre-registered: 0x10 the low byte, 0x08 16 bits, 0x04 zero-extended to 3
 (inferred); 0x0d wrote zeros (bits 0). Other values were not run or never ended."""
 
 
+@dataclass(frozen=True)
+class Event:
+    """A command handed (`kind` and its channel's registers) or a 0x1d (`kind` None) at executed
+    word `t` of the job, for the timing estimate (`timing`)."""
+
+    t: int
+    kind: int | None = None
+    regs: tuple[int | None, ...] = ()
+
+
 class _Off(Exception):
     """A command the engine cannot run: what it does was not measured."""
 
@@ -179,10 +189,12 @@ class Engine:
     cap: Confidence = V
     stored: list[tuple[int, int]] = field(default_factory=list)
     """(DRAM address, length) of every store row written."""
+    events: list[Event] = field(default_factory=list)
+    """Every command handed and every 0x1d, in order."""
 
     # ------------------------------------------------------------------ the stream protocol
 
-    def transfer(self, m: Machine, index: int, head: int, value: Sv) -> None:
+    def transfer(self, m: Machine, index: int, head: int, value: Sv, t: int) -> None:
         k = self.count
         self.count += 1
         where = f"transfer {k} (word {index})"
@@ -193,13 +205,14 @@ class Engine:
         if self.lost:
             return
         if head == 0x1D:
+            self.events.append(Event(t))
             self._wait(m, index, where)
         elif self.key is None:
             self._key(m, value, where)
         else:
             self.group.append(value)
             if len(self.group) == self.need:
-                self._group(m, where, index)
+                self._group(m, where, index, t)
 
     def lane_tier(self) -> Confidence:
         """Own words beside an outstanding command meet the engine at work (hypothesis)."""
@@ -229,7 +242,7 @@ class Engine:
             return
         self.key, self.need = key, need
 
-    def _group(self, m: Machine, where: str, index: int) -> None:
+    def _group(self, m: Machine, where: str, index: int, t: int) -> None:
         key, values = self.key, self.group
         self.key, self.group = None, []
         v = key.value
@@ -244,6 +257,8 @@ class Engine:
             cmd = _Command(
                 channel, v & 0x3F, regs, values[0], values[1], tier, where, index
             )
+            known = tuple(None if r is None else r.value for r in regs)
+            self.events.append(Event(t, cmd.kind, known))
             self._command(m, cmd)
 
     def _wait(self, m: Machine, index: int, where: str) -> None:

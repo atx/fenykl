@@ -43,7 +43,7 @@ UNKNOWN = Sv(None)
 def drive(m: Machine, e: stream.Engine, values: list[int | Sv | None]) -> None:
     for k, v in enumerate(values):
         value = Sv(0) if v is WAIT else v if isinstance(v, Sv) else Sv(v)
-        e.transfer(m, k, 0x1D if v is WAIT else 0x1C, value)
+        e.transfer(m, k, 0x1D if v is WAIT else 0x1C, value, k)
 
 
 def machine(data: bytes = b"") -> Machine:

@@ -264,8 +264,9 @@ def _own_word(unit: str, head: int) -> bool:
 class Stream(Protocol):
     """The stream engine's side of X1's transfer heads (`stream.Engine`)."""
 
-    def transfer(self, m: "Machine", index: int, head: int, value: Sv) -> None:
-        """Transfer `head` of word `index` hands `value` (B[f115_119]) to the engine."""
+    def transfer(self, m: "Machine", index: int, head: int, value: Sv, t: int) -> None:
+        """Transfer `head` of word `index`, executed word `t` of the job, hands `value`
+        (B[f115_119]) to the engine."""
 
     def lane_tier(self) -> Confidence:
         """The tier of the lane memory's content for own words at the stream's position."""
@@ -583,7 +584,7 @@ class Machine:
                     [],
                     "a transfer to the stream engine: no stream",
                 )
-            self.stream.transfer(self, index, head, b)
+            self.stream.transfer(self, index, head, b, t)
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
             quotient = _divide(a, b)
