@@ -17,7 +17,8 @@ The classes and tables of one program are held by its model (`memcpy.Copy16Model
 Stepping (`emu.Executor.step`) takes the op semantics `OP_SEMANTICS` (what a data op does,
 each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
 decisions (the default, none: no condition is known) or `RaTest`. `X_RULES` are the functions
-of the two X units, which stepping does not run.
+of the two X units and `LANE_RULES` the lane functions of the four S units (`lane_result`), which
+stepping does not run.
 """
 
 from collections import Counter
@@ -29,6 +30,8 @@ from typing import Protocol
 
 from .fields import (
     IDLE_OP,
+    LANE_FUNCTIONS,
+    NO_LANE,
     PR_SOURCES,
     X_FUNCTIONS,
     X_IMMEDIATES,
@@ -994,6 +997,319 @@ def x_result(unit: str, head: int, a: int, b: int, k: int) -> int | None:
     width = X_IMMEDIATES[unit].width
     sk = k - (1 << width) if k >> (width - 1) else k
     return _u32(rule.value(a, b, k, sk))
+
+
+LANE_COUNT = 32
+LANE_MASK = 0xFFFF
+Lanes = list[int | None]
+"""The 32 lanes of a lane register, 16 bits each; None where a rule does not predict a lane."""
+Scalars = Mapping[str, int]
+LaneValue = Callable[[Sequence[int], Sequence[int], Scalars], Lanes]
+"""A lane function of (a, b, scalars)."""
+
+
+def _s16(v: int) -> int:
+    v &= LANE_MASK
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def _sat_s(v: int) -> int:
+    return max(-0x8000, min(0x7FFF, v))
+
+
+def _sat_u(v: int) -> int:
+    return max(0, min(LANE_MASK, v))
+
+
+def _round_even(v: int, n: int) -> int:
+    """v / 2^n rounded to nearest, ties to even."""
+    if n == 0:
+        return v
+    q, r, half = v >> n, v & ((1 << n) - 1), 1 << (n - 1)
+    return q + (r > half or (r == half and q & 1))
+
+
+def _signed(f: Callable[[int, int, Scalars], int]) -> LaneValue:
+    return lambda a, b, c: [f(_s16(x), _s16(y), c) for x, y in zip(a, b, strict=True)]
+
+
+def _unsigned(f: Callable[[int, int, Scalars], int]) -> LaneValue:
+    return lambda a, b, c: [f(x, y, c) for x, y in zip(a, b, strict=True)]
+
+
+def _wide(f: Callable[[int, Scalars], int]) -> LaneValue:
+    """f on the 32-bit value a : b, a the signed high half."""
+    return lambda a, b, c: [f(_s16(x) << 16 | y, c) for x, y in zip(a, b, strict=True)]
+
+
+def _next(f: Callable[[int, int], int], of_a: bool) -> LaneValue:
+    """f(a, b) on signed lanes with the next lane of a (or of b); lane 31's is not predicted."""
+
+    def value(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        pairs = zip(a[1:], b) if of_a else zip(a, b[1:])
+        return [f(_s16(x), _s16(y)) for x, y in pairs] + [None]
+
+    return value
+
+
+def _open(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    return [None] * LANE_COUNT
+
+
+def _lane_numbers(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    return list(range(LANE_COUNT))
+
+
+def _insert(b: Sequence[int], lane: int, value: int) -> Lanes:
+    out: Lanes = list(b)
+    out[lane & (LANE_COUNT - 1)] = value
+    return out
+
+
+def _imm14(c: Scalars) -> int:
+    v = c["f96_99"] << 10 | c["f65_68"] << 6 | (c["f31_34"] >> 2 & 3) << 4 | c["f92_95"]
+    return v - 0x4000 if v & 0x2000 else v
+
+
+def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    """b moved by f92_95 as a signed nibble; the lanes moved in, and a move by 0, are not
+    predicted."""
+    n = _s16(c["f92_95"] << 12) >> 12
+    if n == 0:
+        return [None] * LANE_COUNT
+    if abs(n) > 4:
+        return list(b)
+    if n > 0:
+        return [*b[n:], *[None] * n]
+    return [*[None] * -n, *b[:n]]
+
+
+def _n(c: Scalars) -> int:
+    return c["imm"] & 15
+
+
+def _t(c: Scalars) -> int:
+    return c["t"] & 15
+
+
+def _u(c: Scalars, key: str) -> int:
+    return c[key] & LANE_MASK
+
+
+def _sv(c: Scalars, key: str) -> int:
+    return _s16(c[key])
+
+
+_A = _signed(lambda x, y, c: x)
+_B = _signed(lambda x, y, c: y)
+_ZERO = _signed(lambda x, y, c: 0)
+_ABS_DIFF = _signed(lambda x, y, c: _sat_s(abs(x - y)))
+_SUB = _signed(lambda x, y, c: _sat_s(y - x))
+_ADD = _signed(lambda x, y, c: _sat_s(x + y))
+_NEGATIVE = _signed(lambda x, y, c: -(y < 0))
+_NOT_NEGATIVE = _signed(lambda x, y, c: -(y >= 0))
+
+_LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
+    "s0": {
+        0x00: _next(lambda x, y: _sat_s(abs(x - y)), of_a=True),
+        0x01: _next(lambda x, y: _sat_s(abs(x - y)), of_a=False),
+        0x02: _next(lambda x, y: _sat_s(y - x), of_a=True),
+        0x03: _next(lambda x, y: _sat_s(y - x), of_a=False),
+        0x04: _next(lambda x, y: _sat_s(x + y), of_a=True),
+        0x05: _ABS_DIFF,
+        0x21: _ABS_DIFF,
+        0x06: _SUB,
+        0x28: _SUB,
+        0x07: _ADD,
+        0x29: _ADD,
+        **dict.fromkeys(range(0x08, 0x0E), _open),
+        0x0E: _signed(lambda x, y, c: max(y, _sv(c, "imm"))),
+        0x0F: _signed(lambda x, y, c: min(y, _sv(c, "imm"))),
+        0x10: _signed(lambda x, y, c: _sat_s(y - _sv(c, "imm"))),
+        0x11: _signed(lambda x, y, c: _sat_s(y + _sv(c, "imm"))),
+        **dict.fromkeys((0x12, 0x13, 0x18, 0x19, 0x24, 0x25, *range(0x2E, 0x34))),
+        0x14: _signed(lambda x, y, c: _round_even(y - _sv(c, "s"), 1)),
+        0x15: _signed(lambda x, y, c: _round_even(y + _sv(c, "s"), 1)),
+        0x16: _signed(lambda x, y, c: max(y, _sv(c, "s"))),
+        0x17: _signed(lambda x, y, c: min(y, _sv(c, "s"))),
+        0x1A: _signed(lambda x, y, c: _sat_s(y - _sv(c, "s"))),
+        0x1B: _signed(lambda x, y, c: _sat_s(y + _sv(c, "s"))),
+        0x1D: _signed(lambda x, y, c: _round_even(x + y, 1)),
+        **dict.fromkeys((0x1E, 0x1F, 0x2A, 0x2B, 0x2C, 0x2D), _open),
+        0x20: _signed(lambda x, y, c: x + y),
+        0x22: _signed(lambda x, y, c: max(x, y)),
+        0x23: _signed(lambda x, y, c: min(x, y)),
+        0x26: _signed(lambda x, y, c: _sat_s(abs(x))),
+        0x27: _signed(lambda x, y, c: -x),
+        0x34: _unsigned(lambda x, y, c: max(y, _u(c, "imm"))),
+        0x35: _unsigned(lambda x, y, c: min(y, _u(c, "imm"))),
+        0x36: _unsigned(lambda x, y, c: max(y, _u(c, "s"))),
+        0x37: _unsigned(lambda x, y, c: min(y, _u(c, "s"))),
+        0x38: _unsigned(lambda x, y, c: max(x, y)),
+        0x39: _unsigned(lambda x, y, c: min(x, y)),
+        0x3A: _unsigned(lambda x, y, c: _sat_u(y - _u(c, "imm"))),
+        0x3B: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "imm"))),
+        0x3C: _unsigned(lambda x, y, c: _sat_u(y - _u(c, "s"))),
+        0x3D: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "s"))),
+        0x3E: _unsigned(lambda x, y, c: _sat_u(y - x)),
+        0x3F: _unsigned(lambda x, y, c: _sat_u(x + y)),
+        **dict.fromkeys(range(0x60, 0x7F), _A),
+    },
+    "s1": {
+        0x00: _signed(lambda x, y, c: ~y),
+        0x01: _signed(lambda x, y, c: x ^ y),
+        0x02: _signed(lambda x, y, c: x | y),
+        0x03: _signed(lambda x, y, c: x & y),
+        0x04: _unsigned(lambda x, y, c: y ^ _u(c, "imm")),
+        0x05: _unsigned(lambda x, y, c: y | _u(c, "imm")),
+        0x06: _unsigned(lambda x, y, c: y & _u(c, "imm")),
+        0x07: _unsigned(lambda x, y, c: y ^ _u(c, "t")),
+        0x08: _unsigned(lambda x, y, c: y | _u(c, "t")),
+        0x09: _unsigned(lambda x, y, c: y & _u(c, "t")),
+        **dict.fromkeys((0x0A, 0x13), _signed(lambda x, y, c: _sat_s(y << _n(c)))),
+        0x0B: _signed(lambda x, y, c: y << _n(c)),
+        0x0C: _unsigned(lambda x, y, c: y >> _n(c)),
+        0x0D: _signed(lambda x, y, c: y >> _n(c)),
+        0x0E: _signed(lambda x, y, c: _round_even(y, _n(c))),
+        0x0F: _wide(lambda v, c: _sat_s(v >> _n(c))),
+        0x10: _wide(lambda v, c: _sat_s(_round_even(v, _n(c)))),
+        **dict.fromkeys((0x11, 0x12), _unsigned(lambda x, y, c: _sat_u(y << _n(c)))),
+        **dict.fromkeys((0x14, 0x15), _wide(lambda v, c: _round_even(v, _n(c)))),
+        **dict.fromkeys(range(0x16, 0x1A), _open),
+        **dict.fromkeys((0x1A, 0x1C), _unsigned(lambda x, y, c: _sat_u(y << _t(c)))),
+        **dict.fromkeys((0x1B, 0x23), _signed(lambda x, y, c: _sat_s(y << _t(c)))),
+        **dict.fromkeys((0x1D, 0x1E), _wide(lambda v, c: _round_even(v, _t(c)))),
+        **dict.fromkeys(range(0x1F, 0x23), _open),
+        0x24: _signed(lambda x, y, c: y << _t(c)),
+        0x25: _unsigned(lambda x, y, c: y >> _t(c)),
+        0x26: _signed(lambda x, y, c: y >> _t(c)),
+        0x27: _signed(lambda x, y, c: _round_even(y, _t(c))),
+        0x28: _wide(lambda v, c: _sat_s(v >> _t(c))),
+        0x29: _wide(lambda v, c: _sat_s(_round_even(v, _t(c)))),
+        0x2A: _signed(lambda x, y, c: max(y, _sv(c, "imm"))),
+        0x2B: _signed(lambda x, y, c: min(y, _sv(c, "imm"))),
+        0x2C: _signed(lambda x, y, c: max(y, _sv(c, "t"))),
+        0x2D: _signed(lambda x, y, c: min(y, _sv(c, "t"))),
+        0x2E: _signed(lambda x, y, c: max(x, y)),
+        0x2F: _signed(lambda x, y, c: min(x, y)),
+        0x30: _signed(lambda x, y, c: _sat_s(y - _sv(c, "imm"))),
+        0x31: _signed(lambda x, y, c: _sat_s(y + _sv(c, "imm"))),
+        **dict.fromkeys((0x32, 0x33, *range(0x3D, 0x41)), _open),
+        0x34: _signed(lambda x, y, c: x + y),
+        0x35: _signed(lambda x, y, c: _round_even(y + _sv(c, "t"), 1)),
+        0x36: _signed(lambda x, y, c: _sat_s(y - _sv(c, "t"))),
+        0x37: _signed(lambda x, y, c: _sat_s(y + _sv(c, "t"))),
+        0x38: _signed(lambda x, y, c: _round_even(x + y, 1)),
+        0x39: _signed(lambda x, y, c: _sat_s(abs(x))),
+        0x3A: _signed(lambda x, y, c: -x),
+        0x3B: _SUB,
+        0x3C: _ADD,
+        **dict.fromkeys((*range(0x41, 0x47), 0x54)),
+        0x47: _unsigned(lambda x, y, c: max(y, _u(c, "imm"))),
+        0x48: _unsigned(lambda x, y, c: min(y, _u(c, "imm"))),
+        0x49: _unsigned(lambda x, y, c: max(y, _u(c, "t"))),
+        0x4A: _unsigned(lambda x, y, c: min(y, _u(c, "t"))),
+        0x4B: _unsigned(lambda x, y, c: max(x, y)),
+        0x4C: _unsigned(lambda x, y, c: min(x, y)),
+        0x4D: _unsigned(lambda x, y, c: _sat_u(y - _u(c, "imm"))),
+        0x4E: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "imm"))),
+        0x4F: _unsigned(lambda x, y, c: _sat_u(y - _u(c, "t"))),
+        0x50: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "t"))),
+        0x51: _unsigned(lambda x, y, c: _sat_u(y - x)),
+        0x52: _unsigned(lambda x, y, c: _sat_u(x + y)),
+        **dict.fromkeys((0x53, *range(0x55, 0x60)), _B),
+        **dict.fromkeys(range(0x61, 0x7E), _ZERO),
+        **dict.fromkeys((0x60, 0x7E), _open),
+    },
+    "s2": {
+        **dict.fromkeys((0x00, 0x01), _signed(lambda x, y, c: y * c["imm"])),
+        **dict.fromkeys((0x02, 0x04, 0x06), _signed(lambda x, y, c: x * y)),
+        **dict.fromkeys((0x03, 0x05), _signed(lambda x, y, c: y * c["t"])),
+        0x07: _A,
+        0x08: _B,
+        0x0D: _B,
+        0x09: _NEGATIVE,
+        0x0A: _lane_numbers,
+        0x0B: _NOT_NEGATIVE,
+    },
+    "s3": {
+        **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
+        **dict.fromkeys(range(0x24, 0x3F)),
+        0x06: _ZERO,
+        0x07: _B,
+        0x08: _B,
+        0x09: _open,
+        0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
+        0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
+        0x0C: lambda a, b, c: [*b[1::2], *a[1::2]],
+        0x0D: lambda a, b, c: [*b[0::2], *a[0::2]],
+        0x10: lambda a, b, c: _insert(
+            b, c["f92_95"] | (c["f31_34"] & 4) << 2, c["value"]
+        ),
+        0x11: lambda a, b, c: [_imm14(c)] * LANE_COUNT,
+        0x12: _NEGATIVE,
+        0x13: _NOT_NEGATIVE,
+        0x14: _lane_numbers,
+        0x15: lambda a, b, c: _insert(b, c["index"], c["value"]),
+        0x18: lambda a, b, c: [c["value"]] * LANE_COUNT,
+        **dict.fromkeys((0x19, 0x20, 0x21, 0x23), _B),
+        **dict.fromkeys((0x1B, 0x1C, 0x22), _lane_shift),
+    },
+}
+
+
+@dataclass(frozen=True)
+class LaneRule:
+    """What an S unit's head value does to the lanes: `value` of (a, b, scalars), None for a
+    head that writes no lane result."""
+
+    confidence: Confidence
+    fact: str
+    value: LaneValue | None
+
+
+def _lane_rules(unit: str) -> dict[int, LaneRule]:
+    values = _LANE_VALUES[unit]
+    table = LANE_FUNCTIONS[unit]
+    if set(values) != set(table):
+        raise ValueError(
+            f"{unit}: rules and fields.LANE_FUNCTIONS differ in their head values"
+        )
+    if any(
+        (values[h] is None) != (text == NO_LANE) for h, (text, _, _) in table.items()
+    ):
+        raise ValueError(
+            f"{unit}: rules and fields.LANE_FUNCTIONS differ in which heads write"
+        )
+    return {
+        h: LaneRule(conf, f"{text}; {note}" if note else text, values[h])
+        for h, (text, conf, note) in table.items()
+    }
+
+
+LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
+"""The S units' lane functions by head value, each with its tier (`fields.LANE_FUNCTIONS`)."""
+
+
+def lane_result(
+    unit: str, head: int, a: Sequence[int], b: Sequence[int], scalars: Scalars
+) -> Lanes | None:
+    """The 32 lanes S unit `unit` writes at head value `head` from its lane operands a and b
+    (32 lanes of 0..0xffff each); None where the head writes no lane result, a None lane where
+    the rule does not predict it (the open heads give 32). Raises KeyError at a head value
+    without a rule.
+
+    `scalars` holds what the rules read, by unit: S0 "s" (F0[f72_75]) and "imm"; S1 "t"
+    (F1[f84_87]) and "imm"; S2 "t" (F2[f88_91]) and "imm" (0x0 / 0x1's multiplier); S3 the
+    nibbles "f31_34", "f65_68", "f92_95", "f96_99" and "index" = F3[f92_95], "value" =
+    F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), a
+    shift count as imm & 15 or t & 15."""
+    if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
+        raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
+    rule = LANE_RULES[unit][head]
+    if rule.value is None:
+        return None
+    return [None if v is None else v & LANE_MASK for v in rule.value(a, b, scalars)]
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,9 @@ from fenykl.dsp.fields import (
     HEADS,
     IDLE_OP,
     IDLE_VALUE,
+    LANE_FILES,
+    LANE_FUNCTIONS,
+    LANE_SOURCES,
     PB_FILES,
     PB_SOURCES,
     PORTS,
@@ -20,6 +23,7 @@ from fenykl.dsp.fields import (
     STAIRCASE,
     WORD_BITS,
     X_IMMEDIATES,
+    Confidence,
     Operands,
     lookup,
     op,
@@ -140,6 +144,26 @@ def test_program_13_tap_loads_reach_the_file_s2_reads(items):
     for i in range(435, 439):
         assert words[i][enable] == bus, i
         assert words[i][PORTS[enable]] == words[i + 4][nibble], i
+
+
+def test_lane_tables_verified_rows():
+    # The rows whose pre-registered lanes all matched on the camera: 93 heads.
+    verified = {
+        unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
+        for unit, rows in LANE_FUNCTIONS.items()
+    }
+    assert verified == {"s0": 29, "s1": 35, "s2": 11, "s3": 18}
+
+
+def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():
+    # A unit's lane file has two ports, the grid B partners of its two lane nibbles.
+    ports = {}
+    for enable in LANE_SOURCES:
+        lo = int(PORTS[enable][1:4]) - 110
+        ports[f"f{lo}_{lo + 3}"] = enable
+    assert sorted(ports) == sorted(n for _, *nibs in LANE_FILES.values() for n in nibs)
+    for file, (unit, *nibs) in LANE_FILES.items():
+        assert [lookup(n).unit for n in nibs] == [unit, unit], file
 
 
 def test_control_word_targets_lie_inside_their_program(items):

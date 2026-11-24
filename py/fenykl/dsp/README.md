@@ -50,13 +50,13 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | unit | strobe | fields | reading | confidence |
 |---|---|---|---|---|
 | `op_slot` | op f313_319 | imm, ra, rb (f128_132), f120_122, f229 | scalar and control ops | verified |
-| `s0` | f278_284 | grid A 37, 41, 72, 76; f23_30 | compute slot | inferred |
-| `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot | inferred |
-| `s2` | f292_295 | grid A 53, 57, 88 | compute slot | inferred |
-| `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot | inferred |
+| `s0` | f278_284 | grid A 37, 41, 72, 76; f23_30 | compute slot: add, compare, neighbour lanes on L0 | inferred |
+| `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot: logic, shifts, min / max on L1 | inferred |
+| `s2` | f292_295 | grid A 53, 57, 88 | compute slot: multiply on L2 | inferred |
+| `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot: moves, insert, extract, reductions on L3 | inferred |
 | `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A | inferred (verified but f69_71, which changed no result) |
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3 (verified), the others open | verified (the pairing) |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3 (verified), f232_233's open | verified (the pairing) |
 | `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
 | `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held, not the S unit select (measured), its function open | hypothesis |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
@@ -140,27 +140,61 @@ a multiply's product one word after the multiply. The emulator models G (`Boot.s
 (`Boot.regs`).
 
 The compute side has four more files, F0..F3, of 32-bit scalar registers numbered by a nibble
-(`fields.SCALAR_FILES`; verified by exact readout for F0..F2, F3 inferred), written by grid B ports and read by S heads
+(`fields.SCALAR_FILES`; verified by exact readout), written by grid B ports and read by S heads
 from the next word on:
 
 | file | read by | written by (port, register) |
 |---|---|---|
-| F0 | S0 head 0x52, F0[f76_79] | f255 on f182_185: 0 X0; f256_257 on f186_189: 0 X1, 1 the ALU bus |
-| F1 | S1 head 0x54, F1[f84_87] | f259_260 on f194_197: 0 X1, 1 the ALU bus, 2 no write seen |
-| F2 | S2 head 0xe, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
-| F3 | S3 heads 0x16 / 0x17, as a lane index (inferred) | f263_264 on f202_205, its sources not separated |
+| F0 | S0 head 0x52, F0[f76_79]; S0's lane scalar s = F0[f72_75] | f255 on f182_185: 0 X0; f256_257 on f186_189: 0 X1, 1 the ALU bus, 2 nothing |
+| F1 | S1 head 0x54 and S1's lane scalar t, F1[f84_87] | f258 on f190_193: 0 X0; f259_260 on f194_197: 0 X1, 1 the ALU bus, 2 nothing |
+| F2 | S2 head 0xe and S2's lane scalar t, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
+| F3 | S3 head 0x24, F3[f96_99]; S3's lane index F3[f92_95] and value F3[f96_99] | f263_264 on f202_205: 0 X0, 1 X1, 2 the ALU bus |
 
-The sources per enable value (`fields.PB_SOURCES`) are inferred: one exact value per cell.
-Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after each load, on
-the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar result on X0's
-result bus, where f272_273 = 2 takes it in the head's own word [verified]; f274_275 does not
-select the S unit [measured], its function open. Under M, S0 0x52, S1 0x54, S2 0xc and 0xe and S3
-0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result (`fields.S_RESULTS`; of S0's
-0x40..0x5f only 0x52 read). S3's 0xe..0x17 read one 16-bit lane of a lane register of 32 lanes, the register
-f65_68, the lane f92_95 itself (0xe / 0xf) or F3[f92_95] & 31 (0x16 / 0x17), zero- / sign-extended
-[the lane width verified, the selects inferred]; S2 0xc's and S3 0x24's rules are open. The grid
-B lane ports f232..f251, driven from the scalar buses with the S side idle, wrote nothing to
-lanes 0 / 1 of the lane registers S3 reads [verified for that one condition]. The emulator does
+The sources per enable value (`fields.PB_SOURCES`) are verified on the camera, most of them
+pre-registered. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
+each load, on the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar
+result on X0's result bus, where f272_273 = 2 takes it in the head's own word [verified];
+f274_275 does not select the S unit [measured], its function open. Under M, S0 0x52, S1 0x54,
+S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result
+(`fields.S_RESULTS`; of S0's 0x40..0x5f only 0x52 read): S3 0xe / 0xf extract lane f92_95 + 16 x
+(f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
+[verified]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
+minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
+register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
+(f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred].
+
+#### Lanes
+
+Each S unit has a lane file of 16 registers of 32 lanes of 16 bits (`fields.LANE_FILES`). The
+unit's lane heads read a and b from it through its two lane nibbles, and the two grid B ports
+110 bits above those nibbles write it; the enable of a port names the unit whose lane result
+it takes (`fields.LANE_SOURCES`):
+
+| file | unit | a, b | first port (enable) | second port (enable) |
+|---|---|---|---|---|
+| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): 1 S0 [inferred] | f151_154 (f238_239): 0 S3 [verified], 1 S2, 2 S1 [inferred] |
+| L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): 1 S0 [inferred] | f159_162 (f242_243): 0 S3 [verified], 1 S2, 2 S1 [inferred] |
+| L2 | S2 | f53_56, f57_60 | f163_166 (f244_245): 0 none seen, 1 S0 | f167_170 (f246_247): 0 S3, 1 S2, 2 S1 |
+| L3 | S3 | f61_64, f65_68 | f171_174 (f248_249): 0 none seen, 1 S0 | f175_178 (f250_251): 0 S3, 1 S2, 2 S1 |
+
+The L2 and L3 rows were measured with a sentinel in the named register [verified], the L0 and
+L1 ones through the operands they gave S0's and S1's function tables. A port takes a move's
+result (S3 0x18, 0x19, 0x22, S2 0x8) in the head's own word and an arithmetic result exactly
+one word after the head (`fields.LANE_LAG`; verified for the heads timed). A third kind of
+file, U, named by f31_34, fills the lanes S3's lane shifts move in [inferred].
+
+The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: a row is
+verified where its expectation was registered before the run and met on all lanes of two
+constructed 32-lane vectors of edge and random values, inferred where it was fitted
+(the edge refits: halvings and rounded shifts round ties to even, saturation, unsigned min /
+max). In short, S0 adds, subtracts, compares and takes absolute differences, with
+neighbour-lane forms (a[k+1]) and a 16-bit immediate whose low byte is f23_30; S1 has logic,
+shifts by its immediate or t, double-width shifts of the 32-bit a : b and min / max / add with a
+scalar; S2 multiplies (a x b and b x t, low 16 bits) and gives sign masks and the lane number;
+S3 moves, interleaves, splits odd / even lanes, inserts a lane, broadcasts F3[f96_99] or a
+14-bit immediate and gives the lane number. Some heads add 1 in some lanes: a per-lane
+condition bit, not identified [hypothesis]. `semantics.lane_result(unit, head, a, b, scalars)`
+evaluates a row on 32 lanes, a None lane where the row does not predict it. The emulator does
 not run the S heads or these files.
 
 X0 and X1 are two copies of one ALU (`fields.X_FUNCTIONS`, verified by exact readout): X0's head

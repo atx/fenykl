@@ -327,7 +327,10 @@ f88_91 read (hypothesis; on the camera S2 head 0xe reads such a write from the n
 the ALU bus carries a load's datum three words on), an S2 term to its accumulator (inferred post hoc on the chroma
 planes)."""
 PORT_WRITES = (("f163_166", "f244_245", 0), ("f167_170", "f246_247", 1))
-"""The operand register write ports: (nibble, enable, the enable's active value)."""
+"""The operand register write ports: (nibble, enable, the enable's active value). On the camera
+with own programs these are the ports of S2's lane file L2, f167_170 under 1 writing S2's lane
+result and f163_166 under 0 no S unit's (`fields.LANE_SOURCES`); what the latter takes in
+program 13 is open."""
 COEFFICIENT_WRITE = ("f198_201", "f261_262", 2)
 """The coefficient register write port: C[nibble] := the load latch (hypothesis). On the camera
 with own programs this port under 2 writes the ALU bus, which carries a load's datum three words

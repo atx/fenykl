@@ -36,7 +36,9 @@ class Unit:
 
 
 _HEAD = (
-    "the compute slot {}: its head f{}_{} and the grid A nibbles that change under it"
+    "the compute slot {}: its head f{}_{} and the grid A nibbles that change under it; a "
+    "unit with a lane file of its own whose two registers its lane heads read, and scalar "
+    "registers of its own scalar file (`fields.LANE_FUNCTIONS`, verified on the camera)"
 )
 _UNITS = (
     (
@@ -88,9 +90,11 @@ _UNITS = (
         (
             "17 ports, one enable in 232..264 for each grid B nibble, the pairing verified in "
             "the bytes (f234_235 for f145_146 a hypothesis); the ports of f255..f264 write the "
-            "scalar files F0..F3 that the S heads read (`fields.SCALAR_FILES`, verified on the "
-            "camera by exact readout, the source per enable value inferred); what the others "
-            "write is open; ports, with the S heads and M the compute group (hypothesis)"
+            "scalar files F0..F3 that the S heads read, each enable value a source "
+            "(`fields.SCALAR_FILES`, verified on the camera by exact readout); those of "
+            "f236..f251 write the lane files L0..L3, each enable value an S unit's lane result "
+            "(`fields.LANE_SOURCES`, verified on the camera for L2 and L3); f232_233's is open; "
+            "ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
     ),

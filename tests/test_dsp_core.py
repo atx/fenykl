@@ -20,6 +20,7 @@ from fenykl.dsp.semantics import (
     RegSet,
     UnknownSemantics,
     destinations,
+    lane_result,
     x_result,
 )
 from fenykl.dsp.state import Reg
@@ -435,6 +436,164 @@ def test_the_x_units_have_no_rule_at_their_idle_head():
         x_result("x1", 0x1F, 0, 0, 0)
     with pytest.raises(KeyError):
         x_result("x0", 0x3F, 0, 0, 0)
+
+
+def lanes(**at: int) -> list[int]:
+    """32 lanes of 0 but the given ones, named l0..l31."""
+    v = [0] * 32
+    for key, value in at.items():
+        v[int(key[1:])] = value
+    return v
+
+
+S3_NIBBLES = {
+    "f31_34": 0,
+    "f65_68": 0,
+    "f92_95": 0,
+    "f96_99": 0,
+    "index": 0,
+    "value": 0,
+}
+
+
+@pytest.mark.parametrize(
+    "unit, head, a, b, scalars, expect",
+    [
+        # Saturating and wrapping adds apart at the top of the range.
+        ("s0", 0x07, lanes(l0=0x7FFF), lanes(l0=1), {}, {0: 0x7FFF}),
+        ("s0", 0x20, lanes(l0=0x7FFF), lanes(l0=1), {}, {0: 0x8000}),
+        # The neighbour forms read a's next lane; lane 31's is in the next block.
+        ("s0", 0x02, lanes(l1=5), lanes(l0=7), {}, {0: 2, 30: 0, 31: None}),
+        # Halving rounds ties to even: 5 / 2 -> 2, 7 / 2 -> 4, -3 / 2 -> -2.
+        (
+            "s0",
+            0x14,
+            lanes(),
+            lanes(l0=5, l1=7, l2=0xFFFD),
+            {"s": 0},
+            {0: 2, 1: 4, 2: 0xFFFE},
+        ),
+        # Unsigned max against the immediate: 0x8000 is above it.
+        (
+            "s0",
+            0x34,
+            lanes(),
+            lanes(l0=0x8000, l1=3),
+            {"imm": 0x515A},
+            {0: 0x8000, 1: 0x515A},
+        ),
+        ("s0", 0x26, lanes(l0=0x8000, l1=0xFFFF), lanes(), {}, {0: 0x7FFF, 1: 1}),
+        ("s0", 0x27, lanes(l0=0x8000), lanes(), {}, {0: 0x8000}),
+        ("s0", 0x3A, lanes(), lanes(l0=1, l1=0x9000), {"imm": 2}, {0: 0, 1: 0x8FFE}),
+        ("s0", 0x0B, lanes(), lanes(), {}, {0: None, 31: None}),  # a carry form: open
+        # Logical and arithmetic shifts by imm & 15 (10 here).
+        ("s1", 0x0C, lanes(), lanes(l0=0x8000), {"imm": 0x2A}, {0: 0x20}),
+        ("s1", 0x0D, lanes(), lanes(l0=0x8000), {"imm": 0x2A}, {0: 0xFFE0}),
+        ("s1", 0x0E, lanes(), lanes(l0=0x600, l1=0x200), {"imm": 0x2A}, {0: 2, 1: 0}),
+        (
+            "s1",
+            0x0A,
+            lanes(),
+            lanes(l0=0x4000, l1=0xC000),
+            {"imm": 1},
+            {0: 0x7FFF, 1: 0x8000},
+        ),
+        ("s1", 0x11, lanes(), lanes(l0=0x8000, l1=3), {"imm": 1}, {0: 0xFFFF, 1: 6}),
+        # The double-width shift of a : b, a the high half.
+        (
+            "s1",
+            0x14,
+            lanes(l0=1, l1=0),
+            lanes(l0=0, l1=0x600),
+            {"imm": 0x2A},
+            {0: 0x40, 1: 2},
+        ),
+        ("s1", 0x0F, lanes(l0=0x7FFF), lanes(l0=0xFFFF), {"imm": 0x10}, {0: 0x7FFF}),
+        ("s1", 0x28, lanes(l0=0x8000), lanes(), {"t": 4}, {0: 0x8000}),
+        ("s1", 0x4A, lanes(), lanes(l0=0xFFFF, l1=1), {"t": 3}, {0: 3, 1: 1}),
+        (
+            "s2",
+            0x03,
+            lanes(),
+            lanes(l0=0x100, l1=7),
+            {"t": 0x101},
+            {0: 0x100, 1: 0x707},
+        ),
+        ("s2", 0x00, lanes(), lanes(l0=3), {"imm": 10}, {0: 30}),
+        ("s2", 0x0B, lanes(), lanes(l0=0x8000, l1=0x7FFF), {}, {0: 0, 1: 0xFFFF}),
+        (
+            "s3",
+            0x0A,
+            lanes(l0=1, l1=2),
+            lanes(l0=3, l1=4),
+            {},
+            {0: 3, 1: 1, 2: 4, 3: 2},
+        ),
+        (
+            "s3",
+            0x0C,
+            lanes(l1=1, l3=2),
+            lanes(l1=3, l3=4),
+            {},
+            {0: 3, 1: 4, 16: 1, 17: 2},
+        ),
+        # The insert at lane f92_95 + 16 x (f31_34 bit 2), the other lanes b's.
+        (
+            "s3",
+            0x10,
+            lanes(),
+            lanes(l4=9),
+            S3_NIBBLES | {"f92_95": 4, "f31_34": 7, "value": 0x12345},
+            {4: 9, 20: 0x2345},
+        ),
+        (
+            "s3",
+            0x15,
+            lanes(),
+            lanes(),
+            S3_NIBBLES | {"index": 33, "value": 5},
+            {1: 5, 0: 0},
+        ),
+        # The 14-bit immediate: f96_99 : f65_68 : f31_34 bits 3..2 : f92_95, sign-extended.
+        (
+            "s3",
+            0x11,
+            lanes(),
+            lanes(),
+            S3_NIBBLES | {"f96_99": 15, "f31_34": 12, "f92_95": 1},
+            {0: 0xFC31, 31: 0xFC31},
+        ),
+        # Lane shifts by f92_95 as a signed nibble; the lanes moved in are not predicted.
+        (
+            "s3",
+            0x1B,
+            lanes(),
+            lanes(l2=6, l3=7),
+            S3_NIBBLES | {"f92_95": 2},
+            {0: 6, 1: 7, 30: None},
+        ),
+        (
+            "s3",
+            0x1C,
+            lanes(),
+            lanes(l0=6),
+            S3_NIBBLES | {"f92_95": 0xE},
+            {1: None, 2: 6},
+        ),
+        ("s3", 0x22, lanes(), lanes(l0=6), S3_NIBBLES | {"f92_95": 7}, {0: 6, 31: 0}),
+    ],
+)
+def test_lane_function_table(unit, head, a, b, scalars, expect):
+    got = lane_result(unit, head, a, b, scalars)
+    assert {k: got[k] for k in expect} == expect
+
+
+def test_heads_without_a_lane_result():
+    # A reduction's result is a scalar, a store-only S1 head writes nothing.
+    assert lane_result("s3", 0x00, lanes(), lanes(), S3_NIBBLES) is None
+    assert lane_result("s1", 0x54, lanes(), lanes(), {}) is None
+    with pytest.raises(KeyError):
+        lane_result("s0", 0x1C, lanes(), lanes(), {})  # open
 
 
 def framed(*routine: Word) -> Job:
