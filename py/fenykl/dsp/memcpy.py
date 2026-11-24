@@ -442,13 +442,14 @@ element format and 38 by position the load's (hypothesis): 38 on a register hold
 or with 47 on 8 too, never ended (measured on the camera, one run each)."""
 
 # Word 47's formats by register; r21's is a boot parameter. The format is the register's value,
-# the number of elements per 16-byte line (verified on the camera, 1024..2048 16-bit elements
-# each: at 8 and 10 pre-registered as the one expectation, at 4 and 12 met by an alternative
-# written before the run): 0x10, the stock r6's, each element's low byte; 0x0c each line 12
-# elements' low 10 bits, least significant first, the last byte 0; 0x0a each line 10 elements'
-# low 12 bits, so packed; 0x08 each element as 16 bits little-endian; 0x04 (and 0x44, measured)
-# each element zero-extended to a 32-bit word; 0x14 and 0x18 never complete (the job times
-# out; that they have no line is inferred). The model has the formats of the registers above.
+# the number of elements per 16-byte line (4, 8, 10 and 12 each verified on the camera against
+# alternatives written before the run, 1024..2048 16-bit elements each): 0x10, the stock r6's,
+# each element's low byte; 0x0c each line 12 elements' low 10 bits, packed (the bit order, least
+# significant first, the last byte 0, fitted after the run: inferred); 0x0a each line 10
+# elements' low 12 bits, so packed; 0x08 each element as 16 bits little-endian; 0x04 (and
+# 0x44, measured) each element zero-extended to a 32-bit word; 0x14 and 0x18 never complete
+# (the job times out; that they have no line is inferred). The model has the formats of the
+# registers above.
 
 _FORMATS: dict[int, str] = {
     6: "bytes",

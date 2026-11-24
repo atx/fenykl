@@ -184,16 +184,16 @@ The operand nibbles were pre-registered at several registers each, 1, 2, 5, 6, 9
 them [verified]. Enable 0 of a first port takes the vector an X0 load head asked for exactly
 four words earlier (the lane memory, below). A port takes a head's result in the head's own word
 or one word later, by head (`fields.LANE_LAG`, verified for the heads timed: in its own word S3
-0x18, 0x19, 0x22, S2 0x8, S1 0x00..0x09 and S0's selects, one word later the arithmetic and
-shift heads timed, S0 0x08 and S3 0xa / 0xc); no head class predicts it. S3's lane shift 0x1b
-moves b by n = f92_95 as a signed nibble: up by 1..4 [verified], down by 1..4 at 12..15
-[inferred, fitted], not at all at 5..11 [measured]; 0x1c and 0x22 matched it at two counts
+0x18, 0x19, 0x22, S2 0x8, S1 0x00..0x09 and S0's selects 0x44, 0x45, 0x46, 0x4b, one word
+later the arithmetic and shift heads timed, S0 0x08 and S3 0xa / 0xc); no head class predicts it.
+S3's lane shift 0x1b moves b by n = f92_95 as a signed nibble: up by 1..4 [verified], down by 1..4
+at 12..15 [inferred, fitted], not at all at 5..11 [measured]; 0x1c and 0x22 matched it at two counts
 [inferred]. The lanes moved in come from a third kind of file, U, named by f31_34 [inferred,
-fitted]: its lanes 0..3 are four carry lanes for either direction. Its port is f141_144 under
-f232_233 = 1 beside an S3 head, which decides what U takes: after 0x1f and 0x21 U's lanes 0..3
-hold b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31 [verified, pre-registered;
-U's other lanes not read; that the port's and the shifts' nibbles name the same register
-inferred] (`fields.LANE_THIRD_FILE`).
+fitted]: its lanes 0..3 are four carry lanes for either direction [inferred]. Its port is f141_144
+under f232_233 = 1 beside an S3 head, which decides what U takes: after 0x1f and 0x21 U's lanes 0..3
+hold b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31 [verified, pre-registered; U's other
+lanes not read; that the port's and the shifts' nibbles name the same register inferred]
+(`fields.LANE_THIRD_FILE`).
 
 The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
 its expectation was registered before the run and met on all lanes of two constructed 32-lane
