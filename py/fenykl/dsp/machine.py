@@ -277,6 +277,8 @@ class Machine:
         word: that register was not on M afterwards (measured on the camera twice: inferred)."""
         self.last_head: int | None = None
         """The word of the last S head run."""
+        self.head_units: set[str] = set()
+        """The units with a head in word `last_head`."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -590,7 +592,9 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
-            self.last_head = t
+            if self.last_head != t:
+                self.last_head, self.head_units = t, set()
+            self.head_units.add(unit)
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
                 self.open_m.setdefault(t, set()).add(unit)
@@ -790,10 +794,13 @@ class Machine:
                 return Kept(I)
             if h is not None:
                 return _cap(h, tier)
-            # Nothing on M behind a head without a result there: verified one word after 97
-            # heads of all four units and two and three words after 16, earlier heads further
-            # back in every cell; with no head before in the job it is inferred.
-            quiet = self.last_head is not None and t > self.last_head
+            # Nothing on M behind a head without a result there: verified one word after a
+            # lone head under its own unit, and two and three words after a head under any
+            # unit, earlier heads further back in every cell; otherwise inferred.
+            gap = None if self.last_head is None else t - self.last_head
+            quiet = gap is not None and (
+                gap >= 2 or gap == 1 and self.head_units == {sel}
+            )
             return Kept(tier if quiet else min(tier, I))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(

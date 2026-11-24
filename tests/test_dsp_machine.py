@@ -550,3 +550,47 @@ def test_os_port_under_5_keeps_its_content_at_inferred(m):
     m.o[2] = Vec(B)
     run(m, [w(f296_301=0x19, f65_68=1, f252_254=5, f179_181=2)])
     assert m.o[2] == Vec(B, I)
+
+
+@pytest.mark.parametrize(("head", "tier"), [(0x1C, V), (0x22, I)])
+def test_a_lane_shift_by_two_is_inferred_for_0x22_only(m, head, tier):
+    m.lanes["L3"][2] = Vec(B)
+    m.u[3] = Vec((0x77,) * 32)
+    shift = w(f296_301=head, f65_68=2, f92_95=2, f31_34=3, **l3_port(9, 0))
+    run(m, [shift])
+    assert m.lanes["L3"][9] == Vec((*B[2:], 0x77, 0x77), tier)
+
+
+R0_UNDER = {"f276": 0, "f270_271": 2, "f221_223": 0}
+"""M's strobe with port 270 / 2 on R[0]; f274_275 picks the unit."""
+S1_AND = {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}
+"""S1's a & b: a lane result in its own word, nothing on M."""
+
+
+@pytest.mark.parametrize(
+    ("before", "unit", "tier"),
+    [
+        ([w(**S1_AND)], 1, V),  # the head's own unit
+        ([w(**S1_AND)], 0, I),
+        ([w(f296_301=0x19, f65_68=1)], 0, I),
+        ([w(**S1_AND, f296_301=0x19, f65_68=1)], 1, I),  # two units' heads
+        ([w(**S1_AND), IDLE], 0, V),
+        ([], 1, I),  # no head before in the job
+    ],
+)
+def test_nothing_on_m_behind_a_head_keeps_the_register(m, before, unit, tier):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.lanes["L3"][1] = Vec(B)
+    m.r[0] = Sv(0x0A5A)
+    run(m, [*before, w(**R0_UNDER, f274_275=unit)])
+    assert m.r[0] == Sv(0x0A5A, tier)
+
+
+@pytest.mark.parametrize(("x0", "tier"), [(False, V), (True, I)])
+def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0, tier):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.g[12] = Sv(0x0A5A)
+    x0_head = {"f302_307": 0x13, "f105_109": 8, "f2_6": 0x1E, "f1": 0} if x0 else {}
+    read = w(f276=0, f274_275=1, f272_273=2, f224_228=12, **x0_head)
+    run(m, [w(**S1_AND), IDLE, read])
+    assert m.g[12] == Sv(0x0A5A, tier)

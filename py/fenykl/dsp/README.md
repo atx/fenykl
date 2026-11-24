@@ -833,10 +833,11 @@ lane memory survives it, are the caller's part. Operand use is declared per rule
 tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
 read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
 after an extract, which reads its own lane (measured); "nothing on M" behind a head
-without a result there is verified (one word after 97 heads, two and three words after 16, in
-all four units), inferred with no head before. An S3 extract ORs with the reduction register in that register's first word
-and comes alone later [verified]; after such a later extract the register is not on M
-[inferred].
+without a result there is verified one word after a lone head under the head's own unit and two
+and three words after a head under any unit (all four units), inferred one word after a head
+under another unit, beside several units' heads and with no head before. An S3 extract ORs
+with the reduction register in that register's first word and comes alone later [verified];
+after such a later extract the register is not on M [inferred].
 
 `stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
 against the stock copy's for the same request (`Transcript`, recorded by running program 16)
