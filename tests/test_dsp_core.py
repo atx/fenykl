@@ -674,10 +674,12 @@ S3_NIBBLES = {
             0x1C,
             lanes(),
             lanes(l0=6),
-            S3_NIBBLES | {"f92_95": 0xE},
-            {1: None, 2: 6},
+            S3_NIBBLES | {"f92_95": 0xD},
+            {2: None, 3: 6},
         ),
-        ("s3", 0x22, lanes(), lanes(l0=6), S3_NIBBLES | {"f92_95": 7}, {0: 6, 31: 0}),
+        # 0x1c and 0x22 only at the counts they were registered at.
+        ("s3", 0x22, lanes(), lanes(l0=6), S3_NIBBLES | {"f92_95": 0xE}, {0: None, 2: None}),
+        ("s3", 0x22, lanes(), lanes(l3=6), S3_NIBBLES | {"f92_95": 3}, {0: 6, 29: None}),
         # The select heads read all 32 bits of s as a lane mask, bit k for lane k.
         *(
             (

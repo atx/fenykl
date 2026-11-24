@@ -842,7 +842,7 @@ both files, each port alone) and through the operands for L0 and L1: copies writ
 f151_154 / f159_162 were the a and b of S0's and S1's pre-registered function tables. L3's 16
 registers were dumped whole: power-up content, stable over a boot, a few bits apart between
 boots (verified on the camera). A register a port writes in word t is read by a head in word
-t + 1 (verified on the camera, pre-registered against a sentinel in the register, three pairs:
+t + 1 (verified on the camera, pre-registered against a sentinel in the register, five pairs:
 L3 through f250_251 = 0 (S3 0x18's result) then S3 0x19, L2 through f244_245 = 0 (a load) then
 S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2; L0 written by S0's
 port then read by S0, L1 by S1's then S1); a head in the port's own word, and U, were not
@@ -954,7 +954,7 @@ S0's selects 0x41..0x46, 0x4b and 0x4d, S1's logic heads 0x00..0x09 and 0x53, S2
 and 0xd, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
 S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd. No head class predicts the lag across
 units. Measured, not pre-registered (inferred): S2 0x9, 0xa, 0xb at 0 (registered at 1, both
-cells opposite), S2 0x7 at 0 and S3 0x6, 0x7, 0x8 at 1 (their rows open). The other heads' lags
+cells opposite); S2 0x7 at 0 and S3 0x6, 0x7, 0x8 at 1 (hypothesis: their rows open). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
 LANE_VECTORS = 0x400
@@ -978,7 +978,8 @@ LANE_MEMORY = (
     "word after a store to the same vector reads the stored vector, and four loads in "
     "consecutive words land in four consecutive port words (measured on the camera, not "
     "pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
-    "camera, pre-registered: vectors 0x40..0x7f read back after later jobs), so "
+    "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
+    "output), so "
     "a job can leave data, such as a layer's weights, for the next"
 )
 STORE_FILE = (
@@ -1054,7 +1055,7 @@ CARRY_IN = (
     "pre-registered on 32 lanes; c's register through 0x1f and 0x33 at four register numbers "
     "each, every mask distinct (`LANE_MASKS`)"
 )
-CLAMP_BOUNDS = "pre-registered at bounds 0..0x7fff only, a negative bound not predicted"
+CLAMP_BOUNDS = "pre-registered at non-negative bounds only, a negative bound not predicted"
 CLAMP_A = (
     "lanes with a < 0 not predicted: there the compare is the sign of the wrapped 16-bit "
     "difference (fitted, inferred: b >= 0 gives b where b - a wraps negative, else a; under "
@@ -1101,7 +1102,7 @@ LANE_MASKS = (
     "a + b on M's bus one word after the head (verified on the camera, pre-registered), and "
     "two words after S0 0x20 no longer (verified on the camera); the carry-in heads (S0 0x1e, 0x1f, 0x2a..0x2d, S1 0x32, 0x33, 0x3d..0x40) "
     "add bit k of F0[f76_79] / F1[f80_83] in lane k (verified on the camera, pre-registered, "
-    "the register at four numbers per unit). With M into F0[0] / F1[0] one word after S0 0x20 / "
+    "0x1f and 0x33 with the register at four numbers, the others at one). With M into F0[0] / F1[0] one word after S0 0x20 / "
     "S1 0x34 and the carry-in head with that register in the next word, the high halves' add "
     "takes the low halves' carry: the stock programs' 32-bit add per lane (verified on the "
     "camera, pre-registered, 32 lanes in each unit); without the M word the carry-in head adds "
@@ -1330,20 +1331,21 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             ),
             V,
             (
-                "both directions pre-registered on all 32 lanes, the tier covering f92_95 = "
-                "1..4 and 12..15 only; U's register named by f31_34 (verified: two registers "
-                "read back by number); f92_95 = 5..11 b (measured, the pre-registered shift "
-                "missed: inferred)"
+                "down by 1..4 (f92_95 = 15..12) pre-registered on all 32 lanes; up by 1..4 "
+                "pre-registered on lanes 24..31, up by 2 also on all 32 lanes (with U's lanes "
+                "0..3 holding b's own lanes 0..3), lanes 0..23 at 1, 3 and 4 the rule's "
+                "(inferred); U's register named by f31_34 (verified: two registers read back by "
+                "number); f92_95 = 5..11 b (measured, the pre-registered shift missed: inferred)"
             ),
         ),
         **_rows(
             (0x1C, 0x22),
-            "as 0x1b",
+            "as 0x1b at f92_95 = 3, 4 and 13; other counts not predicted",
             V,
-            "verified at f92_95 = 3, 4 (lanes 0..27) and 13, pre-registered; at 2 and 14 "
-            "measured, not pre-registered (inferred); they differ from 0x1b in what U's port "
-            "takes beside them (`LANE_THIRD_FILE`); 0x22 wrote nothing while F3 held power-up "
-            "content",
+            "pre-registered at 3 and 13 on all 32 lanes and at 4 on lanes 0..27; at 2 and 14 "
+            "as 0x1b too, measured, not pre-registered (inferred); 1, 12, 15 and 5..11 not "
+            "measured; they differ from 0x1b in what U's port takes beside them "
+            "(`LANE_THIRD_FILE`); 0x22 wrote nothing while F3 held power-up content",
         ),
     },
 }
@@ -1709,8 +1711,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "(verified on the camera: inserts at lanes 0..31 read back as built, the writers "
             "pre-registered by nibble, the & 31 pre-registered); bits 3..0 of 0x11's immediate "
             "(verified on the camera, pre-registered); the signed shift count of 0x1b, 0x1c and "
-            "0x22, used at -4..+4 (`LANE_FUNCTIONS`: up and down by 1..4 verified for 0x1b, "
-            "pre-registered, 0x1c and 0x22 at 3, 4 and 13) and 5..11 no shift (measured, the "
+            "0x22, used at -4..+4 (`LANE_FUNCTIONS`: for 0x1b down by 1..4 verified on all 32 "
+            "lanes and up by 1..4 on lanes 24..31, pre-registered; 0x1c and 0x22 at 3, 4 and "
+            "13) and 5..11 no shift under 0x1b (measured, the "
             "pre-registered shift missed: inferred)"
         ),
     ),
@@ -2293,9 +2296,8 @@ UNIT_FACTS = {
     "4 -> 1 changes tap 0's line at the top edge only; at word 440 (stock 4), 5 does not give "
     f"tap 1 tap 0's line ({_CAMERA}, pre-registered), so a value does not name one tap's line "
     "in every word; post hoc, there tap 1 reads the second source plane's line int(a) + 1 "
-    "(inferred, one run, not modelled); hypothesis: the value names an operand register that "
-    "grid B's f163_166 and f167_170 write from the next word on, the register their value "
-    "names",
+    "(inferred, one run, not modelled); the value names S2's b, a register of L2 "
+    "(`LANE_FILES`)",
     "f88_91": "program 13 words 439..442, S2's head active: taps 0..3's coefficients, one map "
     "for the four words, 3, 2, 4, 5 selecting c0, c1, c2, c3, each word's stock value its own "
     f"tap's ({_CAMERA}, pre-registered); that tap k takes c_j and that its product moves under "
@@ -2329,9 +2331,10 @@ UNIT_FACTS = {
     "values' jobs, on flat and x-varying sources for 1 and 4, and across boots for 1 and 4 "
     "(verified on the camera), but for lane 8 of value 1, fixed within a boot and different "
     "between boots; no function of the "
-    "value's bits and no input of the job gives the masks (inferred): a stored per-lane vector "
-    "that the value selects (hypothesis). The value is also bits 15..12 of S0's lane immediate "
-    "(`LANE_IMMEDIATES`, verified); how one immediate gives a per-lane mask is open",
+    "value's bits and no input of the job gives the masks (inferred). The mask is F0[value], "
+    "which S0's carry-in heads read as their carry-in, bit k for lane k (verified, `LANE_MASKS`); "
+    "that this explains these edits is inferred. The value is also bits 15..12 of S0's lane "
+    "immediate (`LANE_IMMEDIATES`, verified)",
     "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA}); "
     "idling it there equals idling f163_166, byte for byte, and at word 440 changes only the third plane, to the whole word's idle's third "
     "plane (verified on the camera, a flat source, pre-registered); post hoc the register its "

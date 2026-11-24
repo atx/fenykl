@@ -1096,6 +1096,17 @@ def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [*[None] * -n, *b[:n]]
 
 
+SHIFT_COUNTS = (3, 4, 13)
+"""The counts f92_95 at which S3 0x1c and 0x22 were pre-registered as 0x1b."""
+
+
+def _counted_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    """`_lane_shift` at `SHIFT_COUNTS` only; other counts are not predicted."""
+    if c["f92_95"] not in SHIFT_COUNTS:
+        return [None] * LANE_COUNT
+    return _lane_shift(a, b, c)
+
+
 def _n(c: Scalars) -> int:
     return c["imm"] & 15
 
@@ -1326,7 +1337,8 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x15: lambda a, b, c: _insert(b, c["index"], c["value"]),
         0x18: lambda a, b, c: [c["value"]] * LANE_COUNT,
         **dict.fromkeys((0x19, 0x20, 0x21, 0x23), _B),
-        **dict.fromkeys((0x1B, 0x1C, 0x22), _lane_shift),
+        0x1B: _lane_shift,
+        **dict.fromkeys((0x1C, 0x22), _counted_shift),
     },
 }
 

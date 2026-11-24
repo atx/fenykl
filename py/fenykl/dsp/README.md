@@ -145,8 +145,8 @@ from the next word on:
 
 | file | read by | written by (port, register) |
 |---|---|---|
-| F0 | S0 head 0x52, F0[f76_79]; S0's lane scalar s = F0[f72_75] | f255 on f182_185: 0 X0; f256_257 on f186_189: 0 X1, 1 the ALU bus, 2 nothing |
-| F1 | S1 head 0x54 and S1's lane scalar t, F1[f84_87] | f258 on f190_193: 0 X0; f259_260 on f194_197: 0 X1, 1 the ALU bus, 2 nothing |
+| F0 | S0 head 0x52, F0[f76_79]; S0's lane scalar and select mask s = F0[f72_75]; S0's carry-in mask F0[f76_79] | f255 on f182_185: 0 X0; f256_257 on f186_189: 0 X1, 1 the ALU bus, 2 nothing |
+| F1 | S1 head 0x54 and S1's lane scalar t, F1[f84_87]; S1's carry-in mask F1[f80_83] | f258 on f190_193: 0 X0; f259_260 on f194_197: 0 X1, 1 the ALU bus, 2 nothing |
 | F2 | S2 head 0xe and S2's lane scalar t, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
 | F3 | S3 head 0x24, F3[f96_99]; S3's lane index F3[f92_95] and value F3[f96_99] | f263_264 on f202_205: 0 X0, 1 X1, 2 the ALU bus |
 
@@ -184,17 +184,21 @@ The operand nibbles were pre-registered at several registers each, 1, 2, 5, 6, 9
 them [verified]. Enable 0 of a first port takes the vector an X0 load head asked for exactly
 four words earlier (the lane memory, below). A result is on its unit's bus for exactly one word,
 the head's own or the next by head, and a port at the other lag writes nothing (`fields.LANE_LAG`,
-[verified, pre-registered] for 138 heads, the port in one word only: in its own word S0's selects,
+[verified, pre-registered] for 141 heads, every entry of `fields.LANE_LAG` but the seven named
+below, the port in one word only: in its own word S0's selects,
 S1's logic heads, S2's passes and S3's moves, inserts, broadcast and lane shifts; one word later
 every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); no head class
 predicts it across units. S2's sign masks and lane number come in the head's word [inferred: the
-registration said one word later]. A register a
+registration said one word later]; S2 0x7 in the head's word and S3 0x6..0x8 one word later
+[hypothesis: their rows are open]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word, and U, were not measured.
-S3's lane shift 0x1b moves b by n = f92_95 as a signed nibble: up by 1..4 and down by 1..4 at
-12..15 [verified, pre-registered], not at all at 5..11 [measured]; 0x1c and 0x22 move the lanes as
-0x1b [verified at three counts]. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
+S3's lane shift 0x1b moves b by n = f92_95 as a signed nibble: down by 1..4 at 15..12 [verified,
+pre-registered on all 32 lanes], up by 1..4 [verified, pre-registered on lanes 24..31; up by 2 on
+all 32 lanes], not at all at 5..11 [measured]; 0x1c and 0x22 move the lanes as 0x1b at 3, 4 and
+13 [verified, pre-registered] and at 2 and 14 [inferred: measured, not pre-registered]; their
+other counts were not measured. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
 [verified, pre-registered: two registers read back by number; 16 registers inferred, fitted]: its
 lanes 0..3 are four carry lanes for either direction [verified, pre-registered, 0x1b]. Its port is f141_144 under
 f232_233 = 1 beside an S3 head, 0 and 2 writing nothing [verified, pre-registered: U[3] and U[9]
@@ -219,13 +223,13 @@ or a 14-bit immediate and gives the lane number. Halvings and rounded shifts rou
 
 S0 0x8..0xd are clamps, clamp(b, lo, hi) = min_s(max_s(b, lo), hi): 0x8 to 0..imm16 (with
 imm16 = 0xff the clamp to a byte, also a ReLU), 0x9 to 0..F0[f72_75], 0xb to ~imm16..imm16 and
-0xc to ~s..s [verified, pre-registered, bounds 0..0x7fff]; 0xa to 0..a and 0xd to ~a..a per lane
+0xc to ~s..s [verified, pre-registered, non-negative bounds]; 0xa to 0..a and 0xd to ~a..a per lane
 [verified where a >= 0; for a < 0 the compare is the sign of the wrapped difference, inferred].
 
 The carry-in heads add a carry c, bit k of a 32-bit register for lane k: F0[f76_79] for S0 0x1e /
 0x2a (sat_s(a + b + c)), 0x1f / 0x2b (wrapping) and 0x2c / 0x2d (sat_u), F1[f80_83] for S1 0x32 /
-0x3d, 0x33 / 0x3e and 0x3f / 0x40 [verified, pre-registered, the register at four numbers per
-unit]. An add's carry mask is its held result (below), so a **32-bit add per lane** takes three
+0x3d, 0x33 / 0x3e and 0x3f / 0x40 [verified, pre-registered; 0x1f and 0x33 with the register at four numbers, the
+others at one]. An add's carry mask is its held result (below), so a **32-bit add per lane** takes three
 words: the low halves' add (S0 0x20), then M one word later into F1[0] (f258 = 0), then the high
 halves' carry-in head (S1 0x33 with f80_83 = 0) in the word after [verified, pre-registered]. The
 stock programs run the same idiom within S0 (0x20, M into F0[0], 0x1f with f76_79 = 0) [verified
