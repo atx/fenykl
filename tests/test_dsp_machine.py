@@ -473,8 +473,7 @@ def test_a_reduction_is_not_on_m_past_its_first_word(m, lag, between):
     }[between]
     read = w(f276=0, f274_275=3, f270_271=2, f221_223=0)
     run(m, [reduce, IDLE, other, *[IDLE] * (lag - 3), read])
-    measured = between is None and lag <= 6  # registered at 2, 4, 5 and 6 words
-    assert m.r[0] == Sv(0xDEAD, V if measured else I)
+    assert m.r[0] == Sv(0xDEAD)
 
 
 def test_an_extract_meets_the_reduction_register_in_its_first_word_only(m):
@@ -543,11 +542,12 @@ def test_the_machine_refuses_a_control_word_with_f120_122_low_bits():
         Executor(boot, datapath=Machine(boot)).step(job)
 
 
-def test_os_port_under_5_keeps_its_content_at_inferred(m):
+@pytest.mark.parametrize("source", [5, 6])
+def test_os_port_under_5_and_6_keeps_its_content(m, source):
     m.lanes["L3"][1] = Vec(A)
     m.o[2] = Vec(B)
-    run(m, [w(f296_301=0x19, f65_68=1, f252_254=5, f179_181=2)])
-    assert m.o[2] == Vec(B, I)
+    run(m, [w(f296_301=0x19, f65_68=1, f252_254=source, f179_181=2)])
+    assert m.o[2] == Vec(B)
 
 
 def test_m_is_quiet_in_the_own_word_of_a_head_without_a_result_there(m):
@@ -598,3 +598,18 @@ def test_a_halt_in_a_taken_jumps_first_slot_wins():
     )
     m = stepped(list(words), g16=0, g17=0)
     assert (m.g[16], m.g[17]) == (Sv(3), Sv(0))
+
+
+@pytest.mark.parametrize("sel", [0, 2, 3])
+def test_m_under_another_unit_is_quiet_in_a_heads_own_word(m, sel):
+    m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
+    m.r[0] = Sv(0x0A5A)
+    read = {"f276": 0, "f274_275": sel, "f270_271": 2, "f221_223": 0}
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2, **read)])
+    assert m.r[0] == Sv(0x0A5A)
+
+
+def test_m_without_any_head_is_quiet_at_inferred(m):
+    m.r[0] = Sv(0x0A5A)
+    run(m, [w(f276=0, f274_275=3, f270_271=2, f221_223=0)])
+    assert m.r[0] == Sv(0x0A5A, I)

@@ -994,8 +994,8 @@ stock programs, 7 is idle. The heads tried into O, S3's lane number and broadcas
 and S1 0x04, are taken in the head's own word, the arithmetic heads tried one word after it, as
 at the lane ports (`LANE_LAG`)."""
 STORE_NOTHING = (5, 6)
-"""Values of f252_254 under which O kept its content, beside a result of every S unit and with
-none (measured on the camera, not pre-registered: inferred)."""
+"""Values of f252_254 under which O keeps its content, beside a result of every S unit and with
+none (verified on the camera, pre-registered on a second register and other heads)."""
 X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
@@ -1372,7 +1372,15 @@ listed are open; `LANE_OPERANDS` names the operands."""
 S2_HIGH_HALVES: dict[int, LaneRow] = {
     0x02: ("bits 16..31 of the unsigned a x the signed b", V, ""),
     0x05: ("bits 16..31 of the signed b x t", V, ""),
-    0x00: ("bits 16..31 of the unsigned b x imm", I, ""),
+    0x00: (
+        "bits 16..31 of the unsigned b x imm's 16 bits (sext7, then unsigned)",
+        I,
+        "",
+    ),
+    0x01: ("bits 16..31 of the signed b x imm", I, ""),
+    0x03: ("bits 16..31 of the unsigned b x t", I, ""),
+    0x04: ("bits 16..31 of the unsigned a x the unsigned b", I, ""),
+    0x06: ("bits 16..31 of the signed a x the signed b", I, ""),
 }
 """Where S2's multiplies are known whole: the high half of the 32-bit product, which the first
 ports of L0 and L1 take under enable 1 one word after the head (`LANE_SOURCES`). With the low
@@ -1380,9 +1388,12 @@ half taken by f159_162 / 1 in the same word, S1's double-width shifts of a : b n
 product (verified on the camera for 0x5 on all 32 lanes, pre-registered: a fixed-point multiply
 by a scalar, rounded and saturated, in three words). 0x2's signedness was pre-registered on 16-bit
 edge operands and met on all 32 lanes, and through 0x2's low and high halves and S3 0x5 a signed
-dot product came out exact (verified on the camera); 0x0's was refitted on all 32 lanes where an
-operand is negative (inferred); what separates 0x2 / 0x4 / 0x6, 0x3 / 0x5 and 0x0 / 0x1 is open
-(hypothesis: the operands' signedness)."""
+dot product came out exact (verified on the camera). The pairs differ in the operands'
+signedness: 0x0 / 0x1, 0x3 / 0x5 unsigned / signed b, 0x4 / 0x2 / 0x6 unsigned a x unsigned b,
+unsigned a x signed b, signed a x signed b (fitted on all 32 lanes of 16-bit edge operands, one
+alternative left in each by those operands; inferred). Under a negative immediate 0x0 multiplies
+by its 16 bits taken unsigned, not by the signed value (fitted on all 32 lanes; inferred); t was
+positive in every run, so whether 0x3 / 0x5 take it signed is open."""
 LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
     "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", V),
     "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", V),

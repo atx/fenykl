@@ -274,8 +274,6 @@ class Machine:
         self.reductions: list[tuple[int, Sv]] = []
         self.last_head: int | None = None
         """The word of the last S head run."""
-        self.head_units: set[str] = set()
-        """The units whose heads ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -586,9 +584,6 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
-            if self.last_head != t:
-                self.head_units = set()
-            self.head_units.add(unit)
             self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
@@ -806,15 +801,10 @@ class Machine:
         return _cap(v, tier)
 
     def _quiet(self, sel: str, t: int) -> bool:
-        """Whether "nothing on M" was measured for this case: under S0..S2 in the head's own word
-        under its own unit, one word after under every unit, two and three words after; under
-        S3 two to six words after a reduction with no head since. Elsewhere it is inferred."""
-        if self.last_head is None:
-            return False
-        if sel == "s3":
-            last = max((w - 3 for w, _ in self.reductions), default=None)
-            return last == self.last_head and 2 <= t - last <= 6
-        return t > self.last_head or sel in self.head_units
+        """Whether "nothing on M" was measured for this case: under every unit in a head's own
+        word and in every later word, also after a reduction (but its first word) with other
+        heads between (verified). With no head in the job it is inferred."""
+        return self.last_head is not None
 
     # ------------------------------------------------------------------ ports
 
@@ -865,7 +855,7 @@ class Machine:
             put(file, word[PORTS[enable]], _cap(self._lane_source(src[0], t), src[1]))
         v = word["f252_254"]
         if v in STORE_NOTHING:
-            kept[("O", word["f179_181"])] = I
+            kept[("O", word["f179_181"])] = V
         elif v != lookup("f252_254").idle:
             if v not in STORE_SOURCES:
                 raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
