@@ -787,9 +787,8 @@ class Machine:
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
             )
         if sel not in own:
-            # A lone own-word result under another unit's f274_275 (not measured).
-            v = next(iter(own.values()))
-            return _cap(v, H) if h is None else Sv(None, H)
+            # A lone own-word result under another unit's f274_275 is not on M (verified).
+            return Kept(V) if h is None else Sv(None, H)
         v = own[sel]
         if sel == "s3":
             if fresh is None:

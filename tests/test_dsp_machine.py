@@ -261,10 +261,11 @@ def test_an_own_word_result_after_an_open_head_is_unknown(m):
     assert m.f["F1"][3].value is None
 
 
-def test_a_lone_own_word_result_under_another_unit_is_a_hypothesis(m):
+def test_a_lone_own_word_result_under_another_unit_is_not_on_m(m):
     m.f["F1"][4] = Sv(0x55AA)
+    m.f["F1"][3] = Sv(0x0A5A)
     run(m, [w(f285_291=0x54, f84_87=4, f276=0, f274_275=0, f258=0, f190_193=3)])
-    assert m.f["F1"][3] == Sv(0x55AA, Confidence.HYPOTHESIS)
+    assert m.f["F1"][3] == Sv(0x0A5A)
 
 
 def test_another_units_held_mask_is_not_on_m(m):
