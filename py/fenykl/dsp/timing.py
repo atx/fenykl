@@ -39,24 +39,29 @@ REPEAT = Cost(
     "a word executed again, in a loop: 5.37 ns, measured on idle words; scalar local loads, "
     "X1's divide, X0 lane-memory loads and taken branches with their delay slots cost the same "
     "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
+    "idle words at 5.2 to 5.4 ns in passes of 64 to 2000 words, and in passes that jump 1088 "
+    "words away and back by op 2 or op 3 (verified on the camera, pre-registered: no loop "
+    "buffer and no cache smaller than the 2048-word image); "
     "S3 reductions likewise (fitted)",
 )
 REPEAT_I = Cost(
     REPEAT.us,
     I,
-    "a word executed again outside the measured passes (a pass under 9 or over 106 words, or "
-    "with an op 3 or op 4 since the word's last run), or with an S unit's head: S3 reductions "
+    "a word executed again outside the measured passes (a pass under 9 or over 2000 words, or "
+    "with an op 4 since the word's last run), or with an S unit's head: S3 reductions "
     "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
     "more than an idle word)",
 )
-PASSES = range(9, 107)
+PASSES = range(9, 2001)
 """Executed words between two runs of a word in the loops timed on the camera."""
 FIRST = Cost(
     0.062,
-    I,
+    V,
     "a word's first execution: 62 ns, the slope over straight-line jobs of 190 to 2000 words "
-    "(fitted); paid when the word runs, not for the image's length: a word branched over costs "
-    "nothing (verified on the camera)",
+    "(fitted), within a pre-registered 50 to 75 ns in straight-line runs of 0 to 1900 idle "
+    "words (65 to 73 ns) and in the intercepts of loops of 64 to 2000 words per pass; words "
+    "of ALU ops cost the same as idle words (verified on the camera); paid when the word runs, "
+    "not for the image's length: a word branched over costs nothing (verified on the camera)",
 )
 S_UNITS = ("s0", "s1", "s2", "s3")
 
@@ -191,7 +196,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
     for e in engine.events:
         events.setdefault(e.t, []).append(e)
     words = job.program.words
-    # Each index's last executed word and the count of ops 3 and 4 run up to it.
+    # Each index's last executed word and the count of op 4 returns run up to it.
     last: dict[int, tuple[int, int]] = {}
     links = 0
     flow_tier = V
@@ -212,7 +217,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
             cost = REPEAT_I
         else:
             cost = REPEAT
-        links += step.op in (3, 4)
+        links += step.op == 4
         last[step.index] = (t, links)
         counts[cost] += 1
         now += cost.us

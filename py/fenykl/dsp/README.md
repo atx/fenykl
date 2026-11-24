@@ -928,11 +928,16 @@ as the job's completion time against loop pass counts, minimum over repeats:
 
 - **job**: 98.4 us per job, the interrupt and callback path [inferred: the loops' verified
   intercept of 101 us less the first runs of their 42 words];
-- **first runs**: 62 ns for each word index the first time it runs [the straight-line slope
-  fitted, inferred; a word branched over costs nothing, verified];
-- **repeats**: 5.37 ns for each later execution 9 to 106 executed words after the word's last,
-  with no op 3 or 4 between [verified in such loops for idle words, scalar local loads, X1's
-  divide, X0 lane loads and taken branches with their slots]; other repeats, and repeated
+- **first runs**: 62 ns for each word index the first time it runs [verified: the straight-line
+  slope fitted, then 65 to 73 ns in a pre-registered 50 to 75 ns range; words of ALU ops cost
+  as idle words, so a straight-line run is fetch-bound whatever it computes; a word branched
+  over costs nothing];
+- **repeats**: 5.37 ns for each later execution 9 to 2000 executed words after the word's last,
+  with no op 4 between [verified in loops of 9 to 106 words for idle words, scalar local loads,
+  X1's divide, X0 lane loads and taken branches with their slots, and for idle words in loops
+  of 64 to 2000 words and in loops that jump 1088 words away and back by op 2 or op 3: a word
+  once fetched stays for the rest of the job, with no loop buffer and no cache smaller than
+  the 2048-word image to evict it]; other repeats, and repeated
   words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
   not timed];
 - **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and
