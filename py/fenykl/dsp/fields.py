@@ -898,22 +898,46 @@ such a port write (or O's, `STORE_SOURCES`) four words later and no such write l
 (verified in the bytes), so idling f244_245 = 0 in program 13 drops a load (inferred). Enable 2
 of f244_245 / f248_249 wrote nothing from any S head. A port takes a head's result at the lag
 `LANE_LAG` gives for the heads timed."""
-LANE_LAG: dict[str, dict[int, int]] = {
-    "s0": {0x08: 1, 0x1F: 1, 0x20: 1, 0x29: 1, 0x44: 0, 0x45: 0, 0x46: 0, 0x4B: 0},
-    "s1": {**dict.fromkeys(range(0x0A), 0), 0x0E: 1, 0x10: 1, 0x33: 1, 0x3C: 1},
-    "s2": {0x01: 1, 0x05: 1, 0x08: 0},
-    "s3": {0x0A: 1, 0x0C: 1, 0x18: 0, 0x19: 0, 0x22: 0},
+
+
+def _lags(
+    lag: int, tier: Confidence, *heads: int | range
+) -> dict[int, tuple[int, Confidence]]:
+    out = {}
+    for h in heads:
+        out |= dict.fromkeys(h if isinstance(h, range) else (h,), (lag, tier))
+    return out
+
+
+LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
+    "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
+    | _lags(1, V, 0x08, 0x1F, range(0x20, 0x24), range(0x26, 0x2A), range(0x34, 0x40))
+    | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
+    "s1": _lags(0, V, range(0xA), 0x53)
+    | _lags(1, V, range(0xA, 0x16), range(0x1A, 0x1F), range(0x23, 0x32))
+    | _lags(1, V, 0x33, range(0x34, 0x3D), range(0x47, 0x53)),
+    "s2": _lags(1, V, range(0x7))
+    | _lags(0, V, 0x8, 0xD)
+    | _lags(0, I, 0x7, 0x9, 0xA, 0xB),
+    "s3": _lags(1, V, range(0xA, 0xE))
+    | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
+    | _lags(1, I, 0x6, 0x7, 0x8),
 }
-"""Words from a head to the one word whose lane port takes its result, for the heads timed
-(verified on the camera, a sentinel written only at that lag: S1 0x00..0x09 at the head's word
-and the next only, 16 lanes; the others with the head not held and, held, at every lag from 1).
-At 0: S3's moves 0x18 / 0x19, its lane shift 0x22, S2's pass 0x8, S1's logic heads and S0's
-selects 0x44, 0x45, 0x46 and 0x4b; at 1: the arithmetic and shift heads timed, S0's select
-0x08 and S3's shuffles 0xa / 0xc. No head class predicts the lag; the other heads' lags are
-open (hypothesis: as their nearest timed relative). S1 0x34 at 1 (inferred, fitted after the
-run: a loop's pass counter, its port standing in the head's word and the next, read one less
-than its passes where the last pass's next word was no loop word; a lag of 0 would have written
-the last increment)."""
+"""Words from a head to the one word whose lane port takes its result, with the tier: (lag,
+tier) by head. Verified on the camera, pre-registered: per head a sentinel in the lane register,
+the unit's port in the head's word only and in the next word only, the rule's lanes at the
+registered lag and the sentinel at the other (138 heads): S0 lag 1 for 0x0..0x7, 0xe..0x11,
+0x14..0x17, 0x1a, 0x1b, 0x1d, 0x20..0x23, 0x26..0x29, 0x34..0x3f, lag 0 for the selects 0x41..0x46,
+0x4b, 0x4d; S1 lag 0 for its logic heads 0x00..0x09 and 0x53, lag 1 for 0xa..0x15, 0x1a..0x1e,
+0x23..0x31, 0x34..0x3c, 0x47..0x52; S2 lag 1 for the multiplies 0x0..0x6, lag 0 for 0x8 and 0xd; S3
+lag 1 for the shuffles 0xa..0xd, lag 0 for 0x10..0x15, 0x18, 0x19, 0x1b, 0x1c, 0x20..0x23. Earlier
+cells, also verified: S0 0x08 and 0x1f, S1 0x33 at 1. Measured, not pre-registered (inferred): S2
+0x7, 0x9, 0xa, 0xb in the head's word; S3 0x6, 0x7, 0x8 one word later (their rows are open). A
+port at the other lag writes nothing (the sentinel stayed in every cell above): a result is on its
+unit's bus for one word. No class predicts the lag across units: S3's moves are lag 0 and its
+shuffles lag 1, S2's moves and masks lag 0, S0's selects lag 0 and S0's other heads lag 1. The
+heads not listed (S0's carry-in forms but 0x1f, S1 0x16..0x19, 0x1f..0x22, 0x32, 0x3d..0x46,
+0x54..0x7e, the heads with no lane result) have no measured lag."""
 
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
