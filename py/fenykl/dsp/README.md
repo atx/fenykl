@@ -486,15 +486,17 @@ Not modelled by the emulator; measured with the job's completion time against lo
 - The stream engine moves about 2.2 KiB per us for byte loads and stores alike, with well under
   1 us per command besides the bytes; commands on different channels run one after the other
   [inferred from pass-count slopes]. Of 32-byte loads handed before the first 0x1d the first 19
-  run and the rest wait until 0x1d's free room; none is lost, and each 0x1d counts one handed
-  command, kind 2 included [verified, 32 commands and 32 waits] (`stream`).
-- A job runs up to at least 7 ms: own loops of 0.4 to 7.0 ms all ended normally, at 5.21 ns per
-  looped word plus about 105 us [verified, pre-registered]. The firmware gives this job type 8
-  ticks of 1 ms before it aborts, so keep a job below about 7.5 ms.
+  run and the rest wait until 0x1d's free room; 32 commands and 32 waits returned [verified], the
+  loads landed [measured], and each 0x1d counts one handed command [inferred], kind 2 included
+  [measured, one job] (`stream`).
+- Own jobs of 0.4 to 7.0 ms all ended normally [verified, pre-registered]; nothing between 7.0 and
+  7.5 ms was run. A looped word costs 5.21 ns at 64-word passes, plus about 105 us per job
+  [fitted]. The firmware gives this job type 8 ticks of 1 ms before it aborts, so keep a job
+  below about 7 ms.
 - An own program's frame: program 16's words 0..9 (word 0 calls word 10, its delay slots set the
   stack and link registers, word 5 halts), the body from word 10, then a halt and four idles; of
-  those four only three run (a halt's tail). The smallest such image is 15 words with no body
-  [verified, pre-registered]. Program 16's words 10..12 are not needed: the body may start at 10
+  those four only three run (a halt's tail). The smallest such image the harness admits is 15
+  words with no body [verified, pre-registered]; whether any of words 0..9 can go is not measured. Program 16's words 10..12 are not needed: the body may start at 10
   or replace them, and sets its own registers [verified, pre-registered]. Images that change
   words 0..9 were not run on the camera; idling word 0 of the stock copy ends the job at word 5
   without running the routine [verified].

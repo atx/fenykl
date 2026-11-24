@@ -51,17 +51,18 @@ a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred
 command outstanding never returns once the job has handed one, and returned in a job that had
 handed none (inferred, one job: what follows it is capped at inferred); commands still
 outstanding at the job's end complete (verified for a store, inferred for a load). Of commands
-handed back to back before any 0x1d (32-byte loads) the first 19 run, the rest wait in the
-engine and run as 0x1d's free room; none is lost: 32 loads handed, then 32 0x1d, all returned
-and all 32 landed (verified); with no 0x1d the 20th to 32nd had not run 8 us later (verified).
-So a 0x1d's count is the commands handed, run or held. A command of kind 2 counts for a 0x1d
-(verified: a load joined, then kind 2, then a 0x1d that returned); what kind 2 moves is not
-measured (it stored nothing to DRAM). The emulator queues commands without the 19-entry limit,
-which changes only when a held load lands, not what it writes. The emulator never predicts a racing read: a load's destination is unknown from its hand until its
-0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a store handed after
-it runs after it), a store takes its source as of the hand and writes DRAM at once (inferred where
-the source is rewritten before the store completes: that race was not measured), and the lane
-memory read while any command is outstanding is a hypothesis.
+handed back to back before any 0x1d (32-byte loads) the first 19 ran in one job (measured); the
+rest wait in the engine and run as 0x1d's free room: 32 loads handed, then 32 0x1d, all returned
+(verified) and the loads read back had landed (measured); with no 0x1d the 20th to 32nd had not
+run 8 us later (measured). So a 0x1d counts the commands handed, run or held (inferred). A
+command of kind 2 counted for a 0x1d in one job (measured: a load joined, then kind 2, then a
+0x1d that returned); what kind 2 moves is not measured (it stored nothing to DRAM). The emulator
+queues commands without the 19-entry limit, which changes only when a held load lands, not what
+it writes. The emulator never predicts a racing read: a load's destination is unknown from its
+hand until its 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a
+store handed after it runs after it), a store takes its source as of the hand and writes DRAM at
+once (inferred where the source is rewritten before the store completes: that race was not
+measured), and the lane memory read while any command is outstanding is a hypothesis.
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
 job and what later commands write is unknown (`off` says why). A command whose destination cannot
