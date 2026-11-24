@@ -788,7 +788,7 @@ class Machine:
             )
         if sel not in own:
             # A lone own-word result under another unit's f274_275 is not on M (verified).
-            return Kept(V) if h is None else Sv(None, H)
+            return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
         v = own[sel]
         if sel == "s3":
             if fresh is None:

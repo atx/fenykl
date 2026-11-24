@@ -268,6 +268,13 @@ def test_a_lone_own_word_result_under_another_unit_is_not_on_m(m):
     assert m.f["F1"][3] == Sv(0x0A5A)
 
 
+def test_an_own_word_result_beside_a_parked_head_under_another_unit_stays_inferred(m):
+    m.f["F0"][5] = Sv(0x55AA)
+    m.r[0] = Sv(0x0A5A)
+    run(m, [w(f278_284=0x52, f76_79=5, f276=0, f274_275=1, f270_271=2, f221_223=0)])
+    assert m.r[0] == Sv(0x0A5A, I)
+
+
 def test_another_units_held_mask_is_not_on_m(m):
     """M under S1 one word after S0's compare: nothing written (verified)."""
     m.lanes["L0"][1] = Vec(A)
