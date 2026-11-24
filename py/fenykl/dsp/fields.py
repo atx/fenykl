@@ -530,8 +530,8 @@ X_SHARED: dict[int, tuple[str, Confidence, str]] = {
     0x03: ("a + zK", V, ""),
     0x04: ("a <= sK signed", V, ""),
     0x05: ("a < sK signed", V, ""),
-    0x06: ("a <= zK unsigned", I, "zero extension measured, not pre-registered"),
-    0x07: ("a < zK unsigned", I, "zero extension measured, not pre-registered"),
+    0x06: ("a <= zK unsigned", V, "the zero extension pre-registered at K's top value"),
+    0x07: ("a < zK unsigned", V, "the zero extension pre-registered at K's top value"),
     0x08: ("a <= b unsigned", V, ""),
     0x09: ("a < b unsigned", V, ""),
     0x0A: ("a <= b signed", V, ""),
@@ -916,11 +916,11 @@ def _lags(
 
 LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
     "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
-    | _lags(1, V, 0x08, 0x1F, range(0x20, 0x24), range(0x26, 0x2A), range(0x34, 0x40))
+    | _lags(1, V, range(0x08, 0x0E), 0x1E, 0x1F, range(0x20, 0x24), range(0x26, 0x2E))
+    | _lags(1, V, range(0x34, 0x40))
     | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
     "s1": _lags(0, V, range(0xA), 0x53)
-    | _lags(1, V, range(0xA, 0x16), range(0x1A, 0x1F), range(0x23, 0x32))
-    | _lags(1, V, 0x33, range(0x34, 0x3D), range(0x47, 0x53)),
+    | _lags(1, V, range(0xA, 0x41), range(0x47, 0x53)),
     "s2": _lags(1, V, range(0x7)) | _lags(0, V, 0x7, 0x8, 0x9, 0xA, 0xB, 0xD),
     "s3": _lags(1, V, range(0xA, 0xE))
     | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
@@ -934,7 +934,9 @@ S0's selects 0x41..0x46, 0x4b and 0x4d, S1's logic heads 0x00..0x09 and 0x53, S2
 and 0xd, sign masks 0x9 / 0xb and lane number 0xa, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
 S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd. No head class predicts the lag across
 units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then pre-registered at
-0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
+0 and met (verified). S0's clamps 0x9..0xd and carry-in adds 0x1e, 0x2a..0x2d and S1's floor
+shifts 0x16..0x19, 0x1f..0x22 and carry-in heads 0x32, 0x3d..0x40 at 1: pre-registered on four
+lanes each (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
 one word later wrote nothing (measured). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
 their rows open). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
@@ -2608,7 +2610,7 @@ FAMILIES = (
         16,
         "ra and a wide immediate, f120_122 its bits 13..15 (13..14 in 0x37, whose f120_122 is "
         "0..3 in every word): 0x0b the sign-extended imm16, ra not used; 0x37 ra | imm15; 0x38 "
-        f"ra & the sign-extended imm16 ({EXACT}); 0x0a ra | (imm16 << 16) (inferred)",
+        f"ra & the sign-extended imm16 ({EXACT}); 0x0a ra | (imm16 << 16) (verified on the camera, pre-registered)",
     ),
     Family(
         "C",
@@ -2616,7 +2618,7 @@ FAMILIES = (
         True,
         5,
         "ra, rb and an immediate 0..31 in every word: 0x3e ra >> imm5 arithmetic, 0x3f ra >> "
-        "imm5 logical, 0x40 ra << imm5, ra shifted, not rb (inferred, by exact readout); rb and "
+        "imm5 logical, 0x40 ra << imm5, ra shifted, not rb (verified on the camera by exact readout, pre-registered); rb and "
         f"f120_122 are encoded but had no effect on the result ({EXACT}); 16 the most common "
         "count of all three in the stock words",
     ),
@@ -2629,7 +2631,7 @@ FAMILIES = (
         "sign-extended to c in 0x1c / 0x1d / 0x20 / 0x21 (ra != c, ra == c, ra <= c, ra < c "
         f"signed, 1 or 0), 0x24 / 0x25 (max / min signed) and 0x36 (ra ^ c) ({EXACT}); "
         "zero-extended in 0x1e / 0x1f (ra - imm16, ra + imm16) and 0x23 (ra < imm16 unsigned) "
-        "(inferred); f120_122 is 0 in 99 % of the stock words (`semantics.OP_SEMANTICS`)",
+        "(verified on the camera, pre-registered); f120_122 is 0 in 99 % of the stock words (`semantics.OP_SEMANTICS`)",
         signed=True,
     ),
     Family(
@@ -2652,10 +2654,10 @@ FAMILIES = (
         True,
         0,
         "ra, rb and f120_122, imm 0 in every word; register-register ALU ops, 32-bit wrap "
-        f"({EXACT} unless tagged): 0x08 / 0x09 rb, 0x32 abs(rb) (inferred), 0x3c ra & rb, 0x3a "
+        f"({EXACT} unless tagged): 0x08 / 0x09 rb, 0x32 abs(rb), 0x3c ra & rb, 0x3a "
         "ra | rb, 0x34 ra - rb, 0x35 ra + rb, 0x33 -rb, 0x3d ~ra, 0x2f min signed, 0x2e max "
-        "signed, 0x2c max unsigned (inferred), 0x41 ra >> (rb & 31) arithmetic, 0x42 logical "
-        "(inferred), 0x43 ra << (rb & 31), compares to 1 or 0: 0x28 / 0x29 ra <= rb, ra < rb "
+        "signed, 0x2c max unsigned, 0x41 ra >> (rb & 31) arithmetic, 0x42 logical, "
+        "0x43 ra << (rb & 31), compares to 1 or 0: 0x28 / 0x29 ra <= rb, ra < rb "
         "unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 ra != rb, ra == rb; f120_122 has no effect "
         "but in 0x47, family F's ring pointer step with R[f120_122] and L = rb; 0x48 and 0x49 "
         "give no ALU result, change no operand and do not stall, their function open; no op "
@@ -2678,7 +2680,7 @@ SIGNED = {0x0B: True, 0x38: True, 0x1E: False, 0x1F: False, 0x23: False}
 MEANINGS = {
     0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
     f"from its position); it passes rb ({EXACT})",
-    0x0A: "periodic immediates such as 0x5555 and 0x3333: ra | (imm16 << 16) (inferred), a "
+    0x0A: "periodic immediates such as 0x5555 and 0x3333: ra | (imm16 << 16) (verified on the camera, pre-registered), a "
     "high-half set-up (hypothesis)",
     0x0B: "the most varied immediates, often in a call's delay slots: the sign-extended imm16, "
     f"ra not used ({EXACT})",
@@ -2701,18 +2703,18 @@ MEANINGS = {
     0x1A: f"a word load ({EXACT}); program 16's three 0x1a words read src, dst and len at one "
     "ra and immediates 0, 1 and 2; idling the one at 2 on the camera stores 16 KiB of zeros "
     "whatever len is, idling the other two leaves dst unwritten",
-    0x1E: "at a routine's entry + 1 in 67 routines: ra - imm16 (inferred), a frame allocate "
+    0x1E: "at a routine's entry + 1 in 67 routines: ra - imm16 (verified on the camera, pre-registered), a frame allocate "
     "there (hypothesis)",
     0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: ra + imm16 "
-    "(inferred), the frame release there (hypothesis)",
+    "(verified on the camera, pre-registered), the frame release there (hypothesis)",
     0x36: f"imm 1, f128_132 and f120_122 0 in all 53 words: ra ^ 1 there ({EXACT} for the "
     "rule), a toggle (hypothesis)",
     0x37: f"periodic immediates such as 0x5555 and 0x2222: ra | imm15 ({EXACT}), a lane or "
     "phase mask set-up (hypothesis)",
     0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: ra & the sign-extended imm16 "
     f"({EXACT})",
-    0x3F: "ra >> imm5, logical (inferred, by exact readout)",
-    0x40: "ra << imm5 (inferred, by exact readout)",
+    0x3F: "ra >> imm5, logical (verified on the camera by exact readout, pre-registered)",
+    0x40: "ra << imm5 (verified on the camera by exact readout, pre-registered)",
     0x47: f"{RING_STEP}; R = R[f120_122], L = rb",
     0x48: "the multiply as 0x49, the same 32 bits on every operand pair; no stock word uses it "
     f"({EXACT}); what sets it apart from 0x49 is open",

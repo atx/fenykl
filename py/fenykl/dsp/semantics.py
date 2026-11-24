@@ -805,24 +805,24 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c, V)
     ),
     0x0A: OpSemantics(
-        I,
-        "ra | (imm16 << 16) (inferred, by exact readout)",
-        _imm("ra | (c << 16)", lambda a, c: a | c << 16, I),
+        V,
+        "ra | (imm16 << 16) (verified on the camera by exact readout, pre-registered)",
+        _imm("ra | (c << 16)", lambda a, c: a | c << 16, V),
     ),
     0x3E: OpSemantics(
-        I,
-        "ra >> imm5, arithmetic; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra >> c", lambda a, c: _s32(a) >> c, I),
+        V,
+        "ra >> imm5, arithmetic; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
+        _imm("ra >> c", lambda a, c: _s32(a) >> c, V),
     ),
     0x3F: OpSemantics(
-        I,
-        "ra >> imm5, logical; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra >>> c", lambda a, c: _u32(a) >> c, I),
+        V,
+        "ra >> imm5, logical; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
+        _imm("ra >>> c", lambda a, c: _u32(a) >> c, V),
     ),
     0x40: OpSemantics(
-        I,
-        "ra << imm5; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra << c", lambda a, c: a << c, I),
+        V,
+        "ra << imm5; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
+        _imm("ra << c", lambda a, c: a << c, V),
     ),
     0x44: OpSemantics(
         V,
@@ -847,9 +847,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         for code in (0x08, 0x09)
     },
     0x32: OpSemantics(
-        I,
-        "abs(rb) (inferred, by exact readout)",
-        _e("abs(rb)", lambda a, b: abs(_s32(b)), I),
+        V,
+        "abs(rb) (verified on the camera by exact readout, pre-registered)",
+        _e("abs(rb)", lambda a, b: abs(_s32(b)), V),
     ),
     0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
     0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
@@ -864,9 +864,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         V, f"max(ra, rb) signed ({_EXACT_RULE})", _e("max(ra, rb)", _max)
     ),
     0x2C: OpSemantics(
-        I,
-        "max(ra, rb) unsigned (inferred, by exact readout)",
-        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, I),
+        V,
+        "max(ra, rb) unsigned (verified on the camera by exact readout, pre-registered)",
+        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, V),
     ),
     0x28: OpSemantics(
         V,
@@ -904,9 +904,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _e("ra >> rb", lambda a, b: _s32(a) >> (b & 31)),
     ),
     0x42: OpSemantics(
-        I,
-        "ra >> (rb & 31), logical (inferred, by exact readout)",
-        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), I),
+        V,
+        "ra >> (rb & 31), logical (verified on the camera by exact readout, pre-registered)",
+        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), V),
     ),
     0x43: OpSemantics(
         V,
@@ -914,14 +914,14 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _e("ra << rb", lambda a, b: a << (b & 31)),
     ),
     0x1E: OpSemantics(
-        I,
-        "ra - imm16, imm16 zero-extended (inferred, by exact readout)",
-        _imm("ra - c", lambda a, c: a - c, I),
+        V,
+        "ra - imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
+        _imm("ra - c", lambda a, c: a - c, V),
     ),
     0x1F: OpSemantics(
-        I,
-        "ra + imm16, imm16 zero-extended (inferred, by exact readout)",
-        _imm("ra + c", lambda a, c: a + c, I),
+        V,
+        "ra + imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
+        _imm("ra + c", lambda a, c: a + c, V),
     ),
     0x36: OpSemantics(
         V,
@@ -959,9 +959,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
     ),
     0x23: OpSemantics(
-        I,
-        "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (inferred, by exact readout)",
-        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), I),
+        V,
+        "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
+        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), V),
     ),
     0x49: OpSemantics(
         V,

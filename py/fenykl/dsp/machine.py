@@ -18,7 +18,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
   whose bits are not nested);
 - X0's and X1's results in their head's word; under the M strobe (f276 = 0) X0's result bus carries
-  M's value instead (`fields.S_RESULTS`);
+  M's value instead, also beside an active X0 head (`fields.S_RESULTS`; verified on the camera
+  through three ports, values whose bits are not nested);
 - a lane head's result on its unit's bus for exactly one word, `fields.LANE_LAG` words after the head
   (a port at another word writes nothing); a head whose lag was not measured puts its result on the
   bus at both lags 0 and 1 as a hypothesis; a lag-1 result and the next word's lag-0 result of
@@ -306,7 +307,7 @@ class Machine:
         own = self._s_units(index, word, t)
         if word["f276"] == 0:
             m = self._m(index, word, own, t)
-            x0bus = m if x0 is None else _cap(m, H)
+            x0bus = m  # an active X0 head's result is not on its bus under M (verified)
         else:
             x0bus = UNKNOWN if x0 is None else x0
         writes = self._ports(index, word, t, bus, x0bus, UNKNOWN if x1 is None else x1)

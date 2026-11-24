@@ -255,7 +255,7 @@ def test_a_result_goes_to_its_port_register_after_the_latency():
     boot, _ = run_slot(words, r2=given(0x200, 0x201))
     assert boot.regs[12] is None and boot.slot[9] is not None
     assert (boot.slot[9].lo, boot.slot[9].hi) == (0x100, 0x100)
-    assert boot.slot[9].taint is Confidence.INFERRED
+    assert boot.slot[9].taint is Confidence.VERIFIED
     assert boot.slot[2] == given(0x200, 0x201)
     boot, _ = run_slot((*words, IDLE, IDLE))
     assert boot.slot[9] is None  # the input was unknown
@@ -303,15 +303,15 @@ def test_and_mask_sign_extends_imm16():
     [
         # B, C, D, F: ra and the immediate as the op's format extends it; rb unused.
         (0x0B, Operands(ra=2, imm=-13), 0x1010, None, -13, "V"),
-        (0x0A, Operands(ra=2, imm=0x1234), 0x10, None, 0x12340010, "I"),
+        (0x0A, Operands(ra=2, imm=0x1234), 0x10, None, 0x12340010, "V"),
         (0x37, Operands(ra=2, imm=0x7001), 0x10, None, 0x7011, "V"),
-        (0x3E, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, -0x10, "I"),
-        (0x3F, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, 0x0FFFFFF0, "I"),
-        (0x40, Operands(ra=2, rb=3, imm=4), 0x10, 0x1234, 0x100, "I"),
-        (0x1F, Operands(ra=2, imm=0xE010), 0x1010, None, 0xF020, "I"),  # zero-extended
+        (0x3E, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, -0x10, "V"),
+        (0x3F, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, 0x0FFFFFF0, "V"),
+        (0x40, Operands(ra=2, rb=3, imm=4), 0x10, 0x1234, 0x100, "V"),
+        (0x1F, Operands(ra=2, imm=0xE010), 0x1010, None, 0xF020, "V"),  # zero-extended
         (0x25, Operands(ra=2, imm=0x7F0), 0x1010, None, 0x7F0, "V"),
         (0x25, Operands(ra=2, imm=-1), 0x10, None, -1, "V"),  # sign-extended
-        (0x23, Operands(ra=2, imm=0xFFFF), 0x10, None, 1, "I"),
+        (0x23, Operands(ra=2, imm=0xFFFF), 0x10, None, 1, "V"),
         (0x21, Operands(ra=2, imm=-1), 0x10, None, 0, "V"),
         (0x44, Operands(ra=2, imm=0x408), 7, None, 0, "V"),  # 7 + 1 wraps at L = 8
         (0x44, Operands(ra=2, imm=0x408), 2, None, 3, "V"),
@@ -322,13 +322,13 @@ def test_and_mask_sign_extends_imm16():
         (0x31, Operands(ra=2, rb=3), -1, 0xFFFFFFFF, 1, "V"),
         (0x2E, Operands(ra=2, rb=3), 0xFFFFFFF0, 0x10, 0x10, "V"),
         (0x3D, Operands(ra=2, rb=3), 0x400, 0, -0x401, "V"),
-        (0x32, Operands(ra=2, rb=3), 0, -5, 5, "I"),
+        (0x32, Operands(ra=2, rb=3), 0, -5, 5, "V"),
         (0x2F, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "V"),
         (0x2E, Operands(ra=2, rb=3), -0x1000, 0x1010, 0x1010, "V"),
-        (0x2C, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "I"),  # unsigned
+        (0x2C, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000, "V"),  # unsigned
         (0x41, Operands(ra=2, rb=3), 0x1010, 0x22, 0x1010 >> 2, "V"),  # rb & 31
         (0x41, Operands(ra=2, rb=3), -0x1400, 1, -0xA00, "V"),  # arithmetic
-        (0x42, Operands(ra=2, rb=3), -0x10, 4, 0x0FFFFFFF, "I"),  # logical
+        (0x42, Operands(ra=2, rb=3), -0x10, 4, 0x0FFFFFFF, "V"),  # logical
         (0x43, Operands(ra=2, rb=3), 0x10, 0x21, 0x20, "V"),
     ],
 )
