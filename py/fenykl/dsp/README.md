@@ -109,7 +109,7 @@ confidence and fact; `fields.op(value)` is total:
 | 2 | `br` | branch iff ra != 0, either way | verified |
 | 3 | `call` | a jump to T that writes no link; a call is an op 3 whose delay slots hold 0x0b #(i + 5) on r1 | verified |
 | 4 | `ret` | a jump to the word G[f128_132] names, r1 by the stock convention | verified |
-| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the three words behind it still run [verified]; word 5 of every stock program, where the call at word 0 returns | inferred |
+| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the three words behind it still run [verified] (data words only; the emulator refuses a control word among them and a halt in a taken jump's delay slots); word 5 of every stock program, where the call at word 0 returns | inferred |
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
 | 127 | `idle` | no op | inferred |
 

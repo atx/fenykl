@@ -596,3 +596,11 @@ def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0,
     read = w(f276=0, f274_275=1, f272_273=2, f224_228=12, **x0_head)
     run(m, [w(**S1_AND), IDLE, read])
     assert m.g[12] == Sv(0x0A5A, tier)
+
+
+def test_a_halt_in_a_jumps_delay_slots_raises_with_only_idle_ops_behind_it():
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    boot = Boot()
+    words = (control(3, 6), halt, w(**S1_AND), IDLE, IDLE, IDLE, IDLE)
+    with pytest.raises(UnknownSemantics, match="a halt in a taken jump's delay slots"):
+        Executor(boot, datapath=Machine(boot)).step(Job(Program(words), ()))

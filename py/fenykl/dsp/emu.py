@@ -28,7 +28,6 @@ from typing import Protocol
 from ..firmware import unpack_firmware
 from .fields import (
     DELAY_SLOTS,
-    IDLE_OP,
     OP_FIELD,
     Confidence,
     Kind,
@@ -447,11 +446,12 @@ class Executor:
         self, tail: tuple[Word, ...], at: int, steps: list[Step], jumps: list[list[int]]
     ) -> None:
         """The words behind a halt that still run (`HALT_TAIL`), on a `datapath` only: plain
-        stepping ends at the halt. Measured with data words in program order: a pending jump,
-        or a control or halt word among them, raises; words past the program's end are not run."""
+        stepping ends at the halt. Measured with data words in program order: a pending jump
+        (it may run its target's words instead), or a control or halt word among them, raises;
+        words past the program's end are not run."""
         if self.datapath is None:
             return
-        if jumps and any(word.op != IDLE_OP for word in tail):
+        if jumps and tail:
             raise UnknownSemantics(
                 at - 1, "halt", [], "a halt in a taken jump's delay slots"
             )
