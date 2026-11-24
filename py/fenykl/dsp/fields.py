@@ -514,8 +514,7 @@ def _only(where: str) -> str:
 
 
 X0_PATH = (
-    "The residual changes of its nibble fall in data-op words with f302_307 active: the nibble is "
-    "also written on the X0 path (hypothesis)"
+    "The residual changes of its nibble fall in data-op words with f302_307 active"
 )
 X_OPERANDS = (
     "a and b are the unit's two register operands, zK / sK its immediate K zero- / "
@@ -826,6 +825,8 @@ def _pb(enable: str) -> str:
     return f"{port} (`SCALAR_FILES`); its sources by value are not separated"
 
 
+S_NONE = {"s0": "0..0x3f and 0x60..0x7f none"}
+"""Where not every other head value was read."""
 ZEXT = "zero-extended from 16 bits (inferred, fitted)"
 SEXT = "sign-extended from 16 bits (inferred, fitted)"
 S_RESULTS: dict[str, dict[int, str]] = {
@@ -862,11 +863,7 @@ F3_LANE = (
     "(measured on the camera), and S3 heads 0x16 / 0x17 read F3[f92_95] & 31 as their lane "
     "(inferred, fitted)"
 )
-S2_NIBBLE = (
-    f"Under S2 head 0xe the register of F2 it returns ({EXACT}); under S2 head 0xc the 16-bit "
-    "result follows the nibble itself, constant over F2's content (measured on the camera, "
-    "rule open)"
-)
+S2_NIBBLE = f"Under S2 head 0xe the register of F2 it returns ({EXACT}); {S2_0XC}"
 LANE_SELECT = (
     "S3's lane select: under S3 heads 0xe / 0xf the lane itself, under 0x16 / 0x17 the "
     "register of F3 whose value & 31 is the lane (inferred, fitted on the camera)"
@@ -969,8 +966,9 @@ def _head(unit: str, idle: int, fact: str) -> Field:
     )
     results = ", ".join(f"{v:#x}" for v in S_RESULTS[unit])
     scalar = (
-        f"Under the M strobe of its {1 << (hi - lo + 1)} values {results} have a scalar result "
-        f"(`S_RESULTS`), the others none (measured on the camera)"
+        f"Under the M strobe of its {1 << (hi - lo + 1)} values {results} "
+        f"{'has' if len(S_RESULTS[unit]) == 1 else 'have'} a scalar result (`S_RESULTS`), "
+        f"{S_NONE.get(unit, 'the others none')} (measured on the camera)"
     )
     return Field(
         lo,
@@ -1365,9 +1363,9 @@ _HELD_439 = (
 )
 UNIT_FACTS = {
     "f198_201": "program 13 word 433, its enable f261_262 active: idling it alone equals idling "
-    f"all of grid B there, byte for byte ({_CAMERA}); what it routes is open, not the loaded "
-    "tap coefficient itself (inferred: the lines it changes are not those where that tap is "
-    "non-zero)",
+    f"all of grid B there, byte for byte ({_CAMERA}); what that word writes to F2 is open, not "
+    "the loaded tap coefficient itself (inferred: the lines it changes are not those where that "
+    "tap is non-zero)",
     "f202_205": "program 13 word 433, its enable f263_264 active: idling it has no effect "
     f"({_CAMERA}), so an active enable is not sufficient for an effect",
     "f263_264": "active at program 13 word 433, where idling its port f202_205 has no effect "

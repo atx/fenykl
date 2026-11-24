@@ -140,7 +140,7 @@ a multiply's product one word after the multiply. The emulator models G (`Boot.s
 (`Boot.regs`).
 
 The compute side has four more files, F0..F3, of 32-bit scalar registers numbered by a nibble
-(`fields.SCALAR_FILES`, verified by exact readout), written by grid B ports and read by S heads
+(`fields.SCALAR_FILES`; verified by exact readout for F0..F2, F3 inferred), written by grid B ports and read by S heads
 from the next word on:
 
 | file | read by | written by (port, register) |
@@ -505,7 +505,8 @@ words 430..447 (`resample_window`): the stock program's term lists for a stock j
 window's for a job it covers; a row's own law (`Operands`, `Phase`, `Substitute`) runs on the
 stock kernel. Each term reads its source line in any
 plane. The window runs once per job on symbolic values: the tap loads put `TapBytes` of the line's phase into the
-load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register,
+load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register
+(the scalar file F2 that f261_262 = 2 writes from the ALU bus, inferred; that C is F2 a hypothesis),
 the operand write ports put each word's anchored source line (`Row`) into a register, and each
 S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator. Every changed field must
 be a semantic or a don't-care (a held field under an idle owner), else the executor gives no

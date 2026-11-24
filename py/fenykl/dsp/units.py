@@ -5,7 +5,8 @@ whose values change in the words where it is active: counted over every word of 
 across later firmware versions of the same family, each held field changes almost only under
 one strobe (verified in the bytes for the counts; that these groups are execution units is
 inferred). The op slot is the op with its operands; PB and PR are banks of ports, each enable
-owning one field (`fields.PORTS`); M and Q are modes. The constant bits form no unit. A unit's
+owning one field (`fields.PORTS`); M is the strobe that puts an S head's result on X0's result
+bus, with a held 2-bit field; Q is a mode. The constant bits form no unit. A unit's
 fields need not be contiguous; re-cutting one is an edit of the `unit` of its fields.
 
 A slot holds the values of some fields of one unit, keyed by id or semantic name::
