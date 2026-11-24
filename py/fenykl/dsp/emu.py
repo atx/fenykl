@@ -28,7 +28,6 @@ from typing import Protocol
 from ..firmware import unpack_firmware
 from .fields import (
     DELAY_SLOTS,
-    IDLE_OP,
     OP_FIELD,
     Confidence,
     Kind,
@@ -404,9 +403,7 @@ class Executor:
             slots = max(slots - 1, 0)
             if word.op == HALT_OP:
                 steps.append(Step(pc, word.op, slot, confidence=op(HALT_OP).confidence))
-                self._behind_halt(
-                    words[pc + 1 : pc + 1 + HALT_TAIL], pc + 1, steps, jumps
-                )
+                self._behind_halt(words, pc + 1, steps, jumps)
                 return Flow(steps, Stop.HALT)
             target = None
             if not word.control:
@@ -444,32 +441,51 @@ class Executor:
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
 
     def _behind_halt(
-        self, tail: tuple[Word, ...], at: int, steps: list[Step], jumps: list[list[int]]
+        self,
+        words: tuple[Word, ...],
+        at: int,
+        steps: list[Step],
+        jumps: list[list[int]],
     ) -> None:
-        """The words behind a halt that still run (`HALT_TAIL`), on a `datapath` only: plain
-        stepping ends at the halt. They run in program order and the job ends after them
-        (verified on the camera with data words; with the halt in a taken op 3's first delay
-        slot, the jump not taken; with an op 3 as the second of them, its jump not taken). A
-        jump due inside them, another control word or a halt among them raises; words past the
-        program's end are not run."""
+        """The three words the sequencer fetches behind a halt still run (`HALT_TAIL`), on a
+        `datapath` only: plain stepping ends at the halt. The job ends after them. A taken jump
+        due among them redirects the fetch: with the halt in slot k of a taken op 3 the tail
+        is slots k + 1..4, then the target's words (k = 2, 3, 4; with k = 1 the jump is due
+        after the tail and not taken). An op 3 or op 4 as the second tail word is not taken, a
+        second halt as the first changes nothing (all verified on the camera). Other control
+        words or halts in the tail raise; words past the program's end are not run."""
         if self.datapath is None:
             return
-        if any(left <= HALT_TAIL for left, _ in jumps) and any(
-            word.op != IDLE_OP for word in tail
-        ):
-            raise UnknownSemantics(
-                at - 1, "halt", [], "a jump due among the words behind a halt"
+        pending = [list(jump) for jump in jumps]
+
+        def fetched(nxt: int) -> int:
+            """The next word's index after one word, a pending jump's target when it is due."""
+            for jump in pending:
+                jump[0] -= 1
+                if jump[0] == 0:
+                    nxt = jump[1]
+            return nxt
+
+        i = fetched(at)  # the halt's own word counts toward a pending jump
+        for n in range(HALT_TAIL):
+            if i >= len(words):
+                return
+            word = words[i]
+            passive = (word.control and word.op in (3, 4) and n == 1) or (
+                word.op == HALT_OP and n == 0
             )
-        for i, word in enumerate(tail, at):
-            jump = word.control and word.op == 3 and i - at == 1
-            if (word.control and not jump) or word.op == HALT_OP:
+            if (word.control or word.op == HALT_OP) and not passive:
                 raise UnknownSemantics(
                     i, op(word.op).name, [], "a control op behind a halt"
                 )
-            note = self.datapath.execute(i, word, len(steps))
-            if jump:
-                note = "a jump behind a halt: the job ends first"
+            if passive:
+                if word.op != HALT_OP:
+                    self.datapath.execute(i, word, len(steps))
+                note = "behind a halt: not taken"
+            else:
+                note = self.datapath.execute(i, word, len(steps))
             steps.append(Step(i, word.op, False, word.operands, note=note))
+            i = fetched(i + 1)
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
         t, conf = word.target, op(word.op).confidence

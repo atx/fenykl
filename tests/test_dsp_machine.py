@@ -613,3 +613,35 @@ def test_m_without_any_head_is_quiet_at_inferred(m):
     m.r[0] = Sv(0x0A5A)
     run(m, [w(f276=0, f274_275=3, f270_271=2, f221_223=0)])
     assert m.r[0] == Sv(0x0A5A, I)
+
+
+@pytest.mark.parametrize("k", [2, 3, 4])
+def test_a_jump_due_among_the_words_behind_a_halt_redirects_them(k):
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    slots = [inc(16)] * 4
+    slots[k - 1] = halt
+    # op 3 to 9; slots 1..4; three words after the slots; the target counts in g17.
+    words = (
+        control(3, 9),
+        *slots,
+        inc(16),
+        inc(16),
+        inc(16),
+        IDLE,
+        inc(17),
+        inc(17),
+        inc(17),
+    )
+    m = stepped(list(words), g16=0, g17=0)
+    among_slots = 4 - k
+    assert (m.g[16], m.g[17]) == (Sv(k - 1 + among_slots), Sv(3 - among_slots))
+
+
+def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    m = stepped([halt, halt, inc(16), inc(16), inc(16)], g16=0)
+    assert m.g[16] == Sv(2)
+    m = stepped(
+        [halt, inc(16), control(4, f128_132=20), inc(16), inc(16)], g16=0, g20=0
+    )
+    assert m.g[16] == Sv(2)
