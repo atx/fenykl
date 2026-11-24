@@ -341,7 +341,11 @@ class Machine:
         own = self._s_units(index, word, t)
         if word["f276"] == 0:
             m = self._m(index, word, own, t)
-            x0bus = m  # an active X0 head's result is not on its bus under M (verified)
+            # An active X0 head's result is not on its bus under M (verified with a value on
+            # M; with nothing on M beside an X0 head the kept register is not measured).
+            x0bus = (
+                Kept(min(m.tier, I)) if x0 is not None and isinstance(m, Kept) else m
+            )
         else:
             x0bus = UNKNOWN if x0 is None else x0
         writes = self._ports(index, word, t, bus, x0bus, UNKNOWN if x1 is None else x1)
