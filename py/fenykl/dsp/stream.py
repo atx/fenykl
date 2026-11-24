@@ -25,8 +25,8 @@ inferred):
 
 - r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways);
 - r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
-  (verified; 0x10 writes zeros into the vectors on a load, verified for byte and 32-bit elements
-  at the count that ends the load, `ZERO_FORMATS`, inferred otherwise); local memory 4 bytes or 2
+  (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
+  count that ends the load, `ZERO_FORMATS`, inferred otherwise); local memory 4 bytes or 2
   16-bit elements per 32-bit word (little-endian);
 - r3 units per row (vectors, or 32-bit words);
 - r1 the pitch between rows on the memory side in bytes (64 per vector);
@@ -89,9 +89,9 @@ LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12}
 LANE_UNITS: dict[int, Confidence] = {0x20: V, 0x10: I}
 """r2 on a lane-memory load: 0x20 one element per lane (verified), 0x10 writes zeros into
 every lane (inferred, but see `ZERO_FORMATS`)."""
-ZERO_FORMATS = (0x10, 0x04)
-"""r5 measured under r2 0x10 on a lane-memory load, each with r3 = ceil(r5 r6 / 16): zeros
-(verified at those counts)."""
+ZERO_FORMATS = (0x04,)
+"""r5 measured under r2 0x10 on a lane-memory load with zeros named before the run, at
+r3 = ceil(r5 r6 / 16): zeros (verified at that count; bytes gave zeros unforeseen, inferred)."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {

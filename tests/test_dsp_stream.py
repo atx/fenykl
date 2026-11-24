@@ -180,7 +180,7 @@ def test_a_wait_with_nothing_outstanding():
 
 @pytest.mark.parametrize(
     ("r5", "r6", "r3", "tier"),
-    [(0x10, 2, 2, V), (0x04, 8, 2, V), (0x08, 4, 2, I), (0x10, 4, 2, I)],
+    [(0x04, 8, 2, V), (0x04, 16, 2, I), (0x10, 2, 2, I), (0x08, 4, 2, I)],
 )
 def test_zeros_under_16_units_per_vector_are_verified_where_measured(r5, r6, r3, tier):
     m, e = machine(bytes(range(1, 65))), stream.Engine()
@@ -279,9 +279,11 @@ def test_a_store_whose_source_holds_still_stays_verified():
 def test_a_command_with_a_register_not_handed_moves_nothing():
     m, e = machine(bytes(64)), stream.Engine()
     m.memory[0] = Vec(tuple(range(32)))
+    m.boot.local.write(LOCAL_BASE, Bytes.of(bytes(4), 0))
     drive(m, e, [key(0, 3), 2, key(0, 6), 4, *load(0, SRC, 0), WAIT])
     assert m.memory[0].lanes == tuple(range(32))
     assert not e.off and e.lane_tier() == I
+    assert set(m.boot.local.read(LOCAL_BASE, 4).taint) == {I}
 
 
 def test_a_store_with_a_register_not_handed_leaves_dram_inferred():
