@@ -1160,6 +1160,21 @@ def _lookup(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [b[(k & 16) + a[k]] if a[k] < 16 else 0 for k in range(LANE_COUNT)]
 
 
+def _block_select(size: int) -> LaneValue:
+    """Block j of `size` lanes := b's block a[j] where a[j] is a block number, else 0: the
+    block numbers sit in a's first lanes, one per output block."""
+    blocks = LANE_COUNT // size
+
+    def select(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        out: Lanes = []
+        for j in range(blocks):
+            src = a[j]
+            out += b[src * size : (src + 1) * size] if src < blocks else [0] * size
+        return out
+
+    return select
+
+
 def _lane_numbers(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return list(range(LANE_COUNT))
 
@@ -1440,7 +1455,9 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
     "s3": {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
-        **dict.fromkeys((0x06, 0x07, 0x08), _open),
+        0x06: _open,
+        0x07: _block_select(8),
+        0x08: _block_select(16),
         0x09: _lookup,
         0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
         0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
@@ -1515,7 +1532,7 @@ _LANE_READS = {
     ),
     "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
     "s3": _reads(
-        none=(0x06, 0x07, 0x08, 0x11, 0x14, 0x18),
+        none=(0x06, 0x11, 0x14, 0x18),
         b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
     ),
 }

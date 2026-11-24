@@ -1330,13 +1330,20 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             NO_LANE_LAGS,
         ),
         **_rows(range(0x25, 0x3F), NO_LANE, V, NO_LANE_LAGS),
-        **_rows(
-            (0x06, 0x07, 0x08),
-            "a window of b's lanes, 0 in the others",
+        0x06: (
+            "0 in every lane",
             H,
-            "the window follows a's content, not the scalars nor the words around the head: "
-            "0x6 gave 0 on every operand pair; 0x7 a block of b in lanes 0..15, 0x8 a 16-lane "
-            "block of b in one half, or 0, by operands",
+            "0 on every operand pair run so far; what opens it, if anything, is open",
+        ),
+        0x07: (
+            "lanes 8j..8j + 7 := b's 8-lane block a[j] where a[j] < 4, else 0, for j = 0..3",
+            I,
+            "a block select: fitted on four operand pairs, lanes 0..15 only",
+        ),
+        0x08: (
+            "lanes 16j..16j + 15 := b's 16-lane half a[j] where a[j] < 2, else 0, for j = 0, 1",
+            I,
+            "a block select: fitted on four operand pairs",
         ),
         0x09: (
             "b[(k & 16) + a[k]] where a[k] < 16, else 0",
