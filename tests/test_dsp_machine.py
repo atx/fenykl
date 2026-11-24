@@ -363,3 +363,13 @@ def test_a_unit_bus_ors_a_late_result_with_the_next_words_own(m):
     run(m, words)
     want = tuple((a + b) | (a & b) for a, b in zip(A, B, strict=True))
     assert m.lanes["L3"][8] == Vec(want)
+
+
+def test_a_register_form_store_and_load_address_by_rb(m):
+    m.g[5], m.g[9], m.r[2] = Sv(0x40), Sv(0x31), Sv(0x8899AABB)
+    store = op_word(0x13, 5, 9, f120_122=2)  # a halfword at 0x40 + 2 x 0x31
+    load = op_word(0x17, 5, 9)  # the same halfword, sign-extended
+    take = Word.from_fields({"f272_273": 1, "f224_228": 12}, base=IDLE)
+    run(m, [store, load, IDLE, IDLE, take])
+    assert m.boot.local.read(LOCAL_BASE + 0xA2, 2).data == bytes.fromhex("bbaa")
+    assert m.g[12] == Sv(0xFFFFAABB)

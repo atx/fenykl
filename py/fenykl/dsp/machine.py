@@ -80,7 +80,9 @@ from .semantics import (
     LOAD_LAG,
     LOCAL_BYTES,
     LOCAL_LOADS,
+    LOCAL_LOADS_RB,
     LOCAL_STORES,
+    LOCAL_STORES_RB,
     MULTIPLY_LAG,
     OP_SEMANTICS,
     PR_ENABLES,
@@ -101,6 +103,8 @@ from .state import Bytes, RegisterFile
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
+LOADS = LOCAL_LOADS | LOCAL_LOADS_RB
+STORES = LOCAL_STORES | LOCAL_STORES_RB
 M32 = 0xFFFFFFFF
 
 
@@ -340,8 +344,8 @@ class Machine:
         ra = self._rd("G", args.ra)
         rb = self._rd("G", args.rb) if args.rb is not None else None
         tier = min(sem.confidence, ra.tier, rb.tier if rb else V)
-        if code in LOCAL_LOADS or code in LOCAL_STORES:
-            self._local(index, word, code, ra, t, notes)
+        if code in LOADS or code in STORES:
+            self._local(index, word, code, ra, rb, t, notes)
             return None
         if code in (0x48, 0x49):
             value = (
@@ -392,23 +396,33 @@ class Machine:
         return Sv(s & M32, min(tier, step.tier))
 
     def _local(
-        self, index: int, word: Word, code: int, ra: Sv, t: int, notes: list[str]
+        self,
+        index: int,
+        word: Word,
+        code: int,
+        ra: Sv,
+        rb: Sv | None,
+        t: int,
+        notes: list[str],
     ) -> None:
-        width = LOCAL_LOADS[code][0] if code in LOCAL_LOADS else LOCAL_STORES[code]
-        imm = word.operands.imm
-        if ra.value is None:
-            if code in LOCAL_STORES:
+        """A family A access at ra + width x imm13, or at ra + width x rb in the register forms."""
+        width = LOADS[code][0] if code in LOADS else STORES[code]
+        by_register = code in LOCAL_LOADS_RB or code in LOCAL_STORES_RB
+        offset = rb if by_register else Sv(word.operands.imm)
+        if ra.value is None or offset.value is None:
+            if code in STORES:
                 raise UnknownSemantics(
                     index, op(code).name, [], "a local store at an unknown address"
                 )
             self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
             return
-        addr = (ra.value + width * imm) % LOCAL_BYTES
+        ra = Sv(ra.value, min(ra.tier, offset.tier))
+        addr = (ra.value + width * offset.value) % LOCAL_BYTES
         if addr % width:
             raise UnknownSemantics(
                 index, op(code).name, [], f"an unaligned local access at {addr:#x}"
             )
-        if code in LOCAL_STORES:
+        if code in STORES:
             datum = self._rd("R", word["f120_122"])
             tier = min(datum.tier, ra.tier)
             if datum.value is None:
@@ -423,7 +437,7 @@ class Machine:
             notes.append(f"local {addr:#x} := R{word['f120_122']}")
             return
         b = self.boot.local.read(LOCAL_BASE + addr, width)
-        signed = LOCAL_LOADS[code][1]
+        signed = LOADS[code][1]
         if all(b.known):
             v = int.from_bytes(b.data, "little")
             v = _sext(v, 8 * width) & M32 if signed else v

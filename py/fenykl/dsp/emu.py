@@ -516,9 +516,11 @@ class Executor:
         why = "no semantics" if sem is None else "outside what its semantics covers"
         if self.strict:
             raise UnknownSemantics(i, op(word.op).name, [(OP_FIELD, word.op)], why)
-        if args is not None:
+        self._route(i, word, None, now)
+        if args is None:
+            why += ", its ports' registers unknown after it"
+        else:
             self.boot.slot[args.ra] = None
-            self._route(i, word, None, now)
             why += f", r{args.ra} and its ports' registers unknown after it"
         return Step(i, word.op, slot, args, note=why, unknown=True)
 

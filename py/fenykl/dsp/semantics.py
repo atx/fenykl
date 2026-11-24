@@ -642,6 +642,20 @@ def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | N
     return run
 
 
+def _local_load_rb(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """A register-form load: stepping holds no rb, so it records the read only."""
+    return Effect(note="reads local memory at ra + w x rb")
+
+
+def _local_store_rb(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
+    """A register-form store: stepping holds no rb, so all of local memory becomes unknown."""
+
+    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+        return Effect(stores=((None, width),), note="writes ra + w x rb: anywhere")
+
+    return run
+
+
 def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     """ra & imm16 sign-extended. A mask that clears only low bits (~(2^k - 1)) is monotonic, so
     a wide ra interval keeps exact bounds; other masks of a wide interval give a bound."""
@@ -732,6 +746,9 @@ LOCAL_LOADS = {
 """The family A loads by op: (width in bytes, sign-extended)."""
 LOCAL_STORES = {0x18: 4, 0x12: 2, 0x0C: 1}
 """The family A stores by op: the width in bytes of R[f120_122]'s low bits they write."""
+LOCAL_LOADS_RB = {code + 1: form for code, form in LOCAL_LOADS.items()}
+LOCAL_STORES_RB = {code + 1: width for code, width in LOCAL_STORES.items()}
+"""The register forms, each its immediate form's op + 1: the byte address is ra + width x rb."""
 
 
 OP_SEMANTICS: dict[int, OpSemantics] = {
@@ -762,6 +779,25 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
             _local_store(width),
         )
         for code, width in LOCAL_STORES.items()
+    },
+    **{
+        code: OpSemantics(
+            V,
+            f"the register form of {code - 1:#x}: a local {LOCAL_UNITS[width]} load at the byte "
+            f"address ra + {width} x rb modulo 0x2000 ({EXACT}, one address each)",
+            _local_load_rb,
+        )
+        for code, (width, _) in LOCAL_LOADS_RB.items()
+    },
+    **{
+        code: OpSemantics(
+            V,
+            f"the register form of {code - 1:#x}: a local {LOCAL_UNITS[width]} store at the byte "
+            f"address ra + {width} x rb modulo 0x2000 of the low {8 * width} bits of R[f120_122] "
+            f"({EXACT}, one address each)",
+            _local_store_rb(width),
+        )
+        for code, width in LOCAL_STORES_RB.items()
     },
     0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})", _and_mask),
     0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})", _const),
