@@ -1022,11 +1022,11 @@ def _sat_u(v: int) -> int:
 
 
 def _round_even(v: int, n: int) -> int:
-    """v / 2^n rounded to nearest, ties to even."""
-    if n == 0:
-        return v
-    q, r, half = v >> n, v & ((1 << n) - 1), 1 << (n - 1)
-    return q + (r > half or (r == half and q & 1))
+    """v divided by 2^n, rounded to the nearest integer and a tie to the even one."""
+    q, r = divmod(v, 1 << n)
+    if 2 * r > 1 << n or (2 * r == 1 << n and q % 2):
+        q += 1
+    return q
 
 
 def _signed(f: Callable[[int, int, Scalars], int]) -> LaneValue:

@@ -876,6 +876,7 @@ LANE_OPERANDS = (
 NO_LANE = "no lane result"
 """A head that wrote no lane through its unit's port into L3 in four consecutive words."""
 CARRY = "a result with 1 added in some lanes: a per-lane condition bit feeds it"
+SELECT = "a per-lane condition bit selects"
 LaneRow = tuple[str, Confidence, str]
 
 
@@ -898,10 +899,10 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         **_rows((0x05, 0x21), "sat_s(|a - b|)", V),
         **_rows((0x06, 0x28), "sat_s(b - a)", V),
         **_rows((0x07, 0x29), "sat_s(a + b)", V),
-        0x08: (f"0 or imm by lane; {CARRY}", H, ""),
-        0x09: (f"0 or s by lane; {CARRY}", H, ""),
-        0x0A: (f"0, a or b by lane; {CARRY}", H, ""),
-        **_rows(range(0x0B, 0x0E), f"one of 0, imm, s, a and b by lane; {CARRY}", H),
+        0x08: (f"0 or imm by lane; {SELECT}", H, ""),
+        0x09: (f"0 or s by lane; {SELECT}", H, ""),
+        0x0A: (f"0, a or b by lane; {SELECT}", H, ""),
+        **_rows(range(0x0B, 0x0E), f"one of 0, imm, s, a and b by lane; {SELECT}", H),
         0x0E: ("max_s(b, imm)", V, ""),
         0x0F: ("min_s(b, imm)", V, ""),
         0x10: ("sat_s(b - imm)", V, ""),
@@ -1053,7 +1054,11 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x12: ("0xffff where b < 0, else 0", V, ""),
         0x13: ("0xffff where b >= 0, else 0", V, ""),
         0x14: ("the lane number 0..31", V, ""),
-        0x15: ("b with lane F3[f92_95] & 31 := F3[f96_99]", V, ""),
+        0x15: (
+            "b with lane F3[f92_95] := F3[f96_99]",
+            V,
+            "the lane taken & 31 as by 0x16 / 0x17 (inferred)",
+        ),
         0x18: ("F3[f96_99] in every lane: a broadcast", V, ""),
         **_rows((0x19, 0x20, 0x21, 0x23), "b", V),
         **_rows(
@@ -1069,7 +1074,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
 }
 """Each S unit's lane functions by head value: (result, tier, note), the result written to a lane
 file by a lane port (`LANE_SOURCES`). Measured on the camera: every head beside the unit's port
-into L3 in four consecutive words on two random operand pairs (fitted, inferred), then the rows
+into L3 in four consecutive words on one random operand pair (fitted, inferred), then the rows
 pre-registered lane by lane on two constructed 32-lane vectors of edge and random values
 (verified where all lanes matched; where they missed the refit matches all 32 lanes, inferred).
 Heads not listed are open; `LANE_OPERANDS` names the operands. The 1 added by the carry forms is
@@ -1169,8 +1174,8 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
     "f23_30": (
         I,
         (
-            "The low byte of S0's 16-bit lane immediate imm: at f23_30 = 0x5a S0 0x35 wrote 0x515a "
-            "in every lane (inferred, one value); the high byte's fields are open"
+            "The low byte of S0's 16-bit lane immediate imm: at f23_30 = 0x5a the immediate S0's "
+            "heads took was 0x515a (inferred, one value); the high byte's fields are open"
         ),
     ),
     "f31_34": (
@@ -1252,9 +1257,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         V,
         (
             "S3's lane select: the lane itself under 0xe, 0xf and 0x10 (with f31_34 bit 2 as bit "
-            "4), the register of F3 whose value & 31 is the lane under 0x15, 0x16 and 0x17, bits "
-            "3..0 of 0x11's immediate (verified on the camera); the signed shift count of 0x1b, "
-            "0x1c and 0x22 (inferred)"
+            "4), the register of F3 whose value is the lane under 0x15, 0x16 and 0x17 (& 31 "
+            "under 0x16 / 0x17), bits 3..0 of 0x11's immediate (verified on the camera); the "
+            "signed shift count of 0x1b, 0x1c and 0x22 (inferred)"
         ),
     ),
     "f96_99": (
@@ -1715,8 +1720,8 @@ FIELDS: tuple[Field, ...] = (
         "s0",
         0x7F,
         "Merged from 278..280 and 281..284: the low part is never active without the high part, "
-        "which is active alone in 5 % of its words, and both track f41_44 (inferred: one op "
-        "field, possibly an op and a modifier); f23_30 is active only where it is. Of "
+        "which is active alone in 5 % of its words, and both track f41_44 (verified in the bytes: one "
+        "field, one opcode by the lane functions); f23_30 is active only where it is. Of "
         "0x40..0x5f only 0x52 was read: a job of all 32 values under M timed out in the driver, "
         "which value stalls is not separated (measured on the camera)",
     ),
@@ -1724,8 +1729,8 @@ FIELDS: tuple[Field, ...] = (
         "s1",
         0x7F,
         "Merged from 285..287 and 288..291: the low part is never active without the high part, "
-        "which is active alone in 5 % of its words, and both track f49_52 (inferred: one op "
-        "field, possibly an op and a modifier)",
+        "which is active alone in 5 % of its words, and both track f49_52 (verified in the bytes: one "
+        "field, one opcode by the lane functions)",
     ),
     _head(
         "s2",
@@ -1736,8 +1741,8 @@ FIELDS: tuple[Field, ...] = (
         "s3",
         0x3F,
         "Merged from 296..297 and 298..301: the low part is never active without the high part, "
-        "which is active alone in 26 % of its words, and both track f65_68 (inferred: one op "
-        f"field, possibly an op and a modifier); {WORD504}. 0xe, 0xf, 0x16 and 0x17 extract one "
+        "which is active alone in 26 % of its words, and both track f65_68 (verified in the bytes: one "
+        f"field, one opcode by the lane functions); {WORD504}. 0xe, 0xf, 0x16 and 0x17 extract one "
         "16-bit lane of L3 and 0x0..0x5 reduce its 32 lanes to a scalar (`S_RESULTS`)",
     ),
     _ctl(

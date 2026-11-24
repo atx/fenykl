@@ -485,7 +485,8 @@ S3_NIBBLES = {
         ("s0", 0x26, lanes(l0=0x8000, l1=0xFFFF), lanes(), {}, {0: 0x7FFF, 1: 1}),
         ("s0", 0x27, lanes(l0=0x8000), lanes(), {}, {0: 0x8000}),
         ("s0", 0x3A, lanes(), lanes(l0=1, l1=0x9000), {"imm": 2}, {0: 0, 1: 0x8FFE}),
-        ("s0", 0x0B, lanes(), lanes(), {}, {0: None, 31: None}),  # a carry form: open
+        # A per-lane select: open.
+        ("s0", 0x0B, lanes(), lanes(), {}, {0: None, 31: None}),
         # Logical and arithmetic shifts by imm & 15 (10 here).
         ("s1", 0x0C, lanes(), lanes(l0=0x8000), {"imm": 0x2A}, {0: 0x20}),
         ("s1", 0x0D, lanes(), lanes(l0=0x8000), {"imm": 0x2A}, {0: 0xFFE0}),
@@ -589,7 +590,7 @@ def test_lane_function_table(unit, head, a, b, scalars, expect):
 
 
 def test_heads_without_a_lane_result():
-    # A reduction's result is a scalar, a store-only S1 head writes nothing.
+    # A reduction's result is a scalar, as is S1's scalar-read head's.
     assert lane_result("s3", 0x00, lanes(), lanes(), S3_NIBBLES) is None
     assert lane_result("s1", 0x54, lanes(), lanes(), {}) is None
     with pytest.raises(KeyError):
