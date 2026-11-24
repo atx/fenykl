@@ -1487,8 +1487,10 @@ def _shift_tier(c: Scalars) -> Confidence:
 
 
 def _choice_tier(c: Scalars) -> Confidence:
-    """S2 0x7: pre-registered at f88_91 = 2, 3, 8, 9, 10, 12, 13, fitted at the others."""
-    return V if c["f88_91"] in (2, 3, 8, 9, 10, 12, 13) else I
+    """S2 0x7: pre-registered at f88_91 = 2, 3, 8, 9, 10, 12, 13, fitted at 0, 1, 4..7, 14, 15;
+    11 neither (hypothesis)."""
+    n = c["f88_91"]
+    return V if n in (2, 3, 8, 9, 10, 12, 13) else H if n == 11 else I
 
 
 _LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {

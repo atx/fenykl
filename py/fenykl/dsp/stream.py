@@ -62,7 +62,7 @@ STORE_FORMATS: dict[int, tuple[int, Confidence]] = {
     0x09: (14, V),
     0x08: (16, V),
     0x04: (32, V),
-    0x44: (32, I),
+    0x44: (32, I),  # measured on byte elements: a wider element is not predicted
     0x0D: (0, V),
 }
 """The store format (word 47's value): the number of elements per 16-byte line, each element's low
@@ -81,6 +81,9 @@ class Transcript:
 
     def transfer(self, m: Machine, index: int, head: int, value: Sv) -> None:
         self.values.append((head, value.value))
+
+    def lane_tier(self) -> Confidence:
+        return V
 
 
 @dataclass
@@ -116,11 +119,25 @@ class CopyStream:
         return MEASURED[k] is None or value in MEASURED[k]
 
     def _go_off(self, m: Machine, why: str) -> None:
+        """What the engine does from here on is not known: the lane memory, the stock store's
+        DST and what this job stored become unknown."""
         self.off = why
-        m.memory.clear()
+        m.lose_lanes()
+        lost = m.boot.source("stream off script", why)
+        dst, lines = self.reference[DESTINATION][1], self.reference[STORE_LINES][1]
+        for addr, n in {(dst, 16 * lines), self.stored or (dst, 0)}:
+            m.boot.dram.write(dram_alias(addr), Bytes.unknown(n, lost))
 
-    def _tier(self, *ks: int) -> Confidence:
-        return min(self.values[k].tier for k in ks)
+    def _tier(self) -> Confidence:
+        """The weakest value handed so far: every one of them programs the engine."""
+        return min(v.tier for v in self.values)
+
+    def lane_tier(self) -> Confidence:
+        """Own words between the load command and the load's 0x1d, or within the store group,
+        meet the engine at work (not measured: hypothesis); after the load's 0x1d and before the
+        store group they read the loaded vectors (verified)."""
+        k = len(self.values)
+        return H if LOAD_COMMAND < k <= LOADED or LOADED + 1 < k <= STORED else V
 
     def _vector(self, index: int, k: int) -> int:
         v = self.values[k].value
@@ -140,15 +157,17 @@ class CopyStream:
             raise UnknownSemantics(index, "stream", [], "a load format but bytes")
         n = self._length(LOAD_LINES)
         data = m.boot.read(self.values[SOURCE].value, n)
-        tier = self._tier(SOURCE, PLACEMENT, LOAD_LINES)
+        tier = self._tier()
         base = self._vector(index, PLACEMENT)
         for v in range(-(-n // LANE_COUNT)):
+            # The vector address wraps modulo the lane memory's size (inferred).
+            wrap = I if base + v >= LANE_VECTORS else V
             chunk = data[v * LANE_COUNT : (v + 1) * LANE_COUNT]
             lanes = [x if k else None for x, k in zip(chunk.data, chunk.known)]
             lanes += [None] * (LANE_COUNT - len(lanes))
             taints = [Confidence(t) for t, k in zip(chunk.taint, chunk.known) if k]
             m.memory[(base + v) % LANE_VECTORS] = Vec(
-                tuple(lanes), min([tier, *taints])
+                tuple(lanes), min([tier, wrap, *taints])
             )
 
     def _store(self, m: Machine, index: int) -> None:
@@ -159,14 +178,16 @@ class CopyStream:
             )
         bits, tier = STORE_FORMATS[fmt]
         n = self._length(STORE_LINES)
-        tier = min(
-            tier, self._tier(STORE_FORMAT, STORE_SOURCE, DESTINATION, STORE_LINES)
-        )
+        tier = min(tier, self._tier())
         base = self._vector(index, STORE_SOURCE)
 
         def element(i: int) -> tuple[int | None, Confidence]:
-            v = m.memory.get((base + i // LANE_COUNT) % LANE_VECTORS, UNKNOWN_VEC)
-            return v.lanes[i % LANE_COUNT], v.tier
+            at = base + i // LANE_COUNT
+            v = m.memory.get(at % LANE_VECTORS, UNKNOWN_VEC)
+            x = v.lanes[i % LANE_COUNT]
+            if fmt == 0x44 and x is not None and x > 0xFF:
+                x = None
+            return x, min(v.tier, I if at >= LANE_VECTORS else V)
 
         out = pack(m.boot, bits, n, element, tier)
         dst = self.values[DESTINATION].value

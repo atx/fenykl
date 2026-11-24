@@ -17,6 +17,7 @@ from fenykl.dsp.semantics import (
     s_result,
     x_result,
 )
+from fenykl.dsp.state import Bytes
 from fenykl.dsp.word import IDLE, Word
 
 V, I = Confidence.VERIFIED, Confidence.INFERRED
@@ -250,7 +251,42 @@ def test_m_after_a_head_whose_next_word_is_open(m):
     m.f["F1"][3] = Sv(0x1234)
     head = w(f285_291=0x13, f45_48=1, f49_52=1)
     run(m, [head, w(f276=0, f274_275=1, f258=0, f190_193=3)])
-    assert m.f["F1"][3] == Sv(None, Confidence.HYPOTHESIS)
+    assert m.f["F1"][3] == Sv(None, I)
+
+
+def test_an_own_word_result_after_an_open_head_is_unknown(m):
+    """S1 0x13's value one word later is not fitted, so 0x54's own result does not stand alone."""
+    m.lanes["L1"][1] = Vec(A)
+    m.f["F1"][4] = Sv(0x55AA)
+    head = w(f285_291=0x13, f45_48=1, f49_52=1)
+    own = w(f285_291=0x54, f84_87=4, f276=0, f274_275=1, f258=0, f190_193=3)
+    run(m, [head, own])
+    assert m.f["F1"][3].value is None
+
+
+def test_a_lone_own_word_result_under_another_unit_is_a_hypothesis(m):
+    m.f["F1"][4] = Sv(0x55AA)
+    run(m, [w(f285_291=0x54, f84_87=4, f276=0, f274_275=0, f258=0, f190_193=3)])
+    assert m.f["F1"][3] == Sv(0x55AA, Confidence.HYPOTHESIS)
+
+
+def test_a_load_datum_into_a_brf_word_is_inferred():
+    """A local load's datum three words on lands through 272 / 1 in a brf word, at most inferred."""
+    boot = Boot()
+    boot.local.write(LOCAL_BASE + 0x40, Bytes.of((0x1234).to_bytes(4, "little"), 0))
+    m = Machine(boot)
+    m.g[31] = Sv(0)
+    load = Word.data(0x1A, Operands(31, None, 0x10), base=IDLE)  # word load at 0x40
+    brf = Word.from_fields(
+        {"ra": 31, "f272_273": 1, "f224_228": 5}, base=Word.ctl(1, 0, base=IDLE)
+    )
+    run(m, [load, IDLE, IDLE, brf])
+    assert m.g[5] == Sv(0x1234, I)
+
+
+@pytest.mark.parametrize(("head", "count", "tier"), [(0x1C, 13, V), (0x22, 3, I)])
+def test_the_counted_shifts_take_the_tier_of_their_count(head, count, tier):
+    assert lane_tier("s3", head, {"f92_95": count}) == tier
 
 
 def test_another_units_held_mask_is_not_on_m(m):

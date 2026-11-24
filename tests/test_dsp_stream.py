@@ -4,8 +4,13 @@ from fenykl.dsp import stream
 from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Machine, Sv, Vec
+from fenykl.dsp.word import IDLE, Word
 
 SRC, DST, LINES = 0xA0000000, 0xA1000000, 4
+
+
+def w(**fields: int) -> Word:
+    return Word.from_fields(fields, base=IDLE)
 
 
 def reference(fmt: int = 0x10) -> list[tuple[int, int]]:
@@ -77,3 +82,43 @@ def test_another_value_goes_off_script():
     s = stream.CopyStream(reference())
     drive(m, s, values)
     assert s.off and s.stored is None and not m.memory
+
+
+def test_a_wide_element_under_0x44_is_not_predicted():
+    m = Machine(Boot())
+    m.memory[0] = Vec((0x12, 0x1234, *range(30)))
+    values = reference(0x44)
+    values[stream.LOAD_COMMAND] = (0x1C, 1)
+    drive(m, stream.CopyStream(reference(0x44)), values)
+    got = m.boot.read(DST, 8)
+    assert list(got.known) == [1, 1, 1, 1, 0, 0, 0, 0]
+    assert got.data[0] == 0x12
+
+
+def test_off_script_loses_the_lane_memory_for_the_rest_of_the_job():
+    m = Machine(Boot())
+    values = reference()
+    values[3] = (0x1C, 0x98)
+    drive(m, stream.CopyStream(reference()), values)
+    m.a[1] = Sv(0)
+    m.o[0] = Vec(tuple(range(32)))
+    store = w(f302_307=0x1B, f100_104=1, f105_109=0, f69_71=0)
+    load = w(f302_307=0x1D, f100_104=1, f105_109=0)
+    for t, word in enumerate([store, IDLE, IDLE, load]):
+        m.execute(t, word, t)
+    assert m.load_due[7][0].lanes == (None,) * 32
+    assert m.between_jobs().lane_memory == {}
+
+
+def test_transfers_through_the_machine_carry_their_tier():
+    """The same values from a register at inferred: the store is at most inferred."""
+    ref = reference()
+    regs = {v: k for k, v in enumerate(sorted({v for _, v in ref}))}
+    m = Machine(Boot(), stream=stream.CopyStream(ref))
+    m.boot.put(SRC, bytes(range(16 * LINES)), "src")
+    for v, k in regs.items():
+        m.b[k] = Sv(v, Confidence.INFERRED if v == 0x99 else Confidence.VERIFIED)
+    for t, (head, v) in enumerate(ref):
+        m.execute(t, w(f308_312=head, f115_119=regs[v]), t)
+    got = m.boot.read(DST, 16 * LINES)
+    assert all(got.known) and set(got.taint) == {Confidence.INFERRED}

@@ -52,6 +52,7 @@ from .fields import (
     S2_RESULT,
     S3_RESULT,
     S_NEXT_NONE,
+    S_NEXT_VALUES,
     S_OWN_OPEN,
     STORE_SOURCES,
     TRANSFER_HEADS,
@@ -229,6 +230,9 @@ class Stream(Protocol):
     def transfer(self, m: "Machine", index: int, head: int, value: Sv) -> None:
         """Transfer `head` of word `index` hands `value` (B[f115_119]) to the engine."""
 
+    def lane_tier(self) -> Confidence:
+        """The tier of the lane memory's content for own words at the stream's position."""
+
 
 class Machine:
     """The datapath of one job on `boot` (its local memory is `boot.local`), with what an earlier
@@ -240,6 +244,9 @@ class Machine:
     ) -> None:
         self.boot = boot
         self.stream = stream
+        self.lanes_lost = False
+        self.heads_seen: dict[str, list[tuple[int, int]]] = {}
+        """The S heads run so far by unit: (word, head)."""
         self.g = [UNKNOWN] * 32
         self.a = [UNKNOWN] * 32
         self.b = [UNKNOWN] * 32
@@ -263,7 +270,12 @@ class Machine:
         self.store_src = boot.source("local store", "an own program's family A store")
 
     def between_jobs(self) -> Carry:
-        return Carry(dict(self.memory))
+        return Carry({} if self.lanes_lost else dict(self.memory))
+
+    def lose_lanes(self) -> None:
+        """The lane memory is not known from now on (the copy engine's activity is not)."""
+        self.lanes_lost = True
+        self.memory.clear()
 
     # ------------------------------------------------------------------ branching
 
@@ -518,6 +530,14 @@ class Machine:
             return
         addr = lane_address(head, a.value, b.value if b.value is not None else 0, k)
         tier = min(a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1])
+        if self.stream is not None:
+            tier = min(tier, self.stream.lane_tier())
+        if self.lanes_lost:
+            if head in X0_LANE_LOADS:
+                self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(
+                    Vec(UNKNOWN_VEC.lanes, H)
+                )
+            return
         if head in X0_LANE_LOADS:
             v = self.memory.get(addr, UNKNOWN_VEC)
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(_cap(v, tier))
@@ -551,6 +571,7 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
+            self.heads_seen.setdefault(unit, []).append((t, head))
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
                 self.open_m.setdefault(t, set()).add(unit)
@@ -734,16 +755,18 @@ class Machine:
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
         before = self.open_next.get(t, {}).get(sel)
-        if before is not None:
-            if sel not in own:
-                return Sv(None, H)
-            if not (sel == "s3" and _own_word("s3", before)):
-                # An own-word result after a head whose next-word result is open: inferred
-                # from S3's extracts, which read their own lanes in consecutive words.
-                tier = min(tier, I)
+        if before is not None and not (
+            sel == "s3" and sel in own and _own_word("s3", before)
+        ):
+            # One word after a head whose result there is open (S3's extracts in consecutive
+            # words each read their own lane: measured), M is not known: a value not fitted is
+            # there (inferred) or the word was not read (hypothesis).
+            return Sv(None, I if before in S_NEXT_VALUES.get(sel, ()) else H)
         h = held.get(sel)
         if not own:
-            return Kept(tier) if h is None else _cap(h, tier)
+            if h is not None:
+                return _cap(h, tier)
+            return Kept(min(tier, self._quiet_tier(t)))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
@@ -755,7 +778,9 @@ class Machine:
         v = own[sel]
         if sel == "s3":
             if fresh is None:
-                return _cap(v, tier)
+                # Beside a register older than its first word the extract came alone in one
+                # program (inferred).
+                return _cap(v, min(tier, I)) if ready else _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (measured).
             if v.value is None or fresh.value is None:
                 return Sv(None)
@@ -765,6 +790,16 @@ class Machine:
                 None, H
             )  # an own-word result beside its unit's held one: not measured
         return _cap(v, tier)
+
+    def _quiet_tier(self, t: int) -> Confidence:
+        """The tier of "nothing on M" two or more words after S heads: verified two words after
+        S0 0x20 only, inferred after the others."""
+        earlier = [
+            (w, u, h) for u, hs in self.heads_seen.items() for w, h in hs if w <= t - 2
+        ]
+        if all(u == "s0" and h == 0x20 and w == t - 2 for w, u, h in earlier):
+            return V
+        return I
 
     # ------------------------------------------------------------------ ports
 
