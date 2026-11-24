@@ -20,6 +20,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `stream.py` | `Engine`: the stream engine's channel registers, loads and stores as X1's transfers program them |
+| `timing.py` | `estimate`: a job's minimum time from a run of the datapath executor, with tiers |
 | `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
 | `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
@@ -476,7 +477,8 @@ definition, the op meanings and the delay-slot rule after the table.
 
 ### Timing and state across jobs
 
-Not modelled by the emulator; measured with the job's completion time against loop pass counts.
+Measured with the job's completion time against loop pass counts; `timing.estimate` turns the
+figures into a job's time ("Timing" below).
 
 - A word inside a loop costs about 5.3 ns, whatever it holds: idle words, scalar local loads, X1's
   divide, S3's reductions, X0 vector loads and taken branches over their slots all cost the same
@@ -484,8 +486,9 @@ Not modelled by the emulator; measured with the job's completion time against lo
   it runs; a word branched over costs nothing. A job adds about 100 us (the interrupt path), and
   single jobs jitter by up to 1.5 ms, so timings take the minimum over repeats.
 - The stream engine moves about 2.2 KiB per us for byte loads and stores alike, with well under
-  1 us per command besides the bytes; commands on different channels run one after the other
-  [inferred from pass-count slopes]. Of 32-byte loads handed before the first 0x1d the first 19
+  1 us per command besides the bytes, byte loads into local memory at about 0.7 KiB per us;
+  commands on different channels run one after the other; words between a command and its 0x1d
+  hide its transfer [inferred from pass-count slopes]. Of 32-byte loads handed before the first 0x1d the first 19
   run and the rest wait until 0x1d's free room; 32 commands and 32 waits returned [verified], the
   loads landed [measured], and each 0x1d counts one handed command [inferred], kind 2 included
   [measured, one job] (`stream`).
@@ -907,6 +910,49 @@ engine off script (`Engine.off`: the lane memory unknown, later destinations unk
 destination that cannot be bounded, and any value after the grammar is lost, raise. X1 0x1e is
 no transfer: its signed quotient a / b is on X1's result bus four words after the head
 [verified for a >= 0, b > 0 and one divide at a time; inferred with another in flight].
+
+### Timing
+
+```python
+from fenykl.dsp.timing import estimate
+
+flow = Executor(boot, datapath=m).step(job)  # m = Machine(boot, stream=Engine()), per job
+m.between_jobs()
+e = estimate(job, flow, m.stream)
+e.us, e.tier, e.parts  # None when not known; e.unknown says why
+```
+
+The estimate is the job's minimum time on the camera (single jobs jitter by up to 1.5 ms), a sum
+of parts, each with its tier; the total has the weakest. Every figure was measured on the camera
+as the job's completion time against loop pass counts, minimum over repeats:
+
+- **job**: 98.4 us per job, the interrupt and callback path [inferred: the loops' verified
+  intercept of 101 us less the first runs of their 42 words];
+- **first runs**: 62 ns for each word index the first time it runs [the straight-line slope
+  fitted, inferred; a word branched over costs nothing, verified];
+- **repeats**: 5.37 ns for each later execution 9 to 106 executed words after the word's last,
+  with no op 3 or 4 between [verified in such loops for idle words, scalar local loads, X1's
+  divide, X0 lane loads and taken branches with their slots]; other repeats, and repeated
+  words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
+  not timed];
+- **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and
+  0x1d at its executed word (`Engine.events`). A command runs from its hand-off, after the one
+  before it on any channel (one engine), for `per_command` + `per_kib` x its KiB of DRAM
+  (`timing.RATES`: lane-memory byte loads 0.442 us per KiB + 0.2 us and byte stores 0.427 us
+  per KiB + 0.3 us, both from 1 to 16 KiB; 16-bit and 12-bit stores at the byte store's rate,
+  4 KiB only; a 4 KiB byte load into local memory at r2 = 4, 5.77 us); a 0x1d waits for the oldest command only
+  as long as the words since its hand-off did not cover it. A job with a 0x1d has this part
+  even when the words hid every transfer.
+
+The word parts and the waits are capped at the tier of the weakest control step of the flow
+(a branch on an inferred register, a jump in another's delay slots): it decides which words
+run.
+
+A case that was not timed makes the estimate unknown: a command of another kind, memory, r2 or
+r5, of more than one row, with r3 other than the units its r6 lines fill or outside the sizes
+measured, a command that moves nothing (kind 1, or a register not handed), more than 16 commands handed before their 0x1d, an engine
+off script, and commands still outstanding at the halt (whether the job waits for them was not
+measured). A flow that did not halt raises `ValueError`.
 
 ### Adding a semantic
 
