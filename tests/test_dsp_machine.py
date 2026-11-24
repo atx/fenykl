@@ -342,18 +342,22 @@ def test_the_alu_bus_ors_a_product_with_the_ops_result(m):
     assert m.g[12] == Sv(0x7F5 | 0x1808)
 
 
-def test_a_datum_reaches_a_word_whose_op_has_no_result(m):
+@pytest.mark.parametrize(
+    ("code", "target", "want"), [(1, 9, 0x4106), (3, 9, None), (4, None, None)]
+)
+def test_a_datum_reaches_a_branch_word_but_not_a_jump_word(m, code, target, want):
+    """Arrivals in brf words were measured, in op 3 and op 4 words not: unknown there."""
     src = m.boot.source("test", "a known local word")
     m.boot.local.write(
         LOCAL_BASE + 0x100, Bytes.of((0x4106).to_bytes(4, "little"), src)
     )
     m.g[5], m.g[11] = Sv(0), Sv(7)
-    brf = Word.from_fields(
+    ctl = Word.from_fields(
         {"ra": 11, "f120_122": 0, "f272_273": 1, "f224_228": 12},
-        base=Word.ctl(1, 9, base=IDLE),
+        base=Word.ctl(code, target, base=IDLE),
     )
-    run(m, [op_word(0x1A, 5, imm=0x40), IDLE, IDLE, brf])
-    assert m.g[12].value == 0x4106
+    run(m, [op_word(0x1A, 5, imm=0x40), IDLE, IDLE, ctl])
+    assert m.g[12].value == want
 
 
 @pytest.mark.parametrize(

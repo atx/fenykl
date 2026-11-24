@@ -2588,7 +2588,8 @@ RING_STEP = (
 LOAD_DATUM = (
     "a load's datum goes to no register by itself: it appears on the ALU result bus exactly "
     "three words after the load, where a word with f272_273 = 1 or f270_271 = 1 takes it, also "
-    "a word with a branch, a store, a load or a multiply; the bus ORs it with the result of a "
+    "a word with a brf or br, a store, a load or a multiply (in an op 3 or op 4 word not "
+    "measured); the bus ORs it with the result of a "
     "data op or of op 0 in that word and with a product arriving there (verified on the camera, "
     "pre-registered on values whose bits are not nested); consecutive loads deliver in "
     f"consecutive words ({EXACT})"
