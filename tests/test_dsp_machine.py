@@ -647,9 +647,25 @@ def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
     assert m.g[16] == Sv(2)
 
 
-def test_m_under_s0_in_an_s3_heads_own_word_is_quiet_at_inferred(m):
+def test_m_under_s0_in_an_s3_heads_own_word_is_quiet(m):
     m.lanes["L3"][1] = Vec(A)
     m.r[0] = Sv(0x0A5A)
     read = {"f276": 0, "f274_275": 0, "f270_271": 2, "f221_223": 0}
     run(m, [w(f296_301=0x19, f65_68=1, **read)])
-    assert m.r[0] == Sv(0x0A5A, I)
+    assert m.r[0] == Sv(0x0A5A)
+
+
+@pytest.mark.parametrize(
+    ("head", "later", "tier"),
+    [(0x60, 0, V), (0x60, 1, V), (0x50, 0, I), (0x50, 1, I), (0x50, 2, V)],
+)
+def test_quiet_m_beside_an_unread_head_stays_inferred(m, head, later, tier):
+    # M under S1 beside an S0 head: read beside every head but the parked ones.
+    m.r[0] = Sv(0x0A5A)
+    read = {"f276": 0, "f274_275": 1, "f270_271": 2, "f221_223": 0}
+    if later == 0:
+        words = [w(f278_284=head, **read)]
+    else:
+        words = [w(f278_284=head), *[IDLE] * (later - 1), w(**read)]
+    run(m, words)
+    assert m.r[0] == Sv(0x0A5A, tier)

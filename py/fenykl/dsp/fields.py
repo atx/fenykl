@@ -1562,6 +1562,13 @@ camera)."""
 
 S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
 """S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+M_OTHER_OPEN = {
+    "s0": frozenset({0x40, *range(0x47, 0x60)}) - {0x4B, 0x4D},
+    "s1": frozenset(range(0x55, 0x60)),
+}
+"""S heads beside which M under another unit's f274_275, in the head's word and the next, was
+not read; beside every other head it was, and nothing was on M there (verified on the camera,
+pre-registered)."""
 S_NEXT_VALUES = {
     "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
 }

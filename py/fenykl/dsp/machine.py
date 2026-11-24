@@ -47,6 +47,7 @@ from .fields import (
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
+    M_OTHER_OPEN,
     OP_FIELD,
     PB_FILES,
     PB_SOURCES,
@@ -274,8 +275,8 @@ class Machine:
         self.reductions: list[tuple[int, Sv]] = []
         self.last_head: int | None = None
         """The word of the last S head run."""
-        self.head_units: set[str] = set()
-        """The units whose heads ran in that word."""
+        self.head_values: set[tuple[str, int]] = set()
+        """The (unit, head) pairs that ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -587,8 +588,8 @@ class Machine:
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             if self.last_head != t:
-                self.head_units = set()
-            self.head_units.add(unit)
+                self.head_values = set()
+            self.head_values.add((unit, head))
             self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
@@ -806,13 +807,17 @@ class Machine:
         return _cap(v, tier)
 
     def _quiet(self, sel: str, t: int) -> bool:
-        """Whether "nothing on M" was measured for this case: in a head's own word under S3 and,
-        beside an S0..S2 head, under every unit; in every later word under every unit, also
-        after a reduction (but its first word) with other heads between (verified). Under
-        S0..S2 in the own word of S3 heads alone, and with no head in the job, it is inferred."""
+        """Whether "nothing on M" was measured for this case: in a head's own word and every
+        later word under every unit, also after a reduction (but its first word) with other heads
+        between (verified). Beside a head of `M_OTHER_OPEN` under another unit, in its word and
+        the next, and with no head in the job, it is inferred."""
         if self.last_head is None:
             return False
-        return not (t == self.last_head and sel != "s3" and self.head_units == {"s3"})
+        if t - self.last_head > 1:
+            return True
+        return not any(
+            u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in self.head_values
+        )
 
     # ------------------------------------------------------------------ ports
 
