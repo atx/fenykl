@@ -439,9 +439,9 @@ appears on the ALU result bus exactly three words after the load, where a word w
 f272_273 = 1 or f270_271 = 1 takes it; the bus ORs it with a data op's result and with a
 multiply's product arriving in that word, and a word with a brf or br, a store, a load or a
 multiply takes it alone; consecutive loads deliver in consecutive words (verified by exact
-readout). What arrives in an op 3 or op 4 word was not measured: the emulator makes it
-unknown. Stepping records a load's read only and makes a store's bytes unknown, since R is not modelled; an access at an
-address not aligned to its width has no semantics. The resampler's word that reads tap 1 is a
+readout). An op 3 or op 4 word takes it the same way [inferred]. Stepping records a load's
+read only and makes a store's bytes unknown, since R is not modelled; an access at an address
+not aligned to its width has no semantics. The resampler's word that reads tap 1 is a
 0x16 with imm 1; on the camera, with ra kept (one run each):
 
 | op in its place | imm 0 | imm 1 | reading |
