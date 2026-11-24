@@ -81,9 +81,14 @@ LANE_STORE = Rate(
     0.427,
     0.3,
     (1, 16),
-    "stores from the lane memory: 0.74, 2.14 and 7.19 us for 1, 4 and 16 KiB of bytes, fitted; "
-    "16-bit and 12-bit stores ran at the byte store's rate per KiB of DRAM within the jitter "
-    "(1.73 to 2.36 us per 4 KiB, fitted)",
+    "byte stores from the lane memory: 0.74, 2.14 and 7.19 us for 1, 4 and 16 KiB, fitted",
+)
+PACKED_STORE = Rate(
+    LANE_STORE.per_kib,
+    LANE_STORE.per_command,
+    (4, 4),
+    "16-bit and 12-bit stores from the lane memory: 1.73 to 1.94 and 1.56 us per 4 KiB of DRAM, "
+    "the byte store's rate within the jitter (fitted, at 4 KiB only)",
 )
 LOCAL_LOAD = Rate(
     1.44,
@@ -95,12 +100,15 @@ LOCAL_LOAD = Rate(
 RATES: dict[tuple[int, int, int, int], Rate] = {
     (LOAD, LANE_MEMORY, 0x20, 0x10): LANE_LOAD,
     (STORE, LANE_MEMORY, 0x20, 0x10): LANE_STORE,
-    (STORE, LANE_MEMORY, 0x20, 0x08): LANE_STORE,
-    (STORE, LANE_MEMORY, 0x20, 0x0A): LANE_STORE,
+    (STORE, LANE_MEMORY, 0x20, 0x08): PACKED_STORE,
+    (STORE, LANE_MEMORY, 0x20, 0x0A): PACKED_STORE,
     (LOAD, LOCAL_MEMORY, 4, 0x10): LOCAL_LOAD,
 }
 """(kind, r0, r2, r5): the transfers timed on the camera, each a command of one row (r7 = 1)
-handed and joined by a 0x1d. Other shapes have no time."""
+handed and joined by a 0x1d, with r3 the units its r5 r6 elements fill. Other shapes have no
+time."""
+QUEUE = 16
+"""Commands handed and not yet waited for that all ran (verified); of 32 only the first 19 ran."""
 OVERLAP = (
     "the stream engine: one for all channels, its commands run one after another from their "
     "hand-off (two 8 KiB loads on two channels took about as long as one 16 KiB load: fitted); "
@@ -132,9 +140,9 @@ class Estimate:
         return None if self.unknown else sum(p.us for p in self.parts)
 
     @property
-    def tier(self) -> Confidence:
-        """The weakest part's tier."""
-        return min(p.tier for p in self.parts)
+    def tier(self) -> Confidence | None:
+        """The weakest part's tier; None when the time is not known."""
+        return None if self.unknown else min(p.tier for p in self.parts)
 
     def __str__(self) -> str:
         if self.unknown:
@@ -145,12 +153,14 @@ class Estimate:
 
 def transfer_us(event: Event) -> float:
     """The time of the command `event` hands, from its registers; raises `Unmeasured`."""
-    r0, _, r2, _, _, r5, r6, r7 = event.regs
+    r0, _, r2, r3, _, r5, r6, r7 = event.regs
     rate = RATES.get((event.kind, r0, r2, r5))
-    if rate is None or None in (r6, r7):
+    if rate is None or None in (r3, r6, r7):
         raise Unmeasured(
             f"a command of kind {event.kind} at r0 {r0}, r2 {r2}, r5 {r5}: not timed"
         )
+    if r3 != -(-r5 * r6 // r2):
+        raise Unmeasured(f"r3 {r3:#x} short of or past what r6 fills: not timed")
     if r7 != 1:
         raise Unmeasured(f"a command of {r7} rows: only one row was timed")
     kib = 16 * r6 / 1024
@@ -194,6 +204,11 @@ def estimate(job: Job, flow: Flow, engine: Engine | None = None) -> Estimate:
                 except Unmeasured as x:
                     return Estimate(unknown=f"word {step.index}: {x}")
                 ends.append(free)
+                if len(ends) > QUEUE:
+                    return Estimate(
+                        unknown=f"word {step.index}: more than {QUEUE} commands handed "
+                        "before their 0x1d: the later ones may not run"
+                    )
                 continue
             joined = True
             if ends:

@@ -922,14 +922,15 @@ as the job's completion time against loop pass counts, minimum over repeats:
 - **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and
   0x1d at its executed word (`Engine.events`). A command runs from its hand-off, after the one
   before it on any channel (one engine), for `per_command` + `per_kib` x its KiB of DRAM
-  (`timing.RATES`: lane-memory byte loads 0.442 us per KiB + 0.2 us, lane-memory stores of
-  bytes, 16-bit and 12-bit elements 0.427 us per KiB + 0.3 us, both from 1 to 16 KiB; a 4 KiB
-  byte load into local memory at r2 = 4, 5.77 us); a 0x1d waits for the oldest command only
+  (`timing.RATES`: lane-memory byte loads 0.442 us per KiB + 0.2 us and byte stores 0.427 us
+  per KiB + 0.3 us, both from 1 to 16 KiB; 16-bit and 12-bit stores at the byte store's rate,
+  4 KiB only; a 4 KiB byte load into local memory at r2 = 4, 5.77 us); a 0x1d waits for the oldest command only
   as long as the words since its hand-off did not cover it. A job with a 0x1d has this part
   even when the words hid every transfer.
 
 A case that was not timed makes the estimate unknown: a command of another kind, memory, r2 or
-r5, of more than one row or outside the sizes measured, a command that moves nothing, an engine
+r5, of more than one row, with r3 other than the units its r6 lines fill or outside the sizes
+measured, a command that moves nothing, more than 16 commands handed before their 0x1d, an engine
 off script, and commands still outstanding at the halt (whether the job waits for them was not
 measured). A flow that did not halt raises `ValueError`.
 

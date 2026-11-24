@@ -120,13 +120,24 @@ def test_shapes_not_timed_have_no_time():
     cases = {
         "two rows": [*lanes(0, 0x40, r7=2), *load(0), WAIT],
         "16-bit load": [*lanes(0, 0x40, r5=0x08), *load(0), WAIT],
+        "16-bit store of 1 KiB": [*lanes(0, 0x40, r5=0x08), *store(0), WAIT],
         "32-bit store": [*lanes(0, 0x40, r5=0x04), *store(0), WAIT],
+        "r3 short of r6": [0x20, 1, 0x400, 0x20, 0x10, 0x400, 0x10, 0x40, 1]
+        + [*load(0), WAIT],
         "under 1 KiB": [*lanes(0, 0x20), *load(0), WAIT],
         "2 KiB into local memory": [*local(0, 0x80), *load(0, 0x800), WAIT],
         "nothing moves": [*lanes(0, 0x40), 1, SRC, 0, WAIT],
     }
     for name, values in cases.items():
-        assert run(values).us is None, name
+        e = run(values)
+        assert e.us is None and e.tier is None, name
+
+
+def test_more_commands_than_the_queue_held_have_no_time():
+    held = run([*lanes(0, 0x40), *load(0) * 16, *[WAIT] * 16])
+    over = run([*lanes(0, 0x40), *load(0) * 17, *[WAIT] * 17])
+    assert held.us is not None
+    assert over.us is None and "more than 16" in over.unknown
 
 
 def test_4_kib_into_local_memory_is_timed():
