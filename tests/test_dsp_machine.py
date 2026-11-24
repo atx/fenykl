@@ -92,6 +92,16 @@ def test_the_reduction_register_from_the_third_word(m):
     assert m.g[2] == Sv(max(B)) == m.g[3]
 
 
+def test_an_extract_reads_only_its_lane(m):
+    m.lanes["L3"][4] = Vec((None,) * 5 + (0xBEEF,) + (None,) * 26)
+    m.f["F3"][2] = Sv(5)
+    read = {"f276": 0, "f274_275": 3, "f272_273": 2}
+    extract = w(**read, f296_301=0x16, f65_68=4, f92_95=2, f224_228=1)  # lane F3[2]
+    run(m, [extract, w(f296_301=0x0, f65_68=4), IDLE, IDLE, w(**read, f224_228=2)])
+    assert m.g[1] == Sv(0xBEEF)
+    assert m.g[2].value is None  # the maximum of a vector with unknown lanes
+
+
 def test_a_counted_loop_stores_through_r():
     """r2 := 3; loop: r3 += 5 (port 272 / 1); loop end on r2 (r2 - 1 back through 272 / 1); then
     R[0] := r3 and a word store to local 0x40; four passes."""

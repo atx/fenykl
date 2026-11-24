@@ -65,7 +65,6 @@ from .fields import (
 from .semantics import (
     IDLE_OP,
     LANE_COUNT,
-    LANE_MASK,
     LANE_RULES,
     LOAD_LAG,
     LOCAL_BYTES,
@@ -74,13 +73,16 @@ from .semantics import (
     MULTIPLY_LAG,
     OP_SEMANTICS,
     PR_ENABLES,
+    S_RULES,
     X_RULES,
     Branch,
     OpValue,
+    UnknownInput,
     UnknownSemantics,
     lane_address,
     lane_result,
     product_high,
+    s_result,
     x_result,
 )
 from .state import Bytes, RegisterFile
@@ -130,121 +132,8 @@ def _sext(v: int, bits: int) -> int:
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
 
 
-def _mask(bits) -> int:
-    return sum(1 << k for k, b in enumerate(bits) if b)
-
-
-# The scalar results of S heads on M, by unit and head (`fields.S_RESULTS`): (kind, tier, f).
-# "own": on M in the head's word; "held1": on M one word after the head, for one word; "held3":
-# a result register on M from the third word after the head on.
-def _lane_at(v: list[int | None], k: int, signed: bool) -> int:
-    x = v[k & 31]
-    if x is None:
-        raise _Unknown(f"lane {k & 31}")
-    return (_s16(x) if signed else x) & M32
-
-
-def _carry(a: list[int], b: list[int], c: int) -> int:
-    return _mask((x + y + (c >> k & 1)) >> 16 for k, (x, y) in enumerate(zip(a, b)))
-
-
-def _overflow(a: list[int], b: list[int], c: int) -> int:
-    return _mask(
-        not -0x8000 <= _s16(x) + _s16(y) + (c >> k & 1) <= 0x7FFF
-        for k, (x, y) in enumerate(zip(a, b))
-    )
-
-
-def _cmp(f) -> callable:
-    return lambda a, b, s: _mask(f(x, y, s) for x, y in zip(a, b))
-
-
-S_SCALARS: dict[str, dict[int, tuple[str, Confidence, str, callable]]] = {
-    "s0": {
-        0x52: ("own", V, "", lambda a, b, s: s["r"]),
-        0x24: ("held1", V, "ab", _cmp(lambda x, y, s: x != y)),
-        0x25: ("held1", V, "ab", _cmp(lambda x, y, s: x == y)),
-        0x32: ("held1", V, "ab", _cmp(lambda x, y, s: x < y)),
-        0x33: ("held1", V, "ab", _cmp(lambda x, y, s: x >= y)),
-        0x2E: ("held1", V, "b", _cmp(lambda x, y, s: y > s["imm"])),
-        0x2F: ("held1", V, "b", _cmp(lambda x, y, s: y <= s["imm"])),
-        0x30: ("held1", V, "b", _cmp(lambda x, y, s: y > s["s"] & LANE_MASK)),
-        0x31: ("held1", V, "b", _cmp(lambda x, y, s: y <= s["s"] & LANE_MASK)),
-        0x12: ("held1", V, "b", _cmp(lambda x, y, s: y != s["imm"])),
-        0x13: ("held1", V, "b", _cmp(lambda x, y, s: y == s["imm"])),
-        0x18: ("held1", V, "b", _cmp(lambda x, y, s: y != s["s"] & LANE_MASK)),
-        0x19: ("held1", V, "b", _cmp(lambda x, y, s: y == s["s"] & LANE_MASK)),
-        0x20: ("held1", V, "ab", lambda a, b, s: _carry(a, b, 0)),
-        0x1F: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["r"])),
-        0x2C: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["r"])),
-        0x2A: ("held1", V, "ab", lambda a, b, s: _overflow(a, b, s["r"])),
-        0x22: ("held1", V, "ab", _cmp(lambda x, y, s: _s16(x) < _s16(y))),
-        0x23: ("held1", V, "ab", _cmp(lambda x, y, s: _s16(x) >= _s16(y))),
-        0x16: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) > _s16(s["s"]))),
-        0x17: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) <= _s16(s["s"]))),
-        0x0E: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) > _s16(s["imm"]))),
-        0x0F: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) <= _s16(s["imm"]))),
-    },
-    "s1": {
-        0x54: ("own", V, "", lambda a, b, s: s["t"]),
-        0x34: ("held1", V, "ab", lambda a, b, s: _carry(a, b, 0)),
-        0x33: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["r"])),
-        0x3F: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["r"])),
-        0x3D: ("held1", V, "ab", lambda a, b, s: _overflow(a, b, s["r"])),
-        0x41: ("held1", V, "b", _cmp(lambda x, y, s: y > s["imm"] & LANE_MASK)),
-        0x42: ("held1", V, "b", _cmp(lambda x, y, s: y <= s["imm"] & LANE_MASK)),
-        0x43: ("held1", V, "b", _cmp(lambda x, y, s: y > s["t"] & LANE_MASK)),
-        0x44: ("held1", V, "b", _cmp(lambda x, y, s: y <= s["t"] & LANE_MASK)),
-        0x45: ("held1", V, "ab", _cmp(lambda x, y, s: x < y)),
-        0x46: ("held1", V, "ab", _cmp(lambda x, y, s: x >= y)),
-        0x2E: ("held1", V, "ab", _cmp(lambda x, y, s: _s16(x) < _s16(y))),
-        0x2F: ("held1", V, "ab", _cmp(lambda x, y, s: _s16(x) >= _s16(y))),
-        0x2C: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) > _s16(s["t"]))),
-        0x2D: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) <= _s16(s["t"]))),
-        0x2A: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) > _s16(s["imm"]))),
-        0x2B: ("held1", V, "b", _cmp(lambda x, y, s: _s16(y) <= _s16(s["imm"]))),
-    },
-    "s2": {
-        0xE: ("own", V, "", lambda a, b, s: s["t"]),
-        0xC: (
-            "own",
-            V,
-            "b1",
-            lambda a, b, s: _lane_at(b, s["f53_56"] % 4 * 8 + (s["f88_91"] >> 1), True),
-        ),
-    },
-    "s3": {
-        0x24: ("own", V, "", lambda a, b, s: s["value"]),
-        0xE: (
-            "own",
-            V,
-            "b1",
-            lambda a, b, s: _lane_at(b, s["f92_95"] | (s["f31_34"] & 4) << 2, False),
-        ),
-        0xF: (
-            "own",
-            V,
-            "b1",
-            lambda a, b, s: _lane_at(b, s["f92_95"] | (s["f31_34"] & 4) << 2, True),
-        ),
-        0x16: ("own", V, "b1", lambda a, b, s: _lane_at(b, s["index"], False)),
-        0x17: ("own", V, "b1", lambda a, b, s: _lane_at(b, s["index"], True)),
-        0x0: ("held3", V, "b", lambda a, b, s: max(b)),
-        0x1: ("held3", V, "b", lambda a, b, s: min(b)),
-        0x2: ("held3", V, "b", lambda a, b, s: sum(b) & M32),
-        0x3: ("held3", V, "b", lambda a, b, s: max(map(_s16, b)) & M32),
-        0x4: ("held3", V, "b", lambda a, b, s: min(map(_s16, b)) & M32),
-        0x5: ("held3", V, "b", lambda a, b, s: sum(map(_s16, b)) & M32),
-    },
-}
-"""S heads' scalar results (`fields.S_RESULTS`, verified on the camera, pre-registered): the
-compare masks of S0 under f274_275 = 0 and of S1 under 1 one word after the head, for that word
-only (an add's carry, with its carry-in bit k of F0[f76_79] / F1[f80_83], and a signed max / min
-head's choice included); the reductions of S3 from the third word on; the others in the head's
-word. The order compares are unsigned but for the signed max / min heads' masks."""
 M_UNITS = ("s0", "s1", "s2", "s3")
 """f274_275's values: the unit whose result M puts out."""
-_PROBE = random.Random(0x5EED)
 _PROBE_SCALARS = (
     "s",
     "r",
@@ -259,42 +148,52 @@ _PROBE_SCALARS = (
     "index",
     "value",
 )
+PROBES = 32
+"""Random draws per head when probing which operands a rule reads."""
+
+
+def _reads(f, draw) -> frozenset[str]:
+    """The operands ("a", "b") whose change changes f(a, b, c) on `PROBES` random draws of
+    (a, a2, b, b2, c)."""
+    out = set()
+    for _ in range(PROBES):
+        a, a2, b, b2, c = draw()
+        base = f(a, b, c)
+        if f(a2, b, c) != base:
+            out.add("a")
+        if f(a, b2, c) != base:
+            out.add("b")
+    return frozenset(out)
+
+
+def _lane_draw(rng: random.Random):
+    def draw():
+        vecs = [[rng.randrange(HALF) for _ in range(LANE_COUNT)] for _ in range(4)]
+        c = {
+            k: rng.randrange(16 if k.startswith("f") else HALF) for k in _PROBE_SCALARS
+        }
+        return (*vecs, c)
+
+    return draw
 
 
 @cache
 def lane_reads(unit: str, head: int) -> frozenset[str]:
-    """The lane operands ("a", "b") a lane rule reads: those whose change changes its result on
-    random operands (eight draws)."""
-    out = set()
-    for _ in range(8):
-        a, a2, b, b2 = (
-            [_PROBE.randrange(HALF) for _ in range(LANE_COUNT)] for _ in range(4)
-        )
-        c = {
-            k: _PROBE.randrange(16 if k.startswith("f") else HALF)
-            for k in _PROBE_SCALARS
-        }
-        base = lane_result(unit, head, a, b, c)
-        if lane_result(unit, head, a2, b, c) != base:
-            out.add("a")
-        if lane_result(unit, head, a, b2, c) != base:
-            out.add("b")
-    return frozenset(out)
+    """The lane operands ("a", "b") a lane rule reads, probed (`_reads`)."""
+    rng = random.Random(f"lane {unit} {head}")
+    return _reads(lambda a, b, c: lane_result(unit, head, a, b, c), _lane_draw(rng))
 
 
 @cache
 def x_reads(unit: str, head: int) -> frozenset[str]:
-    """The register operands ("a", "b") an X rule reads, probed as `lane_reads`."""
-    out = set()
-    for _ in range(8):
-        a, a2, b, b2 = (_PROBE.randrange(1 << 32) for _ in range(4))
-        k = _PROBE.randrange(1 << X_IMMEDIATES[unit].width)
-        base = x_result(unit, head, a, b, k)
-        if x_result(unit, head, a2, b, k) != base:
-            out.add("a")
-        if x_result(unit, head, a, b2, k) != base:
-            out.add("b")
-    return frozenset(out)
+    """The register operands ("a", "b") an X rule reads, probed (`_reads`)."""
+    rng = random.Random(f"x {unit} {head}")
+    width = X_IMMEDIATES[unit].width
+
+    def draw():
+        return (*(rng.randrange(1 << 32) for _ in range(4)), rng.randrange(1 << width))
+
+    return _reads(lambda a, b, k: x_result(unit, head, a, b, k), draw)
 
 
 U_TAKES = {
@@ -350,7 +249,7 @@ class Carry:
 
 
 class _Scalars(Mapping):
-    """The scalars a lane rule reads; reading an unknown one raises `_Unknown`."""
+    """The scalars a lane rule reads; reading an unknown one raises `UnknownInput`."""
 
     def __init__(self, values: dict[str, Sv]) -> None:
         self.values = values
@@ -359,7 +258,7 @@ class _Scalars(Mapping):
     def __getitem__(self, key: str) -> int:
         v = self.values[key]
         if v.value is None:
-            raise _Unknown(key)
+            raise UnknownInput(key)
         self.tier = min(self.tier, v.tier)
         return v.value
 
@@ -368,10 +267,6 @@ class _Scalars(Mapping):
 
     def __len__(self) -> int:
         return len(self.values)
-
-
-class _Unknown(Exception):
-    pass
 
 
 class Machine:
@@ -690,32 +585,25 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
-            scalar = S_SCALARS[unit].get(head)
-            if scalar is None:
+            rule = S_RULES[unit].get(head)
+            if rule is None:
                 continue
-            kind, tier, reads, f = scalar
             sc = _Scalars(scalars)
-            ins = [v for name, v in (("a", a), ("b", b)) if name in reads]
-            tier = min([tier, *(v.tier for v in ins)])
-            if reads == "b1":
-                try:
-                    value = Sv(f(None, list(b.lanes), sc) & M32, min(tier, sc.tier))
-                except _Unknown:
-                    value = Sv(None)
-            elif any(x is None for v in ins for x in v.lanes):
+            reads = rule.value.reads if rule.value else ""
+            ins = [v for k, v in (("a", a), ("b", b)) if k in reads]
+            tier = min([rule.confidence, *(v.tier for v in ins)])
+            try:
+                value = Sv(
+                    s_result(unit, head, a.lanes, b.lanes, sc), min(tier, sc.tier)
+                )
+            except UnknownInput:
                 value = Sv(None)
-            else:
-                try:
-                    al, bl = [x or 0 for x in a.lanes], [x or 0 for x in b.lanes]
-                    value = Sv(f(al, bl, sc) & M32, min(tier, sc.tier))
-                except _Unknown:
-                    value = Sv(None)
-            if kind == "own":
+            if rule.held:
+                self.reductions.append((t + rule.lag, value))
+            elif rule.lag == 0:
                 own[unit] = value
-            elif kind == "held1":
-                self.held_due.setdefault(t + 1, {})[unit] = value
             else:
-                self.reductions.append((t + 3, value))
+                self.held_due.setdefault(t + rule.lag, {})[unit] = value
         return own
 
     def _scalars(self, unit: str, word: Word) -> dict[str, Sv]:
@@ -776,7 +664,7 @@ class Machine:
         t: int,
     ) -> None:
         rule = LANE_RULES[unit].get(head)
-        if rule is None and head in S_SCALARS[unit]:
+        if rule is None and head in S_RULES[unit]:
             return
         if rule is None:
             # A head without a rule: its lane result is unknown at either lag, and so is M's
@@ -812,7 +700,7 @@ class Machine:
                 if unit == "s2" and head in S2_HIGH_HALVES:
                     hi = product_high(head, al, bl, sc)
                     high = Vec(tuple(hi), min(tier, S2_HIGH_HALVES[head][1], sc.tier))
-            except _Unknown:
+            except UnknownInput:
                 low = UNKNOWN_VEC
         lag = LANE_LAG[unit].get(head)
         if lag is None:
