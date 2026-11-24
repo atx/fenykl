@@ -48,6 +48,7 @@ from .fields import (
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
+    M_OTHER_OPEN,
     OP_FIELD,
     PB_FILES,
     PB_SOURCES,
@@ -277,8 +278,8 @@ class Machine:
         self.reductions: list[tuple[int, Sv]] = []
         self.last_head: int | None = None
         """The word of the last S head run."""
-        self.head_units: set[str] = set()
-        """The units whose heads ran in that word."""
+        self.head_values: set[tuple[str, int]] = set()
+        """The (unit, head) pairs that ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
         self.ceiling = V
         """The tier cap of what the word being run leaves (`execute`)."""
@@ -609,8 +610,8 @@ class Machine:
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             if self.last_head != t:
-                self.head_units = set()
-            self.head_units.add(unit)
+                self.head_values = set()
+            self.head_values.add((unit, head))
             self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
@@ -812,9 +813,8 @@ class Machine:
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
             )
         if sel not in own:
-            # A lone own-word result under another unit's f274_275 (not measured).
-            v = next(iter(own.values()))
-            return _cap(v, H) if h is None else Sv(None, H)
+            # A lone own-word result under another unit's f274_275 is not on M (verified).
+            return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
         v = own[sel]
         if sel == "s3":
             if fresh is None:
@@ -834,17 +834,19 @@ class Machine:
     def _quiet(self, sel: str, t: int) -> bool:
         """Whether "nothing on M" was measured for this case: in every word from two after a
         head under every unit, also after a reduction (but its first word) with other heads
-        between; with one unit's head in the word, in the head's own word under S3 and, beside
-        an S0..S2 head, under every unit, and one word after under every unit (verified). With
-        two units' heads in one word, under S0..S2 in the own word of an S3 head and with no
-        head in the job, it is inferred."""
+        between; with one unit's heads in the word, in the head's own word and the next under
+        every unit (verified). Beside a head of `M_OTHER_OPEN` under another unit in its word and
+        the next, with two units' heads in one word and with no head in the job, it is
+        inferred."""
         if self.last_head is None:
             return False
         if t - self.last_head >= 2:
             return True
-        if len(self.head_units) > 1:
+        if len({u for u, _ in self.head_values}) > 1:
             return False
-        return not (t == self.last_head and sel != "s3" and self.head_units == {"s3"})
+        return not any(
+            u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in self.head_values
+        )
 
     # ------------------------------------------------------------------ ports
 

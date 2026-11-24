@@ -930,13 +930,14 @@ def _lags(
 LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
     "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
     | _lags(1, V, range(0x08, 0x0E), 0x1E, 0x1F, range(0x20, 0x24), range(0x26, 0x2E))
-    | _lags(1, V, range(0x34, 0x40))
+    | _lags(1, V, range(0x34, 0x40), 0x1C)
     | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
     "s1": _lags(0, V, range(0xA), 0x53)
     | _lags(1, V, range(0xA, 0x41), range(0x47, 0x53)),
     "s2": _lags(1, V, range(0x7)) | _lags(0, V, 0x7, 0x8, 0x9, 0xA, 0xB, 0xD),
     "s3": _lags(1, V, range(0xA, 0xE))
     | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
+    | _lags(1, V, 0x9)
     | _lags(1, H, 0x6, 0x7, 0x8),
 }
 """Words from a head to the one word whose lane port takes its result, with the tier, by head (verified on the camera,
@@ -1155,6 +1156,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x17: ("min_s(b, s)", V, ""),
         0x1A: ("sat_s(b - s)", V, ""),
         0x1B: ("sat_s(b + s)", V, ""),
+        0x1C: (f"(b - a) / 2, {TIES}", V, ""),
         0x1D: (f"(a + b) / 2, {TIES}", V, ""),
         **_rows((0x1E, 0x2A), "sat_s(a + b + c)", V, CARRY_IN),
         **_rows((0x1F, 0x2B), "a + b + c, wrapping", V, CARRY_IN),
@@ -1310,16 +1312,20 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             NO_LANE_LAGS,
         ),
-        **_rows(range(0x25, 0x3F), NO_LANE, I),
+        **_rows(range(0x25, 0x3F), NO_LANE, V, NO_LANE_LAGS),
         **_rows(
             (0x06, 0x07, 0x08),
             "a window of b's lanes, 0 in the others",
             H,
-            "the window depends on a state not identified: in one run at lag 1 0x6 gave 0 in "
-            "all lanes, 0x7 b in lanes 9..15 and 0x8 b in lanes 16..31; earlier runs gave b or 0 "
-            "by run",
+            "the window follows a's content, not the scalars nor the words around the head: "
+            "0x6 gave 0 on every operand pair; 0x7 a block of b in lanes 0..15, 0x8 a 16-lane "
+            "block of b in one half, or 0, by operands",
         ),
-        0x09: ("b's lanes 0..2, then 0", H, "0 in an earlier run; the rule open"),
+        0x09: (
+            "b[(k & 16) + a[k]] where a[k] < 16, else 0",
+            V,
+            "a table lookup in each 16-lane half",
+        ),
         0x0A: ("lanes 2k, 2k + 1 := b[k], a[k] for k = 0..15", V, ""),
         0x0B: ("lanes 2k, 2k + 1 := b[16 + k], a[16 + k] for k = 0..15", V, ""),
         0x0C: ("b's odd lanes, then a's odd lanes", V, ""),
@@ -1564,6 +1570,13 @@ camera)."""
 
 S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
 """S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+M_OTHER_OPEN = {
+    "s0": frozenset({0x40, *range(0x47, 0x60)}) - {0x4B, 0x4D},
+    "s1": frozenset(range(0x55, 0x60)),
+}
+"""S heads beside which M under another unit's f274_275, in the head's word and the next, was
+not read; beside every other head it was, and nothing was on M there (verified on the camera,
+pre-registered)."""
 S_NEXT_VALUES = {
     "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
 }

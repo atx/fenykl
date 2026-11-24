@@ -1155,6 +1155,11 @@ def _open(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [None] * LANE_COUNT
 
 
+def _lookup(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+    """Lane k := b[(k & 16) + a[k]] where a[k] < 16, else 0: a table lookup in each half."""
+    return [b[(k & 16) + a[k]] if a[k] < 16 else 0 for k in range(LANE_COUNT)]
+
+
 def _lane_numbers(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return list(range(LANE_COUNT))
 
@@ -1320,6 +1325,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x1A: _signed(lambda x, y, c: _sat_s(y - _sv(c, "s"))),
         0x1B: _signed(lambda x, y, c: _sat_s(y + _sv(c, "s"))),
         0x1D: _signed(lambda x, y, c: _round_even(x + y, 1)),
+        0x1C: _signed(lambda x, y, c: _round_even(y - x, 1)),
         **dict.fromkeys((0x1E, 0x2A), _CARRY_SAT_S),
         **dict.fromkeys((0x1F, 0x2B), _CARRY_WRAP),
         **dict.fromkeys((0x2C, 0x2D), _CARRY_SAT_U),
@@ -1435,7 +1441,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
         **dict.fromkeys((0x06, 0x07, 0x08), _open),
-        0x09: _open,
+        0x09: _lookup,
         0x0A: lambda a, b, c: [v for k in range(16) for v in (b[k], a[k])],
         0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
         0x0C: lambda a, b, c: [*b[1::2], *a[1::2]],
@@ -1509,7 +1515,7 @@ _LANE_READS = {
     ),
     "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
     "s3": _reads(
-        none=(0x06, 0x07, 0x08, 0x09, 0x11, 0x14, 0x18),
+        none=(0x06, 0x07, 0x08, 0x11, 0x14, 0x18),
         b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
     ),
 }

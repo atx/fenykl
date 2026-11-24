@@ -262,10 +262,18 @@ def test_an_own_word_result_after_an_open_head_is_unknown(m):
     assert m.f["F1"][3].value is None
 
 
-def test_a_lone_own_word_result_under_another_unit_is_a_hypothesis(m):
+def test_a_lone_own_word_result_under_another_unit_is_not_on_m(m):
     m.f["F1"][4] = Sv(0x55AA)
+    m.f["F1"][3] = Sv(0x0A5A)
     run(m, [w(f285_291=0x54, f84_87=4, f276=0, f274_275=0, f258=0, f190_193=3)])
-    assert m.f["F1"][3] == Sv(0x55AA, Confidence.HYPOTHESIS)
+    assert m.f["F1"][3] == Sv(0x0A5A)
+
+
+def test_an_own_word_result_beside_a_parked_head_under_another_unit_stays_inferred(m):
+    m.f["F0"][5] = Sv(0x55AA)
+    m.r[0] = Sv(0x0A5A)
+    run(m, [w(f278_284=0x52, f76_79=5, f276=0, f274_275=1, f270_271=2, f221_223=0)])
+    assert m.r[0] == Sv(0x0A5A, I)
 
 
 def test_another_units_held_mask_is_not_on_m(m):
@@ -675,12 +683,12 @@ def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
     assert m.g[16] == Sv(2)
 
 
-def test_m_under_s0_in_an_s3_heads_own_word_is_quiet_at_inferred(m):
+def test_m_under_s0_in_an_s3_heads_own_word_is_quiet(m):
     m.lanes["L3"][1] = Vec(A)
     m.r[0] = Sv(0x0A5A)
     read = {"f276": 0, "f274_275": 0, "f270_271": 2, "f221_223": 0}
     run(m, [w(f296_301=0x19, f65_68=1, **read)])
-    assert m.r[0] == Sv(0x0A5A, I)
+    assert m.r[0] == Sv(0x0A5A)
 
 
 @pytest.mark.parametrize("head", [0x1C, 0x22])
@@ -793,3 +801,19 @@ def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job_at_inferred()
     ]
     m = stepped(words, g17=0)
     assert m.g[17] == Sv(2, I)
+
+
+@pytest.mark.parametrize(
+    ("head", "later", "tier"),
+    [(0x60, 0, V), (0x60, 1, V), (0x50, 0, I), (0x50, 1, I), (0x50, 2, V)],
+)
+def test_quiet_m_beside_an_unread_head_stays_inferred(m, head, later, tier):
+    # M under S1 beside an S0 head: read beside every head but the parked ones.
+    m.r[0] = Sv(0x0A5A)
+    read = {"f276": 0, "f274_275": 1, "f270_271": 2, "f221_223": 0}
+    if later == 0:
+        words = [w(f278_284=head, **read)]
+    else:
+        words = [w(f278_284=head), *[IDLE] * (later - 1), w(**read)]
+    run(m, words)
+    assert m.r[0] == Sv(0x0A5A, tier)

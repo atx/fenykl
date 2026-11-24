@@ -781,7 +781,7 @@ def test_heads_without_a_lane_result():
     assert lane_result("s3", 0x00, lanes(), lanes(), S3_NIBBLES) is None
     assert lane_result("s1", 0x54, lanes(), lanes(), {}) is None
     with pytest.raises(KeyError):
-        lane_result("s0", 0x1C, lanes(), lanes(), {})  # open
+        lane_result("s0", 0x4F, lanes(), lanes(), {})  # open
 
 
 @pytest.mark.parametrize(
@@ -860,3 +860,11 @@ def test_a_return_without_a_call_raises():
     job = Job(Program((Word.ctl(4), *[IDLE] * 4, HALT)), ())
     with pytest.raises(LinkError, match="word 0: .*a return without a call"):
         Executor(Boot()).step(job)
+
+
+def test_s3_0x9_looks_b_up_in_each_half():
+    a = [3, 16, 0x8000, 0] * 4 + [0, 15, 0x100, 2] * 4
+    b = list(range(100, 132))
+    out = lane_result("s3", 0x09, a, b, S3_NIBBLES)
+    assert out[:4] == [103, 0, 0, 100]
+    assert out[16:20] == [116, 131, 0, 118]
