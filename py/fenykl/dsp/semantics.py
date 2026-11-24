@@ -1369,7 +1369,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x45: _select(lambda a, c: [c["r"]] * LANE_COUNT),
         0x46: _select(lambda a, c: a),
         0x4B: lambda a, b, c: [c["s"] >> k & 1 for k in range(LANE_COUNT)],
-        **dict.fromkeys(range(0x60, 0x7F), _open),
+        **dict.fromkeys(range(0x60, 0x7F), lambda a, b, c: list(a)),
     },
     "s1": {
         0x00: _signed(lambda x, y, c: ~y),
@@ -1437,7 +1437,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x52: _unsigned(lambda x, y, c: _sat_u(x + y)),
         0x53: _B,
         **dict.fromkeys(range(0x55, 0x60), _open),
-        **dict.fromkeys(range(0x60, 0x7F), _open),
+        **dict.fromkeys(range(0x60, 0x7F), lambda a, b, c: list(b)),
     },
     "s2": {
         **dict.fromkeys((0x00, 0x01), _signed(lambda x, y, c: y * c["imm"])),
@@ -1492,8 +1492,8 @@ class LaneRule:
 
 _LANE_READS = {
     "s0": _reads(
-        none=(0x42, 0x43, 0x4B, *range(0x60, 0x7F)),
-        a=(0x26, 0x27),
+        none=(0x42, 0x43, 0x4B),
+        a=(0x26, 0x27, *range(0x60, 0x7F)),
         b=(
             *(0x08, 0x09, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x14, 0x15, 0x16, 0x17),
             *(0x1A, 0x1B, 0x34, 0x35, 0x36, 0x37, 0x3A, 0x3B, 0x3C, 0x3D, 0x41, 0x4D),
@@ -1501,7 +1501,7 @@ _LANE_READS = {
         ),
     ),
     "s1": _reads(
-        none=range(0x55, 0x7F),
+        none=range(0x55, 0x60),
         a=(0x39, 0x3A),
         b=(
             0x00,
@@ -1528,6 +1528,7 @@ _LANE_READS = {
             0x4F,
             0x50,
             0x53,
+            *range(0x60, 0x7F),
         ),
     ),
     "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),

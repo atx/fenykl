@@ -302,27 +302,26 @@ HALT_OP = 7
 
 TAIL_SHAPES: dict[tuple[int, int], Confidence] = {
     (3, 1): V,
-    (3, 2): I,
-    (3, 3): I,
-    (3, 4): I,
+    (3, 2): V,
+    (3, 3): V,
+    (3, 4): V,
     (4, 2): V,
     (4, 3): V,
-    (4, 4): I,
+    (4, 4): V,
 }
 """The tier of the words behind a halt in delay slot k of a taken jump, by (op, k). They are
 the next three words fetched: in slot 1 the jump falls due after them and is not taken
-(verified on the camera for op 3); in slots 2 and 3 of an op 4 the rest of the slots, then the
-target's words (verified on the camera, pre-registered); op 3's slots 2..4 were fitted, and
-slot 4 of an op 4 rests on that fit (inferred). Other ops and slots raise."""
+(verified on the camera for op 3); in slots 2..4 of an op 3 or op 4 the rest of the slots, then
+the target's words (verified on the camera, pre-registered). Other ops and slots raise."""
 PASSIVE_BEHIND_HALT: dict[tuple[int, int], Confidence] = {
     (HALT_OP, 0): V,
     (3, 1): V,
     (4, 1): V,
-    (HALT_OP, 2): I,
+    (HALT_OP, 2): V,
 }
 """Control words in the tail behind a halt that change nothing, by (op, position 0..2): a halt
 first, an op 3 or op 4 second, not taken (verified on the camera, each with no jump pending);
-a halt third, a jump target's own (fitted: inferred)."""
+a halt third, a jump target's own (verified on the camera, pre-registered)."""
 
 
 class LinkError(UnknownSemantics):

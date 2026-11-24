@@ -196,8 +196,16 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
-S2_BY_T = (0x03, 0x05)
-"""S2's multiplies by t, whose high half depends on whether t is taken signed (open)."""
+LATCHED = range(0x60, 0x7F)
+"""S0's and S1's heads that give the operand their unit's last head read in the job, latched
+(S0 its a, S1 its b; 0 with none), not their own nibbles' (verified on the camera)."""
+LATCH_OPERAND = {"s0": "a", "s1": "b"}
+LATCH_MEASURED = {
+    "s0": frozenset({0x05, 0x20, 0x41}),
+    "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
+}
+"""Heads whose read was latched on the camera; other heads latch at inferred. S1 0x39, which
+reads a only, kept S1's latch (measured)."""
 LANE_PORT_FILE = {
     enable: next(
         f
@@ -295,6 +303,8 @@ class Machine:
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
+        self.latched = {unit: Vec((0,) * LANE_COUNT, V) for unit in LATCH_OPERAND}
+        """S0's / S1's latched operand (`LATCHED`): 0 at a job's start."""
         self.last_head: int | None = None
         """The word of the last S head run."""
         self.head_values: set[tuple[str, int]] = set()
@@ -728,6 +738,11 @@ class Machine:
         word: Word,
         t: int,
     ) -> None:
+        if unit in LATCH_OPERAND:
+            if head in LATCHED:
+                a = b = self.latched[unit]
+            else:
+                self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
         rule = LANE_RULES[unit].get(head)
         if rule is None and head in S_RULES[unit]:
             return
@@ -764,9 +779,6 @@ class Machine:
                 if unit == "s2" and head in S2_HIGH_HALVES:
                     hi = product_high(head, al, bl, sc)
                     htier = min(tier, S2_HIGH_HALVES[head][1], sc.tier)
-                    t_value = scalars["t"].value
-                    if head in S2_BY_T and t_value is not None and t_value & 0x8000:
-                        htier = min(htier, I)  # t was positive in every camera run
                     high = Vec(tuple(hi), htier)
             except UnknownInput:
                 low = UNKNOWN_VEC
@@ -797,6 +809,17 @@ class Machine:
             out[:-n] = u.lanes[4 + n : 4]
         return out, min(tier, u.tier)
 
+    def _latch(self, unit: str, head: int, operand: Vec) -> None:
+        """What a head of S0 / S1 leaves for the unit's 0x60.. heads (`LATCHED`)."""
+        rule = LANE_RULES[unit].get(head)
+        if rule is None and head not in S_RULES[unit]:
+            self.latched[unit] = Vec(UNKNOWN_VEC.lanes, H)
+            return
+        if unit == "s1" and rule is not None and "b" not in rule.reads:
+            return
+        tier = V if head in LATCH_MEASURED[unit] else I
+        self.latched[unit] = Vec(operand.lanes, min(operand.tier, tier))
+
     def _u_port(self, index: int, head: int, b: Vec, word: Word) -> None:
         reg = word["f141_144"]
         if head in U_NOTHING:
@@ -824,7 +847,9 @@ class Machine:
         fresh = next((v for w, v in reversed(self.reductions) if w == t), None)
         if fresh is not None:
             held["s3"] = fresh
-        tier = I if any(u != sel for u in held if u != "s3") else V
+        # A reduction is on M under 3 beside another unit's held result (verified).
+        others = any(u != sel for u in held if u != "s3")
+        tier = I if others and not (sel == "s3" and fresh is not None) else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
         before = self.open_next.get(t, {}).get(sel)

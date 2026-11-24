@@ -639,12 +639,12 @@ def test_m_without_any_head_is_quiet_at_inferred(m):
 @pytest.mark.parametrize(
     ("jump", "k", "slots_tier", "target_tier"),
     [
-        (control(3, 9), 2, I, I),  # op 3's slots 2..4: fitted
-        (control(3, 9), 3, I, I),
-        (control(3, 9), 4, V, I),
+        (control(3, 9), 2, V, V),
+        (control(3, 9), 3, V, V),
+        (control(3, 9), 4, V, V),
         (control(4, f128_132=20), 2, V, V),
         (control(4, f128_132=20), 3, V, V),
-        (control(4, f128_132=20), 4, V, I),  # rests on op 3's fit
+        (control(4, f128_132=20), 4, V, V),
     ],
 )
 def test_a_jump_due_among_the_words_behind_a_halt_redirects_them(
@@ -775,8 +775,8 @@ def test_a_jump_into_its_own_delay_slots_is_inferred(target, tier):
     assert control_tiers([control(3, target), *[IDLE] * 5]) == {0: tier}
 
 
-@pytest.mark.parametrize(("t", "tier"), [(3, V), (0x8003, I)])
-def test_s2s_high_half_by_a_negative_t_is_inferred(m, t, tier):
+@pytest.mark.parametrize(("t", "tier"), [(3, V), (0x8003, V)])
+def test_s2s_high_half_by_a_negative_t_is_verified(m, t, tier):
     m.lanes["L2"][1], m.lanes["L2"][2] = Vec(A), Vec(B)
     m.f["F2"][4] = Sv(t)
     head = w(f292_295=0x3, f53_56=1, f57_60=2, f88_91=4)
@@ -784,7 +784,7 @@ def test_s2s_high_half_by_a_negative_t_is_inferred(m, t, tier):
     assert m.lanes["L0"][9].tier == tier
 
 
-def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job_at_inferred():
+def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job():
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
     # op 3 to 6, the halt in its fourth slot: the tail is the target's three words.
     words = [
@@ -800,7 +800,7 @@ def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job_at_inferred()
         inc(17),
     ]
     m = stepped(words, g17=0)
-    assert m.g[17] == Sv(2, I)
+    assert m.g[17] == Sv(2, V)
 
 
 @pytest.mark.parametrize(
@@ -845,3 +845,18 @@ def test_x1_divides_onto_its_bus_four_words_after_the_head(
         assert m.g[5] == Sv(0x5A)  # nothing on the bus in the head's own word
     else:
         assert m.g[5].value is None  # an idle X1's bus is not known
+
+
+def test_s1_0x60_gives_the_b_its_unit_last_read_latched(m):
+    m.lanes["L1"][2], m.lanes["L1"][5] = Vec(A), Vec(B)
+    words = [
+        w(f285_291=0x61, f45_48=1, f49_52=5, **l3_port(8, 2)),  # no S1 head before: 0
+        w(f285_291=0x34, f45_48=1, f49_52=2),
+        w(f285_291=0x39, f45_48=1, f49_52=5),  # reads a only: the latch stays
+        IDLE,
+        w(f285_291=0x61, f45_48=1, f49_52=5, **l3_port(9, 2)),
+        IDLE,
+    ]
+    run(m, words)
+    assert m.lanes["L3"][8] == Vec((0,) * 32)
+    assert m.lanes["L3"][9] == Vec(tuple(A))
