@@ -222,15 +222,6 @@ def test_a_vector_written_while_the_load_runs_is_unknown():
     assert m.memory[1].lanes == (None,) * 32
 
 
-def test_a_store_takes_its_source_when_handed():
-    m, e = machine(), stream.Engine()
-    m.memory[0] = Vec(tuple(range(32)))
-    drive(m, e, [*lanes(0, 1, r6=2), *store(0, 0, DST)])
-    m.memory[0] = Vec((0,) * 32)
-    drive(m, e, [WAIT])
-    assert bytes(m.boot.read(DST, 32).data) == bytes(range(32))
-
-
 def test_a_load_reads_dram_before_a_store_handed_after_it():
     m, e = machine(bytes(range(64))), stream.Engine()
     m.memory[5] = Vec(tuple(range(100, 132)))
@@ -245,6 +236,33 @@ def test_a_load_reads_what_a_store_handed_before_it_wrote():
     drive(m, e, [*lanes(0, 1, r6=2), *store(0, 5 * 64, SRC), *load(0, SRC, 0)])
     drive(m, e, [WAIT, WAIT])
     assert m.memory[0].lanes == tuple(range(100, 132))
+
+
+def test_a_lane_source_rewritten_while_the_store_is_queued_is_inferred():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(32)))
+    drive(m, e, [*lanes(0, 1, r6=2), *store(0, 0, DST)])
+    m.memory[0] = Vec((0,) * 32)
+    drive(m, e, [WAIT])
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
+def test_a_local_source_rewritten_while_the_store_is_queued_is_inferred():
+    m, e = machine(), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + 0x400, Bytes.of(bytes(range(32)), 0))
+    drive(m, e, [*block(0, 2, 0, 4, 8, 0, 0x10, 2, 1), *store(0, 0x400, DST)])
+    m.boot.local.write(LOCAL_BASE + 0x404, Bytes.of(bytes(4), 0))
+    drive(m, e, [WAIT])
+    got = m.boot.read(DST, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
+def test_a_store_whose_source_holds_still_stays_verified():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(32)))
+    drive(m, e, [*lanes(0, 1, r6=2), *store(0, 0, DST), WAIT])
+    assert set(m.boot.read(DST, 32).taint) == {V}
 
 
 def test_a_command_with_a_register_not_handed_moves_nothing():

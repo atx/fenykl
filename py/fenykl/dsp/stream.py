@@ -50,7 +50,8 @@ handed none (inferred, one job: what follows it is capped at inferred); commands
 outstanding at the job's end complete (verified for a store, inferred for a load). The
 emulator never predicts a racing read: a load's destination is unknown from its hand until its
 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a store handed after
-it runs after it), a store takes its source as of the hand and writes DRAM at once, and the lane
+it runs after it), a store takes its source as of the hand and writes DRAM at once (inferred where
+the source is rewritten before the store completes: that race was not measured), and the lane
 memory read while any command is outstanding is a hypothesis.
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
@@ -62,7 +63,7 @@ be bounded, a value handed after the grammar is lost and a 0x1d among a command'
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .emu import LOCAL_BASE, Boot, dram_alias
+from .emu import LOCAL_BASE, dram_alias
 from .fields import LANE_VECTORS, Confidence
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
 from .semantics import LANE_COUNT, LOCAL_BYTES, UnknownSemantics
@@ -288,7 +289,7 @@ class Engine:
             if cmd.kind == LOAD:
                 self.outstanding[-1] = self._load(m, cmd)
             else:
-                self._store(m, cmd)
+                self.outstanding[-1] = self._store(m, cmd)
         except _Off as e:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)
@@ -425,7 +426,10 @@ class Engine:
 
         return complete
 
-    def _store(self, m: Machine, cmd: _Command) -> None:
+    def _store(
+        self, m: Machine, cmd: _Command
+    ) -> Callable[[Machine, Confidence], None]:
+        """Writes the store's DRAM rows from its source as of now and returns its completion."""
         r = cmd.regs
         memory = _known(r[0], "r0")
         r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
@@ -455,17 +459,43 @@ class Engine:
             nb = 4 // r2
             for _, off in rows:
                 self._local_offset(off, n * nb)
+        src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
+        taken = []
         for dram, off in rows:
             if memory == LOCAL_MEMORY:
-                element = _local_elements(
-                    m.boot.local.read(LOCAL_BASE + off, n * nb), nb
-                )
+                data = m.boot.local.read(LOCAL_BASE + off, n * nb)
+                taken.append(data)
+                element = _local_elements(data, nb)
             else:
+                taken.append(_lane_source(m, off, n))
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
-            out = pack(m.boot, bits, 16 * r6, element, tier, width)
+            out = pack(src, bits, 16 * r6, element, tier, width)
             m.boot.dram.write(dram_alias(dram), out)
             self.stored.append((dram, 16 * r6))
+
+        def complete(m: Machine, cap: Confidence) -> None:
+            if memory == LOCAL_MEMORY:
+                now = [m.boot.local.read(LOCAL_BASE + off, n * nb) for _, off in rows]
+                same = all(_same_bytes(a, b) for a, b in zip(now, taken, strict=True))
+            else:
+                now = [_lane_source(m, off, n) for _, off in rows]
+                same = not m.lanes_lost and all(
+                    x is y
+                    for a, b in zip(now, taken, strict=True)
+                    for x, y in zip(a, b)
+                )
+            if same:
+                return
+            # The source was rewritten while the store was queued: a race not measured.
+            for dram, _ in rows:
+                got = m.boot.read(dram, 16 * r6)
+                for i, owner in enumerate(got.src):
+                    if owner == src:
+                        got.taint[i] = min(got.taint[i], I)
+                m.boot.dram.write(dram_alias(dram), got)
+
+        return complete
 
     # ------------------------------------------------------------------ off script
 
@@ -537,6 +567,16 @@ def _unpack(data: Bytes, bits: int, lines: int) -> list[tuple[int | None, Confid
     return out
 
 
+def _same_bytes(a: Bytes, b: Bytes) -> bool:
+    return a.data == b.data and a.known == b.known and a.src == b.src
+
+
+def _lane_source(m: Machine, off: int, n: int) -> list[Vec | None]:
+    """The vectors a lane-memory store of n elements from offset `off` reads."""
+    base = off // VECTOR_BYTES
+    return [m.memory.get((base + v) % LANE_VECTORS) for v in range(-(-n // LANE_COUNT))]
+
+
 def _local_elements(
     data: Bytes, nb: int
 ) -> Callable[[int], tuple[int | None, Confidence]]:
@@ -569,7 +609,7 @@ def _lane_elements(
 
 
 def pack(
-    boot: Boot,
+    src: int,
     bits: int,
     n: int,
     element: Callable[[int], tuple[int | None, Confidence]],
@@ -578,8 +618,9 @@ def pack(
 ) -> Bytes:
     """n store bytes of the elements `element`(i) = (value or None, tier), `width` bits wide in
     the memory, at `bits` each: 128 // bits per 16-byte line, least significant first, the rest
-    of the line 0; bits 0 writes zeros. A byte is known when every element it draws on is known."""
-    out = Bytes.unknown(n, boot.source("store", "the stream engine's store"))
+    of the line 0; bits 0 writes zeros. A byte is known when every element it draws on is known;
+    every byte comes from source `src`."""
+    out = Bytes.unknown(n, src)
     per = 128 // bits if bits else 0
     mask = (1 << min(bits, width)) - 1
     for line in range(n // 16):
