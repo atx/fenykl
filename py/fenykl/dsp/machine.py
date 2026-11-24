@@ -25,9 +25,10 @@ give is unknown (None), and a value from a rule below verified carries that tier
 scalars (`Sv`) and 32-lane vectors of 16 bits (`Vec`), each with the weakest tier of what made it.
 """
 
-import re
+import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import cache
 
 from .emu import LOCAL_BASE, Boot
 from .fields import (
@@ -243,8 +244,57 @@ head's choice included); the reductions of S3 from the third word on; the others
 word. The order compares are unsigned but for the signed max / min heads' masks."""
 M_UNITS = ("s0", "s1", "s2", "s3")
 """f274_275's values: the unit whose result M puts out."""
-OPERAND = re.compile(r"\b([ab])\b")
-"""The lane operands a rule's text names."""
+_PROBE = random.Random(0x5EED)
+_PROBE_SCALARS = (
+    "s",
+    "r",
+    "imm",
+    "t",
+    "f31_34",
+    "f65_68",
+    "f92_95",
+    "f96_99",
+    "index",
+    "value",
+)
+
+
+@cache
+def lane_reads(unit: str, head: int) -> frozenset[str]:
+    """The lane operands ("a", "b") a lane rule reads: those whose change changes its result on
+    random operands (eight draws)."""
+    out = set()
+    for _ in range(8):
+        a, a2, b, b2 = (
+            [_PROBE.randrange(HALF) for _ in range(LANE_COUNT)] for _ in range(4)
+        )
+        c = {
+            k: _PROBE.randrange(16 if k.startswith("f") else HALF)
+            for k in _PROBE_SCALARS
+        }
+        base = lane_result(unit, head, a, b, c)
+        if lane_result(unit, head, a2, b, c) != base:
+            out.add("a")
+        if lane_result(unit, head, a, b2, c) != base:
+            out.add("b")
+    return frozenset(out)
+
+
+@cache
+def x_reads(unit: str, head: int) -> frozenset[str]:
+    """The register operands ("a", "b") an X rule reads, probed as `lane_reads`."""
+    out = set()
+    for _ in range(8):
+        a, a2, b, b2 = (_PROBE.randrange(1 << 32) for _ in range(4))
+        k = _PROBE.randrange(1 << X_IMMEDIATES[unit].width)
+        base = x_result(unit, head, a, b, k)
+        if x_result(unit, head, a2, b, k) != base:
+            out.add("a")
+        if x_result(unit, head, a, b2, k) != base:
+            out.add("b")
+    return frozenset(out)
+
+
 U_TAKES = {
     0x1F: range(4),
     0x21: range(4),
@@ -346,6 +396,7 @@ class Machine:
         self.o_written: dict[int, int] = {}
         self._writes: set[tuple[str, int]] = set()
         self._u_write: tuple[int, Vec] | None = None
+        self.open_m: dict[int, set[str]] = {}
         self.store_src = boot.source("local store", "an own program's family A store")
 
     def between_jobs(self) -> Carry:
@@ -401,7 +452,13 @@ class Machine:
         writes = self._ports(index, word, t, bus, x0bus, UNKNOWN if x1 is None else x1)
         for key, value in writes.items():
             self._commit(key, value, t)
-        for due in (self.bus_due, self.load_due, self.lane_due, self.held_due):
+        for due in (
+            self.bus_due,
+            self.load_due,
+            self.lane_due,
+            self.held_due,
+            self.open_m,
+        ):
             due.pop(t, None)
         return "; ".join(notes)
 
@@ -579,9 +636,7 @@ class Machine:
         rule = X_RULES[unit][head]
         if rule.value is None:
             return None
-        ins = [
-            v for name, v in (("a", a), ("b", b)) if name in OPERAND.findall(rule.fact)
-        ]
+        ins = [v for name, v in (("a", a), ("b", b)) if name in x_reads(unit, head)]
         if any(v.value is None for v in ins):
             return Sv(None)
         value = x_result(unit, head, a.value or 0, b.value or 0, k)
@@ -722,10 +777,22 @@ class Machine:
         if rule is None and head in S_SCALARS[unit]:
             return
         if rule is None:
-            raise UnknownSemantics(index, f"{unit} {head:#x}", [], "no lane rule")
-        if rule.value is None:
+            # A head without a rule: its lane result is unknown at either lag, and so is M's
+            # result of its unit in those words.
+            for when in (t, t + 1):
+                unknown = Vec(UNKNOWN_VEC.lanes, H)
+                self.lane_due.setdefault(when, {}).setdefault(unit, []).append(
+                    (unknown, unknown)
+                )
+                self.open_m.setdefault(when, set()).add(unit)
+            if unit == "s3" and word["f232_233"] == 1:
+                self._u_write = (word["f141_144"], Vec(UNKNOWN_VEC.lanes, H))
             return
-        reads = set(OPERAND.findall(rule.fact.split(";")[0]))
+        if rule.value is None:
+            if unit == "s3" and word["f232_233"] == 1:
+                self._u_port(index, head, b, word)
+            return
+        reads = lane_reads(unit, head)
         sc = _Scalars(scalars)
         ins = [v for name, v in (("a", a), ("b", b)) if name in reads]
         tier = min([rule.confidence, *(v.tier for v in ins)])
@@ -776,12 +843,11 @@ class Machine:
             return
         take = U_TAKES.get(head)
         if take is None:
-            raise UnknownSemantics(
-                index,
-                f"s3 {head:#x}",
-                [],
-                "what U's port takes beside this head is open",
-            )
+            self._u_write = (
+                reg,
+                Vec(UNKNOWN_VEC.lanes, H),
+            )  # what U takes here is open
+            return
         lanes = (*(b.lanes[k] for k in take), *(None,) * (LANE_COUNT - 4))
         self._u_write = (reg, Vec(lanes, b.tier))
 
@@ -796,6 +862,8 @@ class Machine:
             if any(w > t for w, _ in self.reductions):
                 v = _cap(v, I)
             held["s3"] = v
+        if sel in self.open_m.get(t, ()):
+            return Sv(None, H)
         h = held.get(sel)
         if len(own) > 1:
             if sel not in own:
@@ -871,9 +939,10 @@ class Machine:
         u = word["f232_233"]
         if u == 1:
             if word[HEAD_IDS["s3"]] == lookup(HEAD_IDS["s3"]).idle:
-                raise UnknownSemantics(
-                    index, "f232_233", [], "U's port without an S3 head"
-                )
+                self._u_write = (
+                    word["f141_144"],
+                    Vec(UNKNOWN_VEC.lanes, H),
+                )  # no S3 head: open
             if self._u_write is not None:
                 put("U", *self._u_write)
         elif u != lookup("f232_233").idle and u not in (0, 2):
