@@ -76,12 +76,12 @@ def test_listing_names_ops_targets_and_delay_slots():
     text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0   call~ -> 1443!  x0: f1=1!",
+        "0   call! -> 1443!  x0: f1=1!",
         "1..4 | idle x4",
         "5..6   idle x2",
-        "7   ret~  op_slot: f128_132=r1!",
+        "7   ret!  op_slot: f128_132=r1!",
         "8 | op1f~ r2, #0xc",
-        "9 | call~ -> 10! ctl_n=1!",
+        "9 | call! -> 10! ctl_n=1!",
     ]
 
 

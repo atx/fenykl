@@ -198,6 +198,10 @@ class Datapath(Protocol):
 
     def execute(self, index: int, word: Word, t: int) -> str: ...
 
+    def link(self, word: Word) -> tuple[int | None, Confidence]:
+        """The word an op 4 jumps to, G[f128_132], with its tier (None: not known)."""
+        ...
+
     def decide(
         self,
         index: int,
@@ -303,10 +307,16 @@ class Executor:
     every control op has four delay slots that run before its transfer takes effect, and op 7
     halts at once at any word and call depth, the return stack unchecked (whether a halt has
     delay slots of its own is open). `branching` decides ops 0..2; the default `Given()`
-    decides none of them. A local op 3 (`Program.local_op3`) runs as a call, or with
-    `local_op3_jump` as a jump to T after its delay slots, pushing no link. A loop end whose T
-    lies in its own delay slots, a control op in another's delay slots and a step past the
-    program end raise `UnknownSemantics`: what they do is open. A return without a link, or
+    decides none of them. A control op in another's delay slots jumps after its own four, and
+    so does a loop end whose T lies in its own slots (verified on the camera). On the camera
+    op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
+    the stock convention: a call's delay slots hold 0x0b #(i + 5) on r1 (verified on the
+    camera: op 4 through r1 and through r21, op 3 with and without a link word). With a
+    `datapath` the stepper takes op 4's target from it; without one, or while that register
+    is unknown, it keeps a return stack of its own: a local op 3 (`Program.local_op3`) runs
+    as a call, or with `local_op3_jump` as a jump to T after its delay slots, pushing no
+    link. A step past the
+    program end raises `UnknownSemantics`: what it does is open. A return without a link, or
     one that pops a local op 3's link, raises `LinkError`: no return lies between that op 3 and
     its T, so the return is not its own (stepped as calls, a stock loop re-ran its tail).
     A data op runs as the op slot's semantics `ops`, its operands read from the operand set
@@ -362,7 +372,9 @@ class Executor:
         steps: list[Step] = []
         stack: list[Link] = []
         visits: dict[int, int] = {}
-        pc, slots, pending = 0, 0, None
+        pc, slots = 0, 0
+        # [delay slots left, target] of each control op taken
+        jumps: list[list[int]] = []
         self._landing = []
         for _ in range(self.limit):
             self._land(len(steps))
@@ -373,43 +385,44 @@ class Executor:
                     pc, "end", [], f"past the program end ({len(words)} words)"
                 )
             word = words[pc]
+            slot = slots > 0
+            slots = max(slots - 1, 0)
             if word.op == HALT_OP:
-                steps.append(
-                    Step(pc, word.op, slots > 0, confidence=op(HALT_OP).confidence)
-                )
+                steps.append(Step(pc, word.op, slot, confidence=op(HALT_OP).confidence))
                 return Flow(steps, Stop.HALT)
+            target = None
             if not word.control:
                 if self.datapath is None:
-                    steps.append(self._data(pc, word, slots > 0, len(steps)))
+                    steps.append(self._data(pc, word, slot, len(steps)))
                 else:
                     note = self.datapath.execute(pc, word, len(steps))
-                    steps.append(Step(pc, word.op, slots > 0, word.operands, note=note))
-                if slots:
-                    slots -= 1
-                    if slots == 0 and pending is not None:
-                        pc, pending = pending, None
-                        continue
-                pc += 1
-                continue
-            if slots:
-                raise UnknownSemantics(
-                    pc, op(word.op).name, [], "a control op in a delay slot"
-                )
-            visit = visits.get(pc, 0)
-            visits[pc] = visit + 1
-            if pc in local:
-                step, pending = self._local_op3(pc, word, stack)
+                    steps.append(Step(pc, word.op, slot, word.operands, note=note))
             else:
-                step, pending = self._control(pc, visit, word, stack)
-            if self.datapath is not None:
-                self.datapath.execute(pc, word, len(steps))
-            steps.append(step)
-            if step.taken is None:
-                if self.strict:
-                    raise UnknownSemantics(pc, op(word.op).name, [], step.note)
-                return Flow(steps, Stop.UNDECIDED, f"word {pc}: {step.note}")
-            slots = DELAY_SLOTS
+                visit = visits.get(pc, 0)
+                visits[pc] = visit + 1
+                if pc in local and self.datapath is None:
+                    step, target = self._local_op3(pc, word, stack)
+                else:
+                    step, target = self._control(pc, visit, word, stack)
+                if self.datapath is not None:
+                    self.datapath.execute(pc, word, len(steps))
+                steps.append(step)
+                if step.taken is None:
+                    if self.strict:
+                        raise UnknownSemantics(pc, op(word.op).name, [], step.note)
+                    return Flow(steps, Stop.UNDECIDED, f"word {pc}: {step.note}")
+                slots = DELAY_SLOTS
+            # Every taken control op jumps after its own four delay slots, also when it stands
+            # in another's (verified on the camera: a br in a br's first slot, a loop end whose
+            # target is one of its own slots).
             pc += 1
+            for jump in jumps:
+                jump[0] -= 1
+                if jump[0] == 0:
+                    pc = jump[1]
+            jumps = [j for j in jumps if j[0]]
+            if target is not None:
+                jumps.append([DELAY_SLOTS, target])
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
@@ -440,6 +453,13 @@ class Executor:
                 note=f"returns to {back}",
                 confidence=conf,
             ), t
+        if word.op == 4 and self.datapath is not None:
+            to, tier = self.datapath.link(word)
+            if to is not None:
+                if stack:
+                    stack.pop()
+                note = f"to {to}, r{word['f128_132']}"
+                return Step(i, word.op, taken=True, note=note, confidence=tier), to
         if word.op == 4:
             if not stack:
                 raise LinkError(i, name, [], "a return without a call")
@@ -452,10 +472,6 @@ class Executor:
             return Step(
                 i, word.op, taken=True, note=f"to {back}", confidence=conf
             ), back
-        if word.op == 0 and t is not None and i < t <= i + DELAY_SLOTS:
-            raise UnknownSemantics(
-                i, name, [], f"loop end to {t}, inside its own delay slots"
-            )
         b = self.branching.decide(i, visit, word, self.boot.slot, self.boot.regs)
         ra = f"r{word['ra']}"
         if b.taken is None:

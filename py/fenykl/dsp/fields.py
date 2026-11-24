@@ -423,20 +423,26 @@ OPS: dict[int, Op] = {
     ),
     3: Op(
         "call",
-        I,
-        "call: when a return lies between the word and T, the word at i + 5 is almost never a "
-        "branch target (11 of 950 across later firmware versions of the same family), so a "
-        "return reaches it (inferred, strong); program 16's word 0 calls its job routine at 10; "
-        "the op 3 words with no return before T (local, `Program.local_op3`) are open, a jump "
-        "or a call: program 13's at word 210 runs in a job (verified on the camera: a halt "
-        "there cuts the job) and acts as a jump (inferred: as a call its link would re-run the "
-        "job's inner loop, longer than the measured job), its twin at 312 by analogy "
-        "(hypothesis); `Executor(local_op3_jump=True)` steps them as jumps",
+        V,
+        "a jump to T after four delay slots that writes no link (verified on the camera: r1 "
+        "kept its value across an op 3 without a link word). A call is an op 3 whose delay "
+        "slots hold 0x0b #(i + 5) with f272_273 = 1 on r1: 24 of the 42 op 3 words of the five "
+        "stock programs (verified in the bytes), program 16's word 0 among them, which calls "
+        "its job routine at 10; calls two deep with the link saved in another register ran as "
+        "written (verified on the camera). The other 18 (`Program.local_op3`: no return "
+        "before T) are jumps: program 13's at word 210 runs in a job (verified on the camera: "
+        "a halt there cuts the job). In the stock words f120_122 is 0 or 4 (verified in the "
+        "bytes); an op 3 built with f120_122 = 7 left its program (measured on the camera), so "
+        "its bits 0..1 may extend T (hypothesis)",
     ),
     4: Op(
         "ret",
-        I,
-        "return to the word after the call's delay slots (inferred, strong); it has no target",
+        V,
+        "a jump, after four delay slots, to the word G[f128_132] names (verified on the "
+        "camera at f128_132 = 1 and 21, the register set just before); f128_132 is 1 in 15 of "
+        "the 18 returns of the five stock programs and 3, 7 and 2 in the others (verified in "
+        "the bytes): r1 is the link by convention, written in the call's delay slots, and a "
+        "routine that calls reloads it from its frame before its op 4",
     ),
     7: Op(
         "halt",
@@ -445,7 +451,8 @@ OPS: dict[int, Op] = {
         "0 returns (inferred); at any word and call depth: program 16 with word 5 in place of "
         "word 11, inside the routine with the call's return pending, ended with status 0 and "
         "dst not written (verified on the camera, one run), so a halt needs no return and the "
-        "return stack is not checked (inferred); whether it has delay slots is open",
+        "return stack is not checked (inferred); of four stores behind an own halt the first three "
+        "wrote and the fourth did not (measured on the camera, one run: inferred)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"

@@ -271,6 +271,11 @@ class Machine:
 
     # ------------------------------------------------------------------ branching
 
+    def link(self, word: Word) -> tuple[int | None, Confidence]:
+        """Op 4's target: the word G[f128_132] names (verified on the camera at r1 and r21)."""
+        v = self.g[word["f128_132"]]
+        return v.value, v.tier
+
     def decide(
         self,
         index: int,

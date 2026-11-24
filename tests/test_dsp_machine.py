@@ -373,3 +373,54 @@ def test_a_register_form_store_and_load_address_by_rb(m):
     run(m, [store, load, IDLE, IDLE, take])
     assert m.boot.local.read(LOCAL_BASE + 0xA2, 2).data == bytes.fromhex("bbaa")
     assert m.g[12] == Sv(0xFFFFAABB)
+
+
+def control(code: int, target: int | None = None, **fields: int) -> Word:
+    return Word.from_fields(
+        {"f120_122": 0, **fields}, base=Word.ctl(code, target, base=IDLE)
+    )
+
+
+def inc(reg: int) -> Word:
+    return op_word(0x35, reg, 30, f272_273=1, f224_228=reg)  # reg += r30
+
+
+def stepped(words: list[Word], **regs: int) -> Machine:
+    boot = Boot()
+    m = Machine(boot)
+    m.g[30] = Sv(1)
+    for name, value in regs.items():
+        m.g[int(name[1:])] = Sv(value)
+    Executor(boot, datapath=m).step(
+        Job(Program((*words, Word.from_fields({"f313_319": 7}, base=IDLE))), ())
+    )
+    return m
+
+
+def test_op_4_jumps_to_the_word_its_register_names():
+    words = [control(4, f128_132=21), *[inc(16)] * 4, inc(17), inc(17), inc(18)]
+    m = stepped(words, r16=0, r17=0, r18=0, r21=7, r1=5)
+    assert (m.g[16].value, m.g[17].value, m.g[18].value) == (4, 0, 1)
+
+
+def test_a_branch_in_a_delay_slot_jumps_after_its_own_slots():
+    words = [
+        control(2, 7, ra=11),
+        control(2, 13, ra=11),
+        *[inc(16)] * 3,
+        inc(17),
+        inc(17),
+        inc(18),  # 7: the first target, the second branch's fourth slot
+        inc(19),
+        *[IDLE] * 4,
+        inc(20),  # 13: the second target
+    ]
+    m = stepped(words, r11=7, r16=0, r17=0, r18=0, r19=0, r20=0)
+    assert [m.g[r].value for r in (16, 17, 18, 19, 20)] == [3, 0, 1, 0, 1]
+
+
+def test_a_loop_end_into_its_own_slots_runs_them_again():
+    loop = control(0, 3, ra=8, f272_273=1, f224_228=8)
+    words = [loop, inc(16), inc(17), inc(18), inc(19), inc(20)]
+    m = stepped(words, r8=3, r16=0, r17=0, r18=0, r19=0, r20=0)
+    assert [m.g[r].value for r in (8, 16, 17, 18, 19, 20)] == [2, 1, 1, 2, 2, 1]
