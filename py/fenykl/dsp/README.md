@@ -197,8 +197,8 @@ own word, and U, were not measured.
 S3's lane shift 0x1b moves b by n = f92_95 as a signed nibble: down by 1..4 at 15..12 [verified,
 pre-registered on all 32 lanes], up by 1..4 [verified, pre-registered on lanes 24..31; up by 2 on
 all 32 lanes], not at all at 5..11 [measured]; 0x1c and 0x22 move the lanes as 0x1b at 3, 4 and
-13 [verified, pre-registered] and at 2 and 14 [inferred: measured, not pre-registered]; their
-other counts were not measured. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
+13 [verified, pre-registered], at the other counts as 0x1b [inferred: measured, fitted, not
+pre-registered]; `semantics.lane_result` predicts them at 3, 4 and 13 only. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
 [verified, pre-registered: two registers read back by number; 16 registers inferred, fitted]: its
 lanes 0..3 are four carry lanes for either direction [verified, pre-registered, 0x1b]. Its port is f141_144 under
 f232_233 = 1 beside an S3 head, 0 and 2 writing nothing [verified, pre-registered: U[3] and U[9]
@@ -211,9 +211,9 @@ the next vector's shift down needs, 0x1c those the previous vector's shift up ne
 
 The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
 its expectation was registered before the run and met on all lanes of two constructed 32-lane
-vectors of edge and random values (168 heads with a lane result: S0 59, S1 78, S2 13, S3 18;
-S0's select heads under masks; 34 more without one, a sentinel kept at both lags), inferred where
-it was fitted; every row with a verified lag was registered again on
+vectors of edge and random values, or registered again on new operands after a fit (168 heads
+with a lane result: S0 59, S1 78, S2 13, S3 18; S0's select heads under masks; 34 more without
+one, a sentinel kept at both lags), inferred where it was fitted; every row with a verified lag was registered again on
 new operands at that lag and met. In short, S0 adds, subtracts, compares and takes absolute differences, with
 neighbour-lane forms (a[k+1]); S1 has logic, shifts by its immediate or t, saturating left
 shifts, double-width shifts of the 32-bit a : b and min / max / add with a scalar; S2
@@ -268,7 +268,7 @@ register of F0, bit k for lane k; S0's and S1's compare heads make one.
 - **f274_275 names the unit** [verified, pre-registered]: with S0 0x52, S1 0x54, S2 0xe and S3
   0x24 in one word, M under 0..3 puts out S0's, S1's, S2's and S3's value; S2 holds no result.
   M takes a unit's result of the previous word while that unit has a new head in the M word
-  [verified: S0 0x20 every word of a packed loop].
+  [verified: S0 0x20 in consecutive words of a packed loop].
 - **Into F0 and F1**: f255 = 0 takes M's bus into F0, f258 = 0 into F1 [verified], under
   f274_275 = 3 S3's held reduction too: S3 0x0's maximum into F0, then S0 0x19 against it gave
   the one-hot mask of the maximum's lane [verified, pre-registered]. In the stock

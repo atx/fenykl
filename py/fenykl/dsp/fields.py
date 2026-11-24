@@ -1361,8 +1361,10 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             "as 0x1b at f92_95 = 3, 4 and 13; other counts not predicted",
             V,
             "pre-registered at 3 and 13 on all 32 lanes and at 4 on lanes 0..27; at 2 and 14 "
-            "as 0x1b too, measured, not pre-registered (inferred); 1, 12, 15 and 5..11 not "
-            "measured; they differ from 0x1b in what U's port takes beside them "
+            "as 0x1b too on all 32 lanes, measured, not pre-registered (inferred); an earlier "
+            "run fitted all three heads alike at every count (inferred), the other counts not "
+            "pre-registered for these two heads; they differ from 0x1b in what U's port takes "
+            "beside them "
             "(`LANE_THIRD_FILE`); 0x22 wrote nothing while F3 held power-up content",
         ),
     },
