@@ -445,7 +445,8 @@ or with 47 on 8 too, never ended (measured on the camera, one run each)."""
 # 16-bit elements each at 8, 12 and 4): 0x10, the stock r6's, each element's low byte; 0x0c
 # each line 12 elements' low 10 bits, least significant first, the last byte 0; 0x08 each
 # element as 16 bits little-endian; 0x04 (and 0x44, measured) each element zero-extended to a
-# 32-bit word; 0x14 and 0x18 have no line and never complete (the job times out).
+# 32-bit word; 0x14 and 0x18 never complete (the job times out; that they have no line is
+# inferred).
 
 _FORMATS: dict[int, str] = {
     6: "bytes",

@@ -867,10 +867,10 @@ sentinel in the named register, one enable value per word, every cell pre-regist
 f238_239 and f244_245..f250_251 first; f240_241 / 1 on all 32 lanes of a product
 (`S2_HIGH_HALVES`), f242_243 / 1 as its low half; then f236_237 / 1 (S2 0x2's high half),
 f236_237 / 2 and f240_241 / 2 (S0's result) and f242_243 / 2 (S1's result, at two registers),
-32 lanes each, one word after the head. Enable 0 of the four first ports (f236_237, f240_241,
-f244_245, f248_249) takes the vector an X0 load head (`LANE_MEMORY`) asked for exactly four
-words earlier; at lag 3 or 5, or with no head, the port writes nothing (verified on the camera,
-pre-registered sentinels, 32 lanes each, into L0 at three registers and L1 at five); one load
+one word after the head. Enable 0 of the four first ports (f236_237, f240_241, f244_245,
+f248_249) takes the vector an X0 load head (`LANE_MEMORY`) asked for exactly four words earlier,
+into all four files (L0 at three registers, L1 at five), 32 lanes each; at lag 3 or 5, or with
+no head, the port writes nothing (verified on the camera, pre-registered sentinels); one load
 reaches all four first ports in the same word (verified on the camera, pre-registered, 16 lanes
 each). In the five stock programs every word with an X0 load head has such a port write (or
 O's, `STORE_SOURCES`) four words later and no such write lacks one (verified in the bytes), so
