@@ -268,7 +268,7 @@ def test_a_lone_own_word_result_under_another_unit_is_a_hypothesis(m):
 
 
 def test_another_units_held_mask_is_not_on_m(m):
-    """M under S1 one word after S0's compare: nothing written, the register at most inferred."""
+    """M under S1 one word after S0's compare: nothing written (verified)."""
     m.lanes["L0"][1] = Vec(A)
     m.f["F1"][3] = Sv(0x1234)
     run(
@@ -278,7 +278,7 @@ def test_another_units_held_mask_is_not_on_m(m):
             w(f276=0, f274_275=1, f258=0, f190_193=3),
         ],
     )
-    assert m.f["F1"][3] == Sv(0x1234, I)
+    assert m.f["F1"][3] == Sv(0x1234)
 
 
 def op_word(

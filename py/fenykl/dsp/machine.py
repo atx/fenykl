@@ -779,7 +779,8 @@ class Machine:
         if not own:
             if h is not None:
                 return _cap(h, tier)
-            return Kept(tier if self._quiet(sel, t) else min(tier, I))
+            # Another unit's held result is not on M here (verified one word after its head).
+            return Kept(V if self._quiet(sel, t) else I)
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
