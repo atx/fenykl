@@ -933,8 +933,8 @@ S0's selects 0x41..0x46, 0x4b and 0x4d, S1's logic heads 0x00..0x09 and 0x53, S2
 and 0xd, sign masks 0x9 / 0xb and lane number 0xa, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
 S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd. No head class predicts the lag across
 units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then pre-registered at
-0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified), the
-next word not excluded (an earlier run read a there too). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
+0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
+one word later wrote nothing (measured). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
 their rows open). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
@@ -1329,7 +1329,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             (
                 "down by 1..4 (f92_95 = 15..12) pre-registered on all 32 lanes; up by 1..4 "
-                "pre-registered on lanes 24..31, up by 2 also on all 32 lanes (with U's lanes "
+                "pre-registered on lanes 24..31, up by 2 also on 30 lanes (with U's lanes "
                 "0..3 holding b's own lanes 0..3), lanes 0..23 at 1, 3 and 4 the rule's "
                 "(inferred); U's register named by f31_34 (verified: two registers read back by "
                 "number); f92_95 = 5..11 b (measured, the pre-registered shift missed: inferred)"
@@ -1337,10 +1337,11 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         ),
         **_rows(
             (0x1C, 0x22),
-            "as 0x1b at f92_95 = 3, 4 and 13; other counts not predicted",
+            "as 0x1b at f92_95 = 2, 3, 4 and 13; other counts not predicted",
             V,
-            "pre-registered at 3 and 13 on all 32 lanes and at 4 on lanes 0..27; at 2 and 14 "
-            "as 0x1b too on all 32 lanes, measured, not pre-registered (inferred); an earlier "
+            "pre-registered at 3 and 13 on all 32 lanes, at 4 on lanes 0..27 and (0x1c) at 2 on "
+            "lanes 0..29; at 14 as 0x1b too on all 32 lanes, measured, not pre-registered "
+            "(inferred); the tier is 0x1b's at the count; an earlier "
             "run fitted all three heads alike at every count (inferred), the other counts not "
             "pre-registered for these two heads; they differ from 0x1b in what U's port takes "
             "beside them "
@@ -1528,6 +1529,23 @@ the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read,
 own word, and one word after it on S0's 0..0x3f and S1's 0..0x5f; the rules' tiers in the text). A
 reduction's register and an extract's lane in the same word reach the bus OR-ed (measured on the
 camera)."""
+
+
+S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
+"""S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+S_NEXT_NONE = {
+    "s0": frozenset(range(0x40)),
+    "s1": frozenset(range(0x60))
+    - {0x13, 0x14, 0x15, 0x16, 0x17, 0x1A, 0x1B, 0x1D, 0x1E, 0x1F, 0x20},
+    "s2": frozenset({0x0E}),
+    "s3": frozenset(range(0x06)),
+}
+"""S heads without a held row in `S_RESULTS` that put nothing on M one word after the head
+under their unit's f274_275 (measured on the camera; S3's reductions: their register from the
+third word on). One word after any other head, M under its unit is not known: S1 0x13, 0x1a,
+0x1b, 0x14, 0x15, 0x1d, 0x1e, 0x16, 0x17, 0x1f and 0x20 put a value there that is not fitted,
+and S0 0x40.., S1 0x60.., S2 and S3 were not read there. Under another unit's f274_275 a held
+result is not on M (verified for S0 0x32 and S1 0x45, inferred for the others)."""
 
 
 def _written(file: str, enable: str, reader: str) -> str:

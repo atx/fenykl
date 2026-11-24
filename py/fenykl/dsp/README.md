@@ -190,8 +190,8 @@ below, the port in one word only: in its own word S0's selects,
 S1's logic heads, S2's passes, sign masks and lane number and S3's moves, inserts, broadcast and
 lane shifts; one word later
 every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); no head class
-predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], the next
-word not excluded; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
+predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], one word
+later nothing; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word, and U, were not measured.
@@ -801,7 +801,9 @@ from fenykl.dsp.machine import Machine
 boot = Boot()
 m = Machine(boot)  # or Machine(boot, carry): what an earlier job of the boot left
 Executor(boot, datapath=m, limit=5_000_000).step(commands.copy(program, src, dst, n))
-boot.local.read(LOCAL_BASE + 0x40, 4)  # what the program stored, known or not, with its tier
+boot.local.read(
+    LOCAL_BASE + 0x40, 4
+)  # what the program stored, known or not, with its tier
 ```
 
 `Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,

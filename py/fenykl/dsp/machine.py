@@ -25,16 +25,15 @@ give is unknown (None), and a value from a rule below verified carries that tier
 scalars (`Sv`) and 32-lane vectors of 16 bits (`Vec`), each with the weakest tier of what made it.
 """
 
-import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from functools import cache
 
 from .emu import LOCAL_BASE, Boot
 from .fields import (
     ALU_BUS,
     HEADS,
     LANE_FILES,
+    LANE_IMMEDIATES,
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
@@ -51,6 +50,8 @@ from .fields import (
     S2_LOW,
     S2_RESULT,
     S3_RESULT,
+    S_NEXT_NONE,
+    S_OWN_OPEN,
     STORE_SOURCES,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
@@ -81,6 +82,7 @@ from .semantics import (
     UnknownSemantics,
     lane_address,
     lane_result,
+    lane_tier,
     product_high,
     s_result,
     x_result,
@@ -114,18 +116,24 @@ NOTHING = object()
 """A bus with nothing on it: a port taking it writes nothing."""
 
 
+@dataclass(frozen=True)
+class Kept:
+    """A bus with nothing on it by a rule below verified: a port taking it keeps its register,
+    whose value drops to `tier`."""
+
+    tier: Confidence
+
+
 def _cap(x, tier: Confidence):
     if x is NOTHING or x.tier <= tier:
         return x
+    if isinstance(x, Kept):
+        return Kept(tier)
     return Sv(x.value, tier) if isinstance(x, Sv) else Vec(x.lanes, tier)
 
 
 def _s32(v: int) -> int:
     return v - (1 << 32) if v & 0x80000000 else v
-
-
-def _s16(v: int) -> int:
-    return v - 0x10000 if v & 0x8000 else v
 
 
 def _sext(v: int, bits: int) -> int:
@@ -134,68 +142,6 @@ def _sext(v: int, bits: int) -> int:
 
 M_UNITS = ("s0", "s1", "s2", "s3")
 """f274_275's values: the unit whose result M puts out."""
-_PROBE_SCALARS = (
-    "s",
-    "r",
-    "imm",
-    "t",
-    "f31_34",
-    "f53_56",
-    "f88_91",
-    "f65_68",
-    "f92_95",
-    "f96_99",
-    "index",
-    "value",
-)
-PROBES = 32
-"""Random draws per head when probing which operands a rule reads."""
-
-
-def _reads(f, draw) -> frozenset[str]:
-    """The operands ("a", "b") whose change changes f(a, b, c) on `PROBES` random draws of
-    (a, a2, b, b2, c)."""
-    out = set()
-    for _ in range(PROBES):
-        a, a2, b, b2, c = draw()
-        base = f(a, b, c)
-        if f(a2, b, c) != base:
-            out.add("a")
-        if f(a, b2, c) != base:
-            out.add("b")
-    return frozenset(out)
-
-
-def _lane_draw(rng: random.Random):
-    def draw():
-        vecs = [[rng.randrange(HALF) for _ in range(LANE_COUNT)] for _ in range(4)]
-        c = {
-            k: rng.randrange(16 if k.startswith("f") else HALF) for k in _PROBE_SCALARS
-        }
-        return (*vecs, c)
-
-    return draw
-
-
-@cache
-def lane_reads(unit: str, head: int) -> frozenset[str]:
-    """The lane operands ("a", "b") a lane rule reads, probed (`_reads`)."""
-    rng = random.Random(f"lane {unit} {head}")
-    return _reads(lambda a, b, c: lane_result(unit, head, a, b, c), _lane_draw(rng))
-
-
-@cache
-def x_reads(unit: str, head: int) -> frozenset[str]:
-    """The register operands ("a", "b") an X rule reads, probed (`_reads`)."""
-    rng = random.Random(f"x {unit} {head}")
-    width = X_IMMEDIATES[unit].width
-
-    def draw():
-        return (*(rng.randrange(1 << 32) for _ in range(4)), rng.randrange(1 << width))
-
-    return _reads(lambda a, b, k: x_result(unit, head, a, b, k), draw)
-
-
 U_TAKES = {
     0x1F: range(4),
     0x21: range(4),
@@ -212,9 +158,6 @@ LANE_SHIFTS = (0x1B, 0x1C, 0x22)
 STORE_SETTLE = 3
 """Words from O's port write to a store head that stores the new content (verified); a store in
 the write's own word stores the old content (inferred); 1 and 2 words were not measured."""
-KEPT_LANES = 0x40
-"""Lane memory vectors below this are the copy's buffer, which the bench's control copies between
-own jobs overwrite; vectors 0x40..0x7f were seen to persist across jobs (verified on the camera)."""
 HALF = 1 << 16
 
 
@@ -269,6 +212,11 @@ class _Scalars(Mapping):
         return len(self.values)
 
 
+def _own_word(unit: str, head: int) -> bool:
+    rule = S_RULES[unit].get(head)
+    return rule is not None and rule.lag == 0 and not rule.held
+
+
 class Machine:
     """The datapath of one job on `boot` (its local memory is `boot.local`), with what an earlier
     job of the boot left (`carry`). It is the `datapath` of `emu.Executor` and decides the
@@ -294,10 +242,12 @@ class Machine:
         self._writes: set[tuple[str, int]] = set()
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
+        self.open_next: dict[int, dict[str, int]] = {}
+        """M results not known one word after a head: by word, unit and head."""
         self.store_src = boot.source("local store", "an own program's family A store")
 
     def between_jobs(self) -> Carry:
-        return Carry({k: v for k, v in self.memory.items() if k >= KEPT_LANES})
+        return Carry(dict(self.memory))
 
     # ------------------------------------------------------------------ branching
 
@@ -321,14 +271,10 @@ class Machine:
     # ------------------------------------------------------------------ reads
 
     def _rd(self, file: str, reg: int) -> Sv:
-        regs = {"G": self.g, "A": self.a, "B": self.b, "R": self.r}.get(file) or self.f[
-            file
-        ]
-        return _cap(regs[reg], H) if (file, reg) in self._writes else regs[reg]
+        v = self._file(file)[reg]
+        return _cap(v, H) if (file, reg) in self._writes else v
 
-    def _rv(self, file: str, reg: int) -> Vec:
-        regs = self.u if file == "U" else self.o if file == "O" else self.lanes[file]
-        return _cap(regs[reg], H) if (file, reg) in self._writes else regs[reg]
+    _rv = _rd
 
     # ------------------------------------------------------------------ the word
 
@@ -355,6 +301,7 @@ class Machine:
             self.lane_due,
             self.held_due,
             self.open_m,
+            self.open_next,
         ):
             due.pop(t, None)
         return "; ".join(notes)
@@ -533,7 +480,7 @@ class Machine:
         rule = X_RULES[unit][head]
         if rule.value is None:
             return None
-        ins = [v for name, v in (("a", a), ("b", b)) if name in x_reads(unit, head)]
+        ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
         if any(v.value is None for v in ins):
             return Sv(None)
         value = x_result(unit, head, a.value or 0, b.value or 0, k)
@@ -586,6 +533,10 @@ class Machine:
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             rule = S_RULES[unit].get(head)
+            if head in S_OWN_OPEN.get(unit, ()):
+                self.open_m.setdefault(t, set()).add(unit)
+            if (rule is None or rule.lag != 1) and head not in S_NEXT_NONE[unit]:
+                self.open_next.setdefault(t + 1, {})[unit] = head
             if rule is None:
                 continue
             sc = _Scalars(scalars)
@@ -629,20 +580,20 @@ class Machine:
             return {
                 "s": self._rd("F0", word["f72_75"]),
                 "r": self._rd("F0", n["f76_79"]),
-                "imm": Sv(imm, I),
+                "imm": Sv(imm, LANE_IMMEDIATES["s0"][1]),
             }
         if unit == "s1":
             imm = _sext((n["f80_83"] >> 2) << 5 | n["f84_87"] << 1 | n["f0"], 7)
             return {
                 "t": self._rd("F1", n["f84_87"]),
                 "r": self._rd("F1", n["f80_83"]),
-                "imm": Sv(imm),
+                "imm": Sv(imm, LANE_IMMEDIATES["s1"][1]),
             }
         if unit == "s2":
             imm = _sext(n["f53_56"] << 3 | n["f88_91"] >> 1, 7)
             return {
                 "t": self._rd("F2", n["f88_91"]),
-                "imm": Sv(imm),
+                "imm": Sv(imm, LANE_IMMEDIATES["s2"][1]),
                 "f53_56": Sv(n["f53_56"]),
                 "f88_91": Sv(n["f88_91"]),
             }
@@ -682,10 +633,9 @@ class Machine:
             if unit == "s3" and word["f232_233"] == 1:
                 self._u_port(index, head, b, word)
             return
-        reads = lane_reads(unit, head)
         sc = _Scalars(scalars)
-        ins = [v for name, v in (("a", a), ("b", b)) if name in reads]
-        tier = min([rule.confidence, *(v.tier for v in ins)])
+        ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
+        tier = min([lane_tier(unit, head, sc), *(v.tier for v in ins)])
         high = None
         if any(x is None for v in ins for x in v.lanes):
             low = UNKNOWN_VEC
@@ -695,7 +645,7 @@ class Machine:
             try:
                 lanes = lane_result(unit, head, al, bl, sc)
                 if unit == "s3" and head in LANE_SHIFTS:
-                    lanes = self._shift_in(lanes, scalars)
+                    lanes, tier = self._shift_in(lanes, scalars, tier)
                 low = Vec(tuple(lanes), min(tier, sc.tier))
                 if unit == "s2" and head in S2_HIGH_HALVES:
                     hi = product_high(head, al, bl, sc)
@@ -714,17 +664,20 @@ class Machine:
             self._u_port(index, head, b, word)
 
     def _shift_in(
-        self, lanes: list[int | None], scalars: dict[str, Sv]
-    ) -> list[int | None]:
-        """S3's lane shift: the lanes moved in come from U[f31_34]'s lanes 0..3."""
+        self, lanes: list[int | None], scalars: dict[str, Sv], tier: Confidence
+    ) -> tuple[list[int | None], Confidence]:
+        """S3's lane shift: the lanes moved in come from U[f31_34]'s lanes 0..3, where the rule
+        predicts the shift."""
         n = _sext(scalars["f92_95"].value, 4)
-        u = self._rv("U", scalars["f31_34"].value).lanes
+        if not 1 <= abs(n) <= 4 or all(x is None for x in lanes):
+            return lanes, tier
+        u = self._rv("U", scalars["f31_34"].value)
         out = list(lanes)
-        if 1 <= n <= 4:
-            out[LANE_COUNT - n :] = u[:n]
-        elif -4 <= n <= -1:
-            out[:-n] = u[4 + n : 4]
-        return out
+        if n > 0:
+            out[LANE_COUNT - n :] = u.lanes[:n]
+        else:
+            out[:-n] = u.lanes[4 + n : 4]
+        return out, min(tier, u.tier)
 
     def _u_port(self, index: int, head: int, b: Vec, word: Word) -> None:
         reg = word["f141_144"]
@@ -744,6 +697,10 @@ class Machine:
     # ------------------------------------------------------------------ M
 
     def _m(self, index: int, word: Word, own: dict[str, Sv], t: int) -> Sv | object:
+        """M's value under f274_275's unit `sel`: an own-word result (f274_275 chooses among
+        several), else the unit's held result; S3's held one is its reduction register, unknown
+        before the job's first reduction. A held result of another unit is not on M (inferred),
+        so beside one M's value is at most inferred."""
         sel = M_UNITS[word["f274_275"]]
         held = dict(self.held_due.get(t, {}))
         ready = [(w, v) for w, v in self.reductions if w <= t]
@@ -752,26 +709,43 @@ class Machine:
             w, v = max(ready, key=lambda x: x[0])
             held["s3"] = v
             fresh = v if w == t else None
+        elif sel == "s3":
+            held["s3"] = Sv(None)
+        tier = I if any(u != sel for u in held if u != "s3") else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
+        before = self.open_next.get(t, {}).get(sel)
+        if before is not None:
+            if sel not in own:
+                return Sv(None, H)
+            if not (sel == "s3" and _own_word("s3", before)):
+                # An own-word result after a head whose next-word result is open: inferred
+                # from S3's extracts, which read their own lanes in consecutive words.
+                tier = min(tier, I)
         h = held.get(sel)
         if not own:
-            return NOTHING if h is None else h
+            return Kept(tier) if h is None else _cap(h, tier)
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
             )
-        unit, v = (sel, own[sel]) if sel in own else next(iter(own.items()))
-        if unit == "s3" and fresh is not None:
+        if sel not in own:
+            # A lone own-word result under another unit's f274_275 (not measured).
+            v = next(iter(own.values()))
+            return _cap(v, min(tier, I)) if h is None else Sv(None, H)
+        v = own[sel]
+        if sel == "s3":
+            if fresh is None:
+                return _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (measured).
             if v.value is None or fresh.value is None:
                 return Sv(None)
             return Sv(v.value | fresh.value, min(v.tier, fresh.tier, I))
-        if h is not None and unit != sel and sel != "s3":
-            raise UnknownSemantics(
-                index, "m", [], f"{unit}'s own-word result beside {sel}'s held one"
-            )
-        return v
+        if h is not None:
+            return Sv(
+                None, H
+            )  # an own-word result beside its unit's held one: not measured
+        return _cap(v, tier)
 
     # ------------------------------------------------------------------ ports
 
@@ -779,9 +753,13 @@ class Machine:
         self, index: int, word: Word, t: int, bus, x0bus, x1: Sv
     ) -> dict[tuple[str, int], object]:
         writes: dict[tuple[str, int], object] = {}
+        kept: dict[tuple[str, int], Confidence] = {}
 
         def put(file: str, reg: int, value) -> None:
             if value is NOTHING:
+                return
+            if isinstance(value, Kept):
+                kept[(file, reg)] = value.tier
                 return
             if (file, reg) in writes:
                 raise UnknownSemantics(
@@ -834,6 +812,9 @@ class Machine:
         elif u != lookup("f232_233").idle and u not in (0, 2):
             raise UnknownSemantics(index, "f232_233", [], f"enable {u}")
         self._u_write = None
+        for (file, reg), tier in kept.items():
+            if (file, reg) not in writes:
+                writes[(file, reg)] = _cap(self._file(file)[reg], tier)
         return writes
 
     def _lane_source(self, text: str, t: int):
@@ -853,17 +834,13 @@ class Machine:
             return UNKNOWN_VEC if high is None else high
         return low
 
+    def _file(self, file: str) -> list:
+        scalar = {"G": self.g, "A": self.a, "B": self.b, "R": self.r, **self.f}
+        vector = {"U": self.u, "O": self.o, **self.lanes}
+        return scalar.get(file) or vector[file]
+
     def _commit(self, key: tuple[str, int], value, t: int) -> None:
         file, reg = key
-        if file in ("G", "A", "B", "R", "F0", "F1", "F2", "F3"):
-            regs = {"G": self.g, "A": self.a, "B": self.b, "R": self.r}.get(
-                file
-            ) or self.f[file]
-            regs[reg] = value
-        elif file == "U":
-            self.u[reg] = value
-        elif file == "O":
-            self.o[reg] = value
+        self._file(file)[reg] = value
+        if file == "O":
             self.o_written[reg] = t
-        else:
-            self.lanes[file][reg] = value

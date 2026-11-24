@@ -995,11 +995,29 @@ _X_ONLY: dict[str, dict[int, XValue | None]] = {
 @dataclass(frozen=True)
 class XRule:
     """What an X unit's head value does: `value` of (a, b, zK, sK), None for no result on the
-    ALU bus."""
+    ALU bus; `reads` the register operands it reads ("a", "b")."""
 
     confidence: Confidence
     fact: str
     value: XValue | None
+    reads: str = "ab"
+
+
+def _reads(**heads: tuple[int, ...] | range) -> dict[int, str]:
+    """Heads by the operands they read: a=..., b=..., none=...; any other head reads both."""
+    return {h: "" if key == "none" else key for key, hs in heads.items() for h in hs}
+
+
+_X_READS = {
+    "x0": _reads(
+        a=(*range(8), 0x12),
+        b=(0x0E, 0x0F, 0x15, *range(0x1E, 0x22)),
+        none=(0x13, 0x14, *range(0x1A, 0x1E), *range(0x23, 0x3F)),
+    ),
+    "x1": _reads(a=(*range(8), 0x12), b=(0x0E, 0x0F, 0x15, 0x1B), none=(0x13, 0x14)),
+}
+"""The register operands each X head reads, from its rule: a compare against the immediate a,
+abs / negate / move b, the immediates none."""
 
 
 def _x_rules(unit: str) -> dict[int, XRule]:
@@ -1010,7 +1028,12 @@ def _x_rules(unit: str) -> dict[int, XRule]:
             f"{unit}: rules and fields.X_FUNCTIONS differ in their head values"
         )
     return {
-        h: XRule(conf, f"{text}; {note}" if note else text, values[h])
+        h: XRule(
+            conf,
+            f"{text}; {note}" if note else text,
+            values[h],
+            _X_READS[unit].get(h, "ab"),
+        )
         for h, (text, conf, note) in table.items()
     }
 
@@ -1124,7 +1147,7 @@ def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [*[None] * -n, *b[:n]]
 
 
-SHIFT_COUNTS = (3, 4, 13)
+SHIFT_COUNTS = (2, 3, 4, 13)
 """The counts f92_95 at which S3 0x1c and 0x22 were pre-registered as 0x1b."""
 
 
@@ -1398,11 +1421,80 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
 @dataclass(frozen=True)
 class LaneRule:
     """What an S unit's head value does to the lanes: `value` of (a, b, scalars), None for a
-    head that writes no lane result."""
+    head that writes no lane result; `reads` the lane operands it reads ("a", "b"); `tier_at`
+    the tier of its result at the scalars (a row whose sub-domains have different tiers)."""
 
     confidence: Confidence
     fact: str
     value: LaneValue | None
+    reads: str = "ab"
+    tier_at: Callable[[Scalars], Confidence] | None = None
+
+
+_LANE_READS = {
+    "s0": _reads(
+        none=(0x42, 0x43, 0x4B, *range(0x60, 0x7F)),
+        a=(0x26, 0x27),
+        b=(
+            *(0x08, 0x09, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x14, 0x15, 0x16, 0x17),
+            *(0x1A, 0x1B, 0x34, 0x35, 0x36, 0x37, 0x3A, 0x3B, 0x3C, 0x3D, 0x41, 0x4D),
+            *(0x44, 0x45),
+        ),
+    ),
+    "s1": _reads(
+        none=range(0x55, 0x7F),
+        a=(0x39, 0x3A),
+        b=(
+            0x00,
+            *range(0x04, 0x0F),
+            0x11,
+            0x12,
+            0x13,
+            0x1A,
+            0x1B,
+            0x1C,
+            *range(0x23, 0x28),
+            0x2A,
+            0x2B,
+            0x2C,
+            0x2D,
+            0x30,
+            0x31,
+            0x35,
+            0x36,
+            0x37,
+            *range(0x47, 0x4B),
+            0x4D,
+            0x4E,
+            0x4F,
+            0x50,
+            0x53,
+        ),
+    ),
+    "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
+    "s3": _reads(
+        none=(0x06, 0x07, 0x08, 0x09, 0x11, 0x14, 0x18),
+        b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
+    ),
+}
+"""The lane operands each S head's lane rule reads, from its rule; a head not listed reads both."""
+
+
+def _shift_tier(c: Scalars) -> Confidence:
+    """S3 0x1b: down by 1..4 verified on all 32 lanes; up by 1..4 pre-registered on part of the
+    lanes and f92_95 = 5..11 fitted: inferred."""
+    return V if c["f92_95"] in (12, 13, 14, 15) else I
+
+
+def _choice_tier(c: Scalars) -> Confidence:
+    """S2 0x7: pre-registered at f88_91 = 2, 3, 8, 9, 10, 12, 13, fitted at the others."""
+    return V if c["f88_91"] in (2, 3, 8, 9, 10, 12, 13) else I
+
+
+_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {
+    "s2": {0x07: _choice_tier},
+    "s3": {0x1B: _shift_tier, 0x1C: _shift_tier, 0x22: _shift_tier},
+}
 
 
 def _lane_rules(unit: str) -> dict[int, LaneRule]:
@@ -1419,13 +1511,27 @@ def _lane_rules(unit: str) -> dict[int, LaneRule]:
             f"{unit}: rules and fields.LANE_FUNCTIONS differ in which heads write"
         )
     return {
-        h: LaneRule(conf, f"{text}; {note}" if note else text, values[h])
+        h: LaneRule(
+            conf,
+            f"{text}; {note}" if note else text,
+            values[h],
+            _LANE_READS[unit].get(h, "ab"),
+            _LANE_TIERS.get(unit, {}).get(h),
+        )
         for h, (text, conf, note) in table.items()
     }
 
 
 LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
 """The S units' lane functions by head value, each with its tier (`fields.LANE_FUNCTIONS`)."""
+
+
+def lane_tier(unit: str, head: int, scalars: Scalars) -> Confidence:
+    """The tier of S unit `unit`'s lane result at head value `head` on `scalars`."""
+    rule = LANE_RULES[unit][head]
+    if rule.tier_at is None:
+        return rule.confidence
+    return min(rule.confidence, rule.tier_at(scalars))
 
 
 def lane_result(
