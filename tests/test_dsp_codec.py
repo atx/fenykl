@@ -341,7 +341,7 @@ def test_an_immediate_extends_by_its_op():
         (0x49, Operands(ra=0)),  # rb missing
         (0x1A, Operands(ra=0, rb=1, imm=0)),  # no rb in family A
         (0x49, Operands(ra=0, rb=1, imm=0)),  # no immediate in family E
-        (0x22, Operands(ra=0)),  # a data op value that never occurs has no format
+        (0x05, Operands(ra=0)),  # an op value that is no data op has no format
     ],
 )
 def test_data_op_assembly_rejects_operands_outside_the_format(code, args):

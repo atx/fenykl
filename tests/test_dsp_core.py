@@ -351,7 +351,7 @@ def test_ops_chain_through_the_operand_set():
         IDLE,
         IDLE,
         ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=2)), "operand", 7),
-        ported(Word.from_fields({"f313_319": 0x39}, base=IDLE), "operand", 2),
+        ported(Word.from_fields({"f313_319": 0x4A}, base=IDLE), "operand", 2),
         IDLE,
         IDLE,
         ported(Word.data(0x3F, Operands(ra=2, rb=2, imm=1)), "operand", 8),

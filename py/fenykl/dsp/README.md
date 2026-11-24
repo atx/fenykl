@@ -114,7 +114,11 @@ confidence and fact; `fields.op(value)` is total:
 | 8..73 | `opNN` | a data op (NN in hex); what the measured ones compute is `semantics.OP_SEMANTICS`, each at its own tier (listings mark them by it), the rest open | per op |
 | 127 | `idle` | no op | inferred |
 
-5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, 0x2d, 0x39, 0x3b and 0x45 never occur.
+5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, 0x2d, 0x39, 0x3b and 0x45 never occur in the
+stock programs. The seven run on the camera as data ops (`fields.UNSEEN_FORMATS`, exact readout on eight operand
+sets each): 0x22 ra <= imm16 unsigned, 0x26 / 0x27 max / min(ra, imm16) unsigned (imm16 zero-extended), 0x2d
+min(ra, rb) unsigned, 0x39 ra ^ rb, 0x45 the ring step with s = ra + 1 and L = rb [verified]; 0x3b ra & ~rb
+[inferred: fitted, one of the candidates named before the run].
 Ops 0..4 are the control ops (`CONTROL_OPS`, `word.control`), and
 f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 | bits 128..132 <<
 8, an absolute word index into the program (`word.target`, None for other words): T follows its
