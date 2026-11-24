@@ -117,13 +117,13 @@ _UNITS = (
     (
         "m",
         "M",
-        I,
+        V,
         (
             "the held 2-bit value f274_275 under the active-low strobe f276, which puts an S "
             "head's scalar result on X0's result bus (verified on the camera by exact readout); "
-            "in the head's own word f274_275 does not select the S unit (measured on the "
-            "camera), for a held result it names the unit, 0 S0, 1 S1, 3 S3 (each verified on "
-            "the camera, pre-registered; 2 not shown, so the reading inferred)"
+            "it names the unit, 0 S0, 1 S1, 2 S2, 3 S3: among the results of four heads in one "
+            "word and for a held result (each verified on the camera, pre-registered); a single "
+            "head's result in its own word passes under every value (measured on the camera)"
         ),
         ("f276",),
     ),
