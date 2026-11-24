@@ -141,7 +141,8 @@ def test_a_counted_loop_stores_through_r():
     zero = data(0x0B, 31, imm=0, f272_273=1, f224_228=3)
     add = data(0x1F, 3, imm=5, f272_273=1, f224_228=3)
     end = Word.from_fields(
-        {"ra": 2, "f272_273": 1, "f224_228": 2}, base=Word.ctl(0, 2, base=IDLE)
+        {"ra": 2, "f120_122": 0, "f272_273": 1, "f224_228": 2},
+        base=Word.ctl(0, 2, base=IDLE),
     )
     to_r = data(0x09, 31, 3, f270_271=1, f221_223=0)
     store = data(0x18, 31, imm=0x10, f120_122=0)
@@ -331,7 +332,8 @@ def test_a_datum_reaches_a_word_whose_op_has_no_result(m):
     )
     m.g[5], m.g[11] = Sv(0), Sv(7)
     brf = Word.from_fields(
-        {"ra": 11, "f272_273": 1, "f224_228": 12}, base=Word.ctl(1, 9, base=IDLE)
+        {"ra": 11, "f120_122": 0, "f272_273": 1, "f224_228": 12},
+        base=Word.ctl(1, 9, base=IDLE),
     )
     run(m, [op_word(0x1A, 5, imm=0x40), IDLE, IDLE, brf])
     assert m.g[12].value == 0x4106

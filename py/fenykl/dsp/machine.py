@@ -304,6 +304,11 @@ class Machine:
 
     def execute(self, index: int, word: Word, t: int) -> str:
         """Run word `word` (program index `index`) as executed word number `t`; returns a note."""
+        if word.control and word.op < 4 and word["f120_122"] & 3:
+            # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
+            raise UnknownSemantics(
+                index, op(word.op).name, [], "f120_122 bits 0..1 set in a control op"
+            )
         notes: list[str] = []
         alu = self._op_slot(index, word, t, notes)
         bus = self._bus(word, alu, t)

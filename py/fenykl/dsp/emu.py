@@ -212,6 +212,11 @@ class Datapath(Protocol):
     ) -> Branch: ...
 
 
+HALT_TAIL = 3
+"""The words behind a halt that still run: of five stores there the first three wrote (verified
+on the camera in two runs, the second pre-registered)."""
+
+
 class Stop(Enum):
     HALT = "halt"
     UNDECIDED = "a conditional control op the branching hypothesis does not decide"
@@ -389,6 +394,7 @@ class Executor:
             slots = max(slots - 1, 0)
             if word.op == HALT_OP:
                 steps.append(Step(pc, word.op, slot, confidence=op(HALT_OP).confidence))
+                self._behind_halt(words[pc + 1 : pc + 1 + HALT_TAIL], pc + 1, steps)
                 return Flow(steps, Stop.HALT)
             target = None
             if not word.control:
@@ -424,6 +430,17 @@ class Executor:
             if target is not None:
                 jumps.append([DELAY_SLOTS, target])
         return Flow(steps, Stop.STEP_LIMIT, f"{self.limit} steps")
+
+    def _behind_halt(self, tail: tuple[Word, ...], at: int, steps: list[Step]) -> None:
+        """The data words behind a halt that still run (`HALT_TAIL`), on a `datapath` only:
+        plain stepping ends at the halt."""
+        if self.datapath is None:
+            return
+        for i, word in enumerate(tail, at):
+            if word.control or word.op == HALT_OP:
+                continue
+            note = self.datapath.execute(i, word, len(steps))
+            steps.append(Step(i, word.op, True, word.operands, note=note))
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
         t, conf = word.target, op(word.op).confidence
