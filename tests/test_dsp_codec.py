@@ -15,13 +15,17 @@ from fenykl.dsp.fields import (
     IDLE_VALUE,
     LANE_FILES,
     LANE_FUNCTIONS,
+    LANE_LOAD,
     LANE_SOURCES,
+    LOAD_LAG,
     PB_FILES,
     PB_SOURCES,
     PORTS,
     SCALAR_READS,
     STAIRCASE,
+    STORE_SOURCES,
     WORD_BITS,
+    X0_LANE_LOADS,
     X_IMMEDIATES,
     Confidence,
     Operands,
@@ -164,6 +168,38 @@ def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():
     assert sorted(ports) == sorted(n for _, *nibs in LANE_FILES.values() for n in nibs)
     for file, (unit, *nibs) in LANE_FILES.items():
         assert [lookup(n).unit for n in nibs] == [unit, unit], file
+
+
+def test_every_x0_load_has_its_port_write_four_words_later(items):
+    # A first lane port or O's port under enable 0 takes a load; none takes one without a head.
+    takers = [
+        e for e, rows in LANE_SOURCES.items() if rows.get(0, ("",))[0] == LANE_LOAD
+    ]
+    assert takers == ["f236_237", "f240_241", "f244_245", "f248_249"]
+    assert STORE_SOURCES[0][0] == LANE_LOAD
+    takers.append("f252_254")
+    loads = 0
+    for item, data in items.items():
+        words = decode_item(data, STOCK[item]).words
+        heads = {i for i, w in enumerate(words) if w["x0op"] in X0_LANE_LOADS}
+        takes = {i for i, w in enumerate(words) if any(w[e] == 0 for e in takers)}
+        assert {i + LOAD_LAG for i in heads} == takes, item
+        loads += len(heads)
+    assert loads == 379
+
+
+def test_the_store_file_takes_the_s_units_in_reverse_order():
+    # 0 is a load, then S3..S0; 5 and 6 were never run, so they have no row.
+    enable = lookup("f252_254")
+    assert [src[:2] for src, _ in STORE_SOURCES.values()][1:] == [
+        "S3",
+        "S2",
+        "S1",
+        "S0",
+    ]
+    assert sorted(enable.values) == [0, 1, 2, 3, 4, 7]
+    assert enable.confidence is Confidence.VERIFIED
+    assert PORTS["f252_254"] == "f179_181"
 
 
 def test_control_word_targets_lie_inside_their_program(items):

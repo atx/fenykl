@@ -54,9 +54,9 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot: logic, shifts, min / max on L1 | inferred |
 | `s2` | f292_295 | grid A 53, 57, 88 | compute slot: multiply on L2 | inferred |
 | `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot: moves, insert, extract, reductions on L3 | inferred |
-| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A | inferred (verified but f69_71, which changed no result) |
+| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A, and the lane memory's loads and stores (f69_71 the store's register of O) | verified |
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3 (verified but some values), f232_233's open | verified (the pairing) |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3 (verified but some values), f252_254's the store file O, f232_233's open | verified (the pairing) |
 | `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
 | `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held, not the S unit select (measured), its function open | hypothesis |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
@@ -75,7 +75,7 @@ On the camera, ownership predicts use in one direction (`fields.UNIT_FACTS`, pro
 433 and 439): idling the nibbles whose owner is active in the word gives the effect of idling the
 whole grid, byte for byte, and idling the held nibbles of idle owners has none (32 nibbles, in
 three sets, at their idle values). An active owner is not sufficient: port f202_205 and X0's
-f69_71 are inert there.
+f69_71 are inert there (X0's head at 439 is no store, the one head that reads f69_71).
 
 ## Fields
 
@@ -171,15 +171,15 @@ unit's lane heads read a and b from it through its two lane nibbles, and the two
 110 bits above those nibbles write it; the enable of a port names the S result it takes
 (`fields.LANE_SOURCES`; [verified] unless tagged):
 
-| file | unit | a, b | first port (enable): 1, 2 | second port (enable): 0, 1, 2 |
+| file | unit | a, b | first port (enable): 0, 1, 2 | second port (enable): 0, 1, 2 |
 |---|---|---|---|---|
-| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): S2's high half, S0 [inferred] | f151_154 (f238_239): S3, S2's low half, S1 |
-| L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): S2's high half, S0 [inferred] | f159_162 (f242_243): S3, S2's low half, S1 [inferred] |
-| L2 | S2 | f53_56, f57_60 | f163_166 (f244_245): S0, nothing seen | f167_170 (f246_247): S3, S2's low half, S1 |
-| L3 | S3 | f61_64, f65_68 | f171_174 (f248_249): S0, nothing seen | f175_178 (f250_251): S3, S2's low half, S1 |
+| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): a load, S2's high half, S0 [inferred] | f151_154 (f238_239): S3, S2's low half, S1 |
+| L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): a load [inferred], S2's high half, S0 [inferred] | f159_162 (f242_243): S3, S2's low half, S1 [inferred] |
+| L2 | S2 | f53_56, f57_60 | f163_166 (f244_245): a load, S0, nothing seen | f167_170 (f246_247): S3, S2's low half, S1 |
+| L3 | S3 | f61_64, f65_68 | f171_174 (f248_249): a load, S0, nothing seen | f175_178 (f250_251): S3, S2's low half, S1 |
 
-Enable 0 of the first ports wrote nothing from any S head in own programs, yet f244_245 = 0
-acts on program 13's stock path: its meaning is open. A port takes a move's result (S3 0x18,
+Enable 0 of a first port takes the vector an X0 load head asked for exactly four words earlier
+(the lane memory, below). A port takes a move's result (S3 0x18,
 0x19, 0x22, S2 0x8) in the head's own word and an arithmetic result exactly one word after the
 head (`fields.LANE_LAG`; verified for the heads timed). A third kind of file, U, named by
 f31_34, fills the lanes S3's lane shifts move in [inferred].
@@ -217,8 +217,53 @@ head f308_312 on a = B[f110_114], b = B[f115_119], K = f115_119 << 8 | f9_14 << 
 bits). The shared table is the op slot's compacted: compares against K and b, a +/- K, a +/- b,
 -b, abs(b), b, K zero- or sign-extended, a | K << 16. X1 adds logic functions at 0x16..0x1b; its
 heads 0x1c..0x1e are the register transfers, which put no result on the bus and change no
-register. X0 gives no result at 0x16..0x19 and 0x22, counts at 0x1a..0x21 and 0 at
-0x23..0x3e.
+register. X0 gives no result at 0x16..0x19 and 0x22, 0 at 0x23..0x3e, and at 0x1a..0x21 the
+immediate + 1 or b + 1 beside a lane memory load or store (below).
+
+#### The lane memory and the store file
+
+X0's heads 0x1a..0x21 load and store whole vectors of the lane memory (`fields.LANE_MEMORY`,
+`fields.X0_LANE_MEMORY`): 0x400 vectors of 32 elements of 16 bits, addressed by vector number
+modulo 0x400 [verified: the wrap pre-registered at 0x400 and through a second operand of 0x7fff;
+the size inferred from five different contents below 0x400 and aliases above].
+
+| heads | does | address |
+|---|---|---|
+| 0x1c, 0x1d | load one vector | A[f100_104] + sK, K X0's signed 11-bit immediate |
+| 0x20, 0x21 | load one vector | A[f100_104] + A[f105_109] |
+| 0x1a, 0x1b | store O[f69_71] | A[f100_104] + sK |
+| 0x1e, 0x1f | store O[f69_71] | A[f100_104] + A[f105_109] |
+
+A load's 32 lanes arrive exactly four words after the head, at any first lane port under enable
+0, at several in one word, or at the store file's port; at lag 3 or 5 the port writes nothing
+[verified; into L0 and L1 inferred]. In the five stock programs every word with a load head has
+such a port write four words later, and none lacks its head (379 words; verified in the bytes).
+The store file O holds eight lane registers: the port f179_181 (the register) writes it under
+f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
+occur and were not run, `fields.STORE_SOURCES`), a move in the head's own word and an arithmetic
+result one word after it, and a store head writes O[f69_71] [verified]. A store head in the
+same word as O's port write stores the old content, three words later the new [verified]; a load
+one word after a store to the same vector reads it back, and four loads in consecutive words
+land in four consecutive port words [inferred]. Each head and its even / odd twin showed no
+difference in address, lanes, element width or scalar result, and none writes A back
+[inferred]; what the low head bit selects is open [hypothesis: the handshake with the copy
+engine's streams].
+
+The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's load puts
+source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
+element's low 8 bits [verified]. So a kernel with bulk input and output is three jobs: a stock
+copy in, an own vector program, and a stock copy without its load to write the vectors out; a
+16-bit result leaves as two byte planes, its low byte and, stored after a shift by 8, its high
+byte [verified: exact on 512 + 512 + 4096 bytes]. `semantics.LaneMemory` holds the content by
+vector (`load`, `store`, `copy_in`, `copy_out`) and `semantics.lane_address(head, a, b, k)`
+gives a head's vector; the emulator runs neither.
+
+What can be written today: an own loop of 16 passes, each incrementing an index into G and A,
+loading two vectors into L2 through X0 0x1d, multiplying them with S2 0x2, putting the product's
+halves into L1 through f155 / 1 and f159 / 1, narrowing with S1 0x29 into O under 3 and storing
+it with X0 0x1b, and reducing the products with S3 0x2, read through M into G and accumulated
+by op 0x35, gave the 32-bit sum of 512 products and every stored vector exactly [verified,
+pre-registered].
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.

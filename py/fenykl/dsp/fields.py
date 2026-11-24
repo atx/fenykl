@@ -587,6 +587,9 @@ def _x_values(unit: str) -> dict[int, str]:
         h: f"{text} ({TAG[conf]}{'; ' + note if note else ''})"
         for h, (text, conf, note) in X_FUNCTIONS[unit].items()
     }
+    if unit == "x0":
+        for h, (text, conf) in X0_LANE_MEMORY.items():
+            values[h] = f"scalar: {values[h]}; lane memory: {text} ({TAG[conf]})"
     return values | {(1 << (HEADS[unit][1] - HEADS[unit][0] + 1)) - 1: "idle"}
 
 
@@ -597,8 +600,8 @@ X0_FACT = (
     f"(`X_FUNCTIONS`; {EXACT}): X0 on the register file A, a = A[f100_104], b = A[f105_109], "
     "K = f105_109 << 6 | f2_6 << 1 | f1 (11 bits). Its result goes to G through f272_273 = 2, "
     "to A through f265_266 = 0, to R through f270_271 = 2 and to B through f269 = 0, all in "
-    f"the head's own word ({EXACT}). {X_OPERANDS}. f69_71 at 0, 1, 2, 4 and 7 changed no result "
-    f"({EXACT})"
+    f"the head's own word ({EXACT}). {X_OPERANDS}. f69_71 at 0, 1, 2, 4 and 7 changed no scalar "
+    f"result ({EXACT})"
 )
 X1_HEAD_FACT = (
     "the head of X1, one 5-bit value h = f310_312 << 2 | f308_309: at every value of 310..312 the "
@@ -851,14 +854,20 @@ LANE_THIRD_FILE = (
 )
 S3_RESULT, S1_RESULT, S0_RESULT = "S3's result", "S1's result", "S0's result"
 S2_LOW, S2_HIGH = "S2's result, a product's low half", "S2's product's high half"
+S2_RESULT = "S2's result"
+LOAD_LAG = 4
+"""Words from an X0 load head to the one word whose port takes the loaded vector."""
+LANE_LOAD = (
+    f"a lane memory load's 32 lanes, {LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
+)
 LANE_SOURCES: dict[str, dict[int, tuple[str, Confidence]]] = {
-    "f236_237": {1: (S2_HIGH, I), 2: (S0_RESULT, I)},
+    "f236_237": {0: (LANE_LOAD, I), 1: (S2_HIGH, I), 2: (S0_RESULT, I)},
     "f238_239": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
-    "f240_241": {1: (S2_HIGH, V), 2: (S0_RESULT, I)},
+    "f240_241": {0: (LANE_LOAD, I), 1: (S2_HIGH, V), 2: (S0_RESULT, I)},
     "f242_243": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, I)},
-    "f244_245": {1: (S0_RESULT, V)},
+    "f244_245": {0: (LANE_LOAD, V), 1: (S0_RESULT, V)},
     "f246_247": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
-    "f248_249": {1: (S0_RESULT, V)},
+    "f248_249": {0: (LANE_LOAD, V), 1: (S0_RESULT, V)},
     "f250_251": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
 }
 """The lane ports' enables: what each value writes, with its tier. Measured on the camera with a
@@ -866,11 +875,16 @@ sentinel in the named register, one enable value per word: f238_239 and f244_245
 pre-registered; f240_241 / 1 on all 32 lanes of a product (`S2_HIGH_HALVES`), f242_243 / 1 as
 its low half; f236_237 and f240_241 / 2 on two lanes, not pre-registered (inferred); f242_243 /
 2 by the pattern of the second ports (inferred). Enable 0 of the four first ports (f236_237,
-f240_241, f244_245, f248_249) wrote nothing from any S head in own programs, and 2 of f244_245 /
-f248_249 nothing either; yet idling f244_245 = 0 changes program 13's output: their meaning is
-open (hypothesis: the stream engine's). A port takes a move's result (S3 0x18, 0x19, 0x22, S2
-0x8) in the head's own word and an arithmetic result exactly one word after the head
-(`LANE_LAG`)."""
+f240_241, f244_245, f248_249) takes the vector an X0 load head (`LANE_MEMORY`) asked for exactly
+four words earlier, into one port or several in the same word; at lag 3 or 5, or with no head,
+the port writes nothing (verified on the camera, pre-registered sentinels, 32 lanes each); into
+L2 and L3 the loaded lanes were pre-registered and met (verified), into L0 and L1 measured on
+the camera, not pre-registered (inferred). In the five stock programs every word with an X0 load
+head has such a port write (or O's, `STORE_SOURCES`) four words later and no such write lacks
+one (verified in the bytes), so idling f244_245 = 0 in program 13 drops a load (inferred). Enable
+2 of f244_245 / f248_249 wrote nothing from any S head. A port takes a move's result (S3 0x18,
+0x19, 0x22, S2 0x8) in the head's own word and an arithmetic result exactly one word after the
+head (`LANE_LAG`)."""
 LANE_LAG: dict[str, dict[int, int]] = {
     "s0": {0x08: 1, 0x1F: 1, 0x20: 1, 0x29: 1},
     "s1": {0x0E: 1, 0x10: 1, 0x33: 1, 0x3C: 1},
@@ -880,6 +894,77 @@ LANE_LAG: dict[str, dict[int, int]] = {
 """Words from a head to the one word whose lane port takes its result (verified on the camera
 for these heads, a sentinel written only at that lag, the head not held; with the head held, at
 every lag from 1); that the other moves take 0 and the other arithmetic heads 1 is inferred."""
+
+LANE_VECTORS = 0x400
+"""The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
+LANE_MEMORY = (
+    f"the lane memory: {LANE_VECTORS:#x} vectors of 32 elements of 16 bits, addressed by vector "
+    f"number modulo {LANE_VECTORS:#x} (verified on the camera: the wrap pre-registered at "
+    f"{LANE_VECTORS:#x} and through a second operand of 0x7fff, which acts as -1; the size "
+    "inferred: five different contents at 0x20, 0x40, 0x80, 0x100 and 0x200, and 0x400, "
+    "0x800 .. 0x4000 read vector 0). X0's heads 0x1c, 0x1d (address A[f100_104] + sK, K X0's "
+    "signed 11-bit immediate) and 0x20, 0x21 (A[f100_104] + A[f105_109]) load one vector, "
+    f"delivered {LOAD_LAG} words after the head to the first lane ports under 0 "
+    "(`LANE_SOURCES`) or to the store file O under 0 (`STORE_SOURCES`); 0x1a, 0x1b (A[a] + sK) "
+    "and 0x1e, 0x1f (A[a] + A[b]) store the 32 lanes of O[f69_71] there (`X0_LANE_MEMORY`). "
+    "It is the stock copy's buffer (program 16, cmd 0xF): the copy's load fills one element per "
+    "source byte, zero-extended, source byte 32 n at vector n lane 0 at placement 0, and its "
+    "store writes each element's low 8 bits (verified on the camera, pre-registered: a stock "
+    "copy in, an own vector program, a stock copy out, exact on 512 + 512 + 4096 bytes). "
+    "Timing: a store head in the same word as O's port write stores the old content of O, one "
+    "three words after the write the new content (verified, pre-registered); a load one word "
+    "after a store to the same vector reads the stored vector, and four loads in consecutive "
+    "words land in four consecutive port words (measured on the camera, not pre-registered: "
+    "inferred)"
+)
+STORE_FILE = (
+    "O, the store file: eight lane registers of 32 lanes of 16 bits, written by the grid B port "
+    "f179_181 (the register) under f252_254 (the source, `STORE_SOURCES`) and read by X0's "
+    "store heads through f69_71, 110 bits below its port as at the lane files (verified on the "
+    "camera, pre-registered: all eight registers written through f179_181 = 0..7 and stored "
+    "through f69_71 = 0..7, 32 lanes exact)"
+)
+STORE_SOURCES: dict[int, tuple[str, Confidence]] = {
+    0: (LANE_LOAD, V),
+    1: (S3_RESULT, V),
+    2: (S2_RESULT, V),
+    3: (S1_RESULT, V),
+    4: (S0_RESULT, V),
+}
+"""What f252_254 writes to O[f179_181] by value, with its tier (verified on the camera,
+pre-registered, 11 groups of 32 lanes exact); 5 and 6 never occur in the stock programs and
+were not run, 7 is idle. A move (S3's lane number and broadcast, S2's pass of b) is taken in the
+head's own word, an arithmetic result one word after the head, as at the lane ports
+(`LANE_LAG`)."""
+X0_PARITY = (
+    "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
+    "showed no difference in address, lanes covered, element width or scalar result, and none "
+    "writes A[a] or A[b] back (measured on the camera: inferred); what the low head bit selects "
+    "is open (hypothesis: the handshake with the copy engine's streams)"
+)
+_STORE_IMM, _STORE_REG = (
+    f"stores O[f69_71] to vector A[a] + {offset}" for offset in ("sK", "A[b]")
+)
+_LOAD_IMM, _LOAD_REG = (
+    f"loads vector A[a] + {offset}, delivered {LOAD_LAG} words later"
+    for offset in ("sK", "A[b]")
+)
+X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
+    0x1A: (_STORE_IMM, V),
+    0x1B: (_STORE_IMM, V),
+    0x1C: (_LOAD_IMM, V),
+    0x1D: (_LOAD_IMM, V),
+    0x1E: (_STORE_REG, V),
+    0x1F: (_STORE_REG, V),
+    0x20: (_LOAD_REG, V),
+    0x21: (_LOAD_REG, V),
+}
+"""X0's lane memory heads beside their scalar result (`X_FUNCTIONS`), each with its tier
+(verified on the camera, pre-registered, 32 lanes each, a negative immediate and the wrap
+included); the address modulo `LANE_VECTORS` (`LANE_MEMORY`)."""
+X0_LANE_LOADS = (0x1C, 0x1D, 0x20, 0x21)
+X0_LANE_BY_REGISTER = range(0x1E, 0x22)
+"""The lane memory heads that add A[b], not sK, to A[a]."""
 
 U_PORT_FACT = (
     "With each enable value 0..2, from a word with one value on all three scalar buses and no "
@@ -1234,6 +1319,14 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     **dict(_lane_ports()),
+    "f179_181": (V, f"The register of O that its port writes; {STORE_FILE}"),
+    "f69_71": (
+        V,
+        (
+            "The register of O whose 32 lanes X0's store heads 0x1a, 0x1b, 0x1e and 0x1f write "
+            f"to the lane memory (`X0_LANE_MEMORY`); {STORE_FILE}"
+        ),
+    ),
     "f141_144": (I, f"The register of U its port writes; {LANE_THIRD_FILE}"),
     "f23_30": (
         I,
@@ -1430,7 +1523,7 @@ def _lane_enable(lo: int, fact: str = "") -> Field:
     rows = LANE_SOURCES[enable]
     lane = (
         f"The enable of the lane port that writes {file}[{port}], the file {nibble} reads: its "
-        "value names the S result it writes (`LANE_SOURCES`)"
+        "value names the source it writes (`LANE_SOURCES`)"
     )
     values = {v: f"{source} to {file} ({TAG[t]})" for v, (source, t) in rows.items()}
     return _enable(
@@ -1699,7 +1792,17 @@ FIELDS: tuple[Field, ...] = (
     _lane_enable(236, WORD504_NONE),
     _lane_enable(238, WORD504_NONE),
     *(_lane_enable(lo) for lo in range(240, 252, 2)),
-    _enable(252, 254, "pb", 7, f"values 0..4 and the idle 7 only; {WORD504_NONE}"),
+    _enable(
+        252,
+        254,
+        "pb",
+        7,
+        f"values 0..4 and the idle 7 only; {WORD504_NONE}. The enable of the store file's port, "
+        f"its value the source (`STORE_SOURCES`): {STORE_FILE}",
+        {v: f"{src} to O ({TAG[t]})" for v, (src, t) in STORE_SOURCES.items()}
+        | {7: "idle"},
+        min(t for _, t in STORE_SOURCES.values()),
+    ),
     _enable(255, 255, "pb", 1, _pb("f255"), _pb_values("f255", 1), V),
     _enable(
         256,
@@ -1865,7 +1968,8 @@ FIELDS: tuple[Field, ...] = (
         307,
         "x0",
         0x3F,
-        X0_FACT,
+        f"{X0_FACT}. Its heads 0x1a..0x21 load and store vectors of the lane memory beside "
+        f"their scalar result (`X0_LANE_MEMORY`): {LANE_MEMORY}; {X0_PARITY}",
         kind=Kind.OPCODE,
         confidence=V,
         values=_x_values("x0"),
@@ -1937,7 +2041,8 @@ UNIT_FACTS = {
     f"boots ({_CAMERA}, one run each on three boots; the state reading inferred); at word 557, "
     "15 equals f250_251 = 3 there (verified on the camera)",
     "f69_71": f"program 13 word 439, X0 active: idling it has no effect ({_CAMERA}), so an "
-    "active owner is not sufficient for an effect",
+    "active owner is not sufficient for an effect; X0's head there is 0x3, no store head "
+    "(verified in the bytes)",
     **{k: _HELD_439 for k in ("f37_40", "f45_48", "f49_52", "f65_68", "f80_83")},
     "f41_44": f"{_HELD_439}. Program 13 words 446 and 448, S0's head active: each value tried "
     "(2, 4, 5, 6 at 446; 1, 4, 5, 6 at 448) changes only the first plane, every byte 0, 255 or "

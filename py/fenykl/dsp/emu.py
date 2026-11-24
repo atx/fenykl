@@ -53,7 +53,9 @@ LOCAL_BASE = 0x9D000000
 LOCAL_SIZE = LOCAL_BYTES
 """Local memory, 8 KiB, which the scalar addresses wrap in (`semantics.LOCAL_BYTES`)."""
 BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
-"""The modelled buffer indices: it holds at least 16 KiB and reaches below index 0."""
+"""The modelled buffer indices: it holds at least 16 KiB and reaches below index 0. The buffer is
+the lane memory (`fields.LANE_MEMORY`), one source byte per element, so it holds 0x8000 bytes
+and its indices count modulo that (inferred); the model does not wrap them yet."""
 LINE_PAIRS = 3 * 2 * 64
 """The resampler's held line pairs: plane c, line parity r, pixel x at (2 c + r) x 64 + x."""
 

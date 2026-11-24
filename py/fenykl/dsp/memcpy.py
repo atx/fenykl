@@ -97,7 +97,14 @@ READOUT = 16
 the copy model holds an inserted op's result there as those roles use it, 16 times what the op
 computes (inferred: the scale that read as immediates and results scaled by 16 through these
 two roles, and that exact readout of own programs on the camera does not show). The address
-role takes plain byte addresses."""
+role takes plain byte addresses.
+
+The values the stock transfers hand explain the scale (inferred, a camera readout of the B file
+at the transfer words at one length): at len 0x400 the count (word 73) hands 0x40, so the count
+is in 16-byte units; the load placement (68) and the store offset (76) hand 0, and their older
+register sweeps fit an address in bytes of the lane memory's 16-bit elements, 64 per vector,
+value >> 6 the vector modulo 0x400 (`fields.LANE_MEMORY`). For those two roles the model's 16 x
+value, taken / 32 to a multiple of 32, is the same rule: 32 source bytes per vector."""
 ENGINE_OPERANDS = (
     (
         2,

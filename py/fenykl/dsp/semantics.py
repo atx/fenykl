@@ -17,8 +17,9 @@ The classes and tables of one program are held by its model (`memcpy.Copy16Model
 Stepping (`emu.Executor.step`) takes the op semantics `OP_SEMANTICS` (what a data op does,
 each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
 decisions (the default, none: no condition is known) or `RaTest`. `X_RULES` are the functions
-of the two X units and `LANE_RULES` the lane functions of the four S units (`lane_result`), which
-stepping does not run.
+of the two X units and `LANE_RULES` the lane functions of the four S units (`lane_result`);
+`LaneMemory` and `lane_address` model the lane memory X0 loads and stores. Stepping runs none of
+these.
 """
 
 from collections import Counter
@@ -31,9 +32,12 @@ from typing import Protocol
 from .fields import (
     IDLE_OP,
     LANE_FUNCTIONS,
+    LANE_VECTORS,
     NO_LANE,
     PR_SOURCES,
     S2_HIGH_HALVES,
+    X0_LANE_BY_REGISTER,
+    X0_LANE_MEMORY,
     X_FUNCTIONS,
     X_IMMEDIATES,
     Confidence,
@@ -1332,6 +1336,55 @@ def product_high(
     if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
         raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
     return [v & LANE_MASK for v in _HIGH_VALUES[head](a, b, scalars)]
+
+
+def lane_address(head: int, a: int, b: int, k: int) -> int:
+    """The lane memory vector X0's load or store head `head` addresses (`fields.LANE_MEMORY`):
+    a + b at 0x1e..0x21, a + sK (k sign-extended from X0's 11 bits) at 0x1a..0x1d, modulo
+    `LANE_VECTORS`. Raises KeyError at any other head."""
+    if head not in X0_LANE_MEMORY:
+        raise KeyError(head)
+    if head in X0_LANE_BY_REGISTER:
+        return (a + b) % LANE_VECTORS
+    width = X_IMMEDIATES["x0"].width
+    sk = k - (1 << width) if k >> (width - 1) else k
+    return (a + sk) % LANE_VECTORS
+
+
+@dataclass
+class LaneMemory:
+    """The lane memory's content by vector (`fields.LANE_MEMORY`), a None lane where it is not
+    known (power-up content). The addresses count modulo `LANE_VECTORS`."""
+
+    vectors: dict[int, Lanes] = field(default_factory=dict)
+
+    def load(self, address: int) -> Lanes:
+        return list(self.vectors.get(address % LANE_VECTORS, [None] * LANE_COUNT))
+
+    def store(self, address: int, lanes: Sequence[int | None]) -> None:
+        if len(lanes) != LANE_COUNT:
+            raise ValueError(f"{len(lanes)} lanes: expected {LANE_COUNT}")
+        self.vectors[address % LANE_VECTORS] = [
+            None if v is None else v & LANE_MASK for v in lanes
+        ]
+
+    def copy_in(self, vector: int, data: bytes) -> None:
+        """The stock copy's load: byte i, zero-extended, to lane i % 32 of vector + i // 32;
+        a last partial vector's other lanes are kept (not measured)."""
+        for start in range(0, len(data), LANE_COUNT):
+            address = vector + start // LANE_COUNT
+            lanes = self.load(address)
+            chunk = data[start : start + LANE_COUNT]
+            lanes[: len(chunk)] = chunk
+            self.store(address, lanes)
+
+    def copy_out(self, vector: int, length: int) -> list[int | None]:
+        """The stock copy's store of `length` bytes from `vector` on: each element's low 8 bits,
+        None for an unknown lane."""
+        lanes = [
+            v for n in range(-(-length // LANE_COUNT)) for v in self.load(vector + n)
+        ]
+        return [None if v is None else v & 0xFF for v in lanes[:length]]
 
 
 @dataclass(frozen=True)

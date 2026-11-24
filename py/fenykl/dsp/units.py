@@ -64,11 +64,12 @@ _UNITS = (
     (
         "x0",
         "X0",
-        I,
+        V,
         (
             "the X0 unit: its head f302_307 and the fields that change under it; an ALU on "
-            "the register file A, its result written to A, B, R or G by the PR ports (verified "
-            "on the camera by exact readout)"
+            "the register file A, its result written to A, B, R or G by the PR ports, and the "
+            "lane memory's load and store heads, f69_71 naming the store's register of O "
+            "(verified on the camera by exact readout)"
         ),
         ("f302_307",),
     ),
@@ -92,8 +93,10 @@ _UNITS = (
             "the bytes (f234_235 for f145_146 a hypothesis); the ports of f255..f264 write the "
             "scalar files F0..F3 that the S heads read, each enable value a source "
             "(`fields.SCALAR_FILES`, verified on the camera by exact readout); those of "
-            "f236..f251 write the lane files L0..L3, each enable value an S result "
-            "(`fields.LANE_SOURCES`, verified on the camera but some values); f232_233's is open; "
+            "f236..f251 write the lane files L0..L3, each enable value an S result or, under 0 "
+            "of the first ports, a lane memory load (`fields.LANE_SOURCES`, verified on the "
+            "camera but some values); f252_254's writes the store file O (`fields.STORE_FILE`, "
+            "verified on the camera); f232_233's is open; "
             "ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),

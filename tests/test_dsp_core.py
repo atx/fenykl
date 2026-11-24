@@ -15,11 +15,13 @@ from fenykl.dsp.semantics import (
     Branching,
     Count,
     Given,
+    LaneMemory,
     RaTest,
     Regs,
     RegSet,
     UnknownSemantics,
     destinations,
+    lane_address,
     lane_result,
     product_high,
     x_result,
@@ -631,6 +633,42 @@ def test_heads_without_a_lane_result():
     assert lane_result("s1", 0x54, lanes(), lanes(), {}) is None
     with pytest.raises(KeyError):
         lane_result("s0", 0x1C, lanes(), lanes(), {})  # open
+
+
+@pytest.mark.parametrize(
+    "head, a, b, k, vector",
+    [
+        (0x1C, 0x10, 0, 0x7FF, 0xF),  # K is signed, 11 bits
+        (0x1D, 0x262, 0, 0x401, 0x263),  # -0x3ff, then the wrap
+        (0x1B, 0x3FF, 0, 1, 0),
+        (0x21, 0x263, 0x7FFF, 0x7FF, 0x262),  # A[b] = 0x7fff acts as -1; K not added
+        (0x1E, 0x263, 0x19D, 0, 0),
+        (0x20, 0xFFFFFFFF, 1, 0, 0),  # 32-bit operands wrap the same way
+    ],
+)
+def test_lane_memory_address(head, a, b, k, vector):
+    assert lane_address(head, a, b, k) == vector
+
+
+def test_lane_memory_address_only_at_the_load_and_store_heads():
+    with pytest.raises(KeyError):
+        lane_address(0x22, 0, 0, 0)
+
+
+def test_lane_memory_aliases_modulo_its_size():
+    memory = LaneMemory()
+    memory.store(0x400, list(range(0xFFF0, 0x10010)))
+    assert memory.load(0) == [v & 0xFFFF for v in range(0xFFF0, 0x10010)]
+    assert memory.load(0x4001) == [None] * 32
+
+
+def test_the_stock_copy_fills_one_element_per_byte_and_stores_its_low_byte():
+    memory = LaneMemory()
+    memory.copy_in(0x3FF, bytes(range(40)))
+    assert memory.load(0x3FF) == list(range(32))
+    assert memory.load(0)[:9] == [*range(32, 40), None]  # the wrap; the rest unknown
+    memory.store(0x3FF, [0x1234] * 32)
+    assert memory.copy_out(0x3FF, 34) == [0x34] * 32 + [32, 33]
 
 
 def framed(*routine: Word) -> Job:
