@@ -156,7 +156,7 @@ def test_lane_tables_verified_rows():
         unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
         for unit, rows in LANE_FUNCTIONS.items()
     }
-    assert verified == {"s0": 71, "s1": 85, "s2": 15, "s3": 59}
+    assert verified == {"s0": 72, "s1": 85, "s2": 15, "s3": 60}
 
 
 def test_a_head_field_is_verified_once_every_value_has_a_verified_row():
