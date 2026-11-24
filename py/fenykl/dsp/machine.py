@@ -776,11 +776,10 @@ class Machine:
                 return _cap(h, tier)
             # Nothing on M beside or behind a head without a result there: verified in the
             # head's own word and one word after under every unit, two and three words after
-            # 16 heads; with no head before in the job it is inferred. Under S3 past a
-            # reduction's first word, also with no reduction, it is inferred: the register was
-            # gone at 4, 8 and 30 words, found after the run.
+            # 16 heads, and under S3 two, four, five and six words after each reduction; with
+            # no head before in the job it is inferred.
             quiet = self.last_head is not None and t >= self.last_head
-            return Kept(tier if quiet and sel != "s3" else min(tier, I))
+            return Kept(tier if quiet else min(tier, I))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
