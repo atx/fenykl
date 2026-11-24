@@ -325,8 +325,9 @@ _CHANNELS: tuple[Channel, ...] = (
                 "load enable",
                 66,
                 "a load at r1, r3, r4, r5, r10, r12, r13, r17; no load (the held buffer is "
-                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8; on a register "
-                "holding 1 the copy skips its load and stores the lane memory as it is "
+                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8; on register 0 "
+                "(which holds 1 at that word) the copy skips its load and stores the lane "
+                "memory as it is "
                 "(verified on the camera, a pre-registered pipeline)",
                 _table(
                     None,

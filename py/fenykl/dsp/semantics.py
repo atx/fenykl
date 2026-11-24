@@ -1004,7 +1004,7 @@ def _sk(unit: str, k: int) -> int:
 def x_result(unit: str, head: int, a: int, b: int, k: int) -> int | None:
     """The 32-bit result X unit `unit` puts out at head value `head` on operands a, b and the
     raw immediate k; None where the head gives no result. Raises KeyError at a head value
-    without a rule (the idle value)."""
+    without a rule (the idle value), ValueError for a k wider than the unit's immediate."""
     rule = X_RULES[unit][head]
     if rule.value is None:
         return None
@@ -1332,8 +1332,9 @@ def lane_result(
     heads read as a lane mask), "r" (F0[f76_79]) and "imm"; S1 "t"
     (F1[f84_87]) and "imm"; S2 "t" (F2[f88_91]) and "imm" (0x0 / 0x1's multiplier); S3 the
     nibbles "f31_34", "f65_68", "f92_95", "f96_99" and "index" = F3[f92_95], "value" =
-    F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), a
-    shift count as imm & 15 or t & 15."""
+    F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), but
+    S0's select heads read all 32 bits of "s" as the lane mask; a shift count enters as imm & 15
+    or t & 15."""
     if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
         raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
     rule = LANE_RULES[unit][head]

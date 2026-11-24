@@ -1009,13 +1009,14 @@ ONE_MASK = (
 )
 LANE_MASKS = (
     "S0's per-lane condition is a 32-bit mask in a scalar register: its select heads 0x44, 0x45, "
-    "0x46 and 0x4b read bit k of F0[f72_75] for lane k (verified on the camera, pre-registered "
-    "under two masks, 32 lanes exact per group, a = L0[f37_40], b = L0[f41_44]); a lane port, "
+    "0x46 and 0x4b read bit k of F0[f72_75] for lane k (verified on the camera, pre-registered, "
+    "0x46 under two masks and the others under one, 32 lanes exact per group, a = L0[f37_40], b = L0[f41_44]); a lane port, "
     "or O under 4, takes their result in the head's own word, one and two words later nothing "
     "(`LANE_LAG`). S0's compare heads make such a mask, bit k from lane k, which M puts on X0's "
     "result bus one word after the head (`S_RESULTS`, inferred); in the stock programs every S0 "
-    "0x13 is followed by a word with M under f274_275 = 0 and F0's port f182_185 under f255 = 0, "
-    "so the mask goes into F0 (verified in the bytes, 18 of 18 words). The whole chain, compare, "
+    "0x13 is followed by a word with M under f274_275 = 0 and F0's port f182_185 under f255 = 0 "
+    "(verified in the bytes, 18 of 18 words); that this word takes 0x13's mask into F0 is "
+    "inferred, and 0x13's operand is not identified. The whole chain, compare, "
     "M, F0 and a select, has not been run in one program"
 )
 LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
@@ -1460,10 +1461,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
     "f72_75": (
         V,
         (
-            "s, the register of F0 that S0's lane heads read as their scalar (`LANE_OPERANDS`; "
-            "inferred: S0's pre-registered function table at one register) and whose 32 bits "
-            "the select heads read as a lane mask (verified on the camera, pre-registered at two "
-            f"registers holding two masks): {LANE_MASKS}"
+            "s, the register of F0 that S0's lane heads read as their scalar (`LANE_OPERANDS`) "
+            "and whose 32 bits the select heads read as a lane mask (verified on the camera, "
+            f"pre-registered at two registers holding two masks): {LANE_MASKS}"
         ),
     ),
     "f76_79": (
@@ -1962,17 +1962,18 @@ FIELDS: tuple[Field, ...] = (
         I,
         "the value under the active-low strobe f276: f274_276 takes 4 (idle) and 0..3, 7 in 38 "
         f"words, never 5 or 6, {OWNERSHIP}; held, in runs of median 8 words, and no field "
-        f"changes under it: a mode of the compute group (hypothesis); {_c2_fact(274, 275)}. "
+        f"changes under it; {_c2_fact(274, 275)}. "
         "In the stock words it is 0 beside S0 head 0x52, 1 beside S1 0x54, 2 beside S2 0xe and "
         "3 beside S3 0x17 (verified in the bytes), but it does not select the S unit: a head's "
         "result passed under M at each of 0..3 in the head's own word (measured on the camera, "
         "one head per word; the selection reading pre-registered and refuted). One word after "
         "an S0 compare head, in a word with no S head, 0 put the compare mask on the bus and 3 "
-        "nothing, and S3's reductions were read under 3: it names the unit whose held result M "
-        "puts out, 0 S0, 3 S3 (inferred: one run; 1 and 2 not run there; `LANE_MASKS`)",
+        "nothing (inferred: one run), and S3's reductions and extracts were read under 3, never "
+        "tried under 0 (inferred). Hypothesis: it names the unit whose held result M puts out, "
+        "0 S0, 3 S3; 1 and 2 not run there (`LANE_MASKS`)",
         values={
-            0: "S0's held result, a compare mask (inferred)",
-            3: "S3's held result, a reduction (inferred)",
+            0: "S0's compare mask one word after its head passes, under 3 it does not (inferred)",
+            3: "S3's reductions and extracts read; never tried under 0 (inferred)",
         },
     ),
     Field(
