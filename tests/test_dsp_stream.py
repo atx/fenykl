@@ -178,6 +178,32 @@ def test_a_wait_with_nothing_outstanding():
         drive(m, e, [WAIT])
 
 
+def test_a_lone_wait_returns_at_inferred():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [WAIT, *lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT])
+    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == I
+    assert e.lane_tier() == I
+
+
+def test_a_command_that_moves_nothing_counts_at_inferred():
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), stream.NOTHING_MOVES, 0, 0, WAIT])
+    assert e.lane_tier() == I
+
+
+def test_a_load_of_more_than_four_rows_is_inferred():
+    m, e = machine(bytes(range(256)) * 2), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2, r7=5, r1=64, r4=64), *load(0, SRC, 0), WAIT])
+    assert m.memory[4].lanes[0] == 0 and m.memory[4].tier == I
+
+
+def test_a_load_completed_by_the_jobs_end_is_inferred():
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0)])
+    e.finish(m)
+    assert m.memory[0].lanes[1] == 1 and m.memory[0].tier == I
+
+
 def test_a_loads_vectors_are_unknown_until_it_is_waited_for():
     m, e = machine(bytes(range(64))), stream.Engine()
     m.memory[0] = Vec(tuple(range(32)))
