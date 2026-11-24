@@ -356,7 +356,7 @@ The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's
 source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
 element's low 8 bits [verified]. A kernel with bulk input and output runs inside one stock copy:
 the loaded vectors are there once the copy's word 74 has run (three vectors read, 8 lanes each:
-the sequencer waits for the engine or the load is faster than a few words), own words between
+word 74 is the load's 0x1d, which waits for it), own words between
 74 and 75 compute on them, and 75..78 store them (`memcpy`; verified: a dense layer of 32
 neurons x 64 inputs, DRAM bytes to DRAM bytes, exact). The store's element format, word 47's
 value, is the number of elements per 16-byte line: 16 bytes, 12 a 10-bit pack, 10 a 12-bit

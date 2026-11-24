@@ -219,6 +219,7 @@ def test_a_key_with_bits_outside_its_fields_loses_the_grammar():
     [
         (0x0C, 2, lambda acc, line: [acc >> 10 * k & 0x3FF for k in range(12)]),
         (0x08, 2, lambda acc, line: [acc >> 16 * k & 0xFFFF for k in range(8)]),
+        (0x04, 2, lambda acc, line: [acc >> 32 * k & 0xFFFFFFFF for k in range(4)]),
     ],
 )
 def test_store_formats_pack_the_lanes(fmt, lines, check):
@@ -231,6 +232,14 @@ def test_store_formats_pack_the_lanes(fmt, lines, check):
         acc = int.from_bytes(got.data[16 * line : 16 * line + 16], "little")
         assert check(acc, line) == [0x300 + per * line + k for k in range(per)]
     assert all(got.known)
+
+
+def test_store_format_0x0d_writes_zeros():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(1, 33)))
+    drive(m, e, [*lanes(0, 1, r5=0x0D, r6=2), *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 32)
+    assert all(got.known) and bytes(got.data) == bytes(32)
 
 
 def test_an_unknown_lane_leaves_the_bytes_it_reaches_unknown():
