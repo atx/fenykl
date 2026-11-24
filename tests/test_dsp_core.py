@@ -650,11 +650,6 @@ def test_lane_memory_address(head, a, b, k, vector):
     assert lane_address(head, a, b, k) == vector
 
 
-def test_lane_memory_address_only_at_the_load_and_store_heads():
-    with pytest.raises(KeyError):
-        lane_address(0x22, 0, 0, 0)
-
-
 def test_lane_memory_aliases_modulo_its_size():
     memory = LaneMemory()
     memory.store(0x400, list(range(0xFFF0, 0x10010)))

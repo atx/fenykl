@@ -992,6 +992,15 @@ X_RULES = {unit: _x_rules(unit) for unit in X_FUNCTIONS}
 the unit's register operands, K its immediate (`fields.X_IMMEDIATES`)."""
 
 
+def _sk(unit: str, k: int) -> int:
+    """X unit `unit`'s raw immediate k sign-extended from its width; raises ValueError for a k
+    wider than that."""
+    width = X_IMMEDIATES[unit].width
+    if not 0 <= k < 1 << width:
+        raise ValueError(f"{unit}: immediate {k:#x} does not fit {width} bits")
+    return k - (1 << width) if k >> (width - 1) else k
+
+
 def x_result(unit: str, head: int, a: int, b: int, k: int) -> int | None:
     """The 32-bit result X unit `unit` puts out at head value `head` on operands a, b and the
     raw immediate k; None where the head gives no result. Raises KeyError at a head value
@@ -999,9 +1008,7 @@ def x_result(unit: str, head: int, a: int, b: int, k: int) -> int | None:
     rule = X_RULES[unit][head]
     if rule.value is None:
         return None
-    width = X_IMMEDIATES[unit].width
-    sk = k - (1 << width) if k >> (width - 1) else k
-    return _u32(rule.value(a, b, k, sk))
+    return _u32(rule.value(a, b, k, _sk(unit, k)))
 
 
 LANE_COUNT = 32
@@ -1341,14 +1348,12 @@ def product_high(
 def lane_address(head: int, a: int, b: int, k: int) -> int:
     """The lane memory vector X0's load or store head `head` addresses (`fields.LANE_MEMORY`):
     a + b at 0x1e..0x21, a + sK (k sign-extended from X0's 11 bits) at 0x1a..0x1d, modulo
-    `LANE_VECTORS`. Raises KeyError at any other head."""
+    `LANE_VECTORS`. Raises KeyError at any other head, ValueError for a k over 11 bits."""
     if head not in X0_LANE_MEMORY:
         raise KeyError(head)
     if head in X0_LANE_BY_REGISTER:
         return (a + b) % LANE_VECTORS
-    width = X_IMMEDIATES["x0"].width
-    sk = k - (1 << width) if k >> (width - 1) else k
-    return (a + sk) % LANE_VECTORS
+    return (a + _sk("x0", k)) % LANE_VECTORS
 
 
 @dataclass

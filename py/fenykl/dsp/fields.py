@@ -35,7 +35,7 @@ write them from the same three sources (`PB_SOURCES`), and S heads read them (`S
 under the M strobe f276 = 0 an S head's scalar result goes on X0's result bus (`S_RESULTS`). Each
 S unit has a lane file of 16 registers of 32 lanes of 16 bits (`LANE_FILES`), read by the unit's
 two lane nibbles and written by the two grid B lane ports 110 bits above them, whose enable
-names the S result they take (`LANE_SOURCES`); the S heads' lane functions are
+names the source they take (`LANE_SOURCES`); the S heads' lane functions are
 `LANE_FUNCTIONS`, their immediates `LANE_IMMEDIATES`.
 """
 
@@ -876,8 +876,9 @@ pre-registered; f240_241 / 1 on all 32 lanes of a product (`S2_HIGH_HALVES`), f2
 its low half; f236_237 and f240_241 / 2 on two lanes, not pre-registered (inferred); f242_243 /
 2 by the pattern of the second ports (inferred). Enable 0 of the four first ports (f236_237,
 f240_241, f244_245, f248_249) takes the vector an X0 load head (`LANE_MEMORY`) asked for exactly
-four words earlier, into one port or several in the same word; at lag 3 or 5, or with no head,
-the port writes nothing (verified on the camera, pre-registered sentinels, 32 lanes each); into
+four words earlier; at lag 3 or 5, or with no head, the port writes nothing (verified on the
+camera, pre-registered sentinels, 32 lanes each); one load reaches several ports in the same
+word (measured on the camera, not pre-registered: inferred); into
 L2 and L3 the loaded lanes were pre-registered and met (verified), into L0 and L1 measured on
 the camera, not pre-registered (inferred). In the five stock programs every word with an X0 load
 head has such a port write (or O's, `STORE_SOURCES`) four words later and no such write lacks
@@ -963,6 +964,7 @@ X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
 (verified on the camera, pre-registered, 32 lanes each, a negative immediate and the wrap
 included); the address modulo `LANE_VECTORS` (`LANE_MEMORY`)."""
 X0_LANE_LOADS = (0x1C, 0x1D, 0x20, 0x21)
+"""X0's lane memory load heads; what f69_71 does on a load is open."""
 X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 """The lane memory heads that add A[b], not sK, to A[a]."""
 

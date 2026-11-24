@@ -168,7 +168,7 @@ register on M's bus from the third word after the head on [verified]; S2 0xc rea
 
 Each S unit has a lane file of 16 registers of 32 lanes of 16 bits (`fields.LANE_FILES`). The
 unit's lane heads read a and b from it through its two lane nibbles, and the two grid B ports
-110 bits above those nibbles write it; the enable of a port names the S result it takes
+110 bits above those nibbles write it; the enable of a port names the source it takes
 (`fields.LANE_SOURCES`; [verified] unless tagged):
 
 | file | unit | a, b | first port (enable): 0, 1, 2 | second port (enable): 0, 1, 2 |
@@ -235,8 +235,8 @@ the size inferred from five different contents below 0x400 and aliases above].
 | 0x1e, 0x1f | store O[f69_71] | A[f100_104] + A[f105_109] |
 
 A load's 32 lanes arrive exactly four words after the head, at any first lane port under enable
-0, at several in one word, or at the store file's port; at lag 3 or 5 the port writes nothing
-[verified; into L0 and L1 inferred]. In the five stock programs every word with a load head has
+0 or at the store file's port; at lag 3 or 5, or with no head, the port writes nothing [verified;
+into L0 and L1 inferred]; one load reaches several ports in one word [inferred]. In the five stock programs every word with a load head has
 such a port write four words later, and none lacks its head (379 words; verified in the bytes).
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
@@ -260,9 +260,9 @@ gives a head's vector; the emulator runs neither.
 
 What can be written today: an own loop of 16 passes, each incrementing an index into G and A,
 loading two vectors into L2 through X0 0x1d, multiplying them with S2 0x2, putting the product's
-halves into L1 through f155 / 1 and f159 / 1, narrowing with S1 0x29 into O under 3 and storing
-it with X0 0x1b, and reducing the products with S3 0x2, read through M into G and accumulated
-by op 0x35, gave the 32-bit sum of 512 products and every stored vector exactly [verified,
+halves into L1 through f155 / 1 and f159 / 1 and its low half into L3 through f175 / 1,
+narrowing with S1 0x29 into O under 3 and storing it with X0 0x1b, and reducing the products in
+L3 with S3 0x2, read through M into G and accumulated by op 0x35, gave the 32-bit sum of 512 products and every stored vector exactly [verified,
 pre-registered].
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays

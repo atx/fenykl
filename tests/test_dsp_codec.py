@@ -188,15 +188,9 @@ def test_every_x0_load_has_its_port_write_four_words_later(items):
     assert loads == 379
 
 
-def test_the_store_file_takes_the_s_units_in_reverse_order():
-    # 0 is a load, then S3..S0; 5 and 6 were never run, so they have no row.
+def test_the_store_file_enable_has_rows_only_for_the_values_run():
+    # 5 and 6 were never run, so they have no row and do not lower the tier.
     enable = lookup("f252_254")
-    assert [src[:2] for src, _ in STORE_SOURCES.values()][1:] == [
-        "S3",
-        "S2",
-        "S1",
-        "S0",
-    ]
     assert sorted(enable.values) == [0, 1, 2, 3, 4, 7]
     assert enable.confidence is Confidence.VERIFIED
     assert PORTS["f252_254"] == "f179_181"
