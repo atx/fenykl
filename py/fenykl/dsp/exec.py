@@ -326,8 +326,9 @@ def _cover_field(
 
 LATENCY = {"port": 1, "load": 3, "coefficient": 1, "term": 1}
 """Executed words from a write to the first read that sees it: a port write to an S2 read
-(inferred), a load to the load latch that f198_201 reads (hypothesis), f198_201's write to an
-f88_91 read (hypothesis; on the camera S2 head 0xe reads such a write from the next word on, and
+(inferred; on the camera with own programs a load's write through f163_166 is read by S2 0x2 in
+the next word, verified, pre-registered, f167_170's not measured), a load to the load latch
+that f198_201 reads (hypothesis), f198_201's write to an f88_91 read (hypothesis; on the camera S2 head 0xe reads such a write from the next word on, and
 the ALU bus carries a load's datum three words on), an S2 term to its accumulator (inferred post hoc on the chroma
 planes)."""
 PORT_WRITES = (("f163_166", "f244_245", 0), ("f167_170", "f246_247", 1))

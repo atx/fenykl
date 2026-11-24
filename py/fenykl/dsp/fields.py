@@ -791,7 +791,8 @@ register, f258 / 0 at three of F1, f263_264's three read back both by S3 0x18 an
 Under an X0 source
 with X0 idle the port stores a value that is no result of the word (measured on the camera).
 X0's result bus is also M's (`S_RESULTS`): f255 = 0 takes S0's compare mask into F0 and f258 = 0
-S1's into F1 (verified on the camera, pre-registered)."""
+S1's into F1, and f255 = 0 under f274_275 = 3 S3's held reduction into F0 (each verified on the
+camera, pre-registered; S3 0x0's maximum read back by S0 0x19 against that F0 register)."""
 
 
 SCALAR_FILES = (
@@ -840,7 +841,11 @@ the register they name (`LANE_SOURCES`). Verified on the camera for L2 and L3 (s
 both files, each port alone) and through the operands for L0 and L1: copies written by
 f151_154 / f159_162 were the a and b of S0's and S1's pre-registered function tables. L3's 16
 registers were dumped whole: power-up content, stable over a boot, a few bits apart between
-boots (verified on the camera)."""
+boots (verified on the camera). A register a port writes in word t is read by a head in word
+t + 1 (verified on the camera, pre-registered against a sentinel in the register, three pairs:
+L3 through f250_251 = 0 (S3 0x18's result) then S3 0x19, L2 through f244_245 = 0 (a load) then
+S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2); a head in the port's
+own word, and L0, L1 and U, were not measured."""
 LANE_THIRD_FILE = (
     "U, a third kind of lane register file, 16 registers named by f31_34 (inferred, fitted: 16 "
     "values of f31_34 gave 16 different fills of power-up content), whose lanes 0..3 are the "
@@ -851,10 +856,12 @@ LANE_THIRD_FILE = (
     "lanes 0..3 held b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31 (verified on the "
     "camera, pre-registered, lanes 0..3 read back as the top lanes of S3 0x1b by 4): the next "
     "vector's first lanes for a shift up, the previous vector's last lanes for a shift down "
-    "(inferred); each "
-    "cell wrote and read the same register number, so that f141_144 and f31_34 name the same "
-    "register rests on the fit (inferred); under 0 and 2 beside 0x1f U kept its content "
-    "(measured on the camera, one head, one register, lanes 0..3: inferred); 0x18, 0x19, 0x22 "
+    "(inferred). f141_144 names the register written and f31_34 the one the shifts read: U[3] "
+    "and U[9], written in consecutive heads with values apart in every one of lanes 0..3, read "
+    "back as written through S3 0x1b by 4 with f31_34 = 3 and 9, also after later writes to "
+    "U[5] (verified on the camera, pre-registered); under 0 and 2 beside 0x1f U[5] kept a known "
+    "value and under 1 in the same word took the new one (verified on the camera, "
+    "pre-registered, lanes 0..3), so 1 is the write enable among 0..2; 0x18, 0x19, 0x22 "
     "and 0x14 under 1 wrote nothing and 0x1a and 0x1d a content not identified (inferred, one "
     "run); U's lanes 4..31 were not read"
 )
@@ -903,7 +910,10 @@ and the next only, 16 lanes; the others with the head not held and, held, at eve
 At 0: S3's moves 0x18 / 0x19, its lane shift 0x22, S2's pass 0x8, S1's logic heads and S0's
 selects 0x44, 0x45, 0x46 and 0x4b; at 1: the arithmetic and shift heads timed, S0's select
 0x08 and S3's shuffles 0xa / 0xc. No head class predicts the lag; the other heads' lags are
-open (hypothesis: as their nearest timed relative)."""
+open (hypothesis: as their nearest timed relative). S1 0x34 at 1 (inferred, fitted after the
+run: a loop's pass counter, its port standing in the head's word and the next, read one less
+than its passes where the last pass's next word was no loop word; a lag of 0 would have written
+the last increment)."""
 
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
@@ -980,7 +990,9 @@ X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 U_PORT_FACT = (
     "With each enable value 0..2, from a word with one value on all three scalar buses and no "
     "S head, it wrote nothing to lanes 0 / 1 of L3, nor to L3 under 1 beside any S3 head "
-    f"(verified on the camera). The enable of U's port: {LANE_THIRD_FILE}"
+    "(verified on the camera). The enable of U's port U[f141_144] beside an S3 head: 1 writes, "
+    "0 and 2 write nothing (verified on the camera, pre-registered against a known value in "
+    "U[5]); U is `LANE_THIRD_FILE`"
 )
 LANE_OPERANDS = (
     "a and b are the unit's two lane operands (`LANE_FILES`) lane by lane, read as signed or "
@@ -1029,7 +1041,13 @@ LANE_MASKS = (
     "(verified on the camera, pre-registered, two masks and 2 x 32 lanes). In the stock programs "
     "every S0 0x13 (b == imm16) is followed by a word with M under f274_275 = 0 and F0's port "
     "f182_185 under f255 = 0 (verified in the bytes, 18 of 18 words), so they keep its mask in "
-    "F0 (inferred). Both units' order compares are unsigned; no signed one is known. S1 0x56, "
+    "F0 (inferred). Both units' order compares are unsigned, and no signed compare head is "
+    "known; a signed order compare is the unsigned one on both operands XOR-ed with 0x8000 "
+    "(S1 0x01 against a broadcast 0x8000): so S0 0x32 / 0x33 and S1 0x45 / 0x46 gave the masks "
+    "of a < b and a >= b signed (verified on the camera, pre-registered, four masks on edge and "
+    "random lanes). S3's held reduction reaches F0 the same way under f274_275 = 3: S3 0x0's "
+    "maximum, then S0 0x19 against it, gave the one-hot mask of the maximum's lane (verified on "
+    "the camera, pre-registered). S1 0x56, "
     "0x5b, 0x60, 0x61, 0x62, 0x6f, 0x70 and 0x7e gave b in every lane with a mask in F1 "
     "(measured on the camera): no select of S1's is known"
 )
@@ -1230,9 +1248,9 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             (
                 "1..4 pre-registered on lanes 24..31, the tier covering n = 1..4 only; U's "
-                "register named by f31_34 (inferred: every cell used one register); n = 5..11 b "
-                "(measured, the pre-registered shift missed: inferred); n = 12..15 down by "
-                "m = 16 - n: lane k := b[k - m], the bottom m "
+                "register named by f31_34 (verified: two registers read back by number); "
+                "n = 5..11 b (measured, the pre-registered shift missed: inferred); n = 12..15 "
+                "down by m = 16 - n: lane k := b[k - m], the bottom m "
                 "lanes U's lanes 4-m..3 (inferred, fitted)"
             ),
         ),
@@ -1269,7 +1287,7 @@ dot product came out exact (verified on the camera); 0x0's was refitted on all 3
 operand is negative (inferred); what separates 0x2 / 0x4 / 0x6, 0x3 / 0x5 and 0x0 / 0x1 is open
 (hypothesis: the operands' signedness)."""
 LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
-    "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", V),
+    "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", I),
     "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", V),
     "s2": ("imm7 = sext7(f53_56 << 3 | f88_91 >> 1), the multiplier of 0x0 / 0x1", V),
     "s3": (
@@ -1279,8 +1297,9 @@ LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
 }
 """Each S unit's immediate by field. Fitted on the camera with one field varied per cell, read
 through max_s(0x8000, imm), 1 x imm or S3 0x11, then pre-registered on fresh values of every
-field and met (verified on the camera, 13 cells x 2 lanes); f80_83's bits 1..0 do not enter
-S1's. Register nibbles double as immediate bits: S0's f37_40 (a) and f76_79, S1's f84_87 (t),
+field and met (verified on the camera, 13 cells x 2 lanes), but for S0's bit 5, which was 0 in
+every pre-registered cell and so rests on the fit (S0's inferred); f80_83's bits 1..0 do not
+enter S1's. Register nibbles double as immediate bits: S0's f37_40 (a) and f76_79, S1's f84_87 (t),
 S2's f53_56 (a) and f88_91 (t)."""
 
 S_NONE = {
@@ -1429,7 +1448,14 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             f"to the lane memory (`X0_LANE_MEMORY`); {STORE_FILE}"
         ),
     ),
-    "f141_144": (I, f"The register of U its port writes; {LANE_THIRD_FILE}"),
+    "f141_144": (
+        V,
+        (
+            "The register of U its port writes under f232_233 = 1 (verified on the camera, "
+            "pre-registered: U[3] and U[9] written in one job and read back by number); U is "
+            "`LANE_THIRD_FILE`"
+        ),
+    ),
     "f23_30": (
         I,
         (
@@ -1444,7 +1470,8 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "lanes 0..31 read back as built) and 0xe / 0xf extract; bits 3..2 are bits 5..4 of "
             "S3 0x11's immediate (verified on the camera, pre-registered on fresh values), and "
             "0x16 / 0x17 ignore it (inferred, fitted); as a whole the register of U that the lane "
-            f"shifts read (inferred): {LANE_THIRD_FILE}"
+            "shifts read (verified on the camera, pre-registered: U[3] and U[9] read back by "
+            f"number through 0x1b): {LANE_THIRD_FILE}"
         ),
     ),
     "f37_40": (
@@ -1891,12 +1918,12 @@ FIELDS: tuple[Field, ...] = (
         "f232 is never clear without f233; active together with S3 (f296_301) in 1928 of its "
         f"1940 active words, so its port cannot be told apart from S3 in the bytes. {U_PORT_FACT}",
         {
-            0: "writes nothing (inferred)",
+            0: "writes nothing (verified, beside S3 0x1f)",
             1: "U[f141_144] takes what the S3 head beside it hands (verified, lanes 0..3 read)",
-            2: "writes nothing (inferred)",
+            2: "writes nothing (verified, beside S3 0x1f)",
             3: "idle",
         },
-        I,
+        V,
     ),
     Field(
         234,
