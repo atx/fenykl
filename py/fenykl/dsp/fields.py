@@ -423,20 +423,26 @@ OPS: dict[int, Op] = {
     ),
     3: Op(
         "call",
-        I,
-        "call: when a return lies between the word and T, the word at i + 5 is almost never a "
-        "branch target (11 of 950 across later firmware versions of the same family), so a "
-        "return reaches it (inferred, strong); program 16's word 0 calls its job routine at 10; "
-        "the op 3 words with no return before T (local, `Program.local_op3`) are open, a jump "
-        "or a call: program 13's at word 210 runs in a job (verified on the camera: a halt "
-        "there cuts the job) and acts as a jump (inferred: as a call its link would re-run the "
-        "job's inner loop, longer than the measured job), its twin at 312 by analogy "
-        "(hypothesis); `Executor(local_op3_jump=True)` steps them as jumps",
+        V,
+        "a jump to T after four delay slots that writes no link (verified on the camera: r1 "
+        "kept its value across an op 3 without a link word). A call is an op 3 whose delay "
+        "slots hold 0x0b #(i + 5) with f272_273 = 1 on r1: 24 of the 42 op 3 words of the five "
+        "stock programs (verified in the bytes), program 16's word 0 among them, which calls "
+        "its job routine at 10; calls two deep with the link saved in another register ran as "
+        "written (verified on the camera). The other 18 (`Program.local_op3`: no return "
+        "before T) are jumps: program 13's at word 210 runs in a job (verified on the camera: "
+        "a halt there cuts the job). In the stock words f120_122 is 0 or 4 (verified in the "
+        "bytes); an op 3 built with f120_122 = 7 left its program (measured on the camera), so "
+        "its bits 0..1 may extend T (hypothesis)",
     ),
     4: Op(
         "ret",
-        I,
-        "return to the word after the call's delay slots (inferred, strong); it has no target",
+        V,
+        "a jump, after four delay slots, to the word G[f128_132] names (verified on the "
+        "camera at f128_132 = 1 and 21, the register set just before); f128_132 is 1 in 15 of "
+        "the 18 returns of the five stock programs and 3, 7 and 2 in the others (verified in "
+        "the bytes): r1 is the link by convention, written in the call's delay slots, and a "
+        "routine that calls reloads it from its frame before its op 4",
     ),
     7: Op(
         "halt",
@@ -445,7 +451,8 @@ OPS: dict[int, Op] = {
         "0 returns (inferred); at any word and call depth: program 16 with word 5 in place of "
         "word 11, inside the routine with the call's return pending, ended with status 0 and "
         "dst not written (verified on the camera, one run), so a halt needs no return and the "
-        "return stack is not checked (inferred); whether it has delay slots is open",
+        "return stack is not checked (inferred); three words behind a halt still run: of five "
+        "stores there the first three wrote (verified on the camera, pre-registered)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
@@ -530,8 +537,8 @@ X_SHARED: dict[int, tuple[str, Confidence, str]] = {
     0x03: ("a + zK", V, ""),
     0x04: ("a <= sK signed", V, ""),
     0x05: ("a < sK signed", V, ""),
-    0x06: ("a <= zK unsigned", I, "zero extension measured, not pre-registered"),
-    0x07: ("a < zK unsigned", I, "zero extension measured, not pre-registered"),
+    0x06: ("a <= zK unsigned", V, "the zero extension pre-registered at K's top value"),
+    0x07: ("a < zK unsigned", V, "the zero extension pre-registered at K's top value"),
     0x08: ("a <= b unsigned", V, ""),
     0x09: ("a < b unsigned", V, ""),
     0x0A: ("a <= b signed", V, ""),
@@ -845,11 +852,12 @@ boots (verified on the camera). A register a port writes in word t is read by a 
 t + 1 (verified on the camera, pre-registered against a sentinel in the register, five pairs:
 L3 through f250_251 = 0 (S3 0x18's result) then S3 0x19, L2 through f244_245 = 0 (a load) then
 S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2; L0 written by S0's
-port then read by S0, L1 by S1's then S1); a head in the port's own word, and U, were not
-measured."""
+port then read by S0, L1 by S1's then S1); a head in the port's own word reads the old
+content, in every lane file and in U (verified on the camera, pre-registered)."""
 LANE_THIRD_FILE = (
-    "U, a third kind of lane register file, 16 registers named by f31_34 (inferred, fitted: 16 "
-    "values of f31_34 gave 16 different fills of power-up content), whose lanes 0..3 are the "
+    "U, a third kind of lane register file, 16 registers named by f31_34 (verified on the "
+    "camera, pre-registered: sixteen values written through f141_144 = 0..15 read back by "
+    "number), whose lanes 0..3 are the "
     "carry lanes of S3's lane shifts: a shift up by n = 1..4 fills its top n lanes from U's lanes "
     "0..n-1, a shift down by m = 1..4 its bottom m lanes from U's lanes 4-m..3 (verified on "
     "the camera, pre-registered, 0x1b). Its port is f141_144 under f232_233 = 1, "
@@ -915,11 +923,11 @@ def _lags(
 
 LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
     "s0": _lags(1, V, range(0x8), range(0xE, 0x12), range(0x14, 0x18), 0x1A, 0x1B, 0x1D)
-    | _lags(1, V, 0x08, 0x1F, range(0x20, 0x24), range(0x26, 0x2A), range(0x34, 0x40))
+    | _lags(1, V, range(0x08, 0x0E), 0x1E, 0x1F, range(0x20, 0x24), range(0x26, 0x2E))
+    | _lags(1, V, range(0x34, 0x40))
     | _lags(0, V, range(0x41, 0x47), 0x4B, 0x4D),
     "s1": _lags(0, V, range(0xA), 0x53)
-    | _lags(1, V, range(0xA, 0x16), range(0x1A, 0x1F), range(0x23, 0x32))
-    | _lags(1, V, 0x33, range(0x34, 0x3D), range(0x47, 0x53)),
+    | _lags(1, V, range(0xA, 0x41), range(0x47, 0x53)),
     "s2": _lags(1, V, range(0x7)) | _lags(0, V, 0x7, 0x8, 0x9, 0xA, 0xB, 0xD),
     "s3": _lags(1, V, range(0xA, 0xE))
     | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
@@ -933,8 +941,10 @@ S0's selects 0x41..0x46, 0x4b and 0x4d, S1's logic heads 0x00..0x09 and 0x53, S2
 and 0xd, sign masks 0x9 / 0xb and lane number 0xa, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
 S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd. No head class predicts the lag across
 units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then pre-registered at
-0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified), the
-next word not excluded (an earlier run read a there too). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
+0 and met (verified). S0's clamps 0x9..0xd and carry-in adds 0x1e, 0x2a..0x2d and S1's floor
+shifts 0x16..0x19, 0x1f..0x22 and carry-in heads 0x32, 0x3d..0x40 at 1: pre-registered on four
+lanes each (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
+one word later wrote nothing (measured). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
 their rows open). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
@@ -954,11 +964,12 @@ LANE_MEMORY = (
     "source byte, zero-extended, source byte 32 n at vector n lane 0 at placement 0, and its "
     "store writes each element's low 8 bits (verified on the camera, pre-registered: a stock "
     "copy in, an own vector program, a stock copy out, exact on 512 + 512 + 4096 bytes). "
-    "Timing: a store head three words after O's port write stores the new content (verified, "
-    "pre-registered); one in the same word as the write stores the old content of O, a load one "
-    "word after a store to the same vector reads the stored vector, and four loads in "
-    "consecutive words land in four consecutive port words (measured on the camera, not "
-    "pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
+    "Timing: a store head in the word of O's port write stores the old content of O, one, two "
+    "or three words later the new content; a load one or two words after a store to the same "
+    "vector reads the stored vector, and a store one, two or three words after a load of its "
+    "vector does not change what the load delivers (verified on the camera, pre-registered); "
+    "four loads in consecutive words land in four consecutive port words (measured on the "
+    "camera, not pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
     "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
     "output), so "
     "a job can leave data, such as a layer's weights, for the next"
@@ -978,10 +989,13 @@ STORE_SOURCES: dict[int, tuple[str, Confidence]] = {
     4: (S0_RESULT, V),
 }
 """What f252_254 writes to O[f179_181] by value, with its tier (verified on the camera,
-pre-registered, 11 groups of 32 lanes exact); 5 and 6 never occur in the stock programs and
-were not run, 7 is idle. The heads tried into O, S3's lane number and broadcast, S2's pass of b
+pre-registered, 11 groups of 32 lanes exact); 5 and 6 (`STORE_NOTHING`) never occur in the
+stock programs, 7 is idle. The heads tried into O, S3's lane number and broadcast, S2's pass of b
 and S1 0x04, are taken in the head's own word, the arithmetic heads tried one word after it, as
 at the lane ports (`LANE_LAG`)."""
+STORE_NOTHING = (5, 6)
+"""Values of f252_254 under which O kept its content, beside a result of every S unit and with
+none (measured on the camera, not pre-registered: inferred)."""
 X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
@@ -1273,9 +1287,8 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             "b where bit 1 of the nibble f88_91 is set, else a",
             V,
             (
-                "pre-registered at f88_91 = 2, 3, 8, 9, 10, 12 and 13 and met on all 32 lanes, "
-                "the port in the head's word; at the other values measured, the rule fitted "
-                "on them (inferred)"
+                "pre-registered at all sixteen values of f88_91 (seven on all 32 lanes, nine on "
+                "four lanes), the port in the head's word"
             ),
         ),
         **_rows((0x08, 0x0D), "b", V),
@@ -1329,20 +1342,20 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             V,
             (
                 "down by 1..4 (f92_95 = 15..12) pre-registered on all 32 lanes; up by 1..4 "
-                "pre-registered on lanes 24..31, up by 2 also on all 32 lanes (with U's lanes "
-                "0..3 holding b's own lanes 0..3), lanes 0..23 at 1, 3 and 4 the rule's "
-                "(inferred); U's register named by f31_34 (verified: two registers read back by "
-                "number); f92_95 = 5..11 b (measured, the pre-registered shift missed: inferred)"
+                "pre-registered on lanes 0..4, 15 and 24..31 with U's lanes moved in, up by 2 "
+                "also on 30 lanes; U's register named by f31_34 (verified: all sixteen read "
+                "back by number); f92_95 = 5..11 b, no move (pre-registered at each count)"
             ),
         ),
         **_rows(
             (0x1C, 0x22),
-            "as 0x1b at f92_95 = 3, 4 and 13; other counts not predicted",
+            "as 0x1b at f92_95 = 1..5, 8 and 11..15; 6, 7, 9 and 10 not predicted",
             V,
-            "pre-registered at 3 and 13 on all 32 lanes and at 4 on lanes 0..27; at 2 and 14 "
-            "as 0x1b too on all 32 lanes, measured, not pre-registered (inferred); an earlier "
-            "run fitted all three heads alike at every count (inferred), the other counts not "
-            "pre-registered for these two heads; they differ from 0x1b in what U's port takes "
+            "pre-registered at 3 and 13 on all 32 lanes, at 4 on lanes 0..27, (0x1c) at 2 on "
+            "lanes 0..29, and at 1, 5, 8, 11, 12, 14 and 15 on six edge lanes with U's lanes "
+            "moved in; an earlier run fitted all three heads alike at every count (inferred), "
+            "6, 7, 9 and 10 not pre-registered for these two heads; they differ from 0x1b in "
+            "what U's port takes "
             "beside them "
             "(`LANE_THIRD_FILE`); 0x22 wrote nothing while F3 held power-up content",
         ),
@@ -1401,6 +1414,29 @@ REDUCTION = (
 )
 
 
+@dataclass(frozen=True)
+class ScalarRow:
+    """An S head's scalar result on M: its rule, its tier, the word after the head it is on M
+    from (`lag`) and whether it stays there (`held`) or is there for that word only."""
+
+    text: str
+    tier: Confidence
+    lag: int
+    held: bool = False
+
+
+def _own(text: str, tier: Confidence = V) -> ScalarRow:
+    return ScalarRow(text, tier, 0)
+
+
+def _next(text: str, tier: Confidence = V) -> ScalarRow:
+    return ScalarRow(text, tier, 1)
+
+
+def _held(text: str, tier: Confidence = V) -> ScalarRow:
+    return ScalarRow(text, tier, 3, held=True)
+
+
 def _mask(held: int, tried: int) -> str:
     """A compare head's scalar result, which M puts out under f274_275 = `held`; `tried` the
     head read under the other values."""
@@ -1413,74 +1449,91 @@ def _mask(held: int, tried: int) -> str:
 
 
 S0_MASK, S1_MASK = _mask(0, 0x32), _mask(1, 0x45)
-S_RESULTS: dict[str, dict[int, str]] = {
+S_RESULTS: dict[str, dict[int, ScalarRow]] = {
     "s0": {
-        0x52: f"F0[f76_79] ({EXACT})",
-        0x24: f"a != b, {S0_MASK}",
-        0x25: f"a == b, {S0_MASK}",
-        0x32: f"a < b unsigned, {S0_MASK}",
-        0x33: f"a >= b unsigned, {S0_MASK}",
-        0x2E: f"b > imm unsigned, {S0_MASK}",
-        0x2F: f"b <= imm unsigned, {S0_MASK}",
-        0x30: f"b > s unsigned, {S0_MASK}",
-        0x31: f"b <= s unsigned, {S0_MASK}",
-        0x12: f"b != imm, {S0_MASK}",
-        0x13: f"b == imm, {S0_MASK}",
-        0x18: f"b != s, {S0_MASK}",
-        0x19: f"b == s, {S0_MASK}",
-        0x20: f"the carry of a + b, {S0_MASK}",
-        0x1F: f"the carry of a + b + c, {S0_MASK}",
-        0x2C: f"the carry of a + b + c, {S0_MASK}",
-        0x2A: f"the signed overflow of a + b + c, {S0_MASK}",
-        0x22: f"a < b signed, {S0_MASK}",
-        0x23: f"a >= b signed, {S0_MASK}",
-        0x16: f"b > s signed, {S0_MASK}",
-        0x17: f"b <= s signed, {S0_MASK}",
-        0x0E: f"b > imm signed, {S0_MASK}",
-        0x0F: f"b <= imm signed, {S0_MASK}",
+        0x52: _own(f"F0[f76_79] ({EXACT})"),
+        0x24: _next(f"a != b, {S0_MASK}"),
+        0x25: _next(f"a == b, {S0_MASK}"),
+        0x32: _next(f"a < b unsigned, {S0_MASK}"),
+        0x33: _next(f"a >= b unsigned, {S0_MASK}"),
+        0x2E: _next(f"b > imm unsigned, {S0_MASK}"),
+        0x2F: _next(f"b <= imm unsigned, {S0_MASK}"),
+        0x30: _next(f"b > s unsigned, {S0_MASK}"),
+        0x31: _next(f"b <= s unsigned, {S0_MASK}"),
+        0x12: _next(f"b != imm, {S0_MASK}"),
+        0x13: _next(f"b == imm, {S0_MASK}"),
+        0x18: _next(f"b != s, {S0_MASK}"),
+        0x19: _next(f"b == s, {S0_MASK}"),
+        0x20: _next(f"the carry of a + b, {S0_MASK}"),
+        0x1F: _next(f"the carry of a + b + c, {S0_MASK}"),
+        0x2C: _next(f"the carry of a + b + c, {S0_MASK}"),
+        0x2A: _next(f"the signed overflow of a + b + c, {S0_MASK}"),
+        0x22: _next(f"a < b signed, {S0_MASK}"),
+        0x23: _next(f"a >= b signed, {S0_MASK}"),
+        0x16: _next(f"b > s signed, {S0_MASK}"),
+        0x17: _next(f"b <= s signed, {S0_MASK}"),
+        0x0E: _next(f"b > imm signed, {S0_MASK}"),
+        0x0F: _next(f"b <= imm signed, {S0_MASK}"),
     },
     "s1": {
-        0x54: f"F1[f84_87] ({EXACT})",
-        0x34: f"the carry of a + b, {S1_MASK}",
-        0x33: f"the carry of a + b + c, {S1_MASK}",
-        0x3F: f"the carry of a + b + c, {S1_MASK}",
-        0x3D: f"the signed overflow of a + b + c, {S1_MASK}",
-        0x2E: f"a < b signed, {S1_MASK}",
-        0x2F: f"a >= b signed, {S1_MASK}",
-        0x2C: f"b > t signed, {S1_MASK}",
-        0x2D: f"b <= t signed, {S1_MASK}",
-        0x2A: f"b > imm signed, {S1_MASK}",
-        0x2B: f"b <= imm signed, {S1_MASK}",
-        0x12: "a 32-bit word that fits a mask of the lanes the shift saturated, on M's bus one "
-        "word after the head under f274_275 = 1 (measured on the camera, fitted: inferred)",
-        0x41: f"b > imm unsigned, {S1_MASK}",
-        0x42: f"b <= imm unsigned, {S1_MASK}",
-        0x43: f"b > t unsigned, {S1_MASK}",
-        0x44: f"b <= t unsigned, {S1_MASK}",
-        0x45: f"a < b unsigned, {S1_MASK}",
-        0x46: f"a >= b unsigned, {S1_MASK}",
+        0x54: _own(f"F1[f84_87] ({EXACT})"),
+        0x34: _next(f"the carry of a + b, {S1_MASK}"),
+        0x33: _next(f"the carry of a + b + c, {S1_MASK}"),
+        0x3F: _next(f"the carry of a + b + c, {S1_MASK}"),
+        0x3D: _next(f"the signed overflow of a + b + c, {S1_MASK}"),
+        0x2E: _next(f"a < b signed, {S1_MASK}"),
+        0x2F: _next(f"a >= b signed, {S1_MASK}"),
+        0x2C: _next(f"b > t signed, {S1_MASK}"),
+        0x2D: _next(f"b <= t signed, {S1_MASK}"),
+        0x2A: _next(f"b > imm signed, {S1_MASK}"),
+        0x2B: _next(f"b <= imm signed, {S1_MASK}"),
+        0x12: _next(
+            "a 32-bit word that fits a mask of the lanes the shift saturated, on M's bus one "
+            "word after the head under f274_275 = 1 (measured on the camera, fitted: inferred)",
+            I,
+        ),
+        0x41: _next(f"b > imm unsigned, {S1_MASK}"),
+        0x42: _next(f"b <= imm unsigned, {S1_MASK}"),
+        0x43: _next(f"b > t unsigned, {S1_MASK}"),
+        0x44: _next(f"b <= t unsigned, {S1_MASK}"),
+        0x45: _next(f"a < b unsigned, {S1_MASK}"),
+        0x46: _next(f"a >= b unsigned, {S1_MASK}"),
     },
     "s2": {
-        0xC: "lane (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60], sign-extended (verified on the "
-        "camera, pre-registered, 38 cells; the other bits of the two nibbles without effect)",
-        0xE: f"F2[f88_91] ({EXACT}); not held: one word after the head none under any f274_275",
+        0xC: _own(
+            "lane (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60], sign-extended (verified on the "
+            "camera, pre-registered, 38 cells; the other bits of the two nibbles without effect)"
+        ),
+        0xE: _own(
+            f"F2[f88_91] ({EXACT}); not held: one word after the head none under any f274_275"
+        ),
     },
     "s3": {
-        0x0: f"the unsigned maximum {REDUCTION}",
-        0x1: f"the unsigned minimum {REDUCTION}",
-        0x2: f"the sum, the lanes zero-extended, {REDUCTION}",
-        0x3: f"the signed maximum, sign-extended, {REDUCTION}",
-        0x4: f"the signed minimum, sign-extended, {REDUCTION}",
-        0x5: f"the sum, the lanes sign-extended, {REDUCTION}",
-        0xE: "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], zero-extended (verified on the "
-        "camera, pre-registered)",
-        0xF: "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], sign-extended (verified: built "
-        "vectors read back on all 32 lanes)",
-        0x16: "lane F3[f92_95] & 31 of L3[f65_68], zero-extended (verified on the camera, "
-        "pre-registered, indices of 32 and up included)",
-        0x17: "lane F3[f92_95] & 31 of L3[f65_68], sign-extended (verified on the camera, "
-        "pre-registered, indices of 32 and up included)",
-        0x24: "F3[f96_99] (verified on the camera, pre-registered on three sources)",
+        0x0: _held(f"the unsigned maximum {REDUCTION}"),
+        0x1: _held(f"the unsigned minimum {REDUCTION}"),
+        0x2: _held(f"the sum, the lanes zero-extended, {REDUCTION}"),
+        0x3: _held(f"the signed maximum, sign-extended, {REDUCTION}"),
+        0x4: _held(f"the signed minimum, sign-extended, {REDUCTION}"),
+        0x5: _held(f"the sum, the lanes sign-extended, {REDUCTION}"),
+        0xE: _own(
+            "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], zero-extended (verified on the "
+            "camera, pre-registered)"
+        ),
+        0xF: _own(
+            "lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], sign-extended (verified: built "
+            "vectors read back on all 32 lanes)"
+        ),
+        0x16: _own(
+            "lane F3[f92_95] & 31 of L3[f65_68], zero-extended (verified on the camera, "
+            "pre-registered, indices of 32 and up included)"
+        ),
+        0x17: _own(
+            "lane F3[f92_95] & 31 of L3[f65_68], sign-extended (verified on the camera, "
+            "pre-registered, indices of 32 and up included)"
+        ),
+        0x24: _own(
+            "F3[f96_99] (verified on the camera, pre-registered on three sources)"
+        ),
     },
 }
 """The S head values with a scalar result under the M strobe (which values have one: measured on
@@ -1488,6 +1541,27 @@ the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read,
 own word, and one word after it on S0's 0..0x3f and S1's 0..0x5f; the rules' tiers in the text). A
 reduction's register and an extract's lane in the same word reach the bus OR-ed (measured on the
 camera)."""
+
+
+S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
+"""S heads whose own-word result under the M strobe was not read (measured: every other head)."""
+S_NEXT_VALUES = {
+    "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
+}
+"""S heads that put a value on M one word after the head that is not fitted (measured on the
+camera under their unit's f274_275)."""
+S_NEXT_NONE = {
+    "s0": frozenset(range(0x40)),
+    "s1": frozenset(range(0x60)) - S_NEXT_VALUES["s1"],
+    "s2": frozenset({0x0E}),
+    "s3": frozenset(range(0x06)),
+}
+"""S heads without a held row in `S_RESULTS` that put nothing on M one word after the head
+under their unit's f274_275 (measured on the camera; S3's reductions: their register from the
+third word on). One word after any other head, M under its unit is not known: S1 0x13, 0x1a,
+0x1b, 0x14, 0x15, 0x1d, 0x1e, 0x16, 0x17, 0x1f and 0x20 put a value there that is not fitted,
+and S0 0x40.., S1 0x60.., S2 and S3 were not read there. Under another unit's f274_275 a held
+result is not on M (verified for S0 0x32 and S1 0x45, inferred for the others)."""
 
 
 def _written(file: str, enable: str, reader: str) -> str:
@@ -1569,12 +1643,13 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f31_34": (
-        I,
+        V,
         (
             "S3's: bit 2 is bit 4 of the lane 0x10 inserts (verified on the camera: inserts at "
             "lanes 0..31 read back as built) and 0xe / 0xf extract; bits 3..2 are bits 5..4 of "
-            "S3 0x11's immediate (verified on the camera, pre-registered on fresh values), and "
-            "0x16 / 0x17 ignore it (inferred, fitted); as a whole the register of U that the lane "
+            "S3 0x11's immediate (verified on the camera, pre-registered on fresh values); "
+            "0x16 and 0x17 ignore it (verified on the camera, pre-registered at two values "
+            "each); as a whole the register of U that the lane "
             "shifts read (verified on the camera, pre-registered: U[3] and U[9] read back by "
             f"number through 0x1b): {LANE_THIRD_FILE}"
         ),
@@ -1683,7 +1758,7 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f88_91": (
-        I,
+        V,
         (
             f"Under S2 head 0xe the register of F2 it returns ({EXACT}); t, the scalar S2's lane "
             "heads read (verified on the camera by S2's pre-registered function table). Its bits "
@@ -1691,11 +1766,11 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "verified on the camera, pre-registered) and under S2 0xc bits 2..0 of the lane read, "
             "its bit 0 without effect (verified on the camera, pre-registered). Under S2 0x7 its "
             "bit 1 chooses b over a (`LANE_FUNCTIONS`; verified on the camera, pre-registered "
-            "at seven values; at the other nine measured and fitted: inferred)"
+            "at all sixteen values)"
         ),
     ),
     "f92_95": (
-        I,
+        V,
         (
             "S3's lane select: the lane itself under 0xe, 0xf and 0x10 (with f31_34 bit 2 as bit "
             "4), the register of F3 whose value & 31 is the lane under 0x15, 0x16 and 0x17 "
@@ -1703,9 +1778,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "pre-registered by nibble, the & 31 pre-registered); bits 3..0 of 0x11's immediate "
             "(verified on the camera, pre-registered); the signed shift count of 0x1b, 0x1c and "
             "0x22, used at -4..+4 (`LANE_FUNCTIONS`: for 0x1b down by 1..4 verified on all 32 "
-            "lanes and up by 1..4 on lanes 24..31, pre-registered; 0x1c and 0x22 at 3, 4 and "
-            "13) and 5..11 no shift under 0x1b (measured, the "
-            "pre-registered shift missed: inferred)"
+            "lanes and up by 1..4 on lanes 0..4, 15 and 24..31, pre-registered; 0x1c and 0x22 "
+            "at eleven counts) and 5..11 no shift (verified on the camera, pre-registered at "
+            "each count under 0x1b)"
         ),
     ),
     "f96_99": (
@@ -1812,7 +1887,7 @@ def _s_values(unit: str) -> dict[int, str]:
             text, tier, note = lanes[h]
             parts.append(f"lanes: {text} ({TAG[tier]}{'; ' + note if note else ''})")
         if h in scalars:
-            parts.append(f"scalar: {scalars[h]}")
+            parts.append(f"scalar: {scalars[h].text}")
         values[h] = "; ".join(parts)
     return values
 
@@ -2512,8 +2587,10 @@ RING_STEP = (
 )
 LOAD_DATUM = (
     "a load's datum goes to no register by itself: it appears on the ALU result bus exactly "
-    "three words after the load, where a word with an idle op and f272_273 = 1 or f270_271 = 1 "
-    "takes it; a data op in that word wins and the datum is lost; consecutive loads deliver in "
+    "three words after the load, where a word with f272_273 = 1 or f270_271 = 1 takes it, also "
+    "a word with a branch, a store, a load or a multiply; the bus ORs it with the result of a "
+    "data op or of op 0 in that word and with a product arriving there (verified on the camera, "
+    "pre-registered on values whose bits are not nested); consecutive loads deliver in "
     f"consecutive words ({EXACT})"
 )
 FAMILIES = (
@@ -2547,7 +2624,7 @@ FAMILIES = (
         16,
         "ra and a wide immediate, f120_122 its bits 13..15 (13..14 in 0x37, whose f120_122 is "
         "0..3 in every word): 0x0b the sign-extended imm16, ra not used; 0x37 ra | imm15; 0x38 "
-        f"ra & the sign-extended imm16 ({EXACT}); 0x0a ra | (imm16 << 16) (inferred)",
+        f"ra & the sign-extended imm16 ({EXACT}); 0x0a ra | (imm16 << 16) (verified on the camera, pre-registered)",
     ),
     Family(
         "C",
@@ -2555,7 +2632,7 @@ FAMILIES = (
         True,
         5,
         "ra, rb and an immediate 0..31 in every word: 0x3e ra >> imm5 arithmetic, 0x3f ra >> "
-        "imm5 logical, 0x40 ra << imm5, ra shifted, not rb (inferred, by exact readout); rb and "
+        "imm5 logical, 0x40 ra << imm5, ra shifted, not rb (verified on the camera by exact readout, pre-registered); rb and "
         f"f120_122 are encoded but had no effect on the result ({EXACT}); 16 the most common "
         "count of all three in the stock words",
     ),
@@ -2568,7 +2645,7 @@ FAMILIES = (
         "sign-extended to c in 0x1c / 0x1d / 0x20 / 0x21 (ra != c, ra == c, ra <= c, ra < c "
         f"signed, 1 or 0), 0x24 / 0x25 (max / min signed) and 0x36 (ra ^ c) ({EXACT}); "
         "zero-extended in 0x1e / 0x1f (ra - imm16, ra + imm16) and 0x23 (ra < imm16 unsigned) "
-        "(inferred); f120_122 is 0 in 99 % of the stock words (`semantics.OP_SEMANTICS`)",
+        "(verified on the camera, pre-registered); f120_122 is 0 in 99 % of the stock words (`semantics.OP_SEMANTICS`)",
         signed=True,
     ),
     Family(
@@ -2591,10 +2668,10 @@ FAMILIES = (
         True,
         0,
         "ra, rb and f120_122, imm 0 in every word; register-register ALU ops, 32-bit wrap "
-        f"({EXACT} unless tagged): 0x08 / 0x09 rb, 0x32 abs(rb) (inferred), 0x3c ra & rb, 0x3a "
+        f"({EXACT} unless tagged): 0x08 / 0x09 rb, 0x32 abs(rb), 0x3c ra & rb, 0x3a "
         "ra | rb, 0x34 ra - rb, 0x35 ra + rb, 0x33 -rb, 0x3d ~ra, 0x2f min signed, 0x2e max "
-        "signed, 0x2c max unsigned (inferred), 0x41 ra >> (rb & 31) arithmetic, 0x42 logical "
-        "(inferred), 0x43 ra << (rb & 31), compares to 1 or 0: 0x28 / 0x29 ra <= rb, ra < rb "
+        "signed, 0x2c max unsigned, 0x41 ra >> (rb & 31) arithmetic, 0x42 logical, "
+        "0x43 ra << (rb & 31), compares to 1 or 0: 0x28 / 0x29 ra <= rb, ra < rb "
         "unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 ra != rb, ra == rb; f120_122 has no effect "
         "but in 0x47, family F's ring pointer step with R[f120_122] and L = rb; 0x48 and 0x49 "
         "give no ALU result, change no operand and do not stall, their function open; no op "
@@ -2617,7 +2694,7 @@ SIGNED = {0x0B: True, 0x38: True, 0x1E: False, 0x1F: False, 0x23: False}
 MEANINGS = {
     0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
     f"from its position); it passes rb ({EXACT})",
-    0x0A: "periodic immediates such as 0x5555 and 0x3333: ra | (imm16 << 16) (inferred), a "
+    0x0A: "periodic immediates such as 0x5555 and 0x3333: ra | (imm16 << 16) (verified on the camera, pre-registered), a "
     "high-half set-up (hypothesis)",
     0x0B: "the most varied immediates, often in a call's delay slots: the sign-extended imm16, "
     f"ra not used ({EXACT})",
@@ -2640,18 +2717,18 @@ MEANINGS = {
     0x1A: f"a word load ({EXACT}); program 16's three 0x1a words read src, dst and len at one "
     "ra and immediates 0, 1 and 2; idling the one at 2 on the camera stores 16 KiB of zeros "
     "whatever len is, idling the other two leaves dst unwritten",
-    0x1E: "at a routine's entry + 1 in 67 routines: ra - imm16 (inferred), a frame allocate "
+    0x1E: "at a routine's entry + 1 in 67 routines: ra - imm16 (verified on the camera, pre-registered), a frame allocate "
     "there (hypothesis)",
     0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: ra + imm16 "
-    "(inferred), the frame release there (hypothesis)",
+    "(verified on the camera, pre-registered), the frame release there (hypothesis)",
     0x36: f"imm 1, f128_132 and f120_122 0 in all 53 words: ra ^ 1 there ({EXACT} for the "
     "rule), a toggle (hypothesis)",
     0x37: f"periodic immediates such as 0x5555 and 0x2222: ra | imm15 ({EXACT}), a lane or "
     "phase mask set-up (hypothesis)",
     0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: ra & the sign-extended imm16 "
     f"({EXACT})",
-    0x3F: "ra >> imm5, logical (inferred, by exact readout)",
-    0x40: "ra << imm5 (inferred, by exact readout)",
+    0x3F: "ra >> imm5, logical (verified on the camera by exact readout, pre-registered)",
+    0x40: "ra << imm5 (verified on the camera by exact readout, pre-registered)",
     0x47: f"{RING_STEP}; R = R[f120_122], L = rb",
     0x48: "the multiply as 0x49, the same 32 bits on every operand pair; no stock word uses it "
     f"({EXACT}); what sets it apart from 0x49 is open",

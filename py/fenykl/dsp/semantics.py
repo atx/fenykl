@@ -24,7 +24,7 @@ these.
 
 import re
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from itertools import product
@@ -37,6 +37,7 @@ from .fields import (
     NO_LANE,
     PR_SOURCES,
     S2_HIGH_HALVES,
+    S_RESULTS,
     X0_LANE_BY_REGISTER,
     X0_LANE_MEMORY,
     X_FUNCTIONS,
@@ -641,6 +642,20 @@ def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | N
     return run
 
 
+def _local_load_rb(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """A register-form load: stepping holds no rb, so it records the read only."""
+    return Effect(note="reads local memory at ra + w x rb")
+
+
+def _local_store_rb(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
+    """A register-form store: stepping holds no rb, so all of local memory becomes unknown."""
+
+    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+        return Effect(stores=((None, width),), note="writes ra + w x rb: anywhere")
+
+    return run
+
+
 def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     """ra & imm16 sign-extended. A mask that clears only low bits (~(2^k - 1)) is monotonic, so
     a wide ra interval keeps exact bounds; other masks of a wide interval give a bound."""
@@ -731,6 +746,9 @@ LOCAL_LOADS = {
 """The family A loads by op: (width in bytes, sign-extended)."""
 LOCAL_STORES = {0x18: 4, 0x12: 2, 0x0C: 1}
 """The family A stores by op: the width in bytes of R[f120_122]'s low bits they write."""
+LOCAL_LOADS_RB = {code + 1: form for code, form in LOCAL_LOADS.items()}
+LOCAL_STORES_RB = {code + 1: width for code, width in LOCAL_STORES.items()}
+"""The register forms, each its immediate form's op + 1: the byte address is ra + width x rb."""
 
 
 OP_SEMANTICS: dict[int, OpSemantics] = {
@@ -762,30 +780,49 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         )
         for code, width in LOCAL_STORES.items()
     },
+    **{
+        code: OpSemantics(
+            V,
+            f"the register form of {code - 1:#x}: a local {LOCAL_UNITS[width]} load at the byte "
+            f"address ra + {width} x rb modulo 0x2000 ({EXACT}, one address each)",
+            _local_load_rb,
+        )
+        for code, (width, _) in LOCAL_LOADS_RB.items()
+    },
+    **{
+        code: OpSemantics(
+            V,
+            f"the register form of {code - 1:#x}: a local {LOCAL_UNITS[width]} store at the byte "
+            f"address ra + {width} x rb modulo 0x2000 of the low {8 * width} bits of R[f120_122] "
+            f"({EXACT}, one address each)",
+            _local_store_rb(width),
+        )
+        for code, width in LOCAL_STORES_RB.items()
+    },
     0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})", _and_mask),
     0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})", _const),
     0x37: OpSemantics(
         V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c, V)
     ),
     0x0A: OpSemantics(
-        I,
-        "ra | (imm16 << 16) (inferred, by exact readout)",
-        _imm("ra | (c << 16)", lambda a, c: a | c << 16, I),
+        V,
+        "ra | (imm16 << 16) (verified on the camera by exact readout, pre-registered)",
+        _imm("ra | (c << 16)", lambda a, c: a | c << 16, V),
     ),
     0x3E: OpSemantics(
-        I,
-        "ra >> imm5, arithmetic; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra >> c", lambda a, c: _s32(a) >> c, I),
+        V,
+        "ra >> imm5, arithmetic; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
+        _imm("ra >> c", lambda a, c: _s32(a) >> c, V),
     ),
     0x3F: OpSemantics(
-        I,
-        "ra >> imm5, logical; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra >>> c", lambda a, c: _u32(a) >> c, I),
+        V,
+        "ra >> imm5, logical; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
+        _imm("ra >>> c", lambda a, c: _u32(a) >> c, V),
     ),
     0x40: OpSemantics(
-        I,
-        "ra << imm5; rb and f120_122 have no effect (inferred, by exact readout)",
-        _imm("ra << c", lambda a, c: a << c, I),
+        V,
+        "ra << imm5; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
+        _imm("ra << c", lambda a, c: a << c, V),
     ),
     0x44: OpSemantics(
         V,
@@ -810,9 +847,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         for code in (0x08, 0x09)
     },
     0x32: OpSemantics(
-        I,
-        "abs(rb) (inferred, by exact readout)",
-        _e("abs(rb)", lambda a, b: abs(_s32(b)), I),
+        V,
+        "abs(rb) (verified on the camera by exact readout, pre-registered)",
+        _e("abs(rb)", lambda a, b: abs(_s32(b)), V),
     ),
     0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
     0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
@@ -827,9 +864,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         V, f"max(ra, rb) signed ({_EXACT_RULE})", _e("max(ra, rb)", _max)
     ),
     0x2C: OpSemantics(
-        I,
-        "max(ra, rb) unsigned (inferred, by exact readout)",
-        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, I),
+        V,
+        "max(ra, rb) unsigned (verified on the camera by exact readout, pre-registered)",
+        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, V),
     ),
     0x28: OpSemantics(
         V,
@@ -867,9 +904,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _e("ra >> rb", lambda a, b: _s32(a) >> (b & 31)),
     ),
     0x42: OpSemantics(
-        I,
-        "ra >> (rb & 31), logical (inferred, by exact readout)",
-        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), I),
+        V,
+        "ra >> (rb & 31), logical (verified on the camera by exact readout, pre-registered)",
+        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), V),
     ),
     0x43: OpSemantics(
         V,
@@ -877,14 +914,14 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _e("ra << rb", lambda a, b: a << (b & 31)),
     ),
     0x1E: OpSemantics(
-        I,
-        "ra - imm16, imm16 zero-extended (inferred, by exact readout)",
-        _imm("ra - c", lambda a, c: a - c, I),
+        V,
+        "ra - imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
+        _imm("ra - c", lambda a, c: a - c, V),
     ),
     0x1F: OpSemantics(
-        I,
-        "ra + imm16, imm16 zero-extended (inferred, by exact readout)",
-        _imm("ra + c", lambda a, c: a + c, I),
+        V,
+        "ra + imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
+        _imm("ra + c", lambda a, c: a + c, V),
     ),
     0x36: OpSemantics(
         V,
@@ -922,9 +959,9 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
     ),
     0x23: OpSemantics(
-        I,
-        "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (inferred, by exact readout)",
-        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), I),
+        V,
+        "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
+        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), V),
     ),
     0x49: OpSemantics(
         V,
@@ -994,11 +1031,29 @@ _X_ONLY: dict[str, dict[int, XValue | None]] = {
 @dataclass(frozen=True)
 class XRule:
     """What an X unit's head value does: `value` of (a, b, zK, sK), None for no result on the
-    ALU bus."""
+    ALU bus; `reads` the register operands it reads ("a", "b")."""
 
     confidence: Confidence
     fact: str
     value: XValue | None
+    reads: str = "ab"
+
+
+def _reads(**heads: tuple[int, ...] | range) -> dict[int, str]:
+    """Heads by the operands they read: a=..., b=..., none=...; any other head reads both."""
+    return {h: "" if key == "none" else key for key, hs in heads.items() for h in hs}
+
+
+_X_READS = {
+    "x0": _reads(
+        a=(*range(8), 0x12),
+        b=(0x0E, 0x0F, 0x15, *range(0x1E, 0x22)),
+        none=(0x13, 0x14, *range(0x1A, 0x1E), *range(0x23, 0x3F)),
+    ),
+    "x1": _reads(a=(*range(8), 0x12), b=(0x0E, 0x0F, 0x15, 0x1B), none=(0x13, 0x14)),
+}
+"""The register operands each X head reads, from its rule: a compare against the immediate a,
+abs / negate / move b, the immediates none."""
 
 
 def _x_rules(unit: str) -> dict[int, XRule]:
@@ -1009,7 +1064,12 @@ def _x_rules(unit: str) -> dict[int, XRule]:
             f"{unit}: rules and fields.X_FUNCTIONS differ in their head values"
         )
     return {
-        h: XRule(conf, f"{text}; {note}" if note else text, values[h])
+        h: XRule(
+            conf,
+            f"{text}; {note}" if note else text,
+            values[h],
+            _X_READS[unit].get(h, "ab"),
+        )
         for h, (text, conf, note) in table.items()
     }
 
@@ -1123,7 +1183,7 @@ def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
     return [*[None] * -n, *b[:n]]
 
 
-SHIFT_COUNTS = (3, 4, 13)
+SHIFT_COUNTS = (1, 2, 3, 4, 5, 8, 11, 12, 13, 14, 15)
 """The counts f92_95 at which S3 0x1c and 0x22 were pre-registered as 0x1b."""
 
 
@@ -1397,11 +1457,71 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
 @dataclass(frozen=True)
 class LaneRule:
     """What an S unit's head value does to the lanes: `value` of (a, b, scalars), None for a
-    head that writes no lane result."""
+    head that writes no lane result; `reads` the lane operands it reads ("a", "b"); `tier_at`
+    the tier of its result at the scalars (a row whose sub-domains have different tiers)."""
 
     confidence: Confidence
     fact: str
     value: LaneValue | None
+    reads: str = "ab"
+    tier_at: Callable[[Scalars], Confidence] | None = None
+
+
+_LANE_READS = {
+    "s0": _reads(
+        none=(0x42, 0x43, 0x4B, *range(0x60, 0x7F)),
+        a=(0x26, 0x27),
+        b=(
+            *(0x08, 0x09, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x14, 0x15, 0x16, 0x17),
+            *(0x1A, 0x1B, 0x34, 0x35, 0x36, 0x37, 0x3A, 0x3B, 0x3C, 0x3D, 0x41, 0x4D),
+            *(0x44, 0x45),
+        ),
+    ),
+    "s1": _reads(
+        none=range(0x55, 0x7F),
+        a=(0x39, 0x3A),
+        b=(
+            0x00,
+            *range(0x04, 0x0F),
+            0x11,
+            0x12,
+            0x13,
+            0x1A,
+            0x1B,
+            0x1C,
+            *range(0x23, 0x28),
+            0x2A,
+            0x2B,
+            0x2C,
+            0x2D,
+            0x30,
+            0x31,
+            0x35,
+            0x36,
+            0x37,
+            *range(0x47, 0x4B),
+            0x4D,
+            0x4E,
+            0x4F,
+            0x50,
+            0x53,
+        ),
+    ),
+    "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
+    "s3": _reads(
+        none=(0x06, 0x07, 0x08, 0x09, 0x11, 0x14, 0x18),
+        b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
+    ),
+}
+"""The lane operands each S head's lane rule reads, from its rule; a head not listed reads both."""
+
+
+_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {
+    "s3": {0x22: lambda c: I if c["f92_95"] == 2 else V},
+}
+"""Per head a tier that depends on the word's scalars: S3 0x22 at f92_95 = 2 was measured, not
+pre-registered (0x1c was); every other count of the lane shifts and every nibble of S2 0x7 was
+pre-registered."""
 
 
 def _lane_rules(unit: str) -> dict[int, LaneRule]:
@@ -1418,13 +1538,27 @@ def _lane_rules(unit: str) -> dict[int, LaneRule]:
             f"{unit}: rules and fields.LANE_FUNCTIONS differ in which heads write"
         )
     return {
-        h: LaneRule(conf, f"{text}; {note}" if note else text, values[h])
+        h: LaneRule(
+            conf,
+            f"{text}; {note}" if note else text,
+            values[h],
+            _LANE_READS[unit].get(h, "ab"),
+            _LANE_TIERS.get(unit, {}).get(h),
+        )
         for h, (text, conf, note) in table.items()
     }
 
 
 LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
 """The S units' lane functions by head value, each with its tier (`fields.LANE_FUNCTIONS`)."""
+
+
+def lane_tier(unit: str, head: int, scalars: Scalars) -> Confidence:
+    """The tier of S unit `unit`'s lane result at head value `head` on `scalars`."""
+    rule = LANE_RULES[unit][head]
+    if rule.tier_at is None:
+        return rule.confidence
+    return min(rule.confidence, rule.tier_at(scalars))
 
 
 def lane_result(
@@ -1473,6 +1607,204 @@ def product_high(
     if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
         raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
     return [v & LANE_MASK for v in _HIGH_VALUES[head](a, b, scalars)]
+
+
+class UnknownInput(LookupError):
+    """A rule read an input (a lane, a scalar) that is not known."""
+
+
+@dataclass(frozen=True)
+class ScalarValue:
+    """An S head's scalar result `run`(a, b, scalars), reading the lane operands `reads` ("a",
+    "b"); a lane it reads that is None raises `UnknownInput`."""
+
+    reads: str
+    run: Callable[[Sequence[int | None], Sequence[int | None], Scalars], int]
+
+
+def _known(v: Sequence[int | None], name: str) -> list[int]:
+    if any(x is None for x in v):
+        raise UnknownInput(name)
+    return list(v)
+
+
+def _bits(tests: Iterable[bool]) -> int:
+    return sum(1 << k for k, t in enumerate(tests) if t)
+
+
+def _mask_ab(f: Callable[[int, int], bool]) -> ScalarValue:
+    """Bit k from f(lane k of a, lane k of b)."""
+    return ScalarValue(
+        "ab", lambda a, b, c: _bits(map(f, _known(a, "a"), _known(b, "b")))
+    )
+
+
+def _mask_b(f: Callable[[int, Scalars], bool]) -> ScalarValue:
+    """Bit k from f(lane k of b, scalars)."""
+    return ScalarValue("b", lambda a, b, c: _bits(f(y, c) for y in _known(b, "b")))
+
+
+def _carry_mask(carry_in: bool) -> ScalarValue:
+    """The carries out of a + b per lane, with carry-in bit k of "r" for lane k."""
+
+    def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
+        r = c["r"] if carry_in else 0
+        pairs = enumerate(zip(_known(a, "a"), _known(b, "b")))
+        return _bits((x + y + (r >> k & 1)) >> 16 for k, (x, y) in pairs)
+
+    return ScalarValue("ab", value)
+
+
+def _overflows(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
+    """The signed overflows of a + b per lane, with carry-in bit k of "r" for lane k."""
+    pairs = enumerate(zip(_known(a, "a"), _known(b, "b")))
+    return _bits(
+        not -0x8000 <= _s16(x) + _s16(y) + (c["r"] >> k & 1) <= 0x7FFF
+        for k, (x, y) in pairs
+    )
+
+
+_OVERFLOW_MASK = ScalarValue("ab", _overflows)
+
+
+def _lane_of(index: Callable[[Scalars], int], signed: bool) -> ScalarValue:
+    """Lane index(scalars) & 31 of b, zero- or sign-extended."""
+
+    def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
+        k = index(c) & 31
+        x = b[k]
+        if x is None:
+            raise UnknownInput(f"lane {k}")
+        return _s16(x) if signed else x
+
+    return ScalarValue("b", value)
+
+
+def _reduce(f: Callable[[list[int]], int], signed: bool) -> ScalarValue:
+    def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
+        lanes = _known(b, "b")
+        return f([_s16(x) for x in lanes] if signed else lanes)
+
+    return ScalarValue("b", value)
+
+
+def _scalar(key: str) -> ScalarValue:
+    return ScalarValue("", lambda a, b, c: c[key])
+
+
+_S_VALUES: dict[str, dict[int, ScalarValue | None]] = {
+    "s0": {
+        0x52: _scalar("r"),
+        0x24: _mask_ab(lambda x, y: x != y),
+        0x25: _mask_ab(lambda x, y: x == y),
+        0x32: _mask_ab(lambda x, y: x < y),
+        0x33: _mask_ab(lambda x, y: x >= y),
+        0x2E: _mask_b(lambda y, c: y > c["imm"]),
+        0x2F: _mask_b(lambda y, c: y <= c["imm"]),
+        0x30: _mask_b(lambda y, c: y > _u(c, "s")),
+        0x31: _mask_b(lambda y, c: y <= _u(c, "s")),
+        0x12: _mask_b(lambda y, c: y != c["imm"]),
+        0x13: _mask_b(lambda y, c: y == c["imm"]),
+        0x18: _mask_b(lambda y, c: y != _u(c, "s")),
+        0x19: _mask_b(lambda y, c: y == _u(c, "s")),
+        0x20: _carry_mask(carry_in=False),
+        0x1F: _carry_mask(carry_in=True),
+        0x2C: _carry_mask(carry_in=True),
+        0x2A: _OVERFLOW_MASK,
+        0x22: _mask_ab(lambda x, y: _s16(x) < _s16(y)),
+        0x23: _mask_ab(lambda x, y: _s16(x) >= _s16(y)),
+        0x16: _mask_b(lambda y, c: _s16(y) > _sv(c, "s")),
+        0x17: _mask_b(lambda y, c: _s16(y) <= _sv(c, "s")),
+        0x0E: _mask_b(lambda y, c: _s16(y) > _sv(c, "imm")),
+        0x0F: _mask_b(lambda y, c: _s16(y) <= _sv(c, "imm")),
+    },
+    "s1": {
+        0x54: _scalar("t"),
+        0x34: _carry_mask(carry_in=False),
+        0x33: _carry_mask(carry_in=True),
+        0x3F: _carry_mask(carry_in=True),
+        0x3D: _OVERFLOW_MASK,
+        0x2E: _mask_ab(lambda x, y: _s16(x) < _s16(y)),
+        0x2F: _mask_ab(lambda x, y: _s16(x) >= _s16(y)),
+        0x2C: _mask_b(lambda y, c: _s16(y) > _sv(c, "t")),
+        0x2D: _mask_b(lambda y, c: _s16(y) <= _sv(c, "t")),
+        0x2A: _mask_b(lambda y, c: _s16(y) > _sv(c, "imm")),
+        0x2B: _mask_b(lambda y, c: _s16(y) <= _sv(c, "imm")),
+        0x12: None,
+        0x41: _mask_b(lambda y, c: y > _u(c, "imm")),
+        0x42: _mask_b(lambda y, c: y <= _u(c, "imm")),
+        0x43: _mask_b(lambda y, c: y > _u(c, "t")),
+        0x44: _mask_b(lambda y, c: y <= _u(c, "t")),
+        0x45: _mask_ab(lambda x, y: x < y),
+        0x46: _mask_ab(lambda x, y: x >= y),
+    },
+    "s2": {
+        0xC: _lane_of(lambda c: c["f53_56"] % 4 * 8 + (c["f88_91"] >> 1), signed=True),
+        0xE: _scalar("t"),
+    },
+    "s3": {
+        0x0: _reduce(max, signed=False),
+        0x1: _reduce(min, signed=False),
+        0x2: _reduce(sum, signed=False),
+        0x3: _reduce(max, signed=True),
+        0x4: _reduce(min, signed=True),
+        0x5: _reduce(sum, signed=True),
+        0xE: _lane_of(lambda c: c["f92_95"] | (c["f31_34"] & 4) << 2, signed=False),
+        0xF: _lane_of(lambda c: c["f92_95"] | (c["f31_34"] & 4) << 2, signed=True),
+        0x16: _lane_of(lambda c: c["index"], signed=False),
+        0x17: _lane_of(lambda c: c["index"], signed=True),
+        0x24: _scalar("value"),
+    },
+}
+
+
+@dataclass(frozen=True)
+class SRule:
+    """An S head's scalar result on M (`fields.S_RESULTS`): `value` of (a, b, scalars), None
+    where the rule is not exact; on M from `lag` words after the head, for that word only or
+    `held` from then on."""
+
+    confidence: Confidence
+    fact: str
+    lag: int
+    held: bool
+    value: ScalarValue | None
+
+
+def _s_rules(unit: str) -> dict[int, SRule]:
+    values = _S_VALUES[unit]
+    table = S_RESULTS[unit]
+    if set(values) != set(table):
+        raise ValueError(
+            f"{unit}: scalar rules and fields.S_RESULTS differ in their heads"
+        )
+    return {
+        h: SRule(row.tier, row.text, row.lag, row.held, values[h])
+        for h, row in table.items()
+    }
+
+
+S_RULES = {unit: _s_rules(unit) for unit in S_RESULTS}
+"""The S units' scalar results on M by head value, each with its tier and timing."""
+
+
+def s_result(
+    unit: str,
+    head: int,
+    a: Sequence[int | None],
+    b: Sequence[int | None],
+    scalars: Scalars,
+) -> int | None:
+    """The 32-bit scalar S unit `unit` puts on M at head value `head` from its lane operands a
+    and b (`fields.S_RESULTS`); None where the rule is not exact. The operands are as in
+    `lane_result`, plus S2's nibble "f53_56" for its lane extract. Raises `UnknownInput` where it reads a lane that is None, KeyError at a head
+    value without a scalar result."""
+    if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
+        raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")
+    rule = S_RULES[unit][head]
+    if rule.value is None:
+        return None
+    return rule.value.run(a, b, scalars) & 0xFFFFFFFF
 
 
 def lane_address(head: int, a: int, b: int, k: int) -> int:

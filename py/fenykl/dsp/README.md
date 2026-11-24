@@ -19,6 +19,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
+| `stream.py` | `CopyStream`: the copy engine's load and store as X1's transfers program them |
 | `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
 | `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
 | `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
@@ -106,9 +107,9 @@ confidence and fact; `fields.op(value)` is total:
 | 0 | `loop` | loop end: computes ra - 1 for a port to write back, back to T iff ra > 0 signed | verified |
 | 1 | `brf` | branch iff ra == 0, forward, the guard of a loop | verified |
 | 2 | `br` | branch iff ra != 0, either way | verified |
-| 3 | `call` | call (when a return lies before T; the other op 3 words are open, program 13's at 210 acts as a jump) | inferred, strong |
-| 4 | `ret` | return to the word after the call's delay slots | inferred, strong |
-| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); word 5 of every stock program, where the call at word 0 returns | inferred |
+| 3 | `call` | a jump to T that writes no link; a call is an op 3 whose delay slots hold 0x0b #(i + 5) on r1 | verified |
+| 4 | `ret` | a jump to the word G[f128_132] names, r1 by the stock convention | verified |
+| 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); the three words behind it still run [verified]; word 5 of every stock program, where the call at word 0 returns | inferred |
 | 8..73 | `opNN` | a data op (NN in hex), what it does open | inferred |
 | 127 | `idle` | no op | inferred |
 
@@ -190,17 +191,17 @@ below, the port in one word only: in its own word S0's selects,
 S1's logic heads, S2's passes, sign masks and lane number and S3's moves, inserts, broadcast and
 lane shifts; one word later
 every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); no head class
-predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], the next
-word not excluded; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
+predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], one word
+later nothing; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
-own word, and U, were not measured.
+own word reads the old content, in every lane file and in U [verified, pre-registered].
 S3's lane shift 0x1b moves b by n = f92_95 as a signed nibble: down by 1..4 at 15..12 [verified,
-pre-registered on all 32 lanes], up by 1..4 [verified, pre-registered on lanes 24..31; up by 2 on
-all 32 lanes], not at all at 5..11 [measured]; 0x1c and 0x22 move the lanes as 0x1b at 3, 4 and
-13 [verified, pre-registered], at the other counts as 0x1b [inferred: measured, fitted, not
-pre-registered]; `semantics.lane_result` predicts them at 3, 4 and 13 only. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
-[verified, pre-registered: two registers read back by number; 16 registers inferred, fitted]: its
+pre-registered on all 32 lanes], up by 1..4 [verified, pre-registered on lanes 0..4, 15 and 24..31; up by 2 on
+all 32 lanes], not at all at 5..11 [verified, pre-registered at each count]; 0x1c and 0x22 move the lanes as 0x1b at 1..5, 8 and
+11..15 [verified, pre-registered; 0x22 at 2 measured only: inferred], 6, 7, 9 and 10 were not run for these two;
+`semantics.lane_result` predicts them at the counts run. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
+[verified, pre-registered: all sixteen registers read back by number]: its
 lanes 0..3 are four carry lanes for either direction [verified, pre-registered, 0x1b]. Its port is f141_144 under
 f232_233 = 1 beside an S3 head, 0 and 2 writing nothing [verified, pre-registered: U[3] and U[9]
 written in one job and read back by number, U[5] kept under 0 and 2], and the head decides what U
@@ -337,11 +338,12 @@ reaches all four first ports in one word [verified]. In the five stock programs 
 such a port write four words later, and none lacks its head (379 words; verified in the bytes).
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
-occur and were not run, `fields.STORE_SOURCES`), the moves tried in the head's own word and the
-arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head three
-words after O's port write stores the new content [verified]; one in the same word as the write
-stores the old content, a load one word after a store to the same vector reads it back, and four
-loads in consecutive words land in four consecutive port words [inferred]. The lane memory keeps
+occur and left O as it was [inferred, measured], `fields.STORE_SOURCES`), the moves tried in the head's own word and the
+arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head in
+the word of O's port write stores the old content, one to three words later the new content; a
+load one or two words after a store to the same vector reads it back, and a store up to three
+words after a load of its vector does not change the load [verified]; four loads in consecutive
+words land in four consecutive port words [inferred]. The lane memory keeps
 its content across jobs within a boot [verified, pre-registered: vectors 0x40..0x7f read back after
 later jobs]. Each head and its even / odd twin showed no
 difference in address, lanes, element width or scalar result, and none writes A back
@@ -433,9 +435,11 @@ same address as the unsigned reading); the register forms use ra + w x rb. The s
 0x0c write the low 32 / 16 / 8 bits of R[f120_122] (register forms 0x19 / 0x13 / 0x0d); the
 loads are 0x1a 32-bit, 0x16 signed and 0x14 unsigned 16-bit, 0x10 unsigned and 0x0e signed 8-bit
 (register forms 0x1b, 0x17, 0x15, 0x11, 0x0f). A load's datum goes to no register by itself: it
-appears on the ALU result bus exactly three words after the load, where a word with an idle op
-and f272_273 = 1 or f270_271 = 1 takes it; a data op in that word wins and the datum is lost;
-consecutive loads deliver in consecutive words (verified by exact readout). Stepping records a
+appears on the ALU result bus exactly three words after the load, where a word with
+f272_273 = 1 or f270_271 = 1 takes it; the bus ORs it with a data op's result and with a
+multiply's product arriving in that word, and a word with a branch, a store, a load or a
+multiply takes it alone; consecutive loads deliver in consecutive words (verified by exact
+readout). Stepping records a
 load's read only and makes a store's bytes unknown, since R is not modelled; an access at an
 address not aligned to its width has no semantics. The resampler's word that reads tap 1 is a
 0x16 with imm 1; on the camera, with ra kept (one run each):
@@ -777,13 +781,15 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   makes the open ports' registers unknown in lenient mode. Every other op has no semantics:
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
   and its ports' registers unknown. An undecided branch raises in
-  strict mode and stops the run in lenient mode; a loop end into its own delay slots, a control
-  op in a delay slot and a return without a call raise in both.
-- **Local op 3** (`Program.local_op3()`): a forward op 3 after word 0 with no return between it
-  and T. Whether it is a call or a jump is open in general; program 13's at word 210 runs in a
-  job and acts as a jump (inferred: as a call it would re-run the inner loop, longer than the
-  measured job), the one at 312 by analogy (hypothesis). It runs as a call by default, or as a
-  jump with no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
+  strict mode and stops the run in lenient mode. Every taken control op jumps after its own
+  four following words, also a control op in another's delay slots and a loop end whose
+  target is one of its own slots [verified]. On the camera op 3 is a jump and op 4 jumps to
+  the word G[f128_132] names [verified]: with a `datapath` the stepper takes op 4's target
+  from that register (undecided while it is unknown) and keeps no stack.
+- **Local op 3** (`Program.local_op3()`), plain stepping only: a forward op 3 after word 0 with
+  no return between it and T, a jump on the camera. The plain stepper, which holds no link
+  register, infers calls and returns with a stack of its own: such an op 3 runs as a call by
+  default, or as a jump with no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
   finds no link, raises `LinkError` (an `UnknownSemantics`): no return of its own lies before
   that T, and stepped as calls such a link re-ran a loop's tail.
 - **Registers**: the operands (`Boot.slot`, the file G) and the transfer registers
@@ -801,25 +807,42 @@ from fenykl.dsp.machine import Machine
 boot = Boot()
 m = Machine(boot)  # or Machine(boot, carry): what an earlier job of the boot left
 Executor(boot, datapath=m, limit=5_000_000).step(commands.copy(program, src, dst, n))
-boot.local.read(LOCAL_BASE + 0x40, 4)  # what the program stored, known or not, with its tier
+boot.local.read(
+    LOCAL_BASE + 0x40, 4
+)  # what the program stored, known or not, with its tier
 ```
 
 `Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,
 a `Branching`, to decide ops 0..2 on G[ra]). One clock rule: every unit reads the state from
-before the word and every port write lands at its end; a head that reads a register a port
-writes in its own word gets the old value at hypothesis. Buses carry a value in the word it
-arrives in: the op result in its word, a product one word later, a local load's datum three
-words later (a data op in that word wins), a lane load four words after its X0 head, a lane
+before the word and every port write lands at its end; a unit that reads a register a port
+writes in its own word gets the old value (verified for every register file). Buses carry a
+value in the word it arrives in and OR what arrives together: the op result in its word, a
+product one word later, a local load's datum three words later, a lane load four words after its X0 head, a lane
 head's result `LANE_LAG` words after the head for that word only (a head without a measured lag
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
 reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
 `Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
-of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e, the copy
-engine's streams, not modelled), an unaligned local access, a store at an unknown address, two
+of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e) without a
+stream, an unaligned local access, a store at an unknown address, two
 ports on one register and M combinations not measured raise `UnknownSemantics`; a head without a
 rule, or U's port beside a head whose U content is open, makes what it writes unknown. Across
-the jobs of a boot only the lane memory from vector 0x40 on is carried (`Machine.between_jobs`):
-the copy's buffer below it is rewritten between jobs.
+the jobs of a boot the lane memory and every register file are carried (`Machine.between_jobs`;
+verified on the camera for each file); a program that runs between two jobs, and what of the
+lane memory survives it, are the caller's part. Operand use is declared per rule (`LaneRule.reads`,
+`XRule.reads`, `ScalarValue.reads`), and a row whose sub-domains have different tiers gives the
+tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
+read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
+after an extract, which reads its own lane (measured); "nothing on M" behind a head
+without a result there is verified (one word after 97 heads, two and three words after 16, in
+all four units), inferred with no head before. An S3 extract ORs with the reduction register in that register's first word
+and comes alone later [verified]; after such a later extract the register is not on M
+[inferred].
+
+`stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
+against the stock copy's for the same request (`Transcript`, recorded by running program 16)
+and runs its load (src bytes into the lane memory, complete after word 74's 0x1d) and its store
+(`STORE_FORMATS`, word 78's 0x1d) into DRAM; a value never varied on the camera takes the job
+off script (lane memory unknown, no store).
 
 ### Adding a semantic
 
