@@ -1,7 +1,7 @@
 """The word-level emulator: a `Job` (a program and its request in local memory) run on a `Boot`.
 
 The words run in order; the model covers each at its index (the stock word's row, a field
-semantic such as X2's register transfer, or the coverage rule of a window), which records what it
+semantic such as X1's register transfer, or the coverage rule of a window), which records what it
 contributes to the job's `Trace`. At the end the model of the program
 (`memcpy.Copy16Model`, `resample.Resample13Model`) applies the trace: it reads the command's
 request from local memory, resolves the job and writes its result to the boot's state.
@@ -12,6 +12,12 @@ reads it gets UNKNOWN bytes, never guessed ones.
 `Executor.step` steps a job instead: a program counter that follows the control ops (calls,
 returns, branches and loop ends with their delay slots, the halt) and runs the data ops by the
 op slot's semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
+
+The emulator does not model time. On the camera a word costs about 62 ns the first time it runs
+(straight-line words; a branch over 1200 idle words cost nothing, running them about 62 ns
+each, and the call times of 58 straight-line jobs fit the same per word) and about 5 ns when it
+repeats in a loop (0.185 us per 36-word pass, idle and compute words alike; per word 2..7 ns
+over three loop sizes, a per-pass cost not excluded) (measured on the camera; inferred).
 """
 
 from collections.abc import Callable
@@ -23,7 +29,9 @@ from ..firmware import unpack_firmware
 from .fields import DELAY_SLOTS, OP_FIELD, Confidence, Kind, Operands, lookup, op
 from .program import Program
 from .semantics import (
+    LOCAL_BYTES,
     OP_SEMANTICS,
+    OTHER_FILES,
     Branching,
     Given,
     OpSemantics,
@@ -48,10 +56,13 @@ from .word import Word
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 LOCAL_BASE = 0x9D000000
-LOCAL_SIZE = 0x2000
-"""Local memory reaches at least 0x9D001D1C (the resampler's setup writes there)."""
+LOCAL_SIZE = LOCAL_BYTES
+"""Local memory, 8 KiB, which the scalar addresses wrap in (`semantics.LOCAL_BYTES`)."""
 BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
-"""The modelled buffer indices: it holds at least 16 KiB and reaches below index 0."""
+"""The modelled buffer indices, reaching below index 0. The buffer is the lane memory
+(`fields.LANE_MEMORY`), one source byte per element, so it holds 0x8000 bytes and its indices
+count modulo that (inferred); the modelled range exceeds 0x8000 because the model does not wrap
+them."""
 LINE_PAIRS = 3 * 2 * 64
 """The resampler's held line pairs: plane c, line parity r, pixel x at (2 c + r) x 64 + x."""
 
@@ -452,7 +463,7 @@ class Executor:
             sets[to][r] = None
             self._landing.append((now + latency, sets[to], r, result))
         for fid in open_:
-            if lookup(fid).kind is Kind.REG:
+            if lookup(fid).kind is Kind.REG and fid not in OTHER_FILES:
                 for regs in sets.values():
                     regs[word[fid]] = None
         return why

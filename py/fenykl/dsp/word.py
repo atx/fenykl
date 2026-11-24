@@ -30,7 +30,7 @@ from .units import SLOTS, UNITS, Slot
 class Word:
     """One instruction. Built from slots, unset fields keep `base` (default: the idle word)::
 
-    Word(x2=X2(xreg=3, f308_309=0), op_slot=OpSlot(op=0x0B))
+    Word(x1=X1(xreg=3, x1op=0x1C), op_slot=OpSlot(op=0x0B))
     """
 
     __slots__ = ("value",)

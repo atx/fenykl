@@ -4,19 +4,55 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp.fields import (
+    ALU_BUS,
     CONTROL_FLAG,
     CONTROL_OPS,
     DATA_OPS,
     FIELDS,
     FORMATS,
+    HEADS,
     IDLE_OP,
+    IDLE_VALUE,
+    LANE_FILES,
+    LANE_FUNCTIONS,
+    LANE_LOAD,
+    LANE_SOURCES,
+    LOAD_LAG,
+    PB_FILES,
+    PB_SOURCES,
+    PORTS,
+    SCALAR_READS,
     STAIRCASE,
+    STORE_SOURCES,
     WORD_BITS,
+    X0_LANE_LOADS,
+    X_IMMEDIATES,
+    Confidence,
     Operands,
+    lookup,
     op,
 )
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
 from fenykl.dsp.word import IDLE, Word
+
+
+@pytest.mark.parametrize(
+    "unit, k, parts",
+    [
+        ("x0", 0x5A5, {"f1": 1, "f2_6": 0x12, "f105_109": 0x16}),
+        ("x1", 0x1ABC, {"f7_8": 0, "f9_14": 0x2F, "f115_119": 0x1A}),
+    ],
+)
+def test_x_immediates_pack_into_their_fields(unit, k, parts):
+    word = Word.from_int(X_IMMEDIATES[unit].put(IDLE_VALUE, k))
+    assert {key: word[key] for key in parts} == parts
+    assert X_IMMEDIATES[unit].get(word.value) == k
+
+
+def test_x1_head_is_f310_312_over_f308_309():
+    # The transfer form 0x1d: 7 in 310..312, 1 in 308..309.
+    word = Word.from_int(IDLE_VALUE & ~(0x1F << 308) | (7 << 310) | (1 << 308))
+    assert word["x1op"] == 0x1D
 
 
 def test_every_bit_in_exactly_one_field():
@@ -75,6 +111,103 @@ def test_program_16_route_staircase(items):
         start = STAIRCASE[f.lo]
         assert words[start - 1][f.id] != 0, f.id
         assert {w[f.id] for w in words[start:]} == {0}, f.id
+
+
+def _head_id(unit: str) -> str:
+    lo, hi = HEADS[unit]
+    return f"f{lo}_{hi}"
+
+
+def test_program_16_reads_each_scalar_register_the_word_before_wrote(items):
+    # Every scalar read head runs under M, one word after a port wrote its file's register.
+    words = decode_item(items[16], STOCK[16]).words
+    reads = []
+    for i, w in enumerate(words):
+        for unit, (head, file, nibble) in SCALAR_READS.items():
+            if w[_head_id(unit)] != head:
+                continue
+            reads.append(i)
+            assert w["f276"] == 0, i
+            before = words[i - 1]
+            writes = [
+                before[PORTS[e]]
+                for e, f in PB_FILES.items()
+                if f == file and before[e] != lookup(e).idle
+            ]
+            assert writes == [w[nibble]], i
+    assert reads == [20, 30, 60]
+
+
+def test_program_13_tap_loads_reach_the_file_s2_reads(items):
+    # The ALU bus port of S2's file writes, at each tap load's datum word, the register the
+    # matching S2 word four words on reads.
+    words = decode_item(items[13], STOCK[13]).words
+    _, file, nibble = SCALAR_READS["s2"]
+    (enable,) = (e for e, f in PB_FILES.items() if f == file)
+    (bus,) = (v for v, src in PB_SOURCES[enable].items() if src == ALU_BUS)
+    for i in range(435, 439):
+        assert words[i][enable] == bus, i
+        assert words[i][PORTS[enable]] == words[i + 4][nibble], i
+
+
+def test_lane_tables_verified_rows():
+    # The rows whose pre-registered lanes all matched on the camera in either of two runs.
+    verified = {
+        unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
+        for unit, rows in LANE_FUNCTIONS.items()
+    }
+    assert verified == {"s0": 43, "s1": 67, "s2": 13, "s3": 19}
+
+
+def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():
+    # A unit's lane file has two ports, the grid B partners of its two lane nibbles.
+    ports = {}
+    for enable in LANE_SOURCES:
+        lo = int(PORTS[enable][1:4]) - 110
+        ports[f"f{lo}_{lo + 3}"] = enable
+    assert sorted(ports) == sorted(n for _, *nibs in LANE_FILES.values() for n in nibs)
+    for file, (unit, *nibs) in LANE_FILES.items():
+        assert [lookup(n).unit for n in nibs] == [unit, unit], file
+
+
+def test_every_x0_load_has_its_port_write_four_words_later(items):
+    # A first lane port or O's port under enable 0 takes a load; none takes one without a head.
+    takers = [
+        e for e, rows in LANE_SOURCES.items() if rows.get(0, ("",))[0] == LANE_LOAD
+    ]
+    assert takers == ["f236_237", "f240_241", "f244_245", "f248_249"]
+    assert STORE_SOURCES[0][0] == LANE_LOAD
+    takers.append("f252_254")
+    loads = 0
+    for item, data in items.items():
+        words = decode_item(data, STOCK[item]).words
+        heads = {i for i, w in enumerate(words) if w["x0op"] in X0_LANE_LOADS}
+        takes = {i for i, w in enumerate(words) if any(w[e] == 0 for e in takers)}
+        assert {i + LOAD_LAG for i in heads} == takes, item
+        loads += len(heads)
+    assert loads == 379
+
+
+def test_every_stock_s0_0x13_hands_its_mask_to_f0_through_m(items):
+    # The next word puts S0's held result on X0's bus (M under 0) and F0's port takes it.
+    seen = 0
+    for item, data in items.items():
+        words = decode_item(data, STOCK[item]).words
+        for i, word in enumerate(words):
+            if word["f278_284"] != 0x13:
+                continue
+            nxt = words[i + 1]
+            assert (nxt["f276"], nxt["f274_275"], nxt["f255"]) == (0, 0, 0), (item, i)
+            seen += 1
+    assert seen == 18
+
+
+def test_the_store_file_enable_has_rows_only_for_the_values_run():
+    # 5 and 6 were never run, so they have no row and do not lower the tier.
+    enable = lookup("f252_254")
+    assert sorted(enable.values) == [0, 1, 2, 3, 4, 7]
+    assert enable.confidence is Confidence.VERIFIED
+    assert PORTS["f252_254"] == "f179_181"
 
 
 def test_control_word_targets_lie_inside_their_program(items):
@@ -136,18 +269,18 @@ def test_program_16_control_flow(items):
 @pytest.mark.parametrize(
     "code, args, fields",
     [
-        # Family A: imm13 = imm | f128_132 << 8; f120_122 keeps the base word's value.
+        # Family A: imm13 = imm | f128_132 << 8, signed; f120_122 keeps the base word's value.
         (
             0x1A,
-            Operands(ra=5, imm=0x1ABC),
+            Operands(ra=5, imm=0x1ABC - 0x2000),
             {"ra": 5, "imm": 0xBC, "f128_132": 0x1A, "f120_122": 7},
         ),
-        # 0x0c's immediate is two's complement: -7 is 0x1ff9.
+        # -7 is 0x1ff9.
         (0x0C, Operands(ra=3, imm=-7), {"ra": 3, "imm": 0xF9, "f128_132": 0x1F}),
         # Family B: imm16 takes f120_122 as bits 13..15.
         (
             0x0B,
-            Operands(ra=1, imm=0xABCD),
+            Operands(ra=1, imm=0xABCD - 0x10000),
             {"ra": 1, "imm": 0xCD, "f128_132": 0x0B, "f120_122": 5},
         ),
         (
@@ -172,11 +305,14 @@ def test_data_op_operands_assemble_and_decode(code, args, fields):
     assert word.operands == args
 
 
-def test_only_0x0c_and_0x10_immediates_are_signed():
-    raw = Word.data(0x1A, Operands(ra=0, imm=0x1FF9))
-    assert raw.operands.imm == 0x1FF9
-    assert Word.data(0x10, Operands(ra=0, imm=-1)).operands.imm == -1
+def test_an_immediate_extends_by_its_op():
+    assert Word.data(0x1A, Operands(ra=0, imm=-7)).operands.imm == -7
     assert Word.data(0x10, Operands(ra=0, imm=-0x1000)).operands.imm == -0x1000
+    assert Word.data(0x1C, Operands(ra=0, imm=-1)).operands.imm == -1
+    # 0x1e, 0x1f and 0x23 zero-extend imm16 although family D sign-extends it.
+    assert Word.data(0x1E, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
+    assert Word.data(0x0B, Operands(ra=0, imm=-1)).operands.imm == -1
+    assert Word.data(0x0A, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
 
 
 @pytest.mark.parametrize(
@@ -186,7 +322,7 @@ def test_only_0x0c_and_0x10_immediates_are_signed():
         (0x40, Operands(ra=0, rb=0, imm=32)),  # 5 bits
         (0x0C, Operands(ra=0, imm=0x1000)),  # signed 13 bits
         (0x0C, Operands(ra=0, imm=-0x1001)),
-        (0x1A, Operands(ra=0, imm=-1)),  # unsigned
+        (0x1E, Operands(ra=0, imm=-1)),  # zero-extended
         (0x49, Operands(ra=0)),  # rb missing
         (0x1A, Operands(ra=0, rb=1, imm=0)),  # no rb in family A
         (0x49, Operands(ra=0, rb=1, imm=0)),  # no immediate in family E

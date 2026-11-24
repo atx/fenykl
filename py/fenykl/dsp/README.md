@@ -33,10 +33,10 @@ The DSL builds a word from slot objects; unset fields keep the idle word's value
 composed from the table's idle values:
 
 ```python
-from fenykl.dsp.units import X2, OpSlot
+from fenykl.dsp.units import X1, OpSlot
 from fenykl.dsp.word import Word
 
-Word(x2=X2(xreg=3, f308_309=0), op_slot=OpSlot(f123_127=2))
+Word(x1=X1(xreg=3, x1op=0x1C), op_slot=OpSlot(f123_127=2))
 ```
 
 ### Units
@@ -50,20 +50,19 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | unit | strobe | fields | reading | confidence |
 |---|---|---|---|---|
 | `op_slot` | op f313_319 | imm, ra, rb (f128_132), f120_122, f229 | scalar and control ops | verified |
-| `s0` | f278_284 | grid A 37, 41, 72, 76; f23_30 | compute slot | inferred |
-| `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot | inferred |
-| `s2` | f292_295 | grid A 53, 57, 88 | compute slot | inferred |
-| `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot | inferred |
-| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | transfer or address unit | inferred |
-| `x1` | f310_312 | f7_8, f9_14, f110_114 | transfer or address unit | inferred |
-| `x2` | f308_309 (a value, 0 in the transfers) | xreg | register transfer | inferred |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports (hypothesis) | verified (the pairing) |
-| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports (hypothesis) | verified (the pairing) |
-| `m` | f276 (active low) | f274_275 | a held mode of the compute group | hypothesis |
-| `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
+| `s0` | f278_284 | grid A 37, 41, 72, 76; f23_30 | compute slot: add, compare, neighbour lanes on L0 | inferred |
+| `s1` | f285_291 | grid A 45, 49, 80, 84; f0 | compute slot: logic, shifts, min / max on L1 | inferred |
+| `s2` | f292_295 | grid A 53, 57, 88 | compute slot: multiply on L2 | inferred |
+| `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot: moves, insert, extract, reductions on L3 | inferred |
+| `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A, and the lane memory's loads and stores (f69_71 the store's register of O) | verified |
+| `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3, f252_254's the store file O, f232_233's the third lane file U (verified; f232_233 under 0 and 2 inferred) | verified (the pairing) |
+| `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
+| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held: in the head's own word no S unit select (measured), for a held result the unit, 0 S0, 1 S1, 3 S3 (each verified; 2 not shown) | inferred |
+| `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II; set in own programs, it changed nothing (measured, 24 cells) | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
-S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0..X2 and PR (the
+S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0, X1 and PR (the
 transfer group) with the data ops, early in a routine. Grid B follows grid A at +110 in which
 words are active, but not in its values or control: not a mirror bank. The 2-bit PB enables,
 f252_254 / f255, f256_257 / f258 and f265_266 / f267_268 are cut where the two bits across a
@@ -76,7 +75,7 @@ On the camera, ownership predicts use in one direction (`fields.UNIT_FACTS`, pro
 433 and 439): idling the nibbles whose owner is active in the word gives the effect of idling the
 whole grid, byte for byte, and idling the held nibbles of idle owners has none (32 nibbles, in
 three sets, at their idle values). An active owner is not sufficient: port f202_205 and X0's
-f69_71 are inert there.
+f69_71 are inert there (X0's head at 439 is no store head).
 
 ## Fields
 
@@ -103,9 +102,9 @@ confidence and fact; `fields.op(value)` is total:
 
 | op | name | meaning | confidence |
 |---|---|---|---|
-| 0 | `loop` | loop end, back to T | inferred, strong |
-| 1 | `brf` | forward conditional branch, the guard of a loop | inferred |
-| 2 | `br` | conditional branch either way | inferred |
+| 0 | `loop` | loop end: computes ra - 1 for a port to write back, back to T iff ra > 0 signed | verified |
+| 1 | `brf` | branch iff ra == 0, forward, the guard of a loop | verified |
+| 2 | `br` | branch iff ra != 0, either way | verified |
 | 3 | `call` | call (when a return lies before T; the other op 3 words are open, program 13's at 210 acts as a jump) | inferred, strong |
 | 4 | `ret` | return to the word after the call's delay slots | inferred, strong |
 | 7 | `halt` | ends the job, at any word and call depth (one camera run inside the copy's routine); word 5 of every stock program, where the call at word 0 returns | inferred |
@@ -118,16 +117,195 @@ f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 
 8, an absolute word index into the program (`word.target`, None for other words): T follows its
 target word wherever code moved across later firmware versions of the same family, and lies inside
 its program in every op 0..3 word (verified in the bytes). In those words `imm` is T's low byte and
-f128_132 holds T's high bits, not a register. The conditions of `brf` and `br` have no field of
-their own; the candidate is the register ra (f123_127), a loop or condition operand that a guard
-and its loop end share in about half the guarded loops (hypothesis). By family, ra is an address
-base the op reads in family A (inferred), an operand where read in B..F, whose result goes to the
-register of the word's enabled PR port, not ra (inferred, strong). xreg and the op slot's ra /
-rb read two register sets (inferred, strong): a result written through PR port 267 (f211_215
-under f267_268 = 1) reaches the xreg of words 68 and 73 and not the operands, one written
-through port 272 under enable 1 (f224_228) reaches a later op's ra / rb three words on and not
-68's xreg. The emulator keeps them apart: the transfer registers `Boot.regs`, the operands
-`Boot.slot`.
+f128_132 holds T's high bits, not a register. The condition of ops 0..2 is the register ra
+(f123_127), no field of its own: op 1 branches iff ra == 0, op 2 iff ra != 0, op 0 iff ra > 0
+signed, computing ra - 1, which an enabled PR port writes back (the stock loops enable
+f272_273 = 1 on ra): `do { body } while (ra-- > 0)`. Neither branch produces a result.
+
+Facts tagged "by exact readout" were measured on the camera with own programs: every result was
+stored into DSP local memory and read back as an exact 32-bit word. Values are plain 32-bit
+integers that wrap. The scalar unit has four register files:
+
+| file | read by | written by (port, register) |
+|---|---|---|
+| G | ra, rb | f272_273 on f224_228: 0 X1, 1 the ALU bus, 2 X0; read by the next word |
+| R (8 entries) | family A stores (datum R[f120_122]), 0x46 / 0x47 | f270_271 on f221_223: 0 X1, 1 the ALU bus, 2 X0; read by a store in the very next word |
+| A | X0 (f100_104, f105_109) | f265_266 on f206_210: 0 X0, 1 X1, 2 the ALU bus; X0 reads it from the next word on |
+| B | X1 (f110_114, xreg f115_119) | f267_268 on f211_215: 0 X1, 1 the ALU bus, 2 nothing; f269 = 0 on f216_220: X0 |
+
+Each port's enable value selects its source (`fields.PR_SOURCES`, verified by exact readout); X0
+and X1 are their heads' results in the port's own word. A data op writes no register by itself:
+its result goes on the ALU bus, which also carries a load's datum three words after the load and
+a multiply's product one word after the multiply. The emulator models G (`Boot.slot`) and B
+(`Boot.regs`).
+
+The compute side has four more files, F0..F3, of 32-bit scalar registers numbered by a nibble
+(`fields.SCALAR_FILES`; verified by exact readout), written by grid B ports and read by S heads
+from the next word on:
+
+| file | read by | written by (port, register) |
+|---|---|---|
+| F0 | S0 head 0x52, F0[f76_79]; S0's lane scalar s = F0[f72_75] | f255 on f182_185: 0 X0; f256_257 on f186_189: 0 X1, 1 the ALU bus, 2 nothing |
+| F1 | S1 head 0x54 and S1's lane scalar t, F1[f84_87] | f258 on f190_193: 0 X0; f259_260 on f194_197: 0 X1, 1 the ALU bus, 2 nothing |
+| F2 | S2 head 0xe and S2's lane scalar t, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
+| F3 | S3 head 0x24, F3[f96_99]; S3's lane index F3[f92_95] and value F3[f96_99] | f263_264 on f202_205: 0 X0, 1 X1, 2 the ALU bus |
+
+The sources per enable value (`fields.PB_SOURCES`) and S3 0x24 = F3[f96_99] are verified on the
+camera, every cell pre-registered. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
+each load, on the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar
+result on X0's result bus, where f272_273 = 2 takes it in the head's own word [verified];
+f274_275 does not select the S unit in the head's own word [measured, with one head per word];
+for a held result it names the unit whose result M puts out: 0 S0, 1 S1, 3 S3, the other
+values leaving the sentinel [verified, pre-registered; 2 not shown]. Under M, S0 0x52, S1 0x54,
+S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result
+(`fields.S_RESULTS`; of S0's 0x40..0x5f only 0x52 read): S3 0xe / 0xf extract lane f92_95 + 16 x
+(f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
+[inferred, fitted; 0xf verified on all 32 lanes of built vectors]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
+minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
+register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
+(f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred]; S0's and S1's compare heads give a
+mask one word after the head (below).
+
+#### Lanes
+
+Each S unit has a lane file of 16 registers of 32 lanes of 16 bits (`fields.LANE_FILES`). The
+unit's lane heads read a and b from it through its two lane nibbles, and the two grid B ports
+110 bits above those nibbles write it; the enable of a port names the source it takes
+(`fields.LANE_SOURCES`; [verified] unless tagged):
+
+| file | unit | a, b | first port (enable): 0, 1, 2 | second port (enable): 0, 1, 2 |
+|---|---|---|---|---|
+| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): a load, S2's high half, S0 | f151_154 (f238_239): S3, S2's low half, S1 |
+| L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): a load, S2's high half, S0 | f159_162 (f242_243): S3, S2's low half, S1 |
+| L2 | S2 | f53_56, f57_60 | f163_166 (f244_245): a load, S0, nothing seen | f167_170 (f246_247): S3, S2's low half, S1 |
+| L3 | S3 | f61_64, f65_68 | f171_174 (f248_249): a load, S0, nothing seen | f175_178 (f250_251): S3, S2's low half, S1 |
+
+The operand nibbles were pre-registered at several registers each, 1, 2, 5, 6, 9 and 12 among
+them [verified]. Enable 0 of a first port takes the vector an X0 load head asked for exactly
+four words earlier (the lane memory, below). A port takes a head's result in the head's own word
+or one word later, by head (`fields.LANE_LAG`, verified for the heads timed: in its own word S3
+0x18, 0x19, 0x22, S2 0x8, S1 0x00..0x09 and S0's selects, one word later the arithmetic and
+shift heads timed, S0 0x08 and S3 0xa / 0xc); no head class predicts it. S3's lane shift 0x1b
+moves b by n = f92_95 as a signed nibble: up by 1..4 [verified], down by 1..4 at 12..15
+[inferred, fitted], not at all at 5..11 [measured]; 0x1c and 0x22 matched it at two counts
+[inferred]. The lanes moved in come from a third kind of file, U, named by f31_34 [inferred,
+fitted]: its lanes 0..3 are four carry lanes for either direction. Its port is f141_144 under
+f232_233 = 1 beside an S3 head, which decides what U takes: after 0x1f and 0x21 U's lanes 0..3
+hold b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31 [verified, pre-registered;
+U's other lanes not read; that the port's and the shifts' nibbles name the same register
+inferred] (`fields.LANE_THIRD_FILE`).
+
+The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
+its expectation was registered before the run and met on all lanes of two constructed 32-lane
+vectors of edge and random values (138 heads: S0 39, S1 67, S2 13, S3 19), or for S0's four
+select heads under masks (0x46 under two, the others under one), inferred where it was fitted. In short, S0 adds, subtracts, compares and takes absolute differences, with
+neighbour-lane forms (a[k+1]); S1 has logic, shifts by its immediate or t, saturating left
+shifts, double-width shifts of the 32-bit a : b and min / max / add with a scalar; S2
+multiplies (a x b, b x t and b x an immediate, low 16 bits) and gives sign masks and the lane
+number; S3 moves, interleaves, splits odd / even lanes, inserts a lane, broadcasts F3[f96_99]
+or a 14-bit immediate and gives the lane number. Halvings and rounded shifts round ties to even
+(met at counts 1..3; at count 10 no operand lane was a tie). Some heads add 1 in some lanes, or
+select by lane by a condition not identified [hypothesis].
+
+Lane masks (`fields.LANE_MASKS`): S0's per-lane condition is a 32-bit mask in a scalar
+register of F0, bit k for lane k; S0's and S1's compare heads make one.
+
+- **Select** [verified, pre-registered: 0x46 under two masks, the others under one]: with bit = bit k of F0[f72_75], S0 0x46
+  gives bit ? b : a, 0x45 bit ? b : F0[f76_79], 0x44 bit ? b : imm16, and 0x4b the bit as 0 / 1;
+  a lane port (or O under 4) takes them in the head's own word. 0x41 and 0x4d gave b, 0x42
+  imm16 and 0x43 F0[f76_79] in every lane under one mask [inferred]. None of these heads hangs
+  the engine.
+- **Compare** [verified, pre-registered]: S0 0x24 / 0x25 (a != b / a == b), 0x32 / 0x33
+  (a < b / a >= b), 0x2e / 0x2f (b > / <= imm16), 0x30 / 0x31 (b > / <= F0[f72_75]), 0x12 /
+  0x13 (b != / == imm16), 0x18 / 0x19 (b != / == F0[f72_75]), 0x1f and 0x2c (the carry of a +
+  b) and 0x2a (the signed overflow of a + b) put a mask, bit k from lane k, on M's bus one word
+  after the head under f274_275 = 0; S1 0x33 and 0x3f (the carry of a + b), 0x3d (its signed
+  overflow), 0x41 / 0x42 (b > / <= imm7), 0x43 / 0x44 (b > / <= F1[f84_87]) and 0x45 / 0x46
+  (a < b / a >= b) under f274_275 = 1 (`fields.S_RESULTS`). The order compares are unsigned; no
+  signed one is known.
+- **Into F0 and F1**: f255 = 0 takes M's bus into F0, f258 = 0 into F1 [verified]. In the stock
+  programs every S0 0x13 is followed by a word with M under f274_275 = 0 and F0's port f182_185
+  under f255 = 0 [verified in the bytes].
+
+So a mask can be computed, kept, built in a scalar register and applied: S0 0x32, M with f255
+= 0 into F0[k], then S0 0x46 with f72_75 = k gave max_u(a, b) as one program [verified,
+pre-registered]. No select of S1's is known.
+`semantics.lane_result` evaluates the select heads with the mask as the scalar "s".
+
+The immediates by field (`fields.LANE_IMMEDIATES`, fitted, then pre-registered on fresh values:
+verified): S0
+imm16 = f76_79 << 12 | f37_40 << 8 | f23_30; S1 imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1
+| f0); S2 imm7 = sext7(f53_56 << 3 | f88_91 >> 1); S3 imm14 = sext14(f96_99 << 10 | f65_68 << 6
+| f31_34 bits 3..2 << 4 | f92_95). Register nibbles double as immediate bits; f80_83's bits 1..0
+do not enter S1's.
+
+A product's high half goes to S0's and S1's files through their first ports under 1
+(`fields.S2_HIGH_HALVES`): S2 0x5 is signed b x t and 0x2 the unsigned a x the signed b
+[verified], 0x0 the unsigned b x imm [inferred]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
+S1's a : b is the 32-bit product and S1 0x29 (or 0x10) gives it scaled, rounded and saturated:
+a fixed-point multiply by a scalar in three words [verified].
+
+`semantics.lane_result(unit, head, a, b, scalars)` evaluates a row on 32 lanes, a None lane
+where the row does not predict it, and `semantics.product_high(head, a, b, scalars)` the high
+halves. The emulator does not run the S heads or these files.
+
+X0 and X1 are two copies of one ALU (`fields.X_FUNCTIONS`, verified by exact readout): X0's head
+f302_307 on a = A[f100_104], b = A[f105_109], K = f105_109 << 6 | f2_6 << 1 | f1 (11 bits); X1's
+head f308_312 on a = B[f110_114], b = B[f115_119], K = f115_119 << 8 | f9_14 << 2 | f7_8 (13
+bits). The shared table is the op slot's compacted: compares against K and b, a +/- K, a +/- b,
+-b, abs(b), b, K zero- or sign-extended, a | K << 16. X1 adds logic functions at 0x16..0x1b; its
+heads 0x1c..0x1e are the register transfers, which put no result on the bus and change no
+register. X0 gives no result at 0x16..0x19 and 0x22, 0 at 0x23..0x3e, and at 0x1a..0x21 the
+immediate + 1 or b + 1 beside a lane memory load or store (below).
+
+#### The lane memory and the store file
+
+X0's heads 0x1a..0x21 load and store whole vectors of the lane memory (`fields.LANE_MEMORY`,
+`fields.X0_LANE_MEMORY`): 0x400 vectors of 32 elements of 16 bits, addressed by vector number
+modulo 0x400 [verified: the wrap pre-registered at 0x400 and through a second operand of 0x7fff;
+the size inferred from five different contents below 0x400 and aliases above].
+
+| heads | does | address |
+|---|---|---|
+| 0x1c, 0x1d | load one vector | A[f100_104] + sK, K X0's signed 11-bit immediate |
+| 0x20, 0x21 | load one vector | A[f100_104] + A[f105_109] |
+| 0x1a, 0x1b | store O[f69_71] | A[f100_104] + sK |
+| 0x1e, 0x1f | store O[f69_71] | A[f100_104] + A[f105_109] |
+
+A load's 32 lanes arrive exactly four words after the head, at any first lane port under enable
+0 or at the store file's port; at lag 3 or 5, or with no head, the port writes nothing; one load
+reaches all four first ports in one word [verified]. In the five stock programs every word with a load head has
+such a port write four words later, and none lacks its head (379 words; verified in the bytes).
+The store file O holds eight lane registers: the port f179_181 (the register) writes it under
+f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
+occur and were not run, `fields.STORE_SOURCES`), the moves tried in the head's own word and the
+arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head three
+words after O's port write stores the new content [verified]; one in the same word as the write
+stores the old content, a load one word after a store to the same vector reads it back, and four
+loads in consecutive words land in four consecutive port words [inferred]. Each head and its even / odd twin showed no
+difference in address, lanes, element width or scalar result, and none writes A back
+[inferred]; what the low head bit selects is open [hypothesis: the handshake with the copy
+engine's streams].
+
+The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's load puts
+source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
+element's low 8 bits [verified]. A kernel with bulk input and output runs inside one stock copy:
+the loaded vectors are there once the copy's word 74 has run (three vectors read, 8 lanes each:
+the sequencer waits for the engine or the load is faster than a few words), own words between
+74 and 75 compute on them, and 75..78 store them (`memcpy`; verified: a dense layer of 32
+neurons x 64 inputs, DRAM bytes to DRAM bytes, exact). The store's element format, word 47's
+value, is the number of elements per 16-byte line: 16 bytes, 12 a 10-bit pack, 10 a 12-bit
+pack, 8 16-bit little-endian, 4 zero-extended to 32 bits [verified]; 16-bit lanes also leave as bytes, interleaved by S3 0xa /
+0xb with a shift by 8 [verified]. `semantics.LaneMemory` holds the content by
+vector (`load`, `store`, `copy_in`, `copy_out`) and `semantics.lane_address(head, a, b, k)`
+gives a head's vector; the emulator runs neither.
+
+What can be written today: an own loop of 16 passes, each incrementing an index into G and A,
+loading two vectors into L2 through X0 0x1d, multiplying them with S2 0x2, putting the product's
+halves into L1 through f155 / 1 and f159 / 1 and its low half into L3 through f175 / 1,
+narrowing with S1 0x29 into O under 3 and storing it with X0 0x1b, and reducing the products in
+L3 with S3 0x2, read through M into G and accumulated by op 0x35, gave the 32-bit sum of 512 products and every stored vector exactly [verified,
+pre-registered].
 
 T's bits stay in the positional fields, so every word has the same partition and the codec stays
 exact; `TARGET` in the table composes T from `imm` and f128_132.
@@ -152,60 +330,63 @@ meaning is a hypothesis unless tagged):
 
 | family | ops | operands | f120_122 |
 |---|---|---|---|
-| A | 0x0c..0x1a even | ra, imm13 | an operand |
-| A' | 0x0d..0x1b odd | ra, rb | an operand |
+| A | 0x0c..0x1a even | ra, imm13 signed | a store's datum register R[f120_122]; no effect on a load |
+| A' | 0x0d..0x1b odd | ra, rb | as family A |
 | B | 0x0a 0x0b 0x37 0x38 | ra, imm16 (imm15 in 0x37) | immediate bits 13..15 |
-| C | 0x3e 0x3f 0x40 | ra, rb, imm5 | an operand |
-| D | 0x1c..0x25 but 0x22, 0x36 | ra, imm16 signed, used as imm16 << 4 | immediate bits 13..15 (inferred, strong), 0 in 99 % of the words |
-| E | 0x08 0x09 0x28..0x35 but 0x2d, 0x3a 0x3c 0x3d 0x41..0x43 0x47..0x49 | ra, rb | an operand |
-| F | 0x44 0x46 | ra, imm13 | open; 0 where measured |
+| C | 0x3e 0x3f 0x40 | ra, rb (no effect), imm5 | no effect |
+| D | 0x1c..0x25 but 0x22, 0x36 | ra, imm16, sign-extended but zero-extended in 0x1e, 0x1f, 0x23 | immediate bits 13..15, 0 in 99 % of the words |
+| E | 0x08 0x09 0x28..0x35 but 0x2d, 0x3a 0x3c 0x3d 0x41..0x43 0x47..0x49 | ra, rb | no effect but in 0x47, R[f120_122] |
+| F | 0x44 0x46 | ra, imm13 | none in 0x44; R[f120_122] in 0x46 |
 
-rb is f128_132; imm13 is `imm` | f128_132 << 8 and imm16 adds f120_122 << 13. 0x0c's and 0x10's
-immediates are two's complement (inferred: their 0x1fxx values read as small negative numbers).
-The A ops are the immediate forms of the A' ops at op + 1. The strongest meaning is 0x1a, a read
-of the local word at its immediate (inferred, strong): program 16's three 0x1a words name the
-local words of src, dst and len. Its ra reads as a base register, the word ra + imm, not as a
-destination (inferred: across later firmware versions of the same family, in 59 % of its words
-the next naming of that register is this op again, with another immediate in 95 % of those
-pairs, which as writes would be dead).
+rb is f128_132; imm13 is `imm` | f128_132 << 8 and imm16 adds f120_122 << 13. The A ops are the
+immediate forms of the A' ops at op + 1. In family C rb is encoded but had no effect on the
+result (verified by exact readout).
 
-Ops inserted into the copy after its word 64, their result read through word 68's load offset
-or word 73's count, decode the scalar ALU (`OP_SEMANTICS`, each with its tier). The values look
-scaled by 16: the immediates enter as imm << 4, a compare's true is 0x10, a shift by rb counts in
-units of 16. Verified on the camera (pre-registered dst sha256 predictions passed; E ops at
-f120_122 = 7): 0x08 / 0x09 / 0x32 rb, 0x3c AND, 0x3a OR, 0x34 ra - rb, 0x35 ra + rb, 0x33 -rb, 0x3d
-NOT, 0x2f min (signed inferred), 0x2c / 0x2e max (signedness open); compares 0x28 / 0x29 <= / <
-unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 != / ==, and against c = imm16 << 4 0x1c != , 0x1d ==,
-0x20 <= signed, 0x21 < signed, 0x23 < unsigned; 0x41 / 0x42 ra >> ((rb >> 4) & 31), 0x43 ra <<
-((rb >> 4) & 31) (arithmetic and & 31 inferred); 0x40 ra << imm; 0x44 ra - (imm13 << 4); 0x0a ra
-(to 1 KiB, where ra >= imm: max(ra, imm) is not excluded).
-Inferred: family D's signed imm16, 0x1e ra - c, 0x1f ra + c, 0x36 ra ^ c, 0x24 max, 0x25 min;
-0x3e / 0x3f right shifts by imm; 0x37 ra | (imm << 4); 0x38 ra & imm16 (not scaled; one cleared
-mask bit moved a copy's store by 16 B; not covered through port 267, where it did not fit);
-0x46 / 0x47 add a value per boot that no job sets (an unknown input, so their results are
-unknown). 0x48 / 0x49, 0x0b and family A' stay undecoded; no op screened multiplies. The
-resampler's word that reads tap 1 is a 0x16 with imm 1; on the camera,
-with ra kept (one run each; ra as a word index is a hypothesis):
+The data ops (`OP_SEMANTICS`, each with its tier) compute on plain 32-bit values, with 32-bit
+wrap; a compare gives 1 or 0. An earlier indirect readout, through the copy's load offset and
+store count, showed immediates and results scaled by 16: that scale belongs to those two
+roles, which use a register value in units of 16 bytes (`memcpy.READOUT`; inferred: r2 & 0x1080
+through the count at len 0x1100 stored nothing, as a 16-byte unit predicts), not to the ops.
+Verified by exact readout: 0x08 / 0x09 rb, 0x3c ra & rb, 0x3a ra | rb, 0x34 ra - rb, 0x35 ra +
+rb, 0x33 -rb, 0x3d ~ra, 0x2f min signed, 0x2e max signed, 0x41 ra >> (rb & 31) arithmetic, 0x43
+ra << (rb & 31), 0x28 / 0x29 ra <= rb, ra < rb unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 !=,
+==; against c, imm16 sign-extended: 0x1c !=, 0x1d ==, 0x20 <=, 0x21 < signed, 0x24 / 0x25 max /
+min signed, 0x36 ra ^ c; 0x0b c itself, ra not used; 0x37 ra | imm15; 0x38 ra & c; the ring
+pointer steps 0x44, 0x46 and 0x47 (216 points): s = zext(ra) + sext(R), R = 1 in 0x44 and
+R[f120_122] in 0x46 / 0x47, L the low 8 bits of imm13 (0x44, 0x46) or rb (0x47), the result s +
+L if s < 0, s - L if s >= L, else s. 0x49 and 0x48 multiply: (ra x rb) & 0xffffffff reaches
+the ALU bus one word after the op, where a port of that word takes it, and the op's own word gets
+nothing (`semantics.MULTIPLY_LAG`); what sets 0x48 apart is open, and stepping records the
+product without delivering it. Inferred: 0x32 abs(rb), 0x2c max unsigned, 0x42 ra >> (rb & 31)
+logical, 0x1e / 0x1f ra - imm16, ra + imm16 and 0x23 ra < imm16 unsigned with imm16
+zero-extended, 0x0a ra | (imm16 << 16), 0x3e / 0x3f / 0x40 ra >> imm5 arithmetic, logical and
+ra << imm5 (ra shifted, not rb).
 
-| op in its place | imm 0 | imm 1 | reading (inferred) |
+Family A is local memory, 0x2000 bytes with a stack at its top and r0 the stack pointer, at the
+byte address ra + w x imm13 modulo 0x2000 (`semantics.LOCAL_BYTES`), imm13 signed (verified by
+exact readout: any ra reads at its low 13 bits, so no DRAM, register or lane state is reachable;
+imm13's high bits, once read as a flag, are the offset's sign, which modulo 0x2000 gives the
+same address as the unsigned reading); the register forms use ra + w x rb. The stores 0x18 / 0x12 /
+0x0c write the low 32 / 16 / 8 bits of R[f120_122] (register forms 0x19 / 0x13 / 0x0d); the
+loads are 0x1a 32-bit, 0x16 signed and 0x14 unsigned 16-bit, 0x10 unsigned and 0x0e signed 8-bit
+(register forms 0x1b, 0x17, 0x15, 0x11, 0x0f). A load's datum goes to no register by itself: it
+appears on the ALU result bus exactly three words after the load, where a word with an idle op
+and f272_273 = 1 or f270_271 = 1 takes it; a data op in that word wins and the datum is lost;
+consecutive loads deliver in consecutive words (verified by exact readout). Stepping records a
+load's read only and makes a store's bytes unknown, since R is not modelled; an access at an
+address not aligned to its width has no semantics. The resampler's word that reads tap 1 is a
+0x16 with imm 1; on the camera, with ra kept (one run each):
+
+| op in its place | imm 0 | imm 1 | reading |
 |---|---|---|---|
 | 0x16 (stock) | c0 | c1 | halfword, imm in halfwords |
-| 0x14 | c0 | c1 | halfword, imm in halfwords; no pass-on of the datum before it |
+| 0x14 | c0 | c1 | halfword, imm in halfwords |
 | 0x10 | c0's byte 0, zero-extended | byte 1, zero-extended | byte, imm in bytes |
-| 0x0e | c0's byte 0, sign-extended | byte 1, sign-extended (two tap sets) | byte, imm in bytes; a load and a byte select of the datum before it not separated |
+| 0x0e | c0's byte 0, sign-extended | byte 1, sign-extended (two tap sets) | byte, imm in bytes |
 | 0x1a | - | c2, the low 16 bits of the word | word, imm in words |
 
 So the coefficient port keeps between 9 and 16 bits of what reaches it (a zero-extended 0xff
-arrives as 255, a word as its low half). The halfword loads' sign extension is open. Like 0x1a, the
-stepping records the read only. Family A
-as a whole reads as loads and stores of width w (inferred from the static access patterns:
-every read of an r0-based slot follows a store to the same bytes): the byte address is 4 ra
-plus the low 13 bits of w x imm13 as a signed offset, and imm13's bits above them (11..12 in
-the word ops, 12 in the halfword ops) are a flag that does not move the address on r0, its
-meaning open. Stepping also runs 0x14 as a halfword load and 0x12 and 0x18 as halfword and word
-stores (inferred); a store's datum is open, so its bytes become unknown, and at an unknown base
-all of local memory does. Words with the flag set, the byte store 0x0c and the register forms
-have no semantics.
+arrives as 255, a word as its low half).
 `word.operands` decodes a data op's operands (`Operands`), and
 `Word.data(op, Operands(...))` assembles one, rejecting operands outside the format; listings show
 `op1a~ r5, #1` and `op3f~ r2, r2, #5`, and a slot field outside the format stays a field.
@@ -288,9 +469,9 @@ index 0), the resampler's held line pairs, the register file and the DRAM view. 
 of a stock `.BIN` for loads from firmware text. A byte is known or UNKNOWN, and its source says
 where it came from or why it is unknown; the emulator never guesses a byte.
 
-The model covers each word of a job at its index (`model.cover`): the idle word; X2's semantic,
-a register transfer at any index (matched by its signature, every field idle but the register
-groups, the route nibbles and f308_309); the row of the undecoded stock word at its stock index
+The model covers each word of a job at its index (`model.cover`): the idle word; X1's register
+transfer (head 0x1c or 0x1d) at any index (matched by its signature, every field idle but the
+register groups, the route nibbles and the head); the row of the undecoded stock word at its stock index
 (`OpaqueClass`, which leaves the measured operand fields free); and the stock halt at another
 index, which acts where stepping reaches it (below) and is a hypothesis elsewhere. A stock word
 at another index than its own is no row, unless inserted words moved it there ("Inserted
@@ -341,14 +522,14 @@ are all in the op slot and the PR ports, at its op semantics' confidence (`OP_SE
 the executor's `ops`), when the semantics covers its operands. A load is recorded only (where
 its datum goes is open; with a PR port enabled it is UNKNOWN). A result goes through the word's
 PR ports (`semantics.destinations`), and only right after stock word 64, the site where ops were
-measured (`memcpy.ENGINE_AFTER`): there the operands r2 = len + 0x10..0x1f and r7 near 0x40000
+measured (`memcpy.ENGINE_AFTER`): there the operands r2 = (len + 0x1f) / 16 and r7 near 0x4000
 are known (inferred; r7 at len 0x2000 and 0x4000 only), a port-272 result feeds later
-inserts' operands three words on, and a port-267 result is what words 68 and 73 read at that
-register four or more words on; other transfers reading it raise. A load offset or count that the
+inserts' operands three words on, and a port-267 result, times 16 (`memcpy.READOUT`), is what
+words 68 and 73 read at that register four or more words on; other transfers reading it raise. A load offset or count that the
 model cannot place from such a value (unknown, negative, two placements, beyond the buffer, a
 count off 16-byte steps or above len) raises. Every other insert is UNKNOWN, naming the op or
-the fields: an op without semantics, operands outside them (the idle word with only its op
-changed sets imm13's flag bits, so the family A ops are not covered there), a result with no
+the fields: an op without semantics, operands outside them (an unaligned local access), a
+result with no
 decoded port or off the site, a local memory write, a register transfer (its slot is not
 modelled). These raise in both modes: an inserted control
 or halt word, an insert in a control word's four delay slots (it pushes a stock word out of
@@ -459,9 +640,13 @@ words 430..447 (`resample_window`): the stock program's term lists for a stock j
 window's for a job it covers; a row's own law (`Operands`, `Phase`, `Substitute`) runs on the
 stock kernel. Each term reads its source line in any
 plane. The window runs once per job on symbolic values: the tap loads put `TapBytes` of the line's phase into the
-load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register,
+load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register
+(the scalar file F2 that f261_262 = 2 writes from the ALU bus, inferred; that C is F2 a hypothesis),
 the operand write ports put each word's anchored source line (`Row`) into a register, and each
-S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator. Every changed field must
+S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator (the window model's
+reading, hypothesis: on the camera with own programs head 5 is the signed b x t, its low half
+the unit's lane result and its high half taken by S1's file's first port under 1, the pair
+narrowed by S1's double-width shift; `fields.S2_HIGH_HALVES`). Every changed field must
 be a semantic or a don't-care (a held field under an idle owner), else the executor gives no
 terms (`Uncovered`). A stock value at its stock index has the law's tier on every job class;
 an edited value its measured cell's tier, the mechanism's off its cells, and no semantic off
@@ -513,15 +698,18 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
 - **Branches** (`semantics.Branching`): no condition of ops 0..2 is known, so the default
   `Given()` decides none. `Given({index: taken or [per visit]})` takes the caller's decisions;
   `memcpy.copy_branches(len)` gives the copy's two forward branches as the camera runs show them
-  (27 not taken, 45 taken, also at odd src, dst and len). `RaTest` is the alternative to test: brf, br and the loop end on
-  ra == 0 or ra != 0, in the op slot's registers or the transfer registers, the loop end
-  testing ra as it is or after decrementing it (all hypotheses). On the copy's transfer
+  (27 not taken, 45 taken, also at odd src, dst and len). `RaTest` decides brf, br and the loop
+  end on ra == 0 or ra != 0, in the op slot's registers or the transfer registers, the loop end
+  testing ra as it is or after decrementing it; its brf and br defaults are the measured rules,
+  while the measured loop end (ra > 0, ra - 1 written back through a port) is not expressed. On the copy's transfer
   registers it decides nothing: word 14 names 27's r7 through a port whose destination is open.
 - **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): the family A loads 0x1a,
-  0x16, 0x14, 0x10 and 0x0e record their read (where the datum goes is open), the stores 0x18 and
-  0x12 make their bytes unknown, the computing ops send their result through the word's PR
+  0x16, 0x14, 0x10 and 0x0e record their read (the datum's delivery three words on is not
+  modelled), the stores 0x18, 0x12 and 0x0c make their bytes unknown (R is not modelled), the computing ops send their result through the word's PR
   ports (`semantics.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
-  the operands three words on, unknown until then), and the idle op does nothing in the slot. A
+  the operands three words on, unknown until then; exact readout shows the next word reading a
+  272 / 1 write, which these latencies do not model yet), and the idle op does nothing in the
+  slot. A
   result with an open destination (no port, or another enable value) raises in strict mode and
   makes the open ports' registers unknown in lenient mode. Every other op has no semantics:
   strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
@@ -535,8 +723,8 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   jump with no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
   finds no link, raises `LinkError` (an `UnknownSemantics`): no return of its own lies before
   that T, and stepped as calls such a link re-ran a loop's tail.
-- **Registers**: the operands (`Boot.slot`) and the transfer registers (`Boot.regs`), two
-  register sets (inferred, strong).
+- **Registers**: the operands (`Boot.slot`, the file G) and the transfer registers
+  (`Boot.regs`, the file B); R and A are not modelled.
 
 Stepping models neither the register transfers nor the datapath, so it says which words run in
 which order, not what they move. `fenykl dsp flow [--len N] [--branch I=0|1]` prints the copy's

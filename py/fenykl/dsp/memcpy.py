@@ -12,7 +12,7 @@ index:
 
 `Copy16Model` takes the stock program (from the user's firmware, `from_image`) and derives what
 covers a job's words from it: each undecoded stock word is the row of its stock index, the
-register transfers are X2's semantic at any index, matched by their signature, with the
+register transfers are X1's semantic at any index, matched by their signature, with the
 register contexts and the register group B and route values of the stock transfers as the
 reference. A job with words inserted into the stock program is covered by content (`align`,
 `Copy16Model.cover_job`). No stock word is part of this code. The model resolves a job's trace
@@ -25,6 +25,14 @@ them to the boot (`apply`):
 A job that does not complete stores nothing, unless its outcome says that dst is written first
 (`Outcome.STORE_TIMEOUT`). A placement out of range, a register of unknown value or a load that
 may or may not have run makes its bytes UNKNOWN.
+
+The copy also carries own kernels in one job (verified on the camera, pre-registered, the model
+does not run them): its load is complete once word 74 has run (three vectors read, 8 lanes
+each, 0, 1 and 0x1ff, held the source bytes between 74 and 75 at len 0x4000: the sequencer
+waits for the engine, or the load is faster than a few words), own words between 74 and 75
+read and write the lane memory before the store (a dense layer of 32 neurons x 64 inputs and a
+16-bit fixed-point kernel came out exact, DRAM to DRAM), and words 0..78 followed by idles and a
+halt copy as the whole program does: word 79, the return, is not needed.
 
 The guard 45 skips the loop 50..57 in every job tested, so what is known of 50..57 alone was seen
 with the loop skipped: an edit of 28 or 45 together with one of 50..57 has the outcome of
@@ -92,27 +100,44 @@ ITEM = 16
 ENGINE_AFTER = 64
 """Inserted data ops right after this stock word (before 65) are the measured site: their
 operands and their results through the PR ports are modelled there only."""
+READOUT = 16
+"""The load offset (word 68) and the count (word 73) use a register value in units of 16 bytes:
+the copy model holds an inserted op's result there as those roles use it, 16 times what the op
+computes (inferred: the scale that read as immediates and results scaled by 16 through these
+two roles, and that exact readout of own programs on the camera does not show). The address
+role takes plain byte addresses.
+
+The values the transfers hand explain the scale. The load placement (68) and the store offset
+(76) are addresses in bytes of the lane memory's 16-bit elements, 64 per vector, value >> 6 the
+vector (`fields.LANE_MEMORY`): own values 0x1000 and 0x1800 placed the store's source at vector
+0x40 and the load at vector 0x60 (verified on the camera, pre-registered, byte-exact). For those
+two roles the model's 16 x value, taken / 32 to a multiple of 32, is the same rule: 32 source
+bytes per vector. The count (73) hands 0x40 at len 0x400, so it is in 16-byte units (inferred,
+a camera readout of the B file at the transfer words at one length)."""
 ENGINE_OPERANDS = (
     (
         2,
-        lambda length: (length + 0x10, length + 0x1F),
+        lambda length: ((length + 0x1F) // READOUT,) * 2,
         (
-            "len + 0x10..0x1f (inferred): the favoured model of the count, floored to 16 B, "
-            "needs r2 at least len + 0x10, which also explains a full copy then a timeout at "
-            "0x3f imm 0; r2 = len with counts rounded up is not excluded"
+            "(len + 0x10..0x1f) / 16, the one integer there (inferred): the favoured model of "
+            "the count, floored to 16 B, needs r2 at least (len + 0x10) / 16, which also "
+            "explains a full copy then a timeout at 0x3f imm 0; r2 = len / 16 with counts "
+            "rounded up is not excluded"
         ),
     ),
     (
         7,
-        lambda length: (0x40010, 0x4041F) if length in (0x2000, 0x4000) else None,
+        lambda length: (0x4001, 0x4041) if length in (0x2000, 0x4000) else None,
         (
-            "a value near 0x40000, read through ra - rb at two lengths, 0x2000 and 0x4000; "
-            "not the len / 2 that word 64 writes to the xreg's r7 (inferred); at shorter "
+            "a value near 0x4000, read through ra - rb at two lengths, 0x2000 and 0x4000; "
+            "not what word 64 writes to the xreg's r7, len / 2 as the transfers use it "
+            "(inferred); at shorter "
             "lengths it lay further above (unknown there)"
         ),
     ),
 )
-"""The operand set's registers at the engine site (inferred, on the camera), by job length."""
+"""The operand set's registers at the engine site (inferred, on the camera), by job length, in
+the units the ops compute in."""
 MAX_COUNT = 0x40000
 """A count above this is an address or junk: the store never ends (hypothesis)."""
 ZERO_FILL = 0x4000
@@ -215,8 +240,13 @@ _PARTS: dict[int, Part] = {
 ROUTES = tuple(f.id for f in FIELDS if f.lo in STAIRCASE)
 CONTEXT = ("f100_104", "f105_109", "f110_114", "f123_127", "f128_132")
 """The register group A fields besides xreg: they select the transfer's channel."""
-REGS_B = tuple(f.id for f in UNITS["pr"].fields if f.kind == "reg")
-TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_309"})
+# f221_223, R's register, stays idle in a transfer.
+REGS_B = tuple(
+    f.id for f in UNITS["pr"].fields if f.kind == "reg" and f.id != "f221_223"
+)
+TRANSFER_OPERANDS = frozenset({*CONTEXT, "f115_119", *REGS_B, *ROUTES, "f308_312"})
+COUNTED, HOLDING = 0x1C, 0x1D
+"""The X1 heads of the counted and the holding register transfers."""
 
 T_SET = (7, 9, 16, 18, 19, 20, 24, 27, 28, 30)
 Z_SET = (4, 5, 10, 12, 13)
@@ -266,10 +296,11 @@ _CHANNELS: tuple[Channel, ...] = (
             Role(
                 "store format",
                 47,
-                "the store's element format, applied by the store, not the load: bytes at r6, "
-                "u8 -> u32 zero-extended at r14 and r29, a 10-bit pack or zeros at r21 (by "
-                "boot), zeros at the others; timeout at r9; the camera lost its link at r16, "
-                "r18, r19, r20, r24, r26, r27, r28 (not registered)",
+                "the store's element format, applied by the store, not the load: the number of "
+                "elements per 16-byte line (`_FORMATS`); bytes at r6, u8 -> u32 zero-extended "
+                "at r14 and r29, a 10-bit pack or zeros at r21 (by boot), zeros at the others; "
+                "timeout at r9; the camera lost its link at r16, r18, r19, r20, r24, r26, r27, "
+                "r28 (not registered)",
                 _table(None, timeout=(9,)),
                 use=Use.FORMAT,
             ),
@@ -303,7 +334,10 @@ _CHANNELS: tuple[Channel, ...] = (
                 "load enable",
                 66,
                 "a load at r1, r3, r4, r5, r10, r12, r13, r17; no load (the held buffer is "
-                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8",
+                "stored) at 11 values; timeout at the T set; a fixed 1 KiB at r8; on register 0 "
+                "(which holds 1 at that word) the copy skips its load and stores the lane "
+                "memory as it is "
+                "(verified on the camera, a pre-registered pipeline)",
                 _table(
                     None,
                     ok=(1, 3, 4, 5, 10, 12, 13, 17),
@@ -326,7 +360,9 @@ _CHANNELS: tuple[Channel, ...] = (
                 "load offset",
                 68,
                 "the buffer index of the load: buffer[i + o] = S[i], o = value / 32 truncated "
-                "to 32 bytes (towards zero, hypothesis for negative values)",
+                "to 32 bytes (`READOUT`, verified); the address counts modulo the lane memory "
+                "(inferred), which the model does not wrap: it truncates a negative value "
+                "towards zero (hypothesis)",
                 use=Use.LOAD_OFFSET,
                 load=True,
             ),
@@ -374,7 +410,9 @@ _CHANNELS: tuple[Channel, ...] = (
                 "store offset",
                 76,
                 "the buffer index of the store: dst[i] = buffer[i + o], o = value / 32 rounded "
-                "down to 32 bytes (hypothesis for negative values)",
+                "down to 32 bytes (`READOUT`, verified); the address counts modulo the lane "
+                "memory (inferred), which the model does not wrap: it rounds a negative value "
+                "down (hypothesis)",
                 use=Use.STORE_OFFSET,
                 beyond=H,  # its other registers ran only at 1 KiB
             ),
@@ -389,10 +427,29 @@ _CHANNELS: tuple[Channel, ...] = (
     ),
 )
 """Channels cmd 0xF does not need (`needed=False`): idling their transfers has no effect, with
-len, dst and src changing between jobs. Word 57 is a holding transfer (bit 308 set) of its own
-register context and takes no slot."""
+len, dst and src changing between jobs. Word 57 is a holding transfer (head 0x1d) of its own
+register context and takes no slot.
 
-# Word 47's formats by register; r21's is a boot parameter.
+What the transfers hand, read from the B file after each prefix of the program at one length
+(measured on the camera; the reading inferred): words 32 and 41 a header of the load and of the
+store side, the two apart in bit 6; 33..40 and 42..49 a group of eight values each, the same
+for both sides, len / 2, the element format and len among them; 59, 63..65 and 70..73 two
+(key, value) pairs of the load and of the store side, keys apart in bit 6, the second pair's
+value len / 16; 66..68 the load's command, source address and lane memory placement; 75..77
+the store's command, lane memory offset and destination address. A transfer
+reads its register before the same word's port writes it (inferred). So 47 is the store's
+element format and 38 by position the load's (hypothesis): 38 on a register holding 8, alone
+or with 47 on 8 too, never ended (measured on the camera, one run each)."""
+
+# Word 47's formats by register; r21's is a boot parameter. The format is the register's value,
+# the number of elements per 16-byte line (verified on the camera, 1024..2048 16-bit elements
+# each: at 8 and 10 pre-registered as the one expectation, at 4 and 12 met by an alternative
+# written before the run): 0x10, the stock r6's, each element's low byte; 0x0c each line 12
+# elements' low 10 bits, least significant first, the last byte 0; 0x0a each line 10 elements'
+# low 12 bits, so packed; 0x08 each element as 16 bits little-endian; 0x04 (and 0x44, measured)
+# each element zero-extended to a 32-bit word; 0x14 and 0x18 never complete (the job times
+# out; that they have no line is inferred). The model has the formats of the registers above.
+
 _FORMATS: dict[int, str] = {
     6: "bytes",
     14: "u32",
@@ -415,16 +472,16 @@ class Reference:
 
 @dataclass(frozen=True, eq=False)
 class TransferSemantic(WordClass):
-    """X2's semantic, the register transfers at any index: they hand the register named in
-    115..119 to the sequencer."""
+    """The register transfers at any index, X1 heads 0x1c and 0x1d: they hand the register
+    named in 115..119 to the sequencer."""
 
     channel_of: dict[tuple[int, ...], str] = field(default_factory=dict)
     reference: dict[tuple[int, ...], Reference] = field(default_factory=dict)
     holding: frozenset[int] = frozenset()
-    """The indices of the stock holding transfers (bit 308 set)."""
+    """The indices of the stock holding transfers (head 0x1d)."""
 
     def matches(self, word: Word) -> bool:
-        return super().matches(word) and word["f308_309"] in (0, 1)
+        return super().matches(word) and word["f308_312"] in (COUNTED, HOLDING)
 
     def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
         ctx = context(word)
@@ -447,7 +504,7 @@ class TransferSemantic(WordClass):
                 )
             trace.ignored.append((index, [f.id for f, _ in routes]))
             trace.taint = H
-        if word["f308_309"] == 1:
+        if word["f308_312"] == HOLDING:
             # 74 and 78 differ from 73 and 77 only here and copy at every register (hypothesis:
             # a transfer that does not take a slot).
             trace.notes.append(f"word {index}: a holding transfer, no slot")
@@ -496,7 +553,7 @@ def _transfer_semantic(words: tuple[Word, ...]) -> TransferSemantic:
             w = words[role.word]
             if (
                 not cls.matches(w)
-                or w["f308_309"] != 0
+                or w["f308_312"] != COUNTED
                 or context(w) != context(words[c.anchor])
             ):
                 raise ValueError(
@@ -504,10 +561,10 @@ def _transfer_semantic(words: tuple[Word, ...]) -> TransferSemantic:
                 )
     roles = {r.word for c in _CHANNELS for r in c.roles}
     for i, w in enumerate(words):
-        if cls.matches(w) and w["f308_309"] == 0 and i not in roles:
+        if cls.matches(w) and w["f308_312"] == COUNTED and i not in roles:
             raise ValueError(f"stock transfer {i} has no role")
     holding = frozenset(
-        i for i, w in enumerate(words) if cls.matches(w) and w["f308_309"] == 1
+        i for i, w in enumerate(words) if cls.matches(w) and w["f308_312"] == HOLDING
     )
     return TransferSemantic(
         cls.name,
@@ -673,6 +730,14 @@ class Plan:
         if stores:
             deciding.append(self.store_taint)
         return min(self.cap, *deciding)
+
+
+def _readout(value: Reg | None) -> Reg | None:
+    """An op's result as the copy's transfers use it (`READOUT`)."""
+    if value is None:
+        return None
+    fact = f"{READOUT} x ({value.fact})"
+    return Reg(READOUT * value.lo, READOUT * value.hi, value.taint, fact)
 
 
 def _trunc32(v: int) -> int:
@@ -909,11 +974,11 @@ class Copy16Model:
                     f"inserted word {j} writes r{r}, which a stock word after it writes too"
                 )
             else:
-                trace.writes[r] = (effect.result, j)
+                trace.writes[r] = (_readout(effect.result), j)
         return ""
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
-        """Run the job's word at `index` by what covers it: the idle word; X2's semantic, a
+        """Run the job's word at `index` by what covers it: the idle word; X1's transfer semantic, a
         register transfer at any index; the row of the stock word at its stock index, which
         matches the word on its fields besides its operands; the stock halt word at another
         index, which ends the job where stepping reaches it (`_halt`) and else is a hypothesis.

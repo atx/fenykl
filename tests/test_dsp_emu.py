@@ -771,27 +771,34 @@ def test_an_inserted_op_takes_its_semantics_tier():
 
 
 @pytest.mark.parametrize(
-    "word, why",
+    "word, at, why",
     [
-        (Word.from_fields({"f313_319": 0x48}, base=IDLE), "op48 has no op semantics"),
         (
-            Word.from_fields({"f313_319": 0x1A}, base=IDLE),
+            Word.from_fields({"f313_319": 0x1B}, base=IDLE),
+            12,
+            "op1b has no op semantics",
+        ),
+        # A word load at r2, (len + 0x1f) / 16 at the engine site: not word-aligned.
+        (
+            Word.data(0x1A, Operands(ra=2, imm=0)),
+            65,
             "outside what its op semantics covers",
         ),
         (
             Word.from_fields({"f313_319": 0x38}, base=IDLE),
+            12,
             "no PR port enabled: where the result goes is open",
         ),
-        (stock().words[42], "an inserted register transfer"),
+        (stock().words[42], 12, "an inserted register transfer"),
     ],
-    ids=["no-row", "flag-bits", "no-port", "transfer"],
+    ids=["no-row", "unaligned", "no-port", "transfer"],
 )
-def test_an_insert_without_semantics_is_unknown(word: Word, why: str):
-    program = inserted(12, word)
-    with pytest.raises(UnknownSemantics, match=f"word 12: .*{why}"):
+def test_an_insert_without_semantics_is_unknown(word: Word, at: int, why: str):
+    program = inserted(at, word)
+    with pytest.raises(UnknownSemantics, match=f"word {at}: .*{why}"):
         run(program)
     result, boot = run(program, strict=False)
-    assert [i for i, _ in result.ignored] == [12]
+    assert [i for i, _ in result.ignored] == [at]
     assert boot.read(DST, LEN).weakest() is Confidence.HYPOTHESIS
 
 
@@ -825,18 +832,17 @@ def engine(words: tuple[Word, ...], reader: int = 68, length: int = 0x1000):
 
 
 def d_op(code: int, ra: int, c: int) -> Word:
+    """An immediate op whose constant is c as the transfers read it, imm = c / 16."""
     return Word.data(code, Operands(ra=ra, imm=c >> 4))
 
 
 def e_op(code: int, ra: int, rb: int) -> Word:
-    return Word.from_fields(
-        {"f120_122": 7}, base=Word.data(code, Operands(ra=ra, rb=rb))
-    )
+    return Word.data(code, Operands(ra=ra, rb=rb))
 
 
 def test_an_engine_op_sets_the_load_offset():
-    """ra = r2 = len + 0x10..0x1f after word 64; 0x1f adds c; word 68 offsets the load by
-    the value / 32 in 32-byte steps, so dst[o:] = src[:len - o] and dst[:o] is unknown."""
+    """ra = r2 = (len + 0x1f) / 16 after word 64; 0x1f adds c / 16; word 68 offsets the load
+    by 16 x the value / 32 in 32-byte steps, so dst[o:] = src[:len - o] and dst[:o] is unknown."""
     result, boot = engine((port(d_op(0x1F, 2, 0x400), "f267_268", 12),))
     o = (0x1000 + 0x400) // 32 & ~0x1F
     dst = boot.read(DST, 0x1000)
@@ -847,8 +853,8 @@ def test_an_engine_op_sets_the_load_offset():
 
 
 def test_an_operand_chain_feeds_a_count():
-    """min(r2, 0x40) = 0x40 into r13 through port 272, read three words on by a compare
-    through port 267 into r12: true is 0x10, so word 73 stores 16 bytes."""
+    """min(r2, 4) = 4 into r13 through port 272, read three words on by a compare through
+    port 267 into r12: true is 1, so word 73 stores 16 bytes."""
     words = (
         port(d_op(0x25, 2, 0x40), "f272_273", 13),
         IDLE,
@@ -860,7 +866,16 @@ def test_an_operand_chain_feeds_a_count():
     assert result.status is Status.OK and all(dst.known)
     assert bytes(dst.data) == bytes(range(16)) + b"\xa5" * (0x1000 - 16)
     with pytest.raises(UnknownSemantics, match="no exact multiple of 16"):
-        engine((port(e_op(0x08, 2, 2), "f267_268", 12),), reader=73)
+        engine((port(e_op(0x08, 7, 7), "f267_268", 12),), reader=73, length=0x2000)
+
+
+def test_a_mask_through_the_count_reads_in_16_byte_units():
+    """r2 & 0x1080 at len 0x1100: r2 = 0x111 masks to 0, so word 73 stores nothing, as on the
+    camera; read in bytes, r2 & 0x1080 would have stored 0x1000 bytes."""
+    mask = port(Word.data(0x38, Operands(ra=2, imm=0x1080)), "f267_268", 12)
+    result, boot = engine((mask,), reader=73, length=0x1100)
+    assert result.status is Status.OK
+    assert bytes(boot.read(DST, 0x1100).data) == b"\xa5" * 0x1100
 
 
 @pytest.mark.parametrize(
@@ -911,8 +926,10 @@ def test_an_engine_write_off_the_site_is_unknown():
 
 
 def test_an_op_on_one_register_reads_one_value():
-    """0x31 on (r2, r2): r2 is an interval, but equal to itself, so the flag is true."""
-    result, boot = engine((port(e_op(0x31, 2, 2), "f267_268", 12),), reader=73)
+    """0x31 on (r7, r7): r7 is an interval, but equal to itself, so the flag is true."""
+    result, boot = engine(
+        (port(e_op(0x31, 7, 7), "f267_268", 12),), reader=73, length=0x2000
+    )
     assert result.status is Status.OK
     assert bytes(boot.read(DST, 0x1000).data[:16]) == bytes(range(16))
 

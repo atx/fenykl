@@ -16,15 +16,16 @@ from fenykl.dsp.program import (
     labels,
     stock_programs,
 )
-from fenykl.dsp.units import X0, X2, OpSlot
+from fenykl.dsp.units import X0, X1, OpSlot
 from fenykl.dsp.word import IDLE, Word
 
 
 def test_slots_rebuild_program_16():
     # The DSL rebuilds the copy from slots read off the firmware's program: no stock word is
-    # restated in the code.
+    # restated in the code. No field it sets is a hypothesis any more.
     stock = stock_programs(stock_image("em10ii"))[16]
-    with pytest.warns(HypothesisFieldWarning):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         built = assemble(Word(**w.slots()) for w in stock.words)
     assert len(built) == len(stock)
     for index, (a, b) in enumerate(zip(built.words, stock.words)):
@@ -34,11 +35,16 @@ def test_slots_rebuild_program_16():
 def test_assemble_warns_only_about_hypothesis_fields():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assemble([Word(x2=X2(xreg=3)), IDLE])
+        assemble([Word(x1=X1(xreg=3)), IDLE])
     with pytest.warns(
-        HypothesisFieldWarning, match=r"2 hypothesis fields: f100_104, f308_309$"
+        HypothesisFieldWarning, match=r"2 hypothesis fields: f80_83, f234_235$"
     ):
-        assemble([Word(x2=X2(xreg=3), x0=X0(f100_104=2)), Word(x2=X2(f308_309=0))])
+        assemble(
+            [
+                Word.from_fields({"xreg": 3, "f234_235": 1}),
+                Word.from_fields({"f80_83": 0}),
+            ]
+        )
 
 
 @pytest.mark.parametrize("const", ["f133_140", "f230_231", "f277"])
@@ -70,26 +76,26 @@ def test_listing_names_ops_targets_and_delay_slots():
     text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0   call~ -> 1443!  x0: f1=1",
+        "0   call~ -> 1443!  x0: f1=1!",
         "1..4 | idle x4",
         "5..6   idle x2",
-        "7   ret~  op_slot: f128_132=r1",
+        "7   ret~  op_slot: f128_132=r1!",
         "8 | op1f~ r2, #0xc",
         "9 | call~ -> 10! ctl_n=1!",
     ]
 
 
 def test_listing_collapses_idle_runs_repeats_and_deltas():
-    a = Word(x2=X2(xreg=3), op_slot=OpSlot(f123_127=2))
-    b = Word(x2=X2(xreg=7), op_slot=OpSlot(f123_127=2))
+    a = Word(x1=X1(xreg=3), op_slot=OpSlot(f123_127=2))
+    b = Word(x1=X1(xreg=7), op_slot=OpSlot(f123_127=2))
     text = listing(Program((IDLE, IDLE, a, a, a, b, IDLE, b)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
         "0..1   idle x2",
-        "2..4   x3 idle~  op_slot: ra=r2!  x2: xreg=r3~",
-        "5   idle~  ^  x2: xreg=r7~",
+        "2..4   x3 idle~  op_slot: ra=r2!  x1: xreg=r3!",
+        "5   idle~  ^  x1: xreg=r7!",
         "6   idle",
-        "7   idle~  op_slot: ra=r2!  x2: xreg=r7~",
+        "7   idle~  op_slot: ra=r2!  x1: xreg=r7!",
     ]
 
 
@@ -102,12 +108,12 @@ def test_dsl_source_rebuilds_every_stock_program():
 
 def test_a_slot_rejects_a_field_given_by_id_and_name():
     with pytest.raises(ValueError, match="xreg given twice"):
-        X2(xreg=3, f115_119=4)
+        X1(xreg=3, f115_119=4)
 
 
 def test_listing_shows_data_ops_in_their_format():
     # Operands replace their fields; a slot field outside the format (imm in a register form,
-    # f120_122 as an operand) stays a field.
+    # f120_122 as an R register) stays a field.
     shift = Word.data(0x3F, Operands(ra=2, rb=2, imm=5))
     signed = Word.data(
         0x0C, Operands(ra=3, imm=-7), base=Word(op_slot=OpSlot(f120_122=1))
@@ -118,7 +124,7 @@ def test_listing_shows_data_ops_in_their_format():
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body[::2] == [
         "0   op3f~ r2, r2, #5",
-        "2   op0c~ r3, #-7  op_slot: f120_122=1",
+        "2   op0c~ r3, #-7  op_slot: f120_122=r1!",
         "4   op0b~ r1, #0x2468",
         "6   op49~ r1, r2  op_slot: imm=4!",
     ]
@@ -134,7 +140,7 @@ def labelled() -> list:
         *[IDLE] * 4,
         HALT,
         Label("routine"),
-        Word(x2=X2(xreg=3)),
+        Word(x1=X1(xreg=3)),
         Ctl(0, "routine", Word(x0=X0(f1=1))),
         *[IDLE] * 4,
         Word.ctl(4),
@@ -192,7 +198,7 @@ def test_labelled_source_reassembles_the_program():
     program = build(labelled(), 32)
     text = source(program, "P", labels(labelled(), 32), 32)
     assert "    Ctl(3, 'routine'),  # 32 call -> 38\n    IDLE,  # 33\n" in text
-    assert "    Label('routine'),\n    Word(x2=X2(xreg=3)),  # 38\n" in text
+    assert "    Label('routine'),\n    Word(x1=X1(xreg=3)),  # 38\n" in text
     assert "    Ctl(0, 'routine', Word(x0=X0(f1=0x1))),  # 39 loop -> 38\n" in text
     assert text.endswith("  # 48\n    Label('end'),\n]\n")
     namespace: dict = {}

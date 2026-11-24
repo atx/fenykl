@@ -29,7 +29,7 @@ from enum import Enum
 
 from .fields import GRID_A, GRID_B, PORTS, Confidence, Field, lookup
 from .resample_edits import Probe
-from .semantics import FLAG_BITS, UnknownSemantics, local_offset
+from .semantics import UnknownSemantics, local_offset
 from .units import UNITS
 from .word import Word
 
@@ -113,7 +113,11 @@ LOADS: dict[int, tuple[int, str]] = {
 word's low 16 bits: 0x1a in place of a halfword tap read gave the low half of the word)."""
 S2_HEAD = "f292_295"
 S2_TERM = 5
-"""The S2 head value whose word adds C[f88_91] x R[f57_60] to its accumulator."""
+"""The S2 head value whose word adds C[f88_91] x R[f57_60] to its accumulator (the window
+model's reading, hypothesis). On the camera with own programs head 5 is the signed b x t, b =
+L2[f57_60], t = F2[f88_91]: its low half is the unit's lane result, its high half goes to S1's
+file through the first port under enable 1, and S1's double-width shift narrows the pair
+(`fields.S2_HIGH_HALVES`)."""
 
 
 @dataclass(frozen=True)
@@ -136,9 +140,8 @@ def field_is(fid: str, value: int) -> Callable[[Word], bool]:
 
 
 def is_load(word: Word) -> bool:
-    """A family A load in a form the load semantic covers (f120_122 = 7, no flag bits)."""
-    op, imm13 = word["op"], word["imm"] | word["f128_132"] << 8
-    return op in LOADS and word["f120_122"] == 7 and not imm13 & FLAG_BITS[LOADS[op][0]]
+    """A family A load the load semantic covers (f120_122 has no effect on a load)."""
+    return word["op"] in LOADS
 
 
 class Coverage(Enum):
@@ -324,12 +327,20 @@ def _cover_field(
 LATENCY = {"port": 1, "load": 3, "coefficient": 1, "term": 1}
 """Executed words from a write to the first read that sees it: a port write to an S2 read
 (inferred), a load to the load latch that f198_201 reads (hypothesis), f198_201's write to an
-f88_91 read (hypothesis), an S2 term to its accumulator (inferred post hoc on the chroma
+f88_91 read (hypothesis; on the camera S2 head 0xe reads such a write from the next word on, and
+the ALU bus carries a load's datum three words on), an S2 term to its accumulator (inferred post hoc on the chroma
 planes)."""
 PORT_WRITES = (("f163_166", "f244_245", 0), ("f167_170", "f246_247", 1))
-"""The operand register write ports: (nibble, enable, the enable's active value)."""
+"""The operand register write ports: (nibble, enable, the enable's active value). On the camera
+with own programs these are the ports of S2's lane file L2, f167_170 under 1 writing S2's lane
+result (a product's low half) and f163_166 under 0 the vector an X0 load head asked for four
+words earlier (`fields.LANE_SOURCES`, `fields.LANE_MEMORY`); that program 13's loads there are
+its tap lines is a hypothesis, and this executor does not model the lane memory."""
 COEFFICIENT_WRITE = ("f198_201", "f261_262", 2)
-"""The coefficient register write port: C[nibble] := the load latch (hypothesis)."""
+"""The coefficient register write port: C[nibble] := the load latch (hypothesis). On the camera
+with own programs this port under 2 writes the ALU bus, which carries a load's datum three words
+on, to register f198_201 of the scalar file F2 that S2 head 0xe reads (inferred,
+`fields.PB_SOURCES`); that C is F2 is a hypothesis."""
 
 Item = tuple[str, int]
 """A state item: ("R", n) an operand register, ("C", n) a coefficient register, ("latch", 0)
@@ -432,8 +443,9 @@ class Machine:
     def _datum(self, word: Word) -> Value:
         """What a family A load returns: the phase's tap bytes at the tap base register."""
         width, fmt = LOADS[word["op"]]
-        imm13 = word["imm"] | word["f128_132"] << 8
-        offset = local_offset(width, imm13)
+        args = word.operands
+        assert args is not None and args.imm is not None
+        offset = local_offset(width, args.imm)
         key = (word["op"], word["ra"], offset)
         if word["ra"] != self.anchors.phase_base:
             return Unknown(f"r{word['ra']} holds no known base in the window", key)

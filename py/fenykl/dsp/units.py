@@ -5,12 +5,13 @@ whose values change in the words where it is active: counted over every word of 
 across later firmware versions of the same family, each held field changes almost only under
 one strobe (verified in the bytes for the counts; that these groups are execution units is
 inferred). The op slot is the op with its operands; PB and PR are banks of ports, each enable
-owning one field (`fields.PORTS`); M and Q are modes. The constant bits form no unit. A unit's
+owning one field (`fields.PORTS`); M is the strobe that puts an S head's result on X0's result
+bus, with a held 2-bit field; Q is a mode. The constant bits form no unit. A unit's
 fields need not be contiguous; re-cutting one is an edit of the `unit` of its fields.
 
 A slot holds the values of some fields of one unit, keyed by id or semantic name::
 
-    X2(xreg=3, f308_309=0)
+    X1(xreg=3, x1op=0x1C)
 """
 
 from collections.abc import Iterator
@@ -35,9 +36,10 @@ class Unit:
 
 
 _HEAD = (
-    "the compute slot {}: its head f{}_{} and the grid A nibbles that change under it"
+    "the compute slot {}: its head f{}_{} and the grid A nibbles that change under it; a "
+    "unit with a lane file of its own whose two registers its lane heads read, and scalar "
+    "registers of its own scalar file (`fields.LANE_FUNCTIONS`, verified on the camera)"
 )
-_XFER = "the transfer unit {}: its strobe f{}_{} and the fields that change under it"
 _UNITS = (
     (
         "op_slot",
@@ -59,15 +61,28 @@ _UNITS = (
         )
         for u in ("s0", "s1", "s2", "s3")
     ),
-    *(
+    (
+        "x0",
+        "X0",
+        V,
         (
-            u,
-            u.upper(),
-            I,
-            _XFER.format(u.upper(), *HEADS[u]),
-            (f"f{HEADS[u][0]}_{HEADS[u][1]}",),
-        )
-        for u in ("x0", "x1", "x2")
+            "the X0 unit: its head f302_307 and the fields that change under it; an ALU on "
+            "the register file A, its result written to A, B, R or G by the PR ports, and the "
+            "lane memory's load and store heads, f69_71 naming the store's register of O "
+            "(verified on the camera by exact readout)"
+        ),
+        ("f302_307",),
+    ),
+    (
+        "x1",
+        "X1",
+        V,
+        (
+            "the X1 unit: its head f308_312 and the fields that change under it; X0's copy on "
+            "the register file B, its result written to A, B, R or G by the PR ports, and the "
+            "register transfers (verified on the camera by exact readout)"
+        ),
+        ("f308_312",),
     ),
     (
         "pb",
@@ -75,8 +90,15 @@ _UNITS = (
         V,
         (
             "17 ports, one enable in 232..264 for each grid B nibble, the pairing verified in "
-            "the bytes (f234_235 for f145_146 a hypothesis); ports, with the S heads and M the "
-            "compute group (hypothesis)"
+            "the bytes (f234_235 for f145_146 a hypothesis); the ports of f255..f264 write the "
+            "scalar files F0..F3 that the S heads read, each enable value a source "
+            "(`fields.SCALAR_FILES`, verified on the camera by exact readout); those of "
+            "f236..f251 write the lane files L0..L3, each enable value an S result or, under 0 "
+            "of the first ports, a lane memory load (`fields.LANE_SOURCES`, verified on the "
+            "camera); f252_254's writes the store file O (`fields.STORE_FILE`, verified on the "
+            "camera); f232_233's the third lane file U, beside an S3 head "
+            "(`fields.LANE_THIRD_FILE`, verified on the camera under 1, inferred under 0 and 2); "
+            "ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
     ),
@@ -86,16 +108,23 @@ _UNITS = (
         V,
         (
             "5 ports, one enable in 265..273 for each field of register group B 206..228, the "
-            "pairing verified in the bytes: register write ports, with X0..X2 the transfer group "
-            "(hypothesis)"
+            "pairing verified in the bytes: register write ports, f272_273 of G and f270_271 of "
+            "R, f267_268 and f269 of B, f265_266 of A, each enable value a source (verified on "
+            "the camera by exact readout)"
         ),
         tuple(e for e in PORTS if lookup(e).unit == "pr"),
     ),
     (
         "m",
         "M",
-        H,
-        "the held 2-bit value f274_275 under the active-low strobe f276: a compute-group mode",
+        I,
+        (
+            "the held 2-bit value f274_275 under the active-low strobe f276, which puts an S "
+            "head's scalar result on X0's result bus (verified on the camera by exact readout); "
+            "in the head's own word f274_275 does not select the S unit (measured on the "
+            "camera), for a held result it names the unit, 0 S0, 1 S1, 3 S3 (each verified on "
+            "the camera, pre-registered; 2 not shown, so the reading inferred)"
+        ),
         ("f276",),
     ),
     (
@@ -190,7 +219,6 @@ S2 = slot_class("s2")
 S3 = slot_class("s3")
 X0 = slot_class("x0")
 X1 = slot_class("x1")
-X2 = slot_class("x2")
 PB = slot_class("pb")
 PR = slot_class("pr")
 M = slot_class("m")
@@ -198,8 +226,7 @@ Q = slot_class("q")
 Const = slot_class("const")
 
 SLOTS: dict[str, type[Slot]] = {
-    cls.unit.name: cls
-    for cls in (OpSlot, S0, S1, S2, S3, X0, X1, X2, PB, PR, M, Q, Const)
+    cls.unit.name: cls for cls in (OpSlot, S0, S1, S2, S3, X0, X1, PB, PR, M, Q, Const)
 }
 _missing = set(UNITS) - set(SLOTS)
 if _missing:
