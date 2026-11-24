@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from .emu import Flow, Job, Stop
-from .fields import Confidence, lookup
+from .fields import CONTROL_OPS, Confidence, lookup
 from .machine import HEAD_IDS
 from .stream import LANE_MEMORY, LOAD, LOCAL_MEMORY, STORE, Engine, Event
 
@@ -27,25 +27,30 @@ class Cost:
 
 
 JOB = Cost(
-    101.0,
-    V,
-    "the job's fixed cost, the interrupt and callback path: the intercept of loops of 512 to "
-    "2048 passes against their pass counts (verified on the camera, in a pre-registered range "
-    "of 95 to 115 us; it holds the first runs of those jobs' few dozen words, about 3 us)",
+    98.4,
+    I,
+    "the job's fixed cost, the interrupt and callback path: the 101 us intercept of loops of "
+    "512 to 2048 passes against their pass counts (verified on the camera, in a pre-registered "
+    "range of 95 to 115 us) less the first runs of those jobs' 42 words (2.6 us, fitted)",
 )
 REPEAT = Cost(
     0.00537,
     V,
     "a word executed again, in a loop: 5.37 ns, measured on idle words; scalar local loads, "
     "X1's divide, X0 lane-memory loads and taken branches with their delay slots cost the same "
-    "within 1.5 ns (verified on the camera); S3 reductions likewise (fitted)",
+    "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
+    "S3 reductions likewise (fitted)",
 )
-REPEAT_S = Cost(
+REPEAT_I = Cost(
     REPEAT.us,
     I,
-    "a word executed again with an S unit's head: S3 reductions fitted at the idle word's cost, "
-    "other S heads not timed (inferred: no measured class costs more than an idle word)",
+    "a word executed again outside the measured passes (a pass under 9 or over 106 words, or "
+    "with an op 3 or op 4 since the word's last run), or with an S unit's head: S3 reductions "
+    "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
+    "more than an idle word)",
 )
+PASSES = range(9, 107)
+"""Executed words between two runs of a word in the loops timed on the camera."""
 FIRST = Cost(
     0.062,
     I,
@@ -153,9 +158,11 @@ class Estimate:
 
 def transfer_us(event: Event) -> float:
     """The time of the command `event` hands, from its registers; raises `Unmeasured`."""
+    if None in event.regs:
+        raise Unmeasured("a register not handed: the command moves nothing, not timed")
     r0, _, r2, r3, _, r5, r6, r7 = event.regs
     rate = RATES.get((event.kind, r0, r2, r5))
-    if rate is None or None in (r3, r6, r7):
+    if rate is None:
         raise Unmeasured(
             f"a command of kind {event.kind} at r0 {r0}, r2 {r2}, r5 {r5}: not timed"
         )
@@ -171,29 +178,42 @@ def transfer_us(event: Event) -> float:
     return rate.per_command + rate.per_kib * kib
 
 
-def estimate(job: Job, flow: Flow, engine: Engine | None = None) -> Estimate:
+def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
     """The time of `job` as `flow` executed it (`Executor.step` on a `Machine`), with the stream
-    `engine` the machine drove. Raises ValueError for a flow that did not halt."""
+    `engine` the machine drove (a fresh one per job, as the machine needs). The word parts and
+    the waits are capped at the weakest control step's tier: the flow decides which words run.
+    Raises ValueError for a flow that did not halt."""
     if flow.stop is not Stop.HALT:
         raise ValueError(f"the job did not halt: {flow.why}")
-    if engine is not None and engine.off:
+    if engine.off:
         return Estimate(unknown=f"the stream engine went off script: {engine.off}")
     events: dict[int, list[Event]] = {}
-    for e in engine.events if engine is not None else []:
+    for e in engine.events:
         events.setdefault(e.t, []).append(e)
     words = job.program.words
-    seen: set[int] = set()
-    counts = {FIRST: 0, REPEAT: 0, REPEAT_S: 0}
+    # Each index's last executed word and the count of ops 3 and 4 run up to it.
+    last: dict[int, tuple[int, int]] = {}
+    links = 0
+    flow_tier = V
+    counts = {FIRST: 0, REPEAT: 0, REPEAT_I: 0}
     now, free, waited, joined = 0.0, 0.0, 0.0, False
     ends: deque[float] = deque()
     for t, step in enumerate(flow.steps):
-        if step.index not in seen:
+        if step.op in CONTROL_OPS and step.confidence is not None:
+            flow_tier = min(flow_tier, step.confidence)
+        before = last.get(step.index)
+        if before is None:
             cost = FIRST
-        elif any(words[step.index][HEAD_IDS[u]] != _idle(u) for u in S_UNITS):
-            cost = REPEAT_S
+        elif (
+            t - before[0] not in PASSES
+            or links != before[1]
+            or any(words[step.index][HEAD_IDS[u]] != _idle(u) for u in S_UNITS)
+        ):
+            cost = REPEAT_I
         else:
             cost = REPEAT
-        seen.add(step.index)
+        links += step.op in (3, 4)
+        last[step.index] = (t, links)
         counts[cost] += 1
         now += cost.us
         for e in events.get(t, []):
@@ -222,16 +242,16 @@ def estimate(job: Job, flow: Flow, engine: Engine | None = None) -> Estimate:
         )
     parts = [Part("job", JOB.us, JOB.tier)]
     parts += [
-        Part(name, n * c.us, c.tier)
+        Part(name, n * c.us, min(c.tier, flow_tier))
         for name, c in (
             ("first runs", FIRST),
             ("repeats", REPEAT),
-            ("S repeats", REPEAT_S),
+            ("inferred repeats", REPEAT_I),
         )
         if (n := counts[c])
     ]
     if joined:
-        parts.append(Part("stream waits", waited, I))
+        parts.append(Part("stream waits", waited, min(I, flow_tier)))
     return Estimate(tuple(parts))
 
 

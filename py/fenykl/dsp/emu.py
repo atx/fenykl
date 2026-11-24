@@ -581,8 +581,10 @@ class Executor:
             return Step(
                 i, word.op, taken=True, note=f"to {to}, {reg}", confidence=tier
             ), to
-        # Without a datapath the stepper infers the link from the stock convention.
-        conf = min(conf, Confidence.INFERRED)
+        if self.datapath is None:
+            # Without a datapath the stepper infers the link from the stock convention; a
+            # datapath decides ops 0..2 on G[ra] at the register's tier (`Machine.decide`).
+            conf = min(conf, Confidence.INFERRED)
         if word.op == 3:
             back = i + DELAY_SLOTS + 1
             stack.append(Link(back))

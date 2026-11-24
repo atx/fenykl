@@ -903,7 +903,7 @@ no transfer: its signed quotient a / b is on X1's result bus four words after th
 ```python
 from fenykl.dsp.timing import estimate
 
-flow = Executor(boot, datapath=m).step(job)  # m = Machine(boot, stream=Engine())
+flow = Executor(boot, datapath=m).step(job)  # m = Machine(boot, stream=Engine()), per job
 m.between_jobs()
 e = estimate(job, flow, m.stream)
 e.us, e.tier, e.parts  # None when not known; e.unknown says why
@@ -913,12 +913,15 @@ The estimate is the job's minimum time on the camera (single jobs jitter by up t
 of parts, each with its tier; the total has the weakest. Every figure was measured on the camera
 as the job's completion time against loop pass counts, minimum over repeats:
 
-- **job**: 101 us per job, the interrupt and callback path [verified];
+- **job**: 98.4 us per job, the interrupt and callback path [inferred: the loops' verified
+  intercept of 101 us less the first runs of their 42 words];
 - **first runs**: 62 ns for each word index the first time it runs [the straight-line slope
   fitted, inferred; a word branched over costs nothing, verified];
-- **repeats**: 5.37 ns for each later execution [verified for idle words, scalar local loads,
-  X1's divide, X0 lane loads and taken branches with their slots]; a repeated word with an S
-  head goes in **S repeats** [inferred: S3 reductions fitted, the other S heads not timed];
+- **repeats**: 5.37 ns for each later execution 9 to 106 executed words after the word's last,
+  with no op 3 or 4 between [verified in such loops for idle words, scalar local loads, X1's
+  divide, X0 lane loads and taken branches with their slots]; other repeats, and repeated
+  words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
+  not timed];
 - **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and
   0x1d at its executed word (`Engine.events`). A command runs from its hand-off, after the one
   before it on any channel (one engine), for `per_command` + `per_kib` x its KiB of DRAM
@@ -928,9 +931,13 @@ as the job's completion time against loop pass counts, minimum over repeats:
   as long as the words since its hand-off did not cover it. A job with a 0x1d has this part
   even when the words hid every transfer.
 
+The word parts and the waits are capped at the tier of the weakest control step of the flow
+(a branch on an inferred register, a jump in another's delay slots): it decides which words
+run.
+
 A case that was not timed makes the estimate unknown: a command of another kind, memory, r2 or
 r5, of more than one row, with r3 other than the units its r6 lines fill or outside the sizes
-measured, a command that moves nothing, more than 16 commands handed before their 0x1d, an engine
+measured, a command that moves nothing (kind 1, or a register not handed), more than 16 commands handed before their 0x1d, an engine
 off script, and commands still outstanding at the halt (whether the job waits for them was not
 measured). A flow that did not halt raises `ValueError`.
 

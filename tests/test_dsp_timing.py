@@ -4,16 +4,24 @@ without a measured time."""
 
 from fenykl.dsp import stream
 from fenykl.dsp.emu import Boot, Executor, Job
-from fenykl.dsp.fields import Confidence, Operands
+from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Machine, Sv
 from fenykl.dsp.program import Program
-from fenykl.dsp.timing import Estimate, estimate
+from fenykl.dsp.timing import (
+    FIRST,
+    LANE_LOAD,
+    REPEAT,
+    REPEAT_I,
+    Estimate,
+    estimate,
+)
 from fenykl.dsp.word import IDLE, Word
 
 V, I = Confidence.VERIFIED, Confidence.INFERRED
 SRC, DST = 0xA0000000, 0xA1000000
 WAIT = None
 HALT = Word.from_fields({"op": 7}, base=IDLE)
+THREE = Sv(3)
 
 
 def lanes(channel: int, r6: int, r5: int = 0x10, r7: int = 1) -> list[int]:
@@ -35,11 +43,15 @@ def store(channel: int) -> list[int]:
     return [channel << 6 | stream.STORE, 0, DST]
 
 
-def run(values: list, between: dict[int, int] | None = None, body=()) -> Estimate:
+def run(
+    values: list, between: dict[int, int] | None = None, body=(), g=None
+) -> Estimate:
     """Hands `values` (None a 0x1d) from B registers, with `between[k]` idle words before the
-    k-th value, then `body` and a halt."""
+    k-th value, then `body` and a halt; `g` presets G registers."""
     regs = sorted({v for v in values if v is not WAIT})
     m = Machine(Boot(), stream=stream.Engine())
+    for r, v in (g or {}).items():
+        m.g[r] = v
     for k, v in enumerate(regs):
         m.b[k] = Sv(v)
     words = []
@@ -80,30 +92,55 @@ def test_commands_on_two_channels_run_one_after_the_other():
     assert part(both, "stream waits").us > 0
 
 
-def test_the_parts_carry_their_tiers():
-    """A loop's repeated words are verified, a repeated S head's inferred, first runs inferred;
-    the total is the weakest."""
-
-    def data(code: int, ra: int, imm: int, **ports: int) -> Word:
-        return Word.from_fields(
-            ports, base=Word.data(code, Operands(ra, None, imm), base=IDLE)
-        )
-
-    li = data(0x0B, 31, imm=3, f272_273=1, f224_228=2)
-    head = Word.from_fields({"f296_301": 0, "f61_64": 1, "f65_68": 2}, base=IDLE)
+def loop(slots: int, head: bool = False, counter: Sv = THREE) -> Estimate:
+    """Passes of [an S3 head or an idle word, `slots` idles, a loop end on r2 and its four
+    slots], r2 counting down from `counter`."""
+    first = (
+        Word.from_fields({"f296_301": 0, "f61_64": 1, "f65_68": 2}, base=IDLE)
+        if head
+        else IDLE
+    )
     end = Word.from_fields(
         {"ra": 2, "f120_122": 0, "f272_273": 1, "f224_228": 2},
-        base=Word.ctl(0, 1, base=IDLE),
+        base=Word.ctl(0, 0, base=IDLE),
     )
-    e = run([], body=[li, head, end, IDLE, IDLE, IDLE, IDLE])
-    tiers = {p.name: p.tier for p in e.parts}
-    assert tiers == {
-        "job": V,
-        "first runs": I,
-        "repeats": V,
-        "S repeats": I,
-    }
+    body = [first, *[IDLE] * slots, end, IDLE, IDLE, IDLE, IDLE]
+    return run([], body=body, g={2: counter})
+
+
+def test_a_loops_words_are_counted_and_tiered():
+    """Four passes of ten words: ten first runs and the halt, thirty repeats, of which the S
+    head's three are inferred."""
+    e = loop(4, head=True)
+    parts = {p.name: (p.us, p.tier) for p in e.parts}
+    assert parts["first runs"] == (11 * FIRST.us, I)
+    assert parts["repeats"] == (27 * REPEAT.us, V)
+    assert parts["inferred repeats"] == (3 * REPEAT_I.us, I)
     assert e.tier == I
+
+
+def test_passes_shorter_than_the_measured_loops_are_inferred():
+    e = loop(0)
+    assert {p.name for p in e.parts} == {"job", "first runs", "inferred repeats"}
+
+
+def test_a_branch_on_an_inferred_register_caps_the_words():
+    e = loop(4, counter=Sv(3, I))
+    assert part(e, "repeats").tier == I
+
+
+def test_a_wait_joins_the_oldest_command():
+    """A 16 KiB load, then a 1 KiB one on another channel; the first 0x1d joins the 16 KiB load
+    and five idles later the second the 1 KiB one, which runs after it."""
+    values = [*lanes(0, 0x400), *lanes(2, 0x40), *load(0), *load(2, 0x8000), WAIT, WAIT]
+    e = run(values, {len(values) - 1: 5})
+    big = LANE_LOAD.per_command + 16 * LANE_LOAD.per_kib
+    small = LANE_LOAD.per_command + LANE_LOAD.per_kib
+    # 21 words hand the 16 KiB load; the 1 KiB load ends after both; then the halt.
+    assert (
+        abs(e.us - (part(e, "job").us + 21 * FIRST.us + big + small + FIRST.us)) < 1e-9
+    )
+    assert part(e, "first runs").us == 32 * FIRST.us
 
 
 def test_a_lone_wait_is_an_inferred_part():
@@ -127,6 +164,16 @@ def test_shapes_not_timed_have_no_time():
         "under 1 KiB": [*lanes(0, 0x20), *load(0), WAIT],
         "2 KiB into local memory": [*local(0, 0x80), *load(0, 0x800), WAIT],
         "nothing moves": [*lanes(0, 0x40), 1, SRC, 0, WAIT],
+        "r1 and r4 not handed": [
+            *[
+                x
+                for r, v in enumerate(lanes(0, 0x40)[1:])
+                if r not in (1, 4)
+                for x in (r << 11 | 0x21, v)
+            ],
+            *load(0),
+            WAIT,
+        ],
     }
     for name, values in cases.items():
         e = run(values)
