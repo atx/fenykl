@@ -473,7 +473,8 @@ def test_a_reduction_is_not_on_m_past_its_first_word(m, lag, between):
     }[between]
     read = w(f276=0, f274_275=3, f270_271=2, f221_223=0)
     run(m, [reduce, IDLE, other, *[IDLE] * (lag - 3), read])
-    assert m.r[0] == Sv(0xDEAD)
+    measured = between is None and lag <= 6  # registered at 2, 4, 5 and 6 words
+    assert m.r[0] == Sv(0xDEAD, V if measured else I)
 
 
 def test_an_extract_meets_the_reduction_register_in_its_first_word_only(m):

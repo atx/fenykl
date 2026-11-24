@@ -452,7 +452,7 @@ OPS: dict[int, Op] = {
         "word 11, inside the routine with the call's return pending, ended with status 0 and "
         "dst not written (verified on the camera, one run), so a halt needs no return and the "
         "return stack is not checked (inferred); three words behind a halt still run: of five "
-        "stores there the first three wrote (verified on the camera, pre-registered)",
+        "stores there the first three wrote, and the job ended after them also with an op 3 second among them or with the halt in a taken op 3's first delay slot (verified on the camera, pre-registered)",
     ),
     IDLE_OP: Op(
         "idle", I, "no op: the idle word's value, its immediate always 0 (inferred)"
@@ -1031,8 +1031,8 @@ U_PORT_FACT = (
     "With each enable value 0..2, from a word with one value on all three scalar buses and no "
     "S head, it wrote nothing to lanes 0 / 1 of L3, nor to L3 under 1 beside any S3 head "
     "(verified on the camera). The enable of U's port U[f141_144] beside an S3 head: 1 writes, "
-    "0 and 2 write nothing (verified on the camera, pre-registered against a known value in "
-    "U[5]); U is `LANE_THIRD_FILE`"
+    "0 and 2 write nothing, and with no S3 head in the word 1 writes nothing (verified on the "
+    "camera, pre-registered against a known value in U); U is `LANE_THIRD_FILE`"
 )
 LANE_OPERANDS = (
     "a and b are the unit's two lane operands (`LANE_FILES`) lane by lane, read as signed or "
@@ -1409,8 +1409,8 @@ S_NONE = {
 }
 """Where not every other head value was read."""
 REDUCTION = (
-    "of the 32 lanes of L3[f65_68], on M's bus from the third word after the head on, where it stays: a result "
-    "register (verified, pre-registered)"
+    "of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other (verified, "
+    "pre-registered)"
 )
 
 
@@ -2244,7 +2244,7 @@ FIELDS: tuple[Field, ...] = (
             0: "S0's result, and its held mask one word after the head (verified)",
             1: "S1's result, and its held mask one word after the head (verified)",
             2: "S2's result in the head's own word (verified)",
-            3: "S3's result, and a held reduction from the third word after the head (verified)",
+            3: "S3's result, and a reduction in the third word after the head (verified)",
         },
     ),
     Field(
@@ -2259,7 +2259,7 @@ FIELDS: tuple[Field, ...] = (
         "head's own word only; under 1 that port wrote nothing, and M or the port one or two "
         "words after the head took nothing (verified on the camera by exact readout, "
         "pre-registered). S3's reductions 0x0..0x5 are the exception: their result is on the "
-        "bus from the third word after the head on and stays (verified on the camera, "
+        "bus in the third word after the head only (verified on the camera, "
         "pre-registered), OR-ed with an extract's lane in the same word (measured); and S0's and "
         "S1's compare and carry masks, on the bus one word after the head under f274_275 = 0 "
         "and 1 (verified on the camera, pre-registered), two words after S0 0x20 no longer "

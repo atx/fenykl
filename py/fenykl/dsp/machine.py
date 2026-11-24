@@ -274,6 +274,8 @@ class Machine:
         self.reductions: list[tuple[int, Sv]] = []
         self.last_head: int | None = None
         """The word of the last S head run."""
+        self.head_units: set[str] = set()
+        """The units whose heads ran in that word."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -584,6 +586,9 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
+            if self.last_head != t:
+                self.head_units = set()
+            self.head_units.add(unit)
             self.last_head = t
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
@@ -774,12 +779,7 @@ class Machine:
         if not own:
             if h is not None:
                 return _cap(h, tier)
-            # Nothing on M beside or behind a head without a result there: verified in the
-            # head's own word and one word after under every unit, two and three words after
-            # 16 heads, and under S3 two, four, five and six words after each reduction; with
-            # no head before in the job it is inferred.
-            quiet = self.last_head is not None and t >= self.last_head
-            return Kept(tier if quiet else min(tier, I))
+            return Kept(tier if self._quiet(sel, t) else min(tier, I))
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
@@ -803,6 +803,17 @@ class Machine:
                 None, H
             )  # an own-word result beside its unit's held one: not measured
         return _cap(v, tier)
+
+    def _quiet(self, sel: str, t: int) -> bool:
+        """Whether "nothing on M" was measured for this case: under S0..S2 in the head's own word
+        under its own unit, one word after under every unit, two and three words after; under
+        S3 two to six words after a reduction with no head since. Elsewhere it is inferred."""
+        if self.last_head is None:
+            return False
+        if sel == "s3":
+            last = max((w - 3 for w, _ in self.reductions), default=None)
+            return last == self.last_head and 2 <= t - last <= 6
+        return t > self.last_head or sel in self.head_units
 
     # ------------------------------------------------------------------ ports
 

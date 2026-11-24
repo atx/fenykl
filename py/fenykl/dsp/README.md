@@ -164,7 +164,7 @@ S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar resu
 (f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
 [verified, pre-registered]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
 minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
-register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
+result on M's bus in the third word after the head and in no other [verified]; S2 0xc reads lane
 (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [verified, pre-registered]; S0's and S1's compare heads give a
 mask one word after the head (below).
 
@@ -820,23 +820,25 @@ value in the word it arrives in and OR what arrives together: the op result in i
 product one word later, a local load's datum three words later, a lane load four words after its X0 head, a lane
 head's result `LANE_LAG` words after the head for that word only (a head without a measured lag
 at both 0 and 1, as a hypothesis), S0's and S1's masks on M one word after the head, S3's
-reductions from the third word on, held. A port with nothing arriving writes nothing. Values are
+reductions in the third word only. A port with nothing arriving writes nothing. Values are
 `Sv` (32 bits) and `Vec` (32 lanes of 16 bits), None where not known, each with the weakest tier
 of what made it. Strict: an op without semantics, a register transfer (X1 0x1c..0x1e) without a
 stream, an unaligned local access, a store at an unknown address, two
 ports on one register and M combinations not measured raise `UnknownSemantics`; a head without a
-rule, or U's port beside a head whose U content is open, makes what it writes unknown. Across
+rule, or U's port beside a head whose U content is open, makes what it writes unknown; U's port
+with no S3 head writes nothing [verified]. Across
 the jobs of a boot the lane memory and every register file are carried (`Machine.between_jobs`;
 verified on the camera for each file); a program that runs between two jobs, and what of the
 lane memory survives it, are the caller's part. Operand use is declared per rule (`LaneRule.reads`,
-`XRule.reads`, `ScalarValue.reads`), and a row whose sub-domains have different tiers gives the
-tier per scalars (`semantics.lane_tier`). M under a unit after a head whose result there was not
+`XRule.reads`, `ScalarValue.reads`). M under a unit after a head whose result there was not
 read is unknown (`fields.S_OWN_OPEN`, `S_NEXT_NONE`, `S_NEXT_VALUES`), but for an S3 extract
 after an extract, which reads its own lane (measured); "nothing on M" behind a head
-without a result there is verified (one word after 97 heads, two and three words after 16, in
-all four units), inferred with no head before. An S3 extract ORs with the reduction register in that register's first word
-and comes alone later [verified]; after such a later extract the register is not on M
-[inferred].
+without a result there is verified in the head's own word under its own unit, one word after
+under every unit, two and three words after, and under S3 two to six words after a reduction with
+no head since; inferred elsewhere and with no head before. An S3 extract ORs with a reduction in
+the reduction's first word and comes alone later [verified]. Behind a halt three words run and the
+job ends: an op 3 second among them or a taken op 3 whose first delay slot holds the halt does not
+jump [verified]; other control words there raise.
 
 `stream.py` gives X1's transfers to the copy engine: `CopyStream` follows a job's transcript
 against the stock copy's for the same request (`Transcript`, recorded by running program 16)
