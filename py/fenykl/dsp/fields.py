@@ -567,8 +567,14 @@ pre-registered values on operands that separate the compares, X1 139 of 155; the
 on those misses then matched 100 of 100 pre-registered values on fresh operands, on both units
 with K's top bit set)."""
 NO_RESULT = "no result on the ALU bus"
-TRANSFER_HEADS = (0x1C, 0x1D, 0x1E)
-"""X1's register-transfer forms: no result, no R, G or B register changed."""
+TRANSFER_HEADS = (0x1C, 0x1D)
+"""X1's transfers to the stream engine (`stream.Engine`): 0x1c hands B[f115_119], 0x1d waits for
+one command; no result, no R, G or B register changed."""
+DIVIDE_HEAD, DIVIDE_LAG = 0x1E, 4
+"""X1 0x1e divides a by b, signed, truncated toward zero, and puts the 32-bit quotient on X1's
+result bus exactly `DIVIDE_LAG` executed words after the head, nothing in its own word (verified
+on the camera, pre-registered, for a >= 0 and b > 0 at lags 0..8; a negative dividend inferred
+from one pair; b <= 0 not measured)."""
 X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x16: ("~a & b", V, ""),
     0x17: ("~a & ~b", V, ""),
@@ -576,7 +582,15 @@ X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x19: ("a | b", V, ""),
     0x1A: ("a & b", V, ""),
     0x1B: ("~b", V, ""),
-    **{h: (f"{NO_RESULT}: a register transfer", V, "") for h in TRANSFER_HEADS},
+    **{
+        h: (f"{NO_RESULT}: a transfer to the stream engine", V, "")
+        for h in TRANSFER_HEADS
+    },
+    DIVIDE_HEAD: (
+        f"{NO_RESULT} in its own word: a / b signed on X1's result bus {DIVIDE_LAG} words later",
+        V,
+        "a negative dividend inferred, b <= 0 not measured",
+    ),
 }
 X0_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x16: (NO_RESULT, V, ""),
@@ -619,16 +633,18 @@ X0_FACT = (
 X1_HEAD_FACT = (
     "the head of X1, one 5-bit value h = f310_312 << 2 | f308_309: at every value of 310..312 the "
     "four values of 308..309 give four functions, so 308..309 is no unit of its own (verified on "
-    "the camera by exact readout). Its values 0x1c, 0x1d and 0x1e, once read as a separate "
-    "transfer unit X2, put no result on the ALU bus and change no R, G or B register (verified "
-    "on the camera by exact readout, a stock copy clean after each): they hand something to the "
-    "stream engine that the scalar side does not see. xreg changes in 0.81 of the words with "
+    "the camera by exact readout). Its values 0x1c and 0x1d, once read as a separate transfer "
+    "unit X2 with 0x1e, put no result on any bus and change no R, G or B register (verified on "
+    "the camera by exact readout, a stock copy clean after each): 0x1c hands b to the stream "
+    "engine, 0x1d waits for one of its commands (`stream`). 0x1e is no transfer but a signed "
+    "divide a / b whose quotient is on X1's result bus four words after the head "
+    "(`DIVIDE_HEAD`; verified on the camera, pre-registered). xreg changes in 0.81 of the words with "
     "bits 308..309 at 0, 0.58 at 1 and 0.61 at 2 (at any value of 310..312) against 0.27 "
     f"overall, {OWNERSHIP}. {XFER}; in program 16 "
     "words 58..79, the 0x1c words (bit 308 clear) stall the job when idled. X1 is X0's copy on "
     "the register file B, a = B[f110_114], b = B[f115_119], K = f115_119 << 8 | f9_14 << 2 | "
     "f7_8 (13 bits): logic functions at 0x16..0x1b where X0 has none, the transfers at "
-    f"0x1c..0x1e (`X_FUNCTIONS`; {EXACT}). Its result goes to A through f265_266 = 1, to B "
+    f"0x1c, 0x1d and the divide at 0x1e (`X_FUNCTIONS`; {EXACT}). Its result goes to A through f265_266 = 1, to B "
     "through f267_268 = 0, to R through f270_271 = 0 and to G through f272_273 = 0, in the "
     f"head's own word ({EXACT}). {X_OPERANDS}. f7_8 and f9_14 are active only where it is; "
     f"f110_114 changes where bits 310..312 are active in 0.78 of its changes, {OWNERSHIP}"
@@ -1007,7 +1023,8 @@ X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
     "writes A[a] or A[b] back (measured on the camera: inferred); what the low head bit selects "
-    "is open (hypothesis: the handshake with the copy engine's streams)"
+    "is open (it is no wait on the stream engine: a load head beside a load in flight read the old "
+    "content either way, measured on the camera)"
 )
 _STORE_IMM, _STORE_REG = (
     f"stores O[f69_71] to vector A[a] + {offset}" for offset in ("sK", "A[b]")
