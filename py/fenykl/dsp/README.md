@@ -150,15 +150,16 @@ from the next word on:
 | F2 | S2 head 0xe and S2's lane scalar t, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
 | F3 | S3 head 0x24, F3[f96_99]; S3's lane index F3[f92_95] and value F3[f96_99] | f263_264 on f202_205: 0 X0, 1 X1, 2 the ALU bus |
 
-The sources per enable value (`fields.PB_SOURCES`) are verified on the camera, most of them
-pre-registered. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
+The sources per enable value (`fields.PB_SOURCES`) are verified on the camera where
+pre-registered; f256_257 / 2, f258 / 0 and f263_264's three were measured once, not
+pre-registered [inferred], as was S3 0x24 = F3[f96_99]. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
 each load, on the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar
 result on X0's result bus, where f272_273 = 2 takes it in the head's own word [verified];
 f274_275 does not select the S unit [measured], its function open. Under M, S0 0x52, S1 0x54,
 S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result
 (`fields.S_RESULTS`; of S0's 0x40..0x5f only 0x52 read): S3 0xe / 0xf extract lane f92_95 + 16 x
 (f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
-[verified]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
+[inferred, fitted; 0xf verified on all 32 lanes of built vectors]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
 minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
 register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
 (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred].
@@ -195,7 +196,7 @@ or a 14-bit immediate and gives the lane number. Halvings and rounded shifts rou
 (met at counts 1..3; at count 10 no operand lane was a tie). Some heads add 1 in some lanes, or
 select by lane: a per-lane condition input, not identified [hypothesis].
 
-The immediates by field (`fields.LANE_IMMEDIATES`; S3's verified, the others inferred): S0
+The immediates by field (`fields.LANE_IMMEDIATES`, fitted: inferred): S0
 imm16 = f76_79 << 12 | f37_40 << 8 | f23_30; S1 imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1
 | f0); S2 imm7 = sext7(f53_56 << 3 | f88_91 >> 1); S3 imm14 = sext14(f96_99 << 10 | f65_68 << 6
 | f31_34 bits 3..2 << 4 | f92_95). Register nibbles double as immediate bits.
@@ -555,7 +556,10 @@ plane. The window runs once per job on symbolic values: the tap loads put `TapBy
 load latch (3 words on, hypothesis), f198_201 writes the latch into a coefficient register
 (the scalar file F2 that f261_262 = 2 writes from the ALU bus, inferred; that C is F2 a hypothesis),
 the operand write ports put each word's anchored source line (`Row`) into a register, and each
-S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator. Every changed field must
+S2 head-5 word adds C[f88_91] x R[f57_60] to its plane's accumulator (the window model's
+reading, hypothesis: on the camera with own programs head 5 is the signed b x t, its low half
+the unit's lane result and its high half taken by S1's file's first port under 1, the pair
+narrowed by S1's double-width shift; `fields.S2_HIGH_HALVES`). Every changed field must
 be a semantic or a don't-care (a held field under an idle owner), else the executor gives no
 terms (`Uncovered`). A stock value at its stock index has the law's tier on every job class;
 an edited value its measured cell's tier, the mechanism's off its cells, and no semantic off

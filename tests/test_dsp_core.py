@@ -491,7 +491,7 @@ S3_NIBBLES = {
         # Logical and arithmetic shifts by imm & 15 (10 here).
         ("s1", 0x0C, lanes(), lanes(l0=0x8000), {"imm": 0x2A}, {0: 0x20}),
         ("s1", 0x0D, lanes(), lanes(l0=0x8000), {"imm": 0x2A}, {0: 0xFFE0}),
-        ("s1", 0x0E, lanes(), lanes(l0=0x600, l1=0x200), {"imm": 0x2A}, {0: 2, 1: 0}),
+        ("s1", 0x0E, lanes(), lanes(l0=0x700, l1=0x100), {"imm": 0x2A}, {0: 2, 1: 0}),
         (
             "s1",
             0x0A,
@@ -506,9 +506,9 @@ S3_NIBBLES = {
             "s1",
             0x14,
             lanes(l0=1, l1=0),
-            lanes(l0=0, l1=0x600),
+            lanes(l0=0, l1=0x500),
             {"imm": 0x2A},
-            {0: 0x40, 1: 2},
+            {0: 0x40, 1: 1},
         ),
         ("s1", 0x0F, lanes(l0=0x7FFF), lanes(l0=0xFFFF), {"imm": 0x10}, {0: 0x7FFF}),
         ("s1", 0x28, lanes(l0=0x8000), lanes(), {"t": 4}, {0: 0x8000}),

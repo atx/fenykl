@@ -1219,8 +1219,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x51: _unsigned(lambda x, y, c: _sat_u(y - x)),
         0x52: _unsigned(lambda x, y, c: _sat_u(x + y)),
         **dict.fromkeys((0x53, *range(0x55, 0x60)), _B),
-        **dict.fromkeys(range(0x61, 0x7E), _ZERO),
-        **dict.fromkeys((0x60, 0x7E), _open),
+        **dict.fromkeys(range(0x60, 0x7F), _open),
     },
     "s2": {
         **dict.fromkeys((0x00, 0x01), _signed(lambda x, y, c: y * c["imm"])),

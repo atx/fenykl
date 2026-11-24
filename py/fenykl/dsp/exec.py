@@ -113,7 +113,11 @@ LOADS: dict[int, tuple[int, str]] = {
 word's low 16 bits: 0x1a in place of a halfword tap read gave the low half of the word)."""
 S2_HEAD = "f292_295"
 S2_TERM = 5
-"""The S2 head value whose word adds C[f88_91] x R[f57_60] to its accumulator."""
+"""The S2 head value whose word adds C[f88_91] x R[f57_60] to its accumulator (the window
+model's reading, hypothesis). On the camera with own programs head 5 is the signed b x t, b =
+L2[f57_60], t = F2[f88_91]: its low half is the unit's lane result, its high half goes to S1's
+file through the first port under enable 1, and S1's double-width shift narrows the pair
+(`fields.S2_HIGH_HALVES`)."""
 
 
 @dataclass(frozen=True)
