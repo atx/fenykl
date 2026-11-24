@@ -951,10 +951,12 @@ pre-registered with the rule's lanes at that lag and a sentinel at the other: pe
 with the unit's port in the head's word only and one in the next word only, 32 lanes each). A
 port at the other lag writes nothing: a result is on its unit's bus for exactly one word. At 0:
 S0's selects 0x41..0x46, 0x4b and 0x4d, S1's logic heads 0x00..0x09 and 0x53, S2's passes 0x8
-and 0xd, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
+and 0xd, sign masks 0x9 / 0xb and lane number 0xa, S3's moves, inserts, broadcast, lane number and lane shifts; at 1: every other S0 and
 S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd. No head class predicts the lag across
-units. Measured, not pre-registered (inferred): S2 0x9, 0xa, 0xb at 0 (registered at 1, both
-cells opposite); S2 0x7 at 0 and S3 0x6, 0x7, 0x8 at 1 (hypothesis: their rows open). The other heads' lags
+units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then pre-registered at
+0 and met (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified), the
+next word not excluded (an earlier run read a there too). S3 0x6, 0x7, 0x8 at 1 (hypothesis:
+their rows open). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
 LANE_VECTORS = 0x400
@@ -1055,11 +1057,14 @@ CARRY_IN = (
     "pre-registered on 32 lanes; c's register through 0x1f and 0x33 at four register numbers "
     "each, every mask distinct (`LANE_MASKS`)"
 )
-CLAMP_BOUNDS = "pre-registered at non-negative bounds only, a negative bound not predicted"
+CLAMP_BOUNDS = (
+    "pre-registered at non-negative bounds only, a negative bound not predicted"
+)
 CLAMP_A = (
-    "lanes with a < 0 not predicted: there the compare is the sign of the wrapped 16-bit "
-    "difference (fitted, inferred: b >= 0 gives b where b - a wraps negative, else a; under "
-    "0xd b < 0 gives ~a where b + a + 1 wraps negative, else b)"
+    "for a < 0 the compare is the sign bit of a wrapped 16-bit sum: b >= 0 gives b where b - a "
+    "has its sign bit set, else a; b < 0 gives 0 under 0xa and under 0xd ~a where b + a + 1 has "
+    "its sign bit set, else b (pre-registered on 32 constructed lanes of both signs with "
+    "overflow cases); for a >= 0 the clamp"
 )
 NO_SELECT = "pre-registered and met under one mask in s: no select seen"
 LaneRow = tuple[str, Confidence, str]
@@ -1079,7 +1084,15 @@ TIES_AT_10 = (
     "ties to even met at counts 1, 2 and 3; no operand lane was a tie at count 10, where half "
     "up is not excluded"
 )
-WIDE_FLOOR = "1 more in some lanes on the camera: the lanes are not predicted"
+FLOOR_CARRY = (
+    "c the carry-in, bit k of F1[f80_83] for lane k; the low 16 bits (fitted on three masks, "
+    "then pre-registered on other operands, counts and mask and met on all 32 lanes); with c = "
+    "0 the plain floor shift; what separates the four heads of the group is open"
+)
+NO_LANE_LAGS = (
+    "pre-registered: a sentinel kept with the unit's port in the head's word only and in the "
+    "next word only, 32 lanes each"
+)
 LANE_MASKS = (
     "S0's per-lane condition is a 32-bit mask in a scalar register: its select heads 0x44, 0x45, "
     "0x46 and 0x4b read bit k of F0[f72_75] for lane k (verified on the camera, pre-registered, "
@@ -1096,8 +1109,12 @@ LANE_MASKS = (
     "F0 (inferred). Both units' order compare heads are unsigned; a signed order compare is the "
     "unsigned one on both operands XOR-ed with 0x8000 (S1 0x01 against a broadcast 0x8000): so "
     "S0 0x32 / 0x33 and S1 0x45 / 0x46 gave the masks of a < b and a >= b signed (verified on "
-    "the camera, pre-registered, four masks on edge and random lanes); the signed max / min "
-    "heads also hand over a signed order compare (inferred, fitted; `S_RESULTS`). An add's "
+    "the camera, pre-registered, four masks on edge and random lanes). The signed max / min "
+    "heads hand over a signed order compare: a < b under S0 0x22 / S1 0x2e and a >= b under "
+    "0x23 / 0x2f; against a scalar or an immediate b > x under the max heads (S0 0x16, 0xe, S1 "
+    "0x2c, 0x2a) and b <= x under the min heads (S0 0x17, 0xf, S1 0x2d, 0x2b) (verified on the "
+    "camera, pre-registered with ties in the lanes; `S_RESULTS`), so a signed order compare is "
+    "one head and one M word. An add's "
     "mask is its carry: S0 0x20 under f274_275 = 0 and S1 0x34 under 1 put the carry mask of "
     "a + b on M's bus one word after the head (verified on the camera, pre-registered), and "
     "two words after S0 0x20 no longer (verified on the camera); the carry-in heads (S0 0x1e, 0x1f, 0x2a..0x2d, S1 0x32, 0x33, 0x3d..0x40) "
@@ -1124,15 +1141,15 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         **_rows((0x07, 0x29), "sat_s(a + b)", V),
         0x08: ("clamp(b, 0, imm)", V, CLAMP_BOUNDS),
         0x09: ("clamp(b, 0, s)", V, CLAMP_BOUNDS),
-        0x0A: ("clamp(b, 0, a)", V, CLAMP_A),
+        0x0A: ("clamp(b, 0, a), a of either sign by the wrapped rule", V, CLAMP_A),
         0x0B: ("clamp(b, ~imm, imm)", V, CLAMP_BOUNDS),
         0x0C: ("clamp(b, ~s, s)", V, CLAMP_BOUNDS),
-        0x0D: ("clamp(b, ~a, a)", V, CLAMP_A),
+        0x0D: ("clamp(b, ~a, a), a of either sign by the wrapped rule", V, CLAMP_A),
         0x0E: ("max_s(b, imm)", V, ""),
         0x0F: ("min_s(b, imm)", V, ""),
         0x10: ("sat_s(b - imm)", V, ""),
         0x11: ("sat_s(b + imm)", V, ""),
-        **_rows((0x12, 0x13, 0x18, 0x19, 0x24, 0x25), NO_LANE, I),
+        **_rows((0x12, 0x13, 0x18, 0x19, 0x24, 0x25), NO_LANE, V, NO_LANE_LAGS),
         0x14: (f"(b - s) / 2, {TIES}", V, ""),
         0x15: (f"(b + s) / 2, {TIES}", V, ""),
         0x16: ("max_s(b, s)", V, ""),
@@ -1148,7 +1165,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x23: ("min_s(a, b)", V, ""),
         0x26: ("sat_s(|a|)", V, ""),
         0x27: ("-a, wrapping", V, ""),
-        **_rows(range(0x2E, 0x34), NO_LANE, I),
+        **_rows(range(0x2E, 0x34), NO_LANE, V, NO_LANE_LAGS),
         0x34: ("max_u(b, imm)", V, ""),
         0x35: ("min_u(b, imm)", V, ""),
         0x36: ("max_u(b, s)", V, ""),
@@ -1195,11 +1212,11 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x10: ("sat_s((a : b) / 2^n rounded), n = imm & 15", V, TIES_AT_10),
         **_rows((0x11, 0x12), "sat_u(b << n), n = imm & 15", V),
         **_rows((0x14, 0x15), "(a : b) / 2^n rounded, n = imm & 15", V, TIES_AT_10),
-        **_rows(range(0x16, 0x1A), "(a : b) >> n, n = imm & 15", I, WIDE_FLOOR),
+        **_rows(range(0x16, 0x1A), "((a : b) >> n) + c, n = imm & 15", V, FLOOR_CARRY),
         **_rows((0x1A, 0x1C), "sat_u(b << t)", V),
         **_rows((0x1B, 0x23), "sat_s(b << t)", V),
         **_rows((0x1D, 0x1E), f"(a : b) / 2^t, {TIES}", V),
-        **_rows(range(0x1F, 0x23), "(a : b) >> t", I, WIDE_FLOOR),
+        **_rows(range(0x1F, 0x23), "((a : b) >> n) + c, n = t & 15", V, FLOOR_CARRY),
         0x24: ("b << t, wrapping", V, ""),
         0x25: ("b >> t logical", V, ""),
         0x26: ("b >> t arithmetic", V, ""),
@@ -1226,7 +1243,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x3A: ("-a, wrapping", V, ""),
         0x3B: ("sat_s(b - a)", V, ""),
         0x3C: ("sat_s(a + b)", V, ""),
-        **_rows((*range(0x41, 0x47), 0x54), NO_LANE, I),
+        **_rows((*range(0x41, 0x47), 0x54), NO_LANE, V, NO_LANE_LAGS),
         0x47: ("max_u(b, imm)", V, ""),
         0x48: ("min_u(b, imm)", V, ""),
         0x49: ("max_u(b, t)", V, ""),
@@ -1274,12 +1291,12 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x03: ("b x t, low 16 bits", V, ""),
         0x05: ("b x t, low 16 bits", V, "its high half that of the signed b"),
         0x07: (
-            "a or b by the third nibble",
-            H,
+            "b where bit 1 of the nibble f88_91 is set, else a",
+            V,
             (
-                "a with f88_91 = 5 at four registers, with the port in the head's word and the "
-                "next; b with f88_91 = 6 in five cells, the port in the head's word; how f88_91 "
-                "enters is open"
+                "pre-registered at f88_91 = 2, 3, 8, 9, 10, 12 and 13 and met on all 32 lanes, "
+                "the port in the head's word; at the other values measured, the rule fitted "
+                "on them (inferred)"
             ),
         ),
         **_rows((0x08, 0x0D), "b", V),
@@ -1289,11 +1306,12 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
     },
     "s3": {
         **_rows(
-            (*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F),
+            (*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F, 0x24),
             NO_LANE,
-            I,
+            V,
+            NO_LANE_LAGS,
         ),
-        **_rows(range(0x24, 0x3F), NO_LANE, I),
+        **_rows(range(0x25, 0x3F), NO_LANE, I),
         **_rows(
             (0x06, 0x07, 0x08),
             "a window of b's lanes, 0 in the others",
@@ -1413,17 +1431,7 @@ def _mask(held: int, tried: int) -> str:
     )
 
 
-def _signed_mask(held: int) -> str:
-    """A signed max / min head's scalar result, fitted after the run."""
-    return (
-        f"signed, a 32-bit mask, bit k from lane k, on M's bus one word after the head under "
-        f"f274_275 = {held} (measured on the camera, fitted: inferred; no lane equalled its "
-        "bound, so > against >= is open)"
-    )
-
-
 S0_MASK, S1_MASK = _mask(0, 0x32), _mask(1, 0x45)
-S0_SIGNED, S1_SIGNED = _signed_mask(0), _signed_mask(1)
 S_RESULTS: dict[str, dict[int, str]] = {
     "s0": {
         0x52: f"F0[f76_79] ({EXACT})",
@@ -1443,12 +1451,12 @@ S_RESULTS: dict[str, dict[int, str]] = {
         0x1F: f"the carry of a + b + c, {S0_MASK}",
         0x2C: f"the carry of a + b + c, {S0_MASK}",
         0x2A: f"the signed overflow of a + b + c, {S0_MASK}",
-        0x22: f"a < b {S0_SIGNED}",
-        0x23: f"a >= b {S0_SIGNED}",
-        0x16: f"b >= s {S0_SIGNED}",
-        0x17: f"b < s {S0_SIGNED}",
-        0x0E: f"b >= imm {S0_SIGNED}",
-        0x0F: f"b < imm {S0_SIGNED}",
+        0x22: f"a < b signed, {S0_MASK}",
+        0x23: f"a >= b signed, {S0_MASK}",
+        0x16: f"b > s signed, {S0_MASK}",
+        0x17: f"b <= s signed, {S0_MASK}",
+        0x0E: f"b > imm signed, {S0_MASK}",
+        0x0F: f"b <= imm signed, {S0_MASK}",
     },
     "s1": {
         0x54: f"F1[f84_87] ({EXACT})",
@@ -1456,12 +1464,12 @@ S_RESULTS: dict[str, dict[int, str]] = {
         0x33: f"the carry of a + b + c, {S1_MASK}",
         0x3F: f"the carry of a + b + c, {S1_MASK}",
         0x3D: f"the signed overflow of a + b + c, {S1_MASK}",
-        0x2E: f"a < b {S1_SIGNED}",
-        0x2F: f"a >= b {S1_SIGNED}",
-        0x2C: f"b >= t {S1_SIGNED}",
-        0x2D: f"b < t {S1_SIGNED}",
-        0x2A: f"b >= imm {S1_SIGNED}",
-        0x2B: f"b < imm {S1_SIGNED}",
+        0x2E: f"a < b signed, {S1_MASK}",
+        0x2F: f"a >= b signed, {S1_MASK}",
+        0x2C: f"b > t signed, {S1_MASK}",
+        0x2D: f"b <= t signed, {S1_MASK}",
+        0x2A: f"b > imm signed, {S1_MASK}",
+        0x2B: f"b <= imm signed, {S1_MASK}",
         0x12: "a 32-bit word that fits a mask of the lanes the shift saturated, on M's bus one "
         "word after the head under f274_275 = 1 (measured on the camera, fitted: inferred)",
         0x41: f"b > imm unsigned, {S1_MASK}",
@@ -1681,7 +1689,8 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "k for lane k (`LANE_MASKS`; verified on the camera, pre-registered at registers 0, "
             "5, 6 and 15); its bits 3..2 are also bits 6..5 of S1's lane immediate and its bits "
             "1..0 do not enter it (`LANE_IMMEDIATES`; verified on the camera, pre-registered on "
-            "fresh values)"
+            "fresh values); S1's floor shifts 0x16..0x19 and 0x1f..0x22 add the same bit k "
+            "(verified on the camera, pre-registered)"
         ),
     ),
     "f84_87": (
@@ -1699,8 +1708,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "heads read (verified on the camera by S2's pre-registered function table). Its bits "
             "3..1 are bits 2..0 of the immediate S2 0x0 / 0x1 multiply by (`LANE_IMMEDIATES`; "
             "verified on the camera, pre-registered) and under S2 0xc bits 2..0 of the lane read, "
-            "its bit 0 without effect (verified on the camera, pre-registered). It also changes "
-            "what S2 0x7 passes, how is open (`LANE_FUNCTIONS`)"
+            "its bit 0 without effect (verified on the camera, pre-registered). Under S2 0x7 its "
+            "bit 1 chooses b over a (`LANE_FUNCTIONS`; verified on the camera, pre-registered "
+            "at seven values; at the other nine measured and fitted: inferred)"
         ),
     ),
     "f92_95": (

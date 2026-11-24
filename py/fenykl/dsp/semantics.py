@@ -1160,6 +1160,30 @@ def _clamp(lo: Callable[[int], int], hi: Callable[[int, Scalars], int]) -> LaneV
     return value
 
 
+def _wrapped_clamp(neg: Callable[[int, int], int]) -> LaneValue:
+    """S0 0xa / 0xd on signed lanes: for b >= 0, b where b - a has its 16-bit sign bit set,
+    else a; for b < 0, neg(a, b)."""
+
+    def lane(x: int, y: int, c: Scalars) -> int:
+        if y < 0:
+            return neg(x, y)
+        return y if (y - x) & 0x8000 else x
+
+    return _signed(lane)
+
+
+def _floor_carry(n: Callable[[Scalars], int]) -> LaneValue:
+    """((a : b) >> n) + c with c bit k of the carry-in mask "r" for lane k."""
+
+    def value(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:
+        return [
+            ((_s16(x) << 16 | y) >> n(c)) + (c["r"] >> k & 1)
+            for k, (x, y) in enumerate(zip(a, b, strict=True))
+        ]
+
+    return value
+
+
 def _zero(h: int) -> int:
     return 0
 
@@ -1193,10 +1217,10 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x29: _ADD,
         0x08: _clamp(_zero, lambda x, c: _sv(c, "imm")),
         0x09: _clamp(_zero, lambda x, c: _sv(c, "s")),
-        0x0A: _clamp(_zero, lambda x, c: x),
+        0x0A: _wrapped_clamp(lambda x, y: 0),
         0x0B: _clamp(_not, lambda x, c: _sv(c, "imm")),
         0x0C: _clamp(_not, lambda x, c: _sv(c, "s")),
-        0x0D: _clamp(_not, lambda x, c: x),
+        0x0D: _wrapped_clamp(lambda x, y: ~x if (y + x + 1) & 0x8000 else y),
         0x0E: _signed(lambda x, y, c: max(y, _sv(c, "imm"))),
         0x0F: _signed(lambda x, y, c: min(y, _sv(c, "imm"))),
         0x10: _signed(lambda x, y, c: _sat_s(y - _sv(c, "imm"))),
@@ -1259,11 +1283,11 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x10: _wide(lambda v, c: _sat_s(_round_even(v, _n(c)))),
         **dict.fromkeys((0x11, 0x12), _unsigned(lambda x, y, c: _sat_u(y << _n(c)))),
         **dict.fromkeys((0x14, 0x15), _wide(lambda v, c: _round_even(v, _n(c)))),
-        **dict.fromkeys(range(0x16, 0x1A), _open),
+        **dict.fromkeys(range(0x16, 0x1A), _floor_carry(_n)),
         **dict.fromkeys((0x1A, 0x1C), _unsigned(lambda x, y, c: _sat_u(y << _t(c)))),
         **dict.fromkeys((0x1B, 0x23), _signed(lambda x, y, c: _sat_s(y << _t(c)))),
         **dict.fromkeys((0x1D, 0x1E), _wide(lambda v, c: _round_even(v, _t(c)))),
-        **dict.fromkeys(range(0x1F, 0x23), _open),
+        **dict.fromkeys(range(0x1F, 0x23), _floor_carry(_t)),
         0x24: _signed(lambda x, y, c: y << _t(c)),
         0x25: _unsigned(lambda x, y, c: y >> _t(c)),
         0x26: _signed(lambda x, y, c: y >> _t(c)),
@@ -1311,7 +1335,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         **dict.fromkeys((0x00, 0x01), _signed(lambda x, y, c: y * c["imm"])),
         **dict.fromkeys((0x02, 0x04, 0x06), _signed(lambda x, y, c: x * y)),
         **dict.fromkeys((0x03, 0x05), _signed(lambda x, y, c: y * c["t"])),
-        0x07: _open,
+        0x07: lambda a, b, c: list(b if c["f88_91"] & 2 else a),
         0x08: _B,
         0x0D: _B,
         0x09: _NEGATIVE,
@@ -1386,12 +1410,13 @@ def lane_result(
 
     `scalars` holds what the rules read, by unit: S0 "s" (F0[f72_75], whose 32 bits the select
     heads read as a lane mask), "r" (F0[f76_79], whose 32 bits the carry-in heads read as their
-    carry-in mask) and "imm"; S1 "t" (F1[f84_87]), "r" (F1[f80_83], the carry-in mask) and
-    "imm"; S2 "t" (F2[f88_91]) and "imm" (0x0 / 0x1's multiplier); S3 the
+    carry-in mask) and "imm"; S1 "t" (F1[f84_87]), "r" (F1[f80_83], the carry-in mask of the carry-in heads and the
+    floor shifts) and "imm"; S2 "t" (F2[f88_91]), "imm" (0x0 / 0x1's multiplier) and the
+    nibble "f88_91" (0x7's choice); S3 the
     nibbles "f31_34", "f65_68", "f92_95", "f96_99" and "index" = F3[f92_95], "value" =
     F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), but
-    the select heads read all 32 bits of "s" and the carry-in heads all 32 of "r" as a lane
-    mask; a shift count enters as imm & 15
+    the select heads read all 32 bits of "s" and the carry-in heads and S1's floor shifts all
+    32 of "r" as a lane mask; a shift count enters as imm & 15
     or t & 15."""
     if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
         raise ValueError(f"{len(a)} and {len(b)} lanes: expected {LANE_COUNT} each")

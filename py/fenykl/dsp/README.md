@@ -184,13 +184,13 @@ The operand nibbles were pre-registered at several registers each, 1, 2, 5, 6, 9
 them [verified]. Enable 0 of a first port takes the vector an X0 load head asked for exactly
 four words earlier (the lane memory, below). A result is on its unit's bus for exactly one word,
 the head's own or the next by head, and a port at the other lag writes nothing (`fields.LANE_LAG`,
-[verified, pre-registered] for 141 heads, every entry of `fields.LANE_LAG` but the seven named
+[verified, pre-registered] for 144 heads, every entry of `fields.LANE_LAG` but the four named
 below, the port in one word only: in its own word S0's selects,
-S1's logic heads, S2's passes and S3's moves, inserts, broadcast and lane shifts; one word later
+S1's logic heads, S2's passes, sign masks and lane number and S3's moves, inserts, broadcast and
+lane shifts; one word later
 every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); no head class
-predicts it across units. S2's sign masks and lane number come in the head's word [inferred: the
-registration said one word later]; S2 0x7 in the head's word and S3 0x6..0x8 one word later
-[hypothesis: their rows are open]. A register a
+predicts it across units. S2 0x7 comes in the head's word [verified, pre-registered], the next
+word not excluded; S3 0x6..0x8 one word later [hypothesis: their rows are open]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word, and U, were not measured.
@@ -211,20 +211,23 @@ the next vector's shift down needs, 0x1c those the previous vector's shift up ne
 
 The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
 its expectation was registered before the run and met on all lanes of two constructed 32-lane
-vectors of edge and random values (159 heads: S0 59, S1 70, S2 12, S3 18; S0's select heads
-under masks), inferred where it was fitted; every row with a verified lag was registered again on
+vectors of edge and random values (168 heads with a lane result: S0 59, S1 78, S2 13, S3 18;
+S0's select heads under masks; 34 more without one, a sentinel kept at both lags), inferred where
+it was fitted; every row with a verified lag was registered again on
 new operands at that lag and met. In short, S0 adds, subtracts, compares and takes absolute differences, with
 neighbour-lane forms (a[k+1]); S1 has logic, shifts by its immediate or t, saturating left
 shifts, double-width shifts of the 32-bit a : b and min / max / add with a scalar; S2
-multiplies (a x b, b x t and b x an immediate, low 16 bits) and gives sign masks and the lane
-number; S3 moves, interleaves, splits odd / even lanes, inserts a lane, broadcasts F3[f96_99]
+multiplies (a x b, b x t and b x an immediate, low 16 bits), passes a or b by bit 1 of f88_91
+(0x7) and gives sign masks and the lane number; S3 moves, interleaves, splits odd / even lanes, inserts a lane, broadcasts F3[f96_99]
 or a 14-bit immediate and gives the lane number. Halvings and rounded shifts round ties to even
 (met at counts 1..3; at count 10 no operand lane was a tie).
 
 S0 0x8..0xd are clamps, clamp(b, lo, hi) = min_s(max_s(b, lo), hi): 0x8 to 0..imm16 (with
 imm16 = 0xff the clamp to a byte, also a ReLU), 0x9 to 0..F0[f72_75], 0xb to ~imm16..imm16 and
-0xc to ~s..s [verified, pre-registered, non-negative bounds]; 0xa to 0..a and 0xd to ~a..a per lane
-[verified where a >= 0; for a < 0 the compare is the sign of the wrapped difference, inferred].
+0xc to ~s..s [verified, pre-registered, non-negative bounds]; 0xa to 0..a and 0xd to ~a..a per lane, with
+bounds of both signs by a wrapped rule: for b >= 0, b where the 16-bit b - a has its sign bit
+set, else a; for b < 0, 0 under 0xa and under 0xd ~a where b + a + 1 has its sign bit set, else
+b [verified, pre-registered on constructed sign and overflow lanes].
 
 The carry-in heads add a carry c, bit k of a 32-bit register for lane k: F0[f76_79] for S0 0x1e /
 0x2a (sat_s(a + b + c)), 0x1f / 0x2b (wrapping) and 0x2c / 0x2d (sat_u), F1[f80_83] for S1 0x32 /
@@ -234,7 +237,10 @@ words: the low halves' add (S0 0x20), then M one word later into F1[0] (f258 = 0
 halves' carry-in head (S1 0x33 with f80_83 = 0) in the word after [verified, pre-registered]. The
 stock programs run the same idiom within S0 (0x20, M into F0[0], 0x1f with f76_79 = 0) [verified
 in the bytes and on the camera]; split across S0 and S1, each lane file's two ports serve one
-product's two halves.
+product's two halves. S1's floor shifts of a : b add the same carry-in: ((a : b) >> n) + c, low
+16 bits, with n = imm7 & 15 under 0x16..0x19 and n = F1[f84_87] & 15 under 0x1f..0x22 [verified,
+pre-registered]; with c = 0 they are the plain floor shift, and what separates the four heads of
+each group is open.
 
 Lane masks (`fields.LANE_MASKS`): S0's per-lane condition is a 32-bit mask in a scalar
 register of F0, bit k for lane k; S0's and S1's compare heads make one.
@@ -254,11 +260,15 @@ register of F0, bit k for lane k; S0's and S1's compare heads make one.
   0x46 (a < b / a >= b) under f274_275 = 1 (`fields.S_RESULTS`). These order compares are
   unsigned; a signed one is the unsigned one on both operands XOR-ed with 0x8000 (S1 0x01
   against a broadcast 0x8000), which gave a < b and a >= b signed through S0 0x32 / 0x33 and S1
-  0x45 / 0x46 [verified, pre-registered, four masks]. The signed max / min heads (S0 0x22 / 0x23,
-  0x16 / 0x17, 0xe / 0xf, S1 0x2e / 0x2f, 0x2c / 0x2d, 0x2a / 0x2b) hand over a signed order
-  compare [inferred, fitted]; the unsigned ones hand over none.
+  0x45 / 0x46 [verified, pre-registered, four masks]. The signed max / min heads hand over a
+  signed order compare, so one head and one M word make it [verified, pre-registered with ties]:
+  S0 0x22 / S1 0x2e a < b, S0 0x23 / S1 0x2f a >= b; against a scalar or an immediate the max
+  heads (S0 0x16, 0xe, S1 0x2c, 0x2a) b > x and the min heads (S0 0x17, 0xf, S1 0x2d, 0x2b)
+  b <= x. The unsigned ones hand over none.
 - **f274_275 names the unit** [verified, pre-registered]: with S0 0x52, S1 0x54, S2 0xe and S3
   0x24 in one word, M under 0..3 puts out S0's, S1's, S2's and S3's value; S2 holds no result.
+  M takes a unit's result of the previous word while that unit has a new head in the M word
+  [verified: S0 0x20 every word of a packed loop].
 - **Into F0 and F1**: f255 = 0 takes M's bus into F0, f258 = 0 into F1 [verified], under
   f274_275 = 3 S3's held reduction too: S3 0x0's maximum into F0, then S0 0x19 against it gave
   the one-hot mask of the maximum's lane [verified, pre-registered]. In the stock
@@ -287,7 +297,11 @@ These pieces make layers that run exact from DRAM to DRAM as one job [verified, 
 every output byte]: a 3 x 3 convolution of a byte image with signed weights in F2 and 32-bit
 accumulators per lane (S2 0x5's product halves into L0 and L1, the 32-bit add above, S1 0x28's
 narrowing shift, S0 0x8's clamp, an X0 store), and a dense layer whose weights stay in the lane
-memory, so that later jobs carry only their input.
+memory, so that later jobs carry only their input. The convolution also runs as a loop of 27
+words per 32-pixel output row, the multiplies one word apart, at about 5.4 ns per word [verified,
+pre-registered, timed over several copies]. Layers chain inside one job: two convolutions and a
+2 x 2 max pool (max_u of row pairs, then S3's even / odd lane splits 0xd / 0xc joined by max_u),
+the intermediate rows staying in the lane memory between the layers [verified, pre-registered].
 
 `semantics.lane_result(unit, head, a, b, scalars)` evaluates a row on 32 lanes, a None lane
 where the row does not predict it, and `semantics.product_high(head, a, b, scalars)` the high

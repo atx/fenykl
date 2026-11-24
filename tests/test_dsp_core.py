@@ -488,8 +488,10 @@ S3_NIBBLES = {
         ("s0", 0x26, lanes(l0=0x8000, l1=0xFFFF), lanes(), {}, {0: 0x7FFF, 1: 1}),
         ("s0", 0x27, lanes(l0=0x8000), lanes(), {}, {0: 0x8000}),
         ("s0", 0x3A, lanes(), lanes(l0=1, l1=0x9000), {"imm": 2}, {0: 0, 1: 0x8FFE}),
+        # S2 0x7 takes b where bit 1 of its nibble f88_91 is set, else a.
+        ("s2", 0x07, lanes(l0=1), lanes(l0=2), {"f88_91": 0xA}, {0: 2, 31: 0}),
+        ("s2", 0x07, lanes(l0=1), lanes(l0=2), {"f88_91": 0xD}, {0: 1}),
         # Rows on a state not identified: open.
-        ("s2", 0x07, lanes(l0=1), lanes(l0=2), {}, {0: None, 31: None}),
         ("s1", 0x55, lanes(), lanes(l0=2), {}, {0: None}),
         # The clamps: lower bound 0 or ~bound; a negative bound is not predicted.
         (
@@ -525,22 +527,22 @@ S3_NIBBLES = {
             {"s": 0x40},
             {0: 0xFFBF, 1: 0x40},
         ),
-        # Bound a, per lane: a lane with a < 0 is not predicted.
+        # Bound a, per lane, of either sign: the sign bit of a wrapped 16-bit sum decides.
         (
             "s0",
             0x0A,
-            lanes(l0=0x40, l1=0x40, l2=0xFFFF),
-            lanes(l0=0x80, l1=0xFFFE, l2=3),
+            lanes(l0=0x40, l1=0x40, l2=0xFFFF, l3=0xFFF0),
+            lanes(l0=0x80, l1=0xFFFE, l2=3, l3=0x8000),
             {},
-            {0: 0x40, 1: 0, 2: None, 3: 0},
+            {0: 0x40, 1: 0, 2: 0xFFFF, 3: 0},
         ),
         (
             "s0",
             0x0D,
-            lanes(l0=0x40, l1=0x40, l2=0x8000),
-            lanes(l0=0x80, l1=0xFF00, l2=3),
+            lanes(l0=0x40, l1=0x40, l2=0x8000, l3=0xFFFB, l4=0x7FFF, l5=0x8000),
+            lanes(l0=0x80, l1=0xFF00, l2=3, l3=0xFFF6, l4=0x8000, l5=0x8000),
             {},
-            {0: 0x40, 1: 0xFFBF, 2: None},
+            {0: 0x40, 1: 0xFFBF, 2: 3, 3: 4, 4: 0x8000, 5: 0x8000},
         ),
         # The carry-in heads add bit k of the 32-bit mask r in lane k.
         (
@@ -606,6 +608,16 @@ S3_NIBBLES = {
             {0: 0x40, 1: 1},
         ),
         ("s1", 0x0F, lanes(l0=0x7FFF), lanes(l0=0xFFFF), {"imm": 0x10}, {0: 0x7FFF}),
+        # The floor shifts of a : b add the carry-in bit k of r; the result wraps.
+        (
+            "s1",
+            0x16,
+            lanes(l0=0x1234, l1=0xFFFF),
+            lanes(l0=0x5678, l1=0xFFFF),
+            {"imm": 0x24, "r": 0b10},
+            {0: 0x4567, 1: 0},
+        ),
+        ("s1", 0x21, lanes(), lanes(l0=0x10), {"t": 0x13, "r": 1}, {0: 3, 1: 0}),
         ("s1", 0x28, lanes(l0=0x8000), lanes(), {"t": 4}, {0: 0x8000}),
         ("s1", 0x4A, lanes(), lanes(l0=0xFFFF, l1=1), {"t": 3}, {0: 3, 1: 1}),
         (
@@ -678,8 +690,22 @@ S3_NIBBLES = {
             {2: None, 3: 6},
         ),
         # 0x1c and 0x22 only at the counts they were registered at.
-        ("s3", 0x22, lanes(), lanes(l0=6), S3_NIBBLES | {"f92_95": 0xE}, {0: None, 2: None}),
-        ("s3", 0x22, lanes(), lanes(l3=6), S3_NIBBLES | {"f92_95": 3}, {0: 6, 29: None}),
+        (
+            "s3",
+            0x22,
+            lanes(),
+            lanes(l0=6),
+            S3_NIBBLES | {"f92_95": 0xE},
+            {0: None, 2: None},
+        ),
+        (
+            "s3",
+            0x22,
+            lanes(),
+            lanes(l3=6),
+            S3_NIBBLES | {"f92_95": 3},
+            {0: 6, 29: None},
+        ),
         # The select heads read all 32 bits of s as a lane mask, bit k for lane k.
         *(
             (
