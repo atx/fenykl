@@ -774,3 +774,22 @@ def test_s2s_high_half_by_a_negative_t_is_inferred(m, t, tier):
     head = w(f292_295=0x3, f53_56=1, f57_60=2, f88_91=4)
     run(m, [head, w(f236_237=1, f147_150=9)])
     assert m.lanes["L0"][9].tier == tier
+
+
+def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job_at_inferred():
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    # op 3 to 6, the halt in its fourth slot: the tail is the target's three words.
+    words = [
+        control(3, 6),
+        IDLE,
+        IDLE,
+        IDLE,
+        halt,
+        IDLE,
+        inc(17),
+        inc(17),
+        halt,
+        inc(17),
+    ]
+    m = stepped(words, g17=0)
+    assert m.g[17] == Sv(2, I)

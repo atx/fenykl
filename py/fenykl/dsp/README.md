@@ -290,8 +290,10 @@ imm16 = f76_79 << 12 | f37_40 << 8 | f23_30; S1 imm7 = sext7(f80_83 bits 3..2 <<
 do not enter S1's.
 
 A product's high half goes to S0's and S1's files through their first ports under 1
-(`fields.S2_HIGH_HALVES`): S2 0x5 is signed b x t and 0x2 the unsigned a x the signed b
-[verified], 0x0 the unsigned b x imm [inferred]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
+(`fields.S2_HIGH_HALVES`): of S2's seven multiplies 0x0 is the unsigned b x imm's 16 bits,
+0x1 the signed b x imm, 0x2 the unsigned a x the signed b, 0x3 the unsigned b x t, 0x4 the
+unsigned a x the unsigned b, 0x5 the signed b x t and 0x6 the signed a x the signed b
+[verified; with t's bit 15 set 0x3 and 0x5 inferred: t was positive in every run]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
 S1's a : b is the 32-bit product and S1 0x29 (or 0x10) gives it scaled, rounded and saturated:
 a fixed-point multiply by a scalar in three words [verified].
 
@@ -338,7 +340,7 @@ reaches all four first ports in one word [verified]. In the five stock programs 
 such a port write four words later, and none lacks its head (379 words; verified in the bytes).
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
-occur and left O as it was [inferred, measured], `fields.STORE_SOURCES`), the moves tried in the head's own word and the
+occur and leave O as it was [verified, pre-registered], `fields.STORE_SOURCES`), the moves tried in the head's own word and the
 arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head in
 the word of O's port write stores the old content, one to three words later the new content; a
 load one or two words after a store to the same vector reads it back, and a store up to three
