@@ -190,13 +190,13 @@ every other S0 and S1 head timed, S2's multiplies and S3's shuffles 0xa..0xd); n
 predicts it across units. S2's sign masks and lane number come in the head's word [inferred: the
 registration said one word later]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
-and after S2's result, L2 after a load]; a head in the port's own word, and L0, L1 and U, were
-not measured.
+and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
+own word, and U, were not measured.
 S3's lane shift 0x1b moves b by n = f92_95 as a signed nibble: up by 1..4 and down by 1..4 at
 12..15 [verified, pre-registered], not at all at 5..11 [measured]; 0x1c and 0x22 move the lanes as
 0x1b [verified at three counts]. The lanes moved in come from a third kind of file, U, a register of it named by f31_34
 [verified, pre-registered: two registers read back by number; 16 registers inferred, fitted]: its
-lanes 0..3 are four carry lanes for either direction [inferred]. Its port is f141_144 under
+lanes 0..3 are four carry lanes for either direction [verified, pre-registered, 0x1b]. Its port is f141_144 under
 f232_233 = 1 beside an S3 head, 0 and 2 writing nothing [verified, pre-registered: U[3] and U[9]
 written in one job and read back by number, U[5] kept under 0 and 2], and the head decides what U
 takes: after 0x1c, 0x1f and 0x21 U's lanes 0..3 hold b's lanes 0..3, after 0x1b, 0x1e and 0x20
@@ -244,8 +244,8 @@ register of F0, bit k for lane k; S0's and S1's compare heads make one.
   (a < b / a >= b), 0x2e / 0x2f (b > / <= imm16), 0x30 / 0x31 (b > / <= F0[f72_75]), 0x12 /
   0x13 (b != / == imm16), 0x18 / 0x19 (b != / == F0[f72_75]), 0x20 (the carry of a + b), 0x1f
   and 0x2c (the carry of a + b + c) and 0x2a (the signed overflow of a + b + c) put a mask, bit
-  k from lane k, on M's bus one word after the head under f274_275 = 0, and two words after it
-  no longer; S1 0x34 (the carry of a + b), 0x33 and 0x3f (the carry of a + b + c), 0x3d (its
+  k from lane k, on M's bus one word after the head under f274_275 = 0 (two words after S0
+  0x20 no longer); S1 0x34 (the carry of a + b), 0x33 and 0x3f (the carry of a + b + c), 0x3d (its
   signed overflow), 0x41 / 0x42 (b > / <= imm7), 0x43 / 0x44 (b > / <= F1[f84_87]) and 0x45 /
   0x46 (a < b / a >= b) under f274_275 = 1 (`fields.S_RESULTS`). These order compares are
   unsigned; a signed one is the unsigned one on both operands XOR-ed with 0x8000 (S1 0x01

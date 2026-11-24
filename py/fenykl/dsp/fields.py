@@ -844,8 +844,9 @@ registers were dumped whole: power-up content, stable over a boot, a few bits ap
 boots (verified on the camera). A register a port writes in word t is read by a head in word
 t + 1 (verified on the camera, pre-registered against a sentinel in the register, three pairs:
 L3 through f250_251 = 0 (S3 0x18's result) then S3 0x19, L2 through f244_245 = 0 (a load) then
-S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2); a head in the port's
-own word, and L0, L1 and U, were not measured."""
+S2 0x2, L3 through f250_251 = 1 (S2's product) then the reduction S3 0x2; L0 written by S0's
+port then read by S0, L1 by S1's then S1); a head in the port's own word, and U, were not
+measured."""
 LANE_THIRD_FILE = (
     "U, a third kind of lane register file, 16 registers named by f31_34 (inferred, fitted: 16 "
     "values of f31_34 gave 16 different fills of power-up content), whose lanes 0..3 are the "
@@ -977,8 +978,8 @@ LANE_MEMORY = (
     "word after a store to the same vector reads the stored vector, and four loads in "
     "consecutive words land in four consecutive port words (measured on the camera, not "
     "pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
-    "camera, pre-registered: vectors 0x40..0x7f read back after later jobs and the harness's "
-    "copies), so a job can leave data, such as a layer's weights, for the next"
+    "camera, pre-registered: vectors 0x40..0x7f read back after later jobs), so "
+    "a job can leave data, such as a layer's weights, for the next"
 )
 STORE_FILE = (
     "O, the store file: eight lane registers of 32 lanes of 16 bits, written by the grid B port "
@@ -1097,8 +1098,8 @@ LANE_MASKS = (
     "the camera, pre-registered, four masks on edge and random lanes); the signed max / min "
     "heads also hand over a signed order compare (inferred, fitted; `S_RESULTS`). An add's "
     "mask is its carry: S0 0x20 under f274_275 = 0 and S1 0x34 under 1 put the carry mask of "
-    "a + b on M's bus one word after the head, and only then (verified on the camera, "
-    "pre-registered); the carry-in heads (S0 0x1e, 0x1f, 0x2a..0x2d, S1 0x32, 0x33, 0x3d..0x40) "
+    "a + b on M's bus one word after the head (verified on the camera, pre-registered), and "
+    "two words after S0 0x20 no longer (verified on the camera); the carry-in heads (S0 0x1e, 0x1f, 0x2a..0x2d, S1 0x32, 0x33, 0x3d..0x40) "
     "add bit k of F0[f76_79] / F1[f80_83] in lane k (verified on the camera, pre-registered, "
     "the register at four numbers per unit). With M into F0[0] / F1[0] one word after S0 0x20 / "
     "S1 0x34 and the carry-in head with that register in the next word, the high halves' add "
@@ -1385,8 +1386,8 @@ S1's. Register nibbles double as immediate bits: S0's f37_40 (a) and f76_79, S1'
 S2's f53_56 (a) and f88_91 (t)."""
 
 S_NONE = {
-    "s0": "the others of 0..0x3f and 0x60..0x7f none, in the head's own word and one word after "
-    "it under f274_275 = 0 (the unsigned max / min among them)",
+    "s0": "the others of 0..0x3f and 0x60..0x7f none in the head's own word, and of 0..0x3f none "
+    "one word after it under f274_275 = 0 (the unsigned max / min among them)",
     "s1": "the others none in the head's own word; one word after the head under f274_275 = 1 "
     "0x13, 0x1a and 0x1b a per-lane word not fitted, 0x14, 0x15, 0x1d and 0x1e one bit, 0x16, "
     "0x17, 0x1f and 0x20 the word 0, the others of 0..0x5f none (the unsigned max / min among "
@@ -1406,7 +1407,7 @@ def _mask(held: int, tried: int) -> str:
         f"a 32-bit mask, bit k from lane k, on M's bus one word after the head under f274_275 = "
         f"{held} (verified on the camera, pre-registered); under its other values none (verified "
         f"for {tried:#x}, inferred for the other heads); in the head's own word none (inferred) "
-        "and two words after it none (verified for the adds; `LANE_MASKS`)"
+        "and two words after it none (verified for S0 0x20; `LANE_MASKS`)"
     )
 
 
@@ -1690,7 +1691,7 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f88_91": (
-        V,
+        I,
         (
             f"Under S2 head 0xe the register of F2 it returns ({EXACT}); t, the scalar S2's lane "
             "heads read (verified on the camera by S2's pre-registered function table). Its bits "
@@ -2164,8 +2165,8 @@ FIELDS: tuple[Field, ...] = (
         "In the stock words it is 0 beside S0 head 0x52, 1 beside S1 0x54, 2 beside S2 0xe and "
         "3 beside S3 0x17 (verified in the bytes). It names the S unit whose result M puts "
         "out: with S0 0x52, S1 0x54, S2 0xe and S3 0x24 in one word, four distinct 32-bit "
-        "values, 0..3 put out S0's, S1's, S2's and S3's value; one word after S0 0x32 or 0x20 "
-        "only 0 put its mask out, one word after an S1 compare head or 0x34 only 1, three words "
+        "values, 0..3 put out S0's, S1's, S2's and S3's value; one word after S0 0x32 only 0 "
+        "put its mask out, one word after an S1 compare head only 1, three words "
         "after S3 0x2 only 3 its sum, the other values leaving the sentinel (verified on the "
         "camera, pre-registered). A single head's result in its own word passed under each of "
         "0..3 (measured on the camera, one head per word). S2 holds no result: one word after "
@@ -2192,8 +2193,8 @@ FIELDS: tuple[Field, ...] = (
         "bus from the third word after the head on and stays (verified on the camera, "
         "pre-registered), OR-ed with an extract's lane in the same word (measured); and S0's and "
         "S1's compare and carry masks, on the bus one word after the head under f274_275 = 0 "
-        "and 1 and two words after it no longer (verified on the camera, pre-registered; "
-        "`LANE_MASKS`)",
+        "and 1 (verified on the camera, pre-registered), two words after S0 0x20 no longer "
+        "(verified on the camera; `LANE_MASKS`)",
         values={
             0: "an S head's scalar result on X0's result bus (verified)",
             1: "idle",
