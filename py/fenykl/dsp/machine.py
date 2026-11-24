@@ -255,8 +255,6 @@ class Machine:
         self.boot = boot
         self.stream = stream
         self.lanes_lost = False
-        self.heads_seen: dict[str, list[tuple[int, int]]] = {}
-        """The S heads run so far by unit: (word, head)."""
         self.g = [UNKNOWN] * 32
         self.a = [UNKNOWN] * 32
         self.b = [UNKNOWN] * 32
@@ -273,6 +271,9 @@ class Machine:
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
+        self.reduction_gone = False
+        """An extract under M came after the reduction register's first word: the register was
+        not on M afterwards (measured on the camera twice: inferred)."""
         self._u_write: tuple[int, Vec] | None = None
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
@@ -579,7 +580,6 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
-            self.heads_seen.setdefault(unit, []).append((t, head))
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
                 self.open_m.setdefault(t, set()).add(unit)
@@ -599,6 +599,7 @@ class Machine:
                 value = Sv(None)
             if rule.held:
                 self.reductions.append((t + rule.lag, value))
+                self.reduction_gone = False
             elif rule.lag == 0:
                 own[unit] = value
             else:
@@ -772,9 +773,12 @@ class Machine:
             return Sv(None, I if before in S_NEXT_VALUES.get(sel, ()) else H)
         h = held.get(sel)
         if not own:
+            if sel == "s3" and self.reduction_gone:
+                return Kept(I)
             if h is not None:
                 return _cap(h, tier)
-            return Kept(min(tier, self._quiet_tier(t)))
+            # Nothing on M two and three words after a head (verified in all four units).
+            return Kept(tier)
         if len(own) > 1 and sel not in own:
             raise UnknownSemantics(
                 index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
@@ -786,28 +790,19 @@ class Machine:
         v = own[sel]
         if sel == "s3":
             if fresh is None:
-                # Beside a register older than its first word the extract came alone in one
-                # program (inferred).
-                return _cap(v, min(tier, I)) if ready else _cap(v, tier)
-            # A reduction's register on its first word, OR-ed with an extract's lane (measured).
+                # Beside a register older than its first word the extract comes alone
+                # (verified: four, five, eight and twenty words after the reduction head).
+                self.reduction_gone = bool(ready)
+                return _cap(v, tier)
+            # A reduction's register on its first word, OR-ed with an extract's lane (verified).
             if v.value is None or fresh.value is None:
                 return Sv(None)
-            return Sv(v.value | fresh.value, min(v.tier, fresh.tier, I))
+            return Sv(v.value | fresh.value, min(v.tier, fresh.tier))
         if h is not None:
             return Sv(
                 None, H
             )  # an own-word result beside its unit's held one: not measured
         return _cap(v, tier)
-
-    def _quiet_tier(self, t: int) -> Confidence:
-        """The tier of "nothing on M" two or more words after S heads: verified two words after
-        S0 0x20 only, inferred after the others."""
-        earlier = [
-            (w, u, h) for u, hs in self.heads_seen.items() for w, h in hs if w <= t - 2
-        ]
-        if all(u == "s0" and h == 0x20 and w == t - 2 for w, u, h in earlier):
-            return V
-        return I
 
     # ------------------------------------------------------------------ ports
 
