@@ -332,6 +332,9 @@ class Engine:
                 raise _Off(f"memory pitch {pitch:#x}: not measured")
             if dpitch % 16 and cmd.kind == STORE:
                 raise _Off(f"DRAM pitch {dpitch:#x} on a store: not measured")
+            if dpitch % 16 and rows > 2:
+                # Two rows cannot tell a floored pitch from floored row addresses.
+                tier = min(tier, I)
         out = [((dram + k * dpitch) & 0xFFFFFFF0, mem + k * pitch) for k in range(rows)]
         return out, tier
 
