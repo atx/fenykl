@@ -118,17 +118,36 @@ PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
 """Two vectors of byte elements (four lines)."""
 TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
 """Three vectors of byte elements (six lines)."""
-KIND_SHAPES: dict[int, dict[tuple[int | None, ...], Confidence]] = {
-    2: {BASE_SHAPE: I, HALF_SHAPE: V, ROWS_SHAPE: V, LOCAL_SHAPE: V},
-    3: {BASE_SHAPE: I},
-    4: {BASE_SHAPE: I, HALF_SHAPE: V, LOCAL_SHAPE: V, PAIR_SHAPE: I, TRIPLE_SHAPE: I},
-    5: {BASE_SHAPE: I},
-    7: {BASE_SHAPE: I},
-    FILL: {BASE_SHAPE: V, HALF_SHAPE: V, QUAD_SHAPE: V},
+WRAPPED, DIRECT = "wrapped", "direct"
+"""How a kind's memory-side offset was handed where it ran: a DRAM address counted modulo
+`fields.LANE_VECTORS` vectors (the job's dst or src), or an offset inside the memory."""
+KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None]]] = {
+    2: {
+        BASE_SHAPE: (I, WRAPPED),
+        HALF_SHAPE: (V, WRAPPED),
+        ROWS_SHAPE: (V, WRAPPED),
+        LOCAL_SHAPE: (V, DIRECT),
+    },
+    3: {BASE_SHAPE: (I, None)},
+    4: {
+        BASE_SHAPE: (I, WRAPPED),
+        HALF_SHAPE: (V, DIRECT),
+        LOCAL_SHAPE: (V, DIRECT),
+        PAIR_SHAPE: (I, DIRECT),
+        TRIPLE_SHAPE: (I, DIRECT),
+    },
+    5: {BASE_SHAPE: (I, None)},
+    7: {BASE_SHAPE: (I, None)},
+    FILL: {
+        BASE_SHAPE: (V, WRAPPED),
+        HALF_SHAPE: (V, WRAPPED),
+        QUAD_SHAPE: (V, WRAPPED),
+    },
 }
-"""The shapes each kind ran in, by tier: verified where two jobs (one at least pre-registered)
-matched, inferred for one job. Rows were run for kind 2 only. Another shape raises
-`UnknownSemantics`."""
+"""The shapes each kind ran in: (tier, the memory-side offset's form; None for kinds that move
+nothing). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
+a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 only.
+Another shape, or the other offset form, raises `UnknownSemantics`."""
 DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
 (measured); 48 wedged the job twice, also with only 44 0x1d after them, so the depth is 44..47
@@ -210,6 +229,9 @@ class _Command:
     tier: Confidence
     where: str
     index: int
+    wrap_tier: Confidence = I
+    """The tier of a lane-memory offset counted modulo `fields.LANE_VECTORS` (inferred, unless
+    the kind ran so)."""
 
 
 def _known(v: Sv | None, what: str) -> int:
@@ -348,7 +370,7 @@ class Engine:
     def _command(self, m: Machine, cmd: _Command) -> None:
         if cmd.kind in KIND_AS:
             shape = tuple(None if r is None else r.value for r in cmd.regs)
-            tier = next(
+            run = next(
                 (
                     t
                     for want, t in KIND_SHAPES[cmd.kind].items()
@@ -358,13 +380,29 @@ class Engine:
                 ),
                 None,
             )
-            if tier is None:
+            if run is None:
                 raise UnknownSemantics(
                     cmd.index,
                     "stream",
                     [],
                     f"{cmd.where}: command kind {cmd.kind:#x} outside the shapes it ran in",
                 )
+            tier, form = run
+            if form is not None:
+                off = cmd.frm if KIND_AS[cmd.kind] == STORE else cmd.to
+                wrapped = (
+                    off.value is not None and off.value >= LANE_VECTORS * VECTOR_BYTES
+                )
+                if off.value is None or (form == WRAPPED) != wrapped:
+                    raise UnknownSemantics(
+                        cmd.index,
+                        "stream",
+                        [],
+                        f"{cmd.where}: command kind {cmd.kind:#x} with a memory offset "
+                        f"not {form} as where it ran",
+                    )
+                if form == WRAPPED:
+                    cmd = replace(cmd, wrap_tier=tier)
             self.cap = min(self.cap, tier)
             cmd = replace(cmd, kind=KIND_AS[cmd.kind])
         if cmd.kind not in (LOAD, NOTHING_MOVES, STORE, FILL):
@@ -417,7 +455,7 @@ class Engine:
                 return
             for v in range(r3):
                 at = (base + v) % LANE_VECTORS
-                wrap = I if base + v >= LANE_VECTORS else V
+                wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
                 racing = m.memory.get(at) is not held[at]
                 m.memory[at] = (
                     UNKNOWN_VEC
@@ -532,7 +570,7 @@ class Engine:
                 base = off // VECTOR_BYTES
                 for v in range(r3):
                     at = (base + v) % LANE_VECTORS
-                    wrap = I if base + v >= LANE_VECTORS else V
+                    wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
                     chunk = elements[v * LANE_COUNT : (v + 1) * LANE_COUNT]
                     chunk += [(0, V)] * (LANE_COUNT - len(chunk))
                     if r2 != 0x20:

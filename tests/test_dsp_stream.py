@@ -4,7 +4,7 @@ import pytest
 
 from fenykl.dsp import stream
 from fenykl.dsp.emu import LOCAL_BASE, Boot
-from fenykl.dsp.fields import Confidence
+from fenykl.dsp.fields import LANE_VECTORS, Confidence
 from fenykl.dsp.machine import Machine, Sv, Vec
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.state import Bytes
@@ -12,6 +12,7 @@ from fenykl.dsp.word import IDLE, Word
 
 V, I, H = Confidence.VERIFIED, Confidence.INFERRED, Confidence.HYPOTHESIS
 SRC, DST = 0xA0000000, 0xA1000000
+SRC_V, DST_V = SRC // 64 % LANE_VECTORS, DST // 64 % LANE_VECTORS
 WAIT = None
 """A 0x1d in a list of values."""
 
@@ -314,14 +315,18 @@ def test_a_store_with_a_register_not_handed_leaves_dram_inferred():
 
 def test_kind_2_loads_as_kind_0_at_inferred():
     m, e = machine(bytes(range(64))), stream.Engine()
-    drive(m, e, [*lanes(0, 1, r6=2), 0x02, SRC, 0x40, WAIT])
-    assert m.memory[1].lanes == tuple(range(32)) and e.lane_tier() == I
+    drive(m, e, [*lanes(0, 1, r6=2), 0x02, SRC, DST + 0x40, WAIT])
+    assert m.memory[DST_V + 1].lanes == tuple(range(32)) and e.lane_tier() == I
 
 
 def test_kind_4_stores_as_kind_6_at_inferred():
     m, e = machine(bytes(range(64))), stream.Engine()
     m.boot.put(DST, bytes(32), "prefill")
-    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, 0x04, 0, DST, WAIT])
+    drive(
+        m,
+        e,
+        [*lanes(0, 1, r6=2), *load(0, SRC, 64 * SRC_V), WAIT, 0x04, SRC, DST, WAIT],
+    )
     got = m.boot.read(DST, 32)
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
 
@@ -338,15 +343,16 @@ def test_kind_2_loads_16_bit_elements_verified():
         machine(b"".join(k.to_bytes(2, "little") for k in range(32))),
         stream.Engine(),
     )
-    drive(m, e, [*lanes(0, 1, r5=8, r6=4), 0x02, SRC, 0x40, WAIT])
-    assert m.memory[1].lanes == tuple(range(32)) and e.lane_tier() == V
+    drive(m, e, [*lanes(0, 1, r5=8, r6=4), 0x02, SRC, DST + 0x40, WAIT])
+    assert m.memory[DST_V + 1].lanes == tuple(range(32)) and e.lane_tier() == V
 
 
 def test_kind_2_loads_three_rows_at_their_pitches():
     m, e = machine(bytes(k & 0xFF for k in range(0x300))), stream.Engine()
-    drive(m, e, [*lanes(0, 1, r6=2, r7=3, r1=0x80, r4=0x100), 0x02, SRC, 0, WAIT])
-    assert [m.memory[v].lanes[0] for v in (0, 2, 4)] == [0, 0, 0] and 1 not in m.memory
-    assert m.memory[2].lanes == tuple(range(32))
+    drive(m, e, [*lanes(0, 1, r6=2, r7=3, r1=0x80, r4=0x100), 0x02, SRC, DST, WAIT])
+    assert [m.memory[DST_V + v].lanes[0] for v in (0, 2, 4)] == [0, 0, 0]
+    assert DST_V + 1 not in m.memory and m.memory[DST_V + 2].lanes == tuple(range(32))
+    assert e.lane_tier() == V
 
 
 def test_kind_4_rows_raise():
@@ -371,10 +377,10 @@ def test_kinds_3_5_and_7_move_nothing_at_inferred(kind):
 def test_kind_8_fills_r3_vectors_with_the_low_16_bits_of_from(r3, r5, r6):
     m, e = machine(), stream.Engine()
     m.boot.put(DST, bytes(32), "prefill")
-    drive(m, e, [*lanes(0, r3, r5=r5, r6=r6), 0x08, 0x12FCB800, 0x40 * 5, WAIT])
-    for v in range(5, 5 + r3):
+    drive(m, e, [*lanes(0, r3, r5=r5, r6=r6), 0x08, 0x12FCB800, DST + 0x40 * 5, WAIT])
+    for v in range(DST_V + 5, DST_V + 5 + r3):
         assert m.memory[v].lanes == (0xB800,) * 32 and m.memory[v].tier == V
-    assert 5 + r3 not in m.memory
+    assert DST_V + 5 + r3 not in m.memory
     assert bytes(m.boot.read(DST, 32).data) == bytes(32)
 
 
@@ -506,3 +512,64 @@ def test_kind_4_stores_three_vectors_as_kind_6_at_inferred():
     assert bytes(got.data) == bytes(range(96)) + bytes(32) and set(got.taint[:96]) == {
         I
     }
+
+
+def test_kind_2_loads_bytes_into_local_memory_verified():
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [*block(0, 2, 0, 4, 8, 0, 0x10, 2, 1), 0x02, SRC, 0x400, WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x400, 32)
+    assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {V}
+
+
+@pytest.mark.parametrize(
+    ("load_regs", "store_regs", "n", "tier"),
+    [
+        ((1, 0, 0x20, 1, 0, 0x08, 4, 1), (1, 0, 0x20, 1, 0, 0x08, 4, 1), 64, V),
+        ((2, 0, 4, 8, 0, 0x10, 2, 1), (2, 0, 4, 8, 0, 0x10, 2, 1), 32, V),
+        ((1, 0, 0x20, 2, 0, 0x10, 4, 1), (1, 0, 0x20, 2, 0, 0x10, 4, 1), 64, I),
+    ],
+)
+def test_kind_4_stores_its_direct_shapes_as_kind_6(load_regs, store_regs, n, tier):
+    """16-bit elements, local memory and two vectors, each from a direct offset 0x400."""
+    m, e = machine(bytes(k & 0xFF for k in range(128))), stream.Engine()
+    m.boot.put(DST, bytes(128), "prefill")
+    drive(
+        m,
+        e,
+        [
+            *block(0, *load_regs),
+            *load(0, SRC, 0x400),
+            WAIT,
+            *block(1, *store_regs),
+            1 << 6 | 0x04,
+            0x400,
+            DST,
+            WAIT,
+        ],
+    )
+    got = m.boot.read(DST, 128)
+    assert bytes(got.data) == bytes(k & 0xFF for k in range(n)) + bytes(128 - n)
+    assert set(got.taint[:n]) == {tier}
+
+
+@pytest.mark.parametrize(
+    ("kind", "regs", "frm", "to"),
+    [
+        (2, (1, 0, 0x20, 1, 0, 0x10, 2, 1), SRC, 0x40),  # base: ran wrapped
+        (2, (1, 0, 0x20, 1, 0, 0x08, 4, 1), SRC, 0x40),
+        (2, (1, 0x80, 0x20, 1, 0x100, 0x10, 2, 3), SRC, 0x40),
+        (2, (2, 0, 4, 8, 0, 0x10, 2, 1), SRC, DST),  # local: ran direct
+        (4, (1, 0, 0x20, 1, 0, 0x10, 2, 1), 0x40, DST),
+        (4, (1, 0, 0x20, 1, 0, 0x08, 4, 1), SRC, DST),
+        (4, (2, 0, 4, 8, 0, 0x10, 2, 1), SRC, DST),
+        (4, (1, 0, 0x20, 2, 0, 0x10, 4, 1), SRC, DST),
+        (4, (1, 0, 0x20, 3, 0, 0x10, 6, 1), SRC, DST),
+        (8, (1, 0, 0x20, 1, 0, 0x10, 2, 1), 0x1234, 0x40),
+        (8, (1, 0, 0x20, 1, 0, 0x08, 4, 1), 0x1234, 0x40),
+        (8, (1, 0, 0x20, 4, 0, 0x10, 8, 1), 0x1234, 0x40),
+    ],
+)
+def test_kinds_with_the_offset_form_they_did_not_run_in_raise(kind, regs, frm, to):
+    m = machine(bytes(256))
+    with pytest.raises(UnknownSemantics, match="memory offset not"):
+        drive(m, stream.Engine(), [*block(0, *regs), kind, frm, to, WAIT])

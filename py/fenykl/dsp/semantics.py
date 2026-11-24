@@ -451,7 +451,6 @@ EXACT = "verified on the camera by exact readout"
 exact 32-bit word."""
 
 Value = Callable[..., int | None]
-Scope = Callable[..., Confidence]
 
 
 def _result(
@@ -460,10 +459,9 @@ def _result(
     inputs: tuple[Reg | None, ...],
     f: Value,
     tier: Confidence,
-    scope: Scope | None = None,
 ) -> Effect:
     """The result f(*inputs) over the inputs' intervals, its hull enumerated; its taint is the
-    weakest of `tier`, the inputs' and `scope` at each combination. f None at a combination
+    weakest of `tier` and the inputs'. f None at a combination
     (a case the rule leaves open) or a result outside `SPAN` gives an unknown value."""
     name = f"{text} (op {word.op:#x})"
     if any(x is None for x in inputs):
@@ -480,8 +478,6 @@ def _result(
         if v is None:
             return Effect(True, None, f"{name}: open at {', '.join(map(hex, args))}")
         outs.append(v)
-        if scope is not None:
-            taint = min(taint, scope(*args))
     lo, hi = min(outs), max(outs)
     if lo < SPAN[0] or hi >= SPAN[1]:
         return Effect(True, None, f"{name}: beyond 32 bits, the wrap is not modelled")
@@ -500,8 +496,6 @@ class OpValue:
     f: Callable[[int, int], int | None]
     tier: Confidence
     form: str
-    scope: Callable[[int, int], Confidence] | None = None
-    """The tier by operands where it is weaker than `tier` (a side of the rule never run)."""
 
     def __call__(self, word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         args = word.operands
@@ -519,10 +513,7 @@ class OpValue:
         assert args.imm is not None
         c = args.imm
         named = self.text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
-        scope = None if self.scope is None else lambda a: self.scope(a, c)
-        return _result(
-            word, named, (slot[args.ra],), lambda a: self.f(a, c), self.tier, scope
-        )
+        return _result(word, named, (slot[args.ra],), lambda a: self.f(a, c), self.tier)
 
     @property
     def reads_ra(self) -> bool:
