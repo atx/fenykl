@@ -488,7 +488,7 @@ def op(value: int) -> Op:
     name = f"op{value:02x}"
     if value in FORMATS:
         fmt = FORMATS[value]
-        basis = UNSEEN_FORMAT_FACT if value in UNSEEN_FORMATS else FAMILY_BASIS
+        basis = UNSEEN_FORMAT_FACTS.get(value, FAMILY_BASIS)
         fact = f"{DATA_OP_FACT}; family {fmt.family.name} ({basis}): {fmt.family.fact}"
         if value in MEANINGS:
             fact += f"; {MEANINGS[value]}"
@@ -2891,13 +2891,24 @@ UNSEEN_FORMATS = {
     **{value: Format(_FAMILY["E"], 0, False) for value in (0x2D, 0x39, 0x3B, 0x45)},
 }
 """The data op values that never occur in the stock programs, with the operand format their
-results on eight operand sets read through (verified on the camera by exact readout: both
-readings were given to each op; ra, imm16 = imm | f128_132 << 8 | f120_122 << 13 zero-extended
-for 0x22, 0x26 and 0x27; ra and rb for the others, f120_122 without effect)."""
-UNSEEN_FORMAT_FACT = (
-    "never occurs in the stock programs; its operands read as below (verified on the camera by "
-    "exact readout, eight operand sets)"
+results on eight operand sets read through (`UNSEEN_FORMAT_FACTS`: both readings were given to
+each op)."""
+_E_UNSEEN = (
+    "never occurs in the stock programs; ra and rb as family E reads them, f120_122 without "
+    "effect (verified on the camera by exact readout, eight operand sets)"
 )
+UNSEEN_FORMAT_FACTS = {
+    0x22: "never occurs in the stock programs; ra read (verified on the camera by exact "
+    "readout); the immediate never affected a result (every result 0, ra above it in all eight "
+    "sets), so its imm16 reading, zero-extension and f120_122 bits are a hypothesis",
+    0x26: "never occurs in the stock programs; ra read (verified on the camera by exact "
+    "readout); the immediate never affected a result (every result ra), so its imm16 reading, "
+    "zero-extension and f120_122 bits are a hypothesis",
+    0x27: "never occurs in the stock programs; ra and imm16 = imm | f128_132 << 8 | f120_122 "
+    "<< 13 zero-extended (verified on the camera by exact readout: every result the immediate, "
+    "0x8e12 and 0xefff among them)",
+    **{value: _E_UNSEEN for value in (0x2D, 0x39, 0x3B, 0x45)},
+}
 FORMATS |= UNSEEN_FORMATS
 
 

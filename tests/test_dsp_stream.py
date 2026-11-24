@@ -326,6 +326,28 @@ def test_kind_4_stores_as_kind_6_at_inferred():
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
 
 
+@pytest.mark.parametrize("kind", [2, 4])
+def test_kinds_2_and_4_outside_their_one_shape_raise(kind):
+    m = machine(bytes(256))
+    with pytest.raises(UnknownSemantics, match="outside the one shape"):
+        drive(m, stream.Engine(), [*lanes(0, 4, r6=8), kind, SRC, DST, WAIT])
+
+
+def test_kind_8_raises():
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="kind 0x8"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x08, SRC, DST, WAIT])
+
+
+def test_more_commands_outstanding_than_the_depth_raise():
+    m = machine(bytes(64))
+    loads = [v for k in range(stream.DEPTH) for v in load(0, SRC, 64 * k)]
+    drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *loads, *[WAIT] * stream.DEPTH])
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="more than 44 commands outstanding"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *loads, *load(0, SRC, 0)])
+
+
 def test_an_unmeasured_kind_raises():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="kind 0x3"):
