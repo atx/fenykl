@@ -56,10 +56,10 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot: moves, insert, extract, reductions on L3 | inferred |
 | `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A, and the lane memory's loads and stores (f69_71 the store's register of O) | verified |
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3, f252_254's the store file O, f232_233's the third lane file U (all verified) | verified (the pairing) |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3, f252_254's the store file O, f232_233's the third lane file U (verified; f232_233 under 0 and 2 inferred) | verified (the pairing) |
 | `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
-| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held: in the head's own word no S unit select (measured), for a held result the unit, 0 S0, 1 S1, 3 S3 (verified) | verified |
-| `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
+| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held: in the head's own word no S unit select (measured), for a held result the unit, 0 S0, 1 S1, 3 S3 (each verified; 2 not shown) | inferred |
+| `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II; set in own programs, it changed nothing (measured, 24 cells) | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
 S0..S3, PB and M (the compute group) act mostly in words with an idle op, X0, X1 and PR (the
@@ -182,14 +182,18 @@ unit's lane heads read a and b from it through its two lane nibbles, and the two
 
 The operand nibbles were pre-registered at several registers each, 1, 2, 5, 6, 9 and 12 among
 them [verified]. Enable 0 of a first port takes the vector an X0 load head asked for exactly
-four words earlier (the lane memory, below). A port takes a move's or a logic head's result (S3
-0x18, 0x19, 0x22, S2 0x8, S1 0x00..0x09) in the head's own word and an arithmetic or shift
-result exactly one word after the head (`fields.LANE_LAG`; verified for the heads timed, the
-other heads by class inferred). A third kind of file, U, named by f31_34, fills the lanes S3's
-lane shifts move in [inferred, fitted]; its port is f141_144 under f232_233 = 1 beside an S3
-head, which decides what U takes: after 0x1f and 0x21 U's lanes 0..3 hold b's lanes 0..3, after
-0x1b, 0x1e and 0x20 b's lanes 28..31 [verified, pre-registered; U's other lanes not read]
-(`fields.LANE_THIRD_FILE`).
+four words earlier (the lane memory, below). A port takes a head's result in the head's own word
+or one word later, by head (`fields.LANE_LAG`, verified for the heads timed: in its own word S3
+0x18, 0x19, 0x22, S2 0x8, S1 0x00..0x09 and S0's selects, one word later the arithmetic and
+shift heads timed, S0 0x08 and S3 0xa / 0xc); no head class predicts it. S3's lane shift 0x1b
+moves b by n = f92_95 as a signed nibble: up by 1..4 [verified], down by 1..4 at 12..15
+[inferred, fitted], not at all at 5..11 [measured]; 0x1c and 0x22 matched it at two counts
+[inferred]. The lanes moved in come from a third kind of file, U, named by f31_34 [inferred,
+fitted]: its lanes 0..3 are four carry lanes for either direction. Its port is f141_144 under
+f232_233 = 1 beside an S3 head, which decides what U takes: after 0x1f and 0x21 U's lanes 0..3
+hold b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31 [verified, pre-registered;
+U's other lanes not read; that the port's and the shifts' nibbles name the same register
+inferred] (`fields.LANE_THIRD_FILE`).
 
 The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
 its expectation was registered before the run and met on all lanes of two constructed 32-lane
@@ -274,8 +278,8 @@ reaches all four first ports in one word [verified]. In the five stock programs 
 such a port write four words later, and none lacks its head (379 words; verified in the bytes).
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
-occur and were not run, `fields.STORE_SOURCES`), a move in the head's own word and an arithmetic
-result one word after it, and a store head writes O[f69_71] [verified]. A store head three
+occur and were not run, `fields.STORE_SOURCES`), the moves tried in the head's own word and the
+arithmetic results tried one word after it, and a store head writes O[f69_71] [verified]. A store head three
 words after O's port write stores the new content [verified]; one in the same word as the write
 stores the old content, a load one word after a store to the same vector reads it back, and four
 loads in consecutive words land in four consecutive port words [inferred]. Each head and its even / odd twin showed no
@@ -286,11 +290,12 @@ engine's streams].
 The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's load puts
 source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
 element's low 8 bits [verified]. A kernel with bulk input and output runs inside one stock copy:
-the load is complete once the copy's word 74 has run, own words between 74 and 75 compute on
-the loaded vectors, and 75..78 store them (`memcpy`; verified: a dense layer of 32 neurons x 64
-inputs, DRAM bytes to DRAM bytes, exact). The store's element format, word 47's value, is the
-number of elements per 16-byte line: 16 bytes, 12 a 10-bit pack, 8 16-bit little-endian, 4
-zero-extended to 32 bits [verified]; 16-bit lanes also leave as bytes, interleaved by S3 0xa /
+the loaded vectors are there once the copy's word 74 has run (three vectors read, 8 lanes each:
+the sequencer waits for the engine or the load is faster than a few words), own words between
+74 and 75 compute on them, and 75..78 store them (`memcpy`; verified: a dense layer of 32
+neurons x 64 inputs, DRAM bytes to DRAM bytes, exact). The store's element format, word 47's
+value, is the number of elements per 16-byte line: 16 bytes, 12 a 10-bit pack, 10 a 12-bit
+pack, 8 16-bit little-endian, 4 zero-extended to 32 bits [verified]; 16-bit lanes also leave as bytes, interleaved by S3 0xa /
 0xb with a shift by 8 [verified]. `semantics.LaneMemory` holds the content by
 vector (`load`, `store`, `copy_in`, `copy_out`) and `semantics.lane_address(head, a, b, k)`
 gives a head's vector; the emulator runs neither.

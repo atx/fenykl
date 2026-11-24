@@ -13,9 +13,11 @@ reads it gets UNKNOWN bytes, never guessed ones.
 returns, branches and loop ends with their delay slots, the halt) and runs the data ops by the
 op slot's semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
 
-The emulator does not model time. On the camera a word of an own program takes about 5.2 ns,
-idle and compute words alike (measured: the call time against the pass count of two loops, one
-mostly idle, one with loads, multiplies and reductions; inferred).
+The emulator does not model time. On the camera a word costs about 62 ns the first time it runs
+(straight-line words; a branch over 1200 idle words cost nothing, running them about 62 ns
+each, and the call times of 58 straight-line jobs fit the same per word) and about 5 ns when it
+repeats in a loop (0.185 us per 36-word pass, idle and compute words alike; per word 2..7 ns
+over three loop sizes, a per-pass cost not excluded) (measured on the camera; inferred).
 """
 
 from collections.abc import Callable

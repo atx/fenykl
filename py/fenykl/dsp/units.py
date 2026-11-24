@@ -97,7 +97,7 @@ _UNITS = (
             "of the first ports, a lane memory load (`fields.LANE_SOURCES`, verified on the "
             "camera); f252_254's writes the store file O (`fields.STORE_FILE`, verified on the "
             "camera); f232_233's the third lane file U, beside an S3 head "
-            "(`fields.LANE_THIRD_FILE`, verified on the camera); "
+            "(`fields.LANE_THIRD_FILE`, verified on the camera under 1, inferred under 0 and 2); "
             "ports, with the S heads and M the compute group (hypothesis)"
         ),
         (*(e for e in PORTS if lookup(e).unit == "pb"), "f234_235"),
@@ -117,13 +117,13 @@ _UNITS = (
     (
         "m",
         "M",
-        V,
+        I,
         (
             "the held 2-bit value f274_275 under the active-low strobe f276, which puts an S "
             "head's scalar result on X0's result bus (verified on the camera by exact readout); "
             "in the head's own word f274_275 does not select the S unit (measured on the "
-            "camera), for a held result it names the unit, 0 S0, 1 S1, 3 S3 (verified on the "
-            "camera, pre-registered; 2 not shown)"
+            "camera), for a held result it names the unit, 0 S0, 1 S1, 3 S3 (each verified on "
+            "the camera, pre-registered; 2 not shown, so the reading inferred)"
         ),
         ("f276",),
     ),
