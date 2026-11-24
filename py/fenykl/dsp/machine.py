@@ -27,6 +27,7 @@ scalars (`Sv`) and 32-lane vectors of 16 bits (`Vec`), each with the weakest tie
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from .emu import LOCAL_BASE, Boot
 from .fields import (
@@ -53,6 +54,7 @@ from .fields import (
     S_NEXT_NONE,
     S_OWN_OPEN,
     STORE_SOURCES,
+    TRANSFER_HEADS,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
     X_IMMEDIATES,
@@ -158,6 +160,10 @@ LANE_SHIFTS = (0x1B, 0x1C, 0x22)
 STORE_SETTLE = 3
 """Words from O's port write to a store head that stores the new content (verified); a store in
 the write's own word stores the old content (inferred); 1 and 2 words were not measured."""
+DELIVERING_OPS = (IDLE_OP, 1)
+"""Ops of a word that a delivery on the ALU bus reaches: the idle op and brf, which has no result
+of its own (the stock copy's brf took a load's datum into G through 272 / 1, verified on the camera
+by prefix dumps)."""
 HALF = 1 << 16
 
 
@@ -217,13 +223,23 @@ def _own_word(unit: str, head: int) -> bool:
     return rule is not None and rule.lag == 0 and not rule.held
 
 
+class Stream(Protocol):
+    """The copy engine's side of X1's transfer heads (`stream.CopyStream`)."""
+
+    def transfer(self, m: "Machine", index: int, head: int, value: Sv) -> None:
+        """Transfer `head` of word `index` hands `value` (B[f115_119]) to the engine."""
+
+
 class Machine:
     """The datapath of one job on `boot` (its local memory is `boot.local`), with what an earlier
     job of the boot left (`carry`). It is the `datapath` of `emu.Executor` and decides the
     conditional control ops on its own register values (a `semantics.Branching`)."""
 
-    def __init__(self, boot: Boot, carry: Carry | None = None) -> None:
+    def __init__(
+        self, boot: Boot, carry: Carry | None = None, stream: "Stream | None" = None
+    ) -> None:
         self.boot = boot
+        self.stream = stream
         self.g = [UNKNOWN] * 32
         self.a = [UNKNOWN] * 32
         self.b = [UNKNOWN] * 32
@@ -445,8 +461,8 @@ class Machine:
         due = self.bus_due.get(t, [])
         if alu is not None:
             return alu
-        if word.op != IDLE_OP and due:
-            return UNKNOWN  # a delivery into a word with a non-idle op: not measured
+        if word.op not in DELIVERING_OPS and due:
+            return UNKNOWN  # a delivery into a word with another op: not measured
         if len(due) == 1:
             return due[0][0]
         if due:
@@ -466,13 +482,16 @@ class Machine:
         file = "A" if unit == "x0" else "B"
         a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
         k = X_IMMEDIATES[unit].get(word.value)
-        if unit == "x1" and head in (0x1C, 0x1D, 0x1E):
-            raise UnknownSemantics(
-                index,
-                f"x1 {head:#x}",
-                [],
-                "a register transfer to the copy engine: not modelled",
-            )
+        if unit == "x1" and head in TRANSFER_HEADS:
+            if self.stream is None:
+                raise UnknownSemantics(
+                    index,
+                    f"x1 {head:#x}",
+                    [],
+                    "a transfer to the copy engine: no stream",
+                )
+            self.stream.transfer(self, index, head, b)
+            return None
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
         if head not in X_RULES[unit]:
