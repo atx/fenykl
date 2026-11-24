@@ -1457,14 +1457,12 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
 @dataclass(frozen=True)
 class LaneRule:
     """What an S unit's head value does to the lanes: `value` of (a, b, scalars), None for a
-    head that writes no lane result; `reads` the lane operands it reads ("a", "b"); `tier_at`
-    the tier of its result at the scalars (a row whose sub-domains have different tiers)."""
+    head that writes no lane result; `reads` the lane operands it reads ("a", "b")."""
 
     confidence: Confidence
     fact: str
     value: LaneValue | None
     reads: str = "ab"
-    tier_at: Callable[[Scalars], Confidence] | None = None
 
 
 _LANE_READS = {
@@ -1516,14 +1514,6 @@ _LANE_READS = {
 """The lane operands each S head's lane rule reads, from its rule; a head not listed reads both."""
 
 
-_LANE_TIERS: dict[str, dict[int, Callable[[Scalars], Confidence]]] = {
-    "s3": {0x22: lambda c: I if c["f92_95"] == 2 else V},
-}
-"""Per head a tier that depends on the word's scalars: S3 0x22 at f92_95 = 2 was measured, not
-pre-registered (0x1c was); every other count of the lane shifts and every nibble of S2 0x7 was
-pre-registered."""
-
-
 def _lane_rules(unit: str) -> dict[int, LaneRule]:
     values = _LANE_VALUES[unit]
     table = LANE_FUNCTIONS[unit]
@@ -1543,7 +1533,6 @@ def _lane_rules(unit: str) -> dict[int, LaneRule]:
             f"{text}; {note}" if note else text,
             values[h],
             _LANE_READS[unit].get(h, "ab"),
-            _LANE_TIERS.get(unit, {}).get(h),
         )
         for h, (text, conf, note) in table.items()
     }
@@ -1555,10 +1544,7 @@ LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
 
 def lane_tier(unit: str, head: int, scalars: Scalars) -> Confidence:
     """The tier of S unit `unit`'s lane result at head value `head` on `scalars`."""
-    rule = LANE_RULES[unit][head]
-    if rule.tier_at is None:
-        return rule.confidence
-    return min(rule.confidence, rule.tier_at(scalars))
+    return LANE_RULES[unit][head].confidence
 
 
 def lane_result(
