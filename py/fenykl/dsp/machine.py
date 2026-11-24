@@ -188,9 +188,9 @@ S_SCALARS: dict[str, dict[int, tuple[str, Confidence, str, callable]]] = {
     "s1": {
         0x54: ("own", V, "", lambda a, b, s: s["t"]),
         0x34: ("held1", V, "ab", lambda a, b, s: _carry(a, b, 0)),
-        0x33: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["c"])),
-        0x3F: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["c"])),
-        0x3D: ("held1", V, "ab", lambda a, b, s: _overflow(a, b, s["c"])),
+        0x33: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["r"])),
+        0x3F: ("held1", V, "ab", lambda a, b, s: _carry(a, b, s["r"])),
+        0x3D: ("held1", V, "ab", lambda a, b, s: _overflow(a, b, s["r"])),
         0x41: ("held1", V, "b", _cmp(lambda x, y, s: y > s["imm"] & LANE_MASK)),
         0x42: ("held1", V, "b", _cmp(lambda x, y, s: y <= s["imm"] & LANE_MASK)),
         0x43: ("held1", V, "b", _cmp(lambda x, y, s: y > s["t"] & LANE_MASK)),
@@ -251,6 +251,8 @@ _PROBE_SCALARS = (
     "imm",
     "t",
     "f31_34",
+    "f53_56",
+    "f88_91",
     "f65_68",
     "f92_95",
     "f96_99",
@@ -745,7 +747,7 @@ class Machine:
             imm = _sext((n["f80_83"] >> 2) << 5 | n["f84_87"] << 1 | n["f0"], 7)
             return {
                 "t": self._rd("F1", n["f84_87"]),
-                "c": self._rd("F1", n["f80_83"]),
+                "r": self._rd("F1", n["f80_83"]),
                 "imm": Sv(imm),
             }
         if unit == "s2":
