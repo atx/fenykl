@@ -779,21 +779,11 @@ PB_SOURCES: dict[str, dict[int, str | None]] = {
 }
 """What the grid B ports of the scalar files write by enable value, measured on the camera by
 exact readout from a word whose ALU bus, X0 result and X1 result differ (None: the register kept
-its sentinel): verified where pre-registered and met on fresh values, inferred for the cells in
-`PB_MEASURED`, one value each. Under an X0 source with X0 idle the port stores a value that is
-no result of the word (measured on the camera)."""
-PB_MEASURED = {
-    ("f256_257", 2),
-    ("f258", 0),
-    ("f263_264", 0),
-    ("f263_264", 1),
-    ("f263_264", 2),
-}
-"""The cells of `PB_SOURCES` measured but not pre-registered (inferred)."""
-
-
-def _pb_tier(enable: str) -> Confidence:
-    return I if any(e == enable for e, _ in PB_MEASURED) else V
+its sentinel): every cell verified, pre-registered and met on fresh values (f258 / 0 at three
+registers of F1, f263_264's three read back both by S3 0x18 and by S3 0x24). Under an X0 source
+with X0 idle the port stores a value that is no result of the word (measured on the camera).
+X0's result bus is also M's (`S_RESULTS`): f255 = 0 takes S0's compare mask into F0 and f258 = 0
+S1's into F1 (verified on the camera, pre-registered)."""
 
 
 SCALAR_FILES = (
@@ -811,18 +801,15 @@ SCALAR_READS: dict[str, tuple[int, str, str]] = {
 }
 """The S heads that return a scalar register: (head value, file, the nibble naming the register),
 the result file[nibble] (on the camera by exact readout, through the M strobe and port f272_273
-= 2: verified for S0..S2; S3's measured on eight values, not pre-registered, inferred)."""
+= 2, and S3's also against f263_264's three sources; verified, pre-registered)."""
 
 
 def _pb_values(enable: str, idle: int) -> dict[int, str]:
     to = PB_FILES[enable]
-    values = {}
-    for v, src in PB_SOURCES[enable].items():
-        tag = TAG[I if (enable, v) in PB_MEASURED else V]
-        values[v] = (
-            f"writes nothing ({tag})" if src is None else f"{src} to {to} ({tag})"
-        )
-    return values | {idle: "idle"}
+    return {
+        v: "writes nothing (verified)" if src is None else f"{src} to {to} (verified)"
+        for v, src in PB_SOURCES[enable].items()
+    } | {idle: "idle"}
 
 
 def _pb(enable: str) -> str:
@@ -849,8 +836,13 @@ boots (verified on the camera)."""
 LANE_THIRD_FILE = (
     "U, a third kind of lane register file, 16 registers named by f31_34, whose lanes 0..n-1 fill "
     "the top lanes of S3's lane shifts by n (inferred, fitted: 16 values of f31_34 gave 16 "
-    "different fills of power-up content); by position its port is f141_144 under f232_233 "
-    "(inferred)"
+    "different fills of power-up content). Its port is f141_144 under f232_233 = 1, beside an S3 "
+    "head, which decides what U takes, not its lane result: after 0x1f and 0x21 U[f141_144]'s "
+    "lanes 0..3 held b's lanes 0..3, after 0x1b, 0x1e and 0x20 b's lanes 28..31, and under 0 and "
+    "2 beside 0x1f U kept its content (verified on the camera, pre-registered, read back as the "
+    "top lanes of S3 0x1b by 4 with f31_34 naming the register written); 0x18, 0x19, 0x22 and "
+    "0x14 under 1 wrote nothing and 0x1a and 0x1d a content not identified (inferred, one run); "
+    "U's lanes 4..31 were not read"
 )
 S3_RESULT, S1_RESULT, S0_RESULT = "S3's result", "S1's result", "S0's result"
 S2_LOW, S2_HIGH = "S2's result, a product's low half", "S2's product's high half"
@@ -861,40 +853,41 @@ LANE_LOAD = (
     f"a lane memory load's 32 lanes, {LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
 )
 LANE_SOURCES: dict[str, dict[int, tuple[str, Confidence]]] = {
-    "f236_237": {0: (LANE_LOAD, I), 1: (S2_HIGH, I), 2: (S0_RESULT, I)},
+    "f236_237": {0: (LANE_LOAD, V), 1: (S2_HIGH, V), 2: (S0_RESULT, V)},
     "f238_239": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
-    "f240_241": {0: (LANE_LOAD, I), 1: (S2_HIGH, V), 2: (S0_RESULT, I)},
-    "f242_243": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, I)},
+    "f240_241": {0: (LANE_LOAD, V), 1: (S2_HIGH, V), 2: (S0_RESULT, V)},
+    "f242_243": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
     "f244_245": {0: (LANE_LOAD, V), 1: (S0_RESULT, V)},
     "f246_247": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
     "f248_249": {0: (LANE_LOAD, V), 1: (S0_RESULT, V)},
     "f250_251": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},
 }
 """The lane ports' enables: what each value writes, with its tier. Measured on the camera with a
-sentinel in the named register, one enable value per word: f238_239 and f244_245..f250_251
-pre-registered; f240_241 / 1 on all 32 lanes of a product (`S2_HIGH_HALVES`), f242_243 / 1 as
-its low half; f236_237 and f240_241 / 2 on two lanes, not pre-registered (inferred); f242_243 /
-2 by the pattern of the second ports (inferred). Enable 0 of the four first ports (f236_237,
-f240_241, f244_245, f248_249) takes the vector an X0 load head (`LANE_MEMORY`) asked for exactly
-four words earlier; at lag 3 or 5, or with no head, the port writes nothing (verified on the
-camera, pre-registered sentinels, 32 lanes each); one load reaches several ports in the same
-word (measured on the camera, not pre-registered: inferred); into
-L2 and L3 the loaded lanes were pre-registered and met (verified), into L0 and L1 measured on
-the camera, not pre-registered (inferred). In the five stock programs every word with an X0 load
-head has such a port write (or O's, `STORE_SOURCES`) four words later and no such write lacks
-one (verified in the bytes), so idling f244_245 = 0 in program 13 drops a load (inferred). Enable
-2 of f244_245 / f248_249 wrote nothing from any S head. A port takes a move's result (S3 0x18,
-0x19, 0x22, S2 0x8) in the head's own word and an arithmetic result exactly one word after the
-head (`LANE_LAG`)."""
+sentinel in the named register, one enable value per word, every cell pre-registered (verified):
+f238_239 and f244_245..f250_251 first; f240_241 / 1 on all 32 lanes of a product
+(`S2_HIGH_HALVES`), f242_243 / 1 as its low half; then f236_237 / 1 (S2 0x2's high half),
+f236_237 / 2 and f240_241 / 2 (S0's result) and f242_243 / 2 (S1's result, at two registers),
+32 lanes each, one word after the head. Enable 0 of the four first ports (f236_237, f240_241,
+f244_245, f248_249) takes the vector an X0 load head (`LANE_MEMORY`) asked for exactly four
+words earlier; at lag 3 or 5, or with no head, the port writes nothing (verified on the camera,
+pre-registered sentinels, 32 lanes each, into L0 at three registers and L1 at five); one load
+reaches all four first ports in the same word (verified on the camera, pre-registered, 16 lanes
+each). In the five stock programs every word with an X0 load head has such a port write (or
+O's, `STORE_SOURCES`) four words later and no such write lacks one (verified in the bytes), so
+idling f244_245 = 0 in program 13 drops a load (inferred). Enable 2 of f244_245 / f248_249 wrote
+nothing from any S head. A port takes a move's or a logic head's result (S3 0x18, 0x19, 0x22, S2
+0x8, S1 0x00..0x09) in the head's own word and an arithmetic or shift result exactly one word
+after the head (`LANE_LAG`)."""
 LANE_LAG: dict[str, dict[int, int]] = {
     "s0": {0x08: 1, 0x1F: 1, 0x20: 1, 0x29: 1, 0x44: 0, 0x45: 0, 0x46: 0, 0x4B: 0},
-    "s1": {0x0E: 1, 0x10: 1, 0x33: 1, 0x3C: 1},
+    "s1": {**dict.fromkeys(range(0x0A), 0), 0x0E: 1, 0x10: 1, 0x33: 1, 0x3C: 1},
     "s2": {0x01: 1, 0x05: 1, 0x08: 0},
     "s3": {0x0A: 1, 0x0C: 1, 0x18: 0, 0x19: 0, 0x22: 0},
 }
 """Words from a head to the one word whose lane port takes its result (verified on the camera
 for these heads, a sentinel written only at that lag, the head not held; with the head held, at
-every lag from 1); that the other moves take 0 and the other arithmetic heads 1 is inferred."""
+every lag from 1): the lag is by head class, moves and S1's logic heads 0, arithmetic and shifts
+1; that the other heads follow their class is inferred."""
 
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
@@ -934,9 +927,9 @@ STORE_SOURCES: dict[int, tuple[str, Confidence]] = {
 }
 """What f252_254 writes to O[f179_181] by value, with its tier (verified on the camera,
 pre-registered, 11 groups of 32 lanes exact); 5 and 6 never occur in the stock programs and
-were not run, 7 is idle. A move (S3's lane number and broadcast, S2's pass of b) is taken in the
-head's own word, an arithmetic result one word after the head, as at the lane ports
-(`LANE_LAG`)."""
+were not run, 7 is idle. A move (S3's lane number and broadcast, S2's pass of b) or a logic
+result (S1 0x04) is taken in the head's own word, an arithmetic result one word after the head,
+as at the lane ports (`LANE_LAG`)."""
 X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
@@ -970,8 +963,8 @@ X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 
 U_PORT_FACT = (
     "With each enable value 0..2, from a word with one value on all three scalar buses and no "
-    "S head, it wrote nothing to lanes 0 / 1 of L3, nor under 1 beside any S3 head (verified on "
-    f"the camera); by position the enable of U's port (inferred): {LANE_THIRD_FILE}"
+    "S head, it wrote nothing to lanes 0 / 1 of L3, nor to L3 under 1 beside any S3 head "
+    f"(verified on the camera). The enable of U's port: {LANE_THIRD_FILE}"
 )
 LANE_OPERANDS = (
     "a and b are the unit's two lane operands (`LANE_FILES`) lane by lane, read as signed or "
@@ -1012,12 +1005,17 @@ LANE_MASKS = (
     "0x46 and 0x4b read bit k of F0[f72_75] for lane k (verified on the camera, pre-registered, "
     "0x46 under two masks and the others under one, 32 lanes exact per group, a = L0[f37_40], b = L0[f41_44]); a lane port, "
     "or O under 4, takes their result in the head's own word, one and two words later nothing "
-    "(`LANE_LAG`). S0's compare heads make such a mask, bit k from lane k, which M puts on X0's "
-    "result bus one word after the head (`S_RESULTS`, inferred); in the stock programs every S0 "
-    "0x13 is followed by a word with M under f274_275 = 0 and F0's port f182_185 under f255 = 0 "
-    "(verified in the bytes, 18 of 18 words); that this word takes 0x13's mask into F0 is "
-    "inferred, and 0x13's operand is not identified. The whole chain, compare, "
-    "M, F0 and a select, has not been run in one program"
+    "(`LANE_LAG`). S0's and S1's compare heads make such a mask, bit k from lane k, which M puts "
+    "on X0's result bus one word after the head under f274_275 = 0 for S0 and 1 for S1 "
+    "(`S_RESULTS`), where f255 = 0 takes it into F0 and f258 = 0 into F1 (verified on the camera, "
+    "pre-registered). The whole chain ran as one program: S0 0x32, in the next word M under "
+    "f274_275 = 0 with f255 = 0 into F0[k], then S0 0x46 with f72_75 = k gave max_u(a, b) "
+    "(verified on the camera, pre-registered, two masks and 2 x 32 lanes). In the stock programs "
+    "every S0 0x13 (b == imm16) is followed by a word with M under f274_275 = 0 and F0's port "
+    "f182_185 under f255 = 0 (verified in the bytes, 18 of 18 words), so they keep its mask in "
+    "F0 (inferred). Both units' order compares are unsigned; no signed one is known. S1 0x56, "
+    "0x5b, 0x60, 0x61, 0x62, 0x6f, 0x70 and 0x7e gave b in every lane with a mask in F1 "
+    "(measured on the camera): no select of S1's is known"
 )
 LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
     "s0": {
@@ -1146,16 +1144,19 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             range(0x61, 0x7E),
             "0 in one run",
             H,
-            "0x60 and 0x7e of this range gave 0 in that run and b in later ones: open",
+            "0x60, 0x61, 0x62, 0x6f, 0x70 and 0x7e of this range gave 0 in that run and b in "
+            "later ones: open",
         ),
-        **_rows((0x60, 0x7E), "0 or b, on a state not identified", H),
+        **_rows(
+            (0x60, 0x61, 0x62, 0x6F, 0x70, 0x7E), "0 or b, on a state not identified", H
+        ),
     },
     "s2": {
         **_rows(
             (0x00, 0x01),
             "b x imm, low 16 bits",
             V,
-            "imm by field `LANE_IMMEDIATES` (inferred); 0x0's high half that of the unsigned b",
+            "imm by field `LANE_IMMEDIATES`; 0x0's high half that of the unsigned b",
         ),
         0x02: (
             "a x b, low 16 bits",
@@ -1194,7 +1195,7 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x11: (
             "an immediate in every lane",
             V,
-            "the immediate imm14 by field inferred (`LANE_IMMEDIATES`)",
+            "the immediate imm14 by field (`LANE_IMMEDIATES`)",
         ),
         0x12: ("0xffff where b < 0, else 0", V, ""),
         0x13: ("0xffff where b >= 0, else 0", V, ""),
@@ -1226,7 +1227,7 @@ scalars (verified where they matched; inferred where a refit was not run again).
 listed are open; `LANE_OPERANDS` names the operands. The 1 added by the carry forms is not
 predicted."""
 S2_HIGH_HALVES: dict[int, LaneRow] = {
-    0x02: ("bits 16..31 of the unsigned a x the signed b", I, ""),
+    0x02: ("bits 16..31 of the unsigned a x the signed b", V, ""),
     0x05: ("bits 16..31 of the signed b x t", V, ""),
     0x00: ("bits 16..31 of the unsigned b x imm", I, ""),
 }
@@ -1234,61 +1235,80 @@ S2_HIGH_HALVES: dict[int, LaneRow] = {
 ports of L0 and L1 take under enable 1 one word after the head (`LANE_SOURCES`). With the low
 half taken by f159_162 / 1 in the same word, S1's double-width shifts of a : b narrow the
 product (verified on the camera for 0x5 on all 32 lanes, pre-registered: a fixed-point multiply
-by a scalar, rounded and saturated, in three words). 0x2's and 0x0's signedness was refitted on
-all 32 lanes where an operand is negative (inferred); what separates 0x2 / 0x4 / 0x6, 0x3 / 0x5
-and 0x0 / 0x1 is open (hypothesis: the operands' signedness)."""
+by a scalar, rounded and saturated, in three words). 0x2's signedness was pre-registered on 16-bit
+edge operands and met on all 32 lanes, and through 0x2's low and high halves and S3 0x5 a signed
+dot product came out exact (verified on the camera); 0x0's was refitted on all 32 lanes where an
+operand is negative (inferred); what separates 0x2 / 0x4 / 0x6, 0x3 / 0x5 and 0x0 / 0x1 is open
+(hypothesis: the operands' signedness)."""
 LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
-    "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", I),
-    "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", I),
-    "s2": ("imm7 = sext7(f53_56 << 3 | f88_91 >> 1), the multiplier of 0x0 / 0x1", I),
+    "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", V),
+    "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", V),
+    "s2": ("imm7 = sext7(f53_56 << 3 | f88_91 >> 1), the multiplier of 0x0 / 0x1", V),
     "s3": (
         "imm14 = sext14(f96_99 << 10 | f65_68 << 6 | f31_34 bits 3..2 << 4 | f92_95), 0x11's",
-        I,
+        V,
     ),
 }
-"""Each S unit's immediate by field. S0's, S1's and S2's were fitted on the camera with one
-field varied per cell, read through max_s(0x8000, imm) or 1 x imm (inferred); S3's were fitted
-by nibble, then met at one nibble setting pre-registered, f31_34 bit 3 not pre-registered
-(inferred). Register nibbles double as immediate bits: S0's f37_40 (a)
-and f76_79, S1's f84_87 (t), S2's f53_56 (a) and f88_91 (t)."""
+"""Each S unit's immediate by field. Fitted on the camera with one field varied per cell, read
+through max_s(0x8000, imm), 1 x imm or S3 0x11, then pre-registered on fresh values of every
+field and met (verified on the camera, 13 cells x 2 lanes); f80_83's bits 1..0 do not enter
+S1's. Register nibbles double as immediate bits: S0's f37_40 (a) and f76_79, S1's f84_87 (t),
+S2's f53_56 (a) and f88_91 (t)."""
 
 S_NONE = {
     "s0": "the others of 0..0x3f and 0x60..0x7f none; 0x8..0xd, 0x1e, 0x2b and 0x2d none one word "
-    "after the head under f274_275 = 0 either"
+    "after the head under f274_275 = 0 either",
+    "s1": "the others none in the head's own word; one word after the head under f274_275 = 1 "
+    "0x32, 0x3e and 0x40 none, the others not read there",
 }
 """Where not every other head value was read."""
 REDUCTION = (
     "of the 32 lanes of L3[f65_68], on M's bus from the third word after the head on, where it stays: a result "
     "register (verified, pre-registered)"
 )
-COMPARE_MASK = (
-    "a 32-bit mask, bit k from lane k, on M's bus one word after the head, in a word with no S "
-    "head under f274_275 = 0; in the head's own word, two words after it and one word after it "
-    "under f274_275 = 3 none (inferred: one run, fitted against candidate masks; `LANE_MASKS`)"
-)
+
+
+def _mask(held: int) -> str:
+    """A compare head's scalar result, which M puts out under f274_275 = `held`."""
+    return (
+        f"a 32-bit mask, bit k from lane k, on M's bus one word after the head under f274_275 = "
+        f"{held}, under its other values none (verified on the camera, pre-registered); in the "
+        "head's own word none (inferred; `LANE_MASKS`)"
+    )
+
+
+S0_MASK, S1_MASK = _mask(0), _mask(1)
 S_RESULTS: dict[str, dict[int, str]] = {
     "s0": {
         0x52: f"F0[f76_79] ({EXACT})",
-        0x24: f"a != b, {COMPARE_MASK}",
-        0x25: f"a == b, {COMPARE_MASK}",
-        0x32: f"a < b unsigned, {COMPARE_MASK}",
-        0x33: f"a >= b unsigned, {COMPARE_MASK}",
-        0x2E: f"b > imm unsigned (> against >= not separated), {COMPARE_MASK}",
-        0x2F: f"b <= imm unsigned (<= against < not separated), {COMPARE_MASK}",
-        0x30: f"b > a register of F0 unsigned (f72_75's or f76_79's, > against >= not "
-        f"separated), {COMPARE_MASK}",
-        0x31: f"b <= a register of F0 unsigned (f72_75's or f76_79's, <= against < not "
-        f"separated), {COMPARE_MASK}",
-        0x1F: f"the carry of a + b, {COMPARE_MASK}",
-        0x2C: f"the carry of a + b, {COMPARE_MASK}",
-        0x2A: f"the signed overflow of a + b, {COMPARE_MASK}",
-        **{
-            h: f"{'all ones' if h in (0x12, 0x18) else 'zero'} on the operands tried, a compare "
-            f"whose operand is not identified, {COMPARE_MASK}"
-            for h in (0x12, 0x13, 0x18, 0x19)
-        },
+        0x24: f"a != b, {S0_MASK}",
+        0x25: f"a == b, {S0_MASK}",
+        0x32: f"a < b unsigned, {S0_MASK}",
+        0x33: f"a >= b unsigned, {S0_MASK}",
+        0x2E: f"b > imm unsigned, {S0_MASK}",
+        0x2F: f"b <= imm unsigned, {S0_MASK}",
+        0x30: f"b > s unsigned, {S0_MASK}",
+        0x31: f"b <= s unsigned, {S0_MASK}",
+        0x12: f"b != imm, {S0_MASK}",
+        0x13: f"b == imm, {S0_MASK}",
+        0x18: f"b != s, {S0_MASK}",
+        0x19: f"b == s, {S0_MASK}",
+        0x1F: f"the carry of a + b, {S0_MASK}",
+        0x2C: f"the carry of a + b, {S0_MASK}",
+        0x2A: f"the signed overflow of a + b, {S0_MASK}",
     },
-    "s1": {0x54: f"F1[f84_87] ({EXACT})"},
+    "s1": {
+        0x54: f"F1[f84_87] ({EXACT})",
+        0x33: f"the carry of a + b, {S1_MASK}",
+        0x3F: f"the carry of a + b, {S1_MASK}",
+        0x3D: f"the signed overflow of a + b, {S1_MASK}",
+        0x41: f"b > imm unsigned, {S1_MASK}",
+        0x42: f"b <= imm unsigned, {S1_MASK}",
+        0x43: f"b > t unsigned, {S1_MASK}",
+        0x44: f"b <= t unsigned, {S1_MASK}",
+        0x45: f"a < b unsigned, {S1_MASK}",
+        0x46: f"a >= b unsigned, {S1_MASK}",
+    },
     "s2": {
         0xC: "lane (f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60], sign-extended (inferred, "
         "fitted)",
@@ -1306,13 +1326,14 @@ S_RESULTS: dict[str, dict[int, str]] = {
         "vectors read back on all 32 lanes)",
         0x16: "lane F3[f92_95] & 31 of L3[f65_68], zero-extended (inferred, fitted)",
         0x17: "lane F3[f92_95] & 31 of L3[f65_68], sign-extended (inferred, fitted)",
-        0x24: "F3[f96_99] (inferred: measured on eight values, not pre-registered)",
+        0x24: "F3[f96_99] (verified on the camera, pre-registered on three sources)",
     },
 }
 """The S head values with a scalar result under the M strobe (which values have one: measured on
 the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read, in the head's
-own word, and for S0's compare masks one word after it; the rules' tiers in the text). A reduction's register and an extract's lane in the same word reach the bus
-OR-ed (measured on the camera)."""
+own word, and for S0's and S1's compare masks one word after it; the rules' tiers in the text). A
+reduction's register and an extract's lane in the same word reach the bus OR-ed (measured on the
+camera)."""
 
 
 def _written(file: str, enable: str, reader: str) -> str:
@@ -1350,10 +1371,8 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
     "f182_185": (V, _written("F0", "f255", "which S0 head 0x52 reads through f76_79")),
     "f186_189": (V, _written("F0", "f256_257", "the file f182_185's port writes too")),
     "f190_193": (
-        I,
-        _written(
-            "F1", "f258", "the file f194_197's port writes too (inferred: one value)"
-        ),
+        V,
+        _written("F1", "f258", "the file f194_197's port writes too"),
     ),
     "f194_197": (
         V,
@@ -1380,59 +1399,62 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             f"to the lane memory (`X0_LANE_MEMORY`); {STORE_FILE}"
         ),
     ),
-    "f141_144": (I, f"The register of U its port writes; {LANE_THIRD_FILE}"),
+    "f141_144": (V, f"The register of U its port writes; {LANE_THIRD_FILE}"),
     "f23_30": (
-        I,
+        V,
         (
-            "Bits 7..0 of S0's 16-bit lane immediate (`LANE_IMMEDIATES`; inferred, fitted: three "
-            "values moved the low byte)"
+            "Bits 7..0 of S0's 16-bit lane immediate (`LANE_IMMEDIATES`; verified on the camera, "
+            "pre-registered on fresh values)"
         ),
     ),
     "f31_34": (
-        I,
+        V,
         (
             "S3's: bit 2 is bit 4 of the lane 0x10 inserts (verified on the camera: inserts at "
             "lanes 0..31 read back as built) and 0xe / 0xf extract; bits 3..2 are bits 5..4 of "
-            "S3 0x11's immediate, and 0x16 / 0x17 ignore it (inferred, fitted); as a whole the "
-            f"register of U (inferred): {LANE_THIRD_FILE}"
+            "S3 0x11's immediate (verified on the camera, pre-registered on fresh values), and "
+            "0x16 / 0x17 ignore it (inferred, fitted); as a whole the register of U that the lane "
+            "shifts read (verified on the camera, pre-registered: the register f141_144 wrote): "
+            f"{LANE_THIRD_FILE}"
         ),
     ),
     "f37_40": (
-        I,
+        V,
         (
-            "a, the register of the lane file L0 that S0's lane heads read first (`LANE_FILES`); "
-            "also bits 11..8 of S0's immediate (`LANE_IMMEDIATES`) (inferred: pre-registered at "
-            "register 1 only; S0 0x60 did not return its register at other numbers)"
+            "a, the register of the lane file L0 that S0's lane heads read first (`LANE_FILES`; "
+            "pre-registered at registers 1, 5, 6, 9 and 12); also bits 11..8 of S0's immediate "
+            "(`LANE_IMMEDIATES`, verified on the camera, pre-registered); S0 0x60 did not return "
+            "its register at other numbers than 1"
         ),
     ),
     "f41_44": (
-        I,
+        V,
         (
-            "b, the register of L0 that S0's lane heads read second (`LANE_FILES`; inferred: "
-            "pre-registered at register 2 only)"
+            "b, the register of L0 that S0's lane heads read second (`LANE_FILES`; "
+            "pre-registered at registers 2, 5, 6, 9 and 12)"
         ),
     ),
     "f45_48": (
         V,
         (
             "a, the register of the lane file L1 that S1's lane heads read first (`LANE_FILES`; "
-            "pre-registered at registers 1 and 8)"
+            "pre-registered at registers 1, 5, 6 and 8)"
         ),
     ),
     "f49_52": (
         V,
         (
             "b, the register of L1 that S1's lane heads read second (`LANE_FILES`; "
-            "pre-registered at registers 2 and 9)"
+            "pre-registered at registers 2, 9 and 12)"
         ),
     ),
     "f53_56": (
-        I,
+        V,
         (
-            "a, the register of the lane file L2 that S2's lane heads read first (`LANE_FILES`); "
-            "under S2 head 0xc its low two bits are bits 4..3 of the lane read; bits 6..3 of S2's "
-            "multiply immediate (`LANE_IMMEDIATES`) (inferred: pre-registered at register 1 only; "
-            "the rest fitted)"
+            "a, the register of the lane file L2 that S2's lane heads read first (`LANE_FILES`; "
+            "pre-registered at registers 1, 5, 6, 9 and 12); bits 6..3 of S2's multiply "
+            "immediate (`LANE_IMMEDIATES`, verified on the camera, pre-registered); under S2 head "
+            "0xc its low two bits are bits 4..3 of the lane read (inferred, fitted)"
         ),
     ),
     "f57_60": (
@@ -1443,10 +1465,10 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         ),
     ),
     "f61_64": (
-        I,
+        V,
         (
             "a, the register of the lane file L3 that S3's lane heads read first (`LANE_FILES`; "
-            "inferred: pre-registered at register 1 only)"
+            "pre-registered at registers 1, 5, 6, 9 and 12)"
         ),
     ),
     "f65_68": (
@@ -1454,8 +1476,9 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         (
             "b, the register of L3 that S3's lane heads read second (`LANE_FILES`): the register S3 "
             "0xe, 0xf, 0x16 and 0x17 extract a lane of and 0x0..0x5 reduce (verified on the "
-            "camera: built vectors and pre-registered writers read back at several registers); "
-            "bits 9..6 of S3 0x11's immediate (inferred)"
+            "camera: built vectors and pre-registered writers read back at several registers, and "
+            "S3 0xa at registers 5, 6, 9 and 12); bits 9..6 of S3 0x11's immediate (verified on "
+            "the camera, pre-registered)"
         ),
     ),
     "f72_75": (
@@ -1470,14 +1493,15 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         V,
         (
             f"Under S0 head 0x52 the register of F0 it returns ({EXACT}); bits 15..12 of S0's "
-            "lane immediate (`LANE_IMMEDIATES`; inferred, fitted)"
+            "lane immediate (`LANE_IMMEDIATES`; verified on the camera, pre-registered)"
         ),
     ),
     "f80_83": (
         H,
         (
-            "Its bits 3..2 are bits 6..5 of S1's lane immediate (`LANE_IMMEDIATES`; inferred, "
-            "fitted: 0, 1 and 2 gave one immediate, 8 and 15 two others)"
+            "Its bits 3..2 are bits 6..5 of S1's lane immediate and its bits 1..0 do not enter it "
+            "(`LANE_IMMEDIATES`; verified on the camera, pre-registered on fresh values); what "
+            "else the nibble does, and so whether it is one field, is open"
         ),
     ),
     "f84_87": (
@@ -1485,16 +1509,17 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
         (
             f"Under S1 head 0x54 the register of F1 it returns ({EXACT}); t, the scalar S1's lane "
             "heads read (verified on the camera by S1's pre-registered function table); bits 4..1 "
-            "of S1's lane immediate (`LANE_IMMEDIATES`; inferred, fitted)"
+            "of S1's lane immediate (`LANE_IMMEDIATES`; verified on the camera, pre-registered)"
         ),
     ),
     "f88_91": (
         V,
         (
             f"Under S2 head 0xe the register of F2 it returns ({EXACT}); t, the scalar S2's lane "
-            "heads read (verified on the camera by S2's pre-registered function table). Under S2 "
-            "0xc its bits 3..1 are bits 2..0 of the lane read, and bits 2..0 of the immediate S2 "
-            "0x0 / 0x1 multiply by (`LANE_IMMEDIATES`) (inferred, fitted)"
+            "heads read (verified on the camera by S2's pre-registered function table). Its bits "
+            "3..1 are bits 2..0 of the immediate S2 0x0 / 0x1 multiply by (`LANE_IMMEDIATES`; "
+            "verified on the camera, pre-registered) and under S2 0xc bits 2..0 of the lane read "
+            "(inferred, fitted)"
         ),
     ),
     "f92_95": (
@@ -1503,16 +1528,17 @@ NIBBLES: dict[str, tuple[Confidence, str]] = {
             "S3's lane select: the lane itself under 0xe, 0xf and 0x10 (with f31_34 bit 2 as bit "
             "4), the register of F3 whose value is the lane under 0x15, 0x16 and 0x17 (& 31 "
             "under 0x16 / 0x17) (verified on the camera: inserts at lanes 0..31 read back as "
-            "built, the writers pre-registered by nibble); bits 3..0 of 0x11's immediate and the "
-            "signed shift count of 0x1b, 0x1c and 0x22 (inferred)"
+            "built, the writers pre-registered by nibble); bits 3..0 of 0x11's immediate "
+            "(verified on the camera, pre-registered); the signed shift count of 0x1b, 0x1c and "
+            "0x22 (inferred)"
         ),
     ),
     "f96_99": (
         V,
         (
             "The register of F3 whose value S3 0x18 broadcasts and 0x10 and 0x15 insert (verified "
-            "on the camera, pre-registered by nibble); the one 0x24 returns and bits 13..10 of "
-            "0x11's immediate (inferred)"
+            "on the camera, pre-registered by nibble), the one 0x24 returns and bits 13..10 of "
+            "0x11's immediate (verified on the camera, pre-registered)"
         ),
     ),
 }
@@ -1593,7 +1619,8 @@ def _lane_enable(lo: int, fact: str = "") -> Field:
 
 LANE_ROLES = {
     "s0": "an adder / comparator with neighbour-lane forms and a 16-bit immediate",
-    "s1": "logic, shifts and double-width shifts, min / max and add with a scalar or an immediate",
+    "s1": "logic, shifts and double-width shifts, min / max, add and compares with a scalar or an "
+    "immediate",
     "s2": "the multiplier",
     "s3": "moves, shuffles, lane insert, broadcast and the lane number",
 }
@@ -1688,9 +1715,9 @@ FIELDS: tuple[Field, ...] = (
         "s1",
         0,
         f"program 16 never sets it; {_only('f285_291 and f49_52 are')}; bit 0 of S1's lane "
-        "immediate (`LANE_IMMEDIATES`; inferred, fitted: 1 added 1)",
+        "immediate (`LANE_IMMEDIATES`; verified on the camera, pre-registered on fresh values)",
         kind=Kind.IMM,
-        confidence=I,
+        confidence=V,
     ),
     _ctl(
         1,
@@ -1832,6 +1859,13 @@ FIELDS: tuple[Field, ...] = (
         3,
         "f232 is never clear without f233; active together with S3 (f296_301) in 1928 of its "
         f"1940 active words, so its port cannot be told apart from S3 in the bytes. {U_PORT_FACT}",
+        {
+            0: "writes nothing (verified)",
+            1: "U[f141_144] takes what the S3 head beside it hands (verified)",
+            2: "writes nothing (verified)",
+            3: "idle",
+        },
+        V,
     ),
     Field(
         234,
@@ -1858,31 +1892,15 @@ FIELDS: tuple[Field, ...] = (
         min(t for _, t in STORE_SOURCES.values()),
     ),
     _enable(255, 255, "pb", 1, _pb("f255"), _pb_values("f255", 1), V),
-    _enable(
-        256,
-        257,
-        "pb",
-        3,
-        _pb("f256_257"),
-        _pb_values("f256_257", 3),
-        _pb_tier("f256_257"),
-    ),
-    _enable(258, 258, "pb", 1, _pb("f258"), _pb_values("f258", 1), _pb_tier("f258")),
+    _enable(256, 257, "pb", 3, _pb("f256_257"), _pb_values("f256_257", 3), V),
+    _enable(258, 258, "pb", 1, _pb("f258"), _pb_values("f258", 1), V),
     _enable(
         259, 260, "pb", 3, f"{X0_PATH}; {_pb('f259_260')}", _pb_values("f259_260", 3), V
     ),
     _enable(
         261, 262, "pb", 3, f"{X0_PATH}; {_pb('f261_262')}", _pb_values("f261_262", 3), V
     ),
-    _enable(
-        263,
-        264,
-        "pb",
-        3,
-        _pb("f263_264"),
-        _pb_values("f263_264", 3),
-        _pb_tier("f263_264"),
-    ),
+    _enable(263, 264, "pb", 3, _pb("f263_264"), _pb_values("f263_264", 3), V),
     _enable(
         265,
         266,
@@ -1959,21 +1977,22 @@ FIELDS: tuple[Field, ...] = (
         Kind.ROUTE,
         "m",
         0,
-        I,
+        V,
         "the value under the active-low strobe f276: f274_276 takes 4 (idle) and 0..3, 7 in 38 "
         f"words, never 5 or 6, {OWNERSHIP}; held, in runs of median 8 words, and no field "
         f"changes under it; {_c2_fact(274, 275)}. "
         "In the stock words it is 0 beside S0 head 0x52, 1 beside S1 0x54, 2 beside S2 0xe and "
         "3 beside S3 0x17 (verified in the bytes), but it does not select the S unit: a head's "
         "result passed under M at each of 0..3 in the head's own word (measured on the camera, "
-        "one head per word; the selection reading pre-registered and refuted). One word after "
-        "an S0 compare head, in a word with no S head, 0 put the compare mask on the bus and 3 "
-        "nothing (inferred: one run), and S3's reductions and extracts were read under 3, never "
-        "tried under 0 (inferred). Hypothesis: it names the unit whose held result M puts out, "
-        "0 S0, 3 S3; 1 and 2 not run there (`LANE_MASKS`)",
+        "one head per word; the selection reading pre-registered and refuted). It names the unit "
+        "whose held result M puts out: one word after S0 0x32 only 0 put its mask out, one word "
+        "after an S1 compare head only 1, three words after S3 0x2 only 3 its sum, the other "
+        "values leaving the sentinel (verified on the camera, pre-registered); 2 not shown "
+        "(`LANE_MASKS`)",
         values={
-            0: "S0's compare mask one word after its head passes, under 3 it does not (inferred)",
-            3: "S3's reductions and extracts read; never tried under 0 (inferred)",
+            0: "S0's held result: its compare mask one word after the head (verified)",
+            1: "S1's held result: its compare mask one word after the head (verified)",
+            3: "S3's held result: a reduction from the third word after the head (verified)",
         },
     ),
     Field(
@@ -1989,9 +2008,9 @@ FIELDS: tuple[Field, ...] = (
         "words after the head took nothing (verified on the camera by exact readout, "
         "pre-registered). S3's reductions 0x0..0x5 are the exception: their result is on the "
         "bus from the third word after the head on and stays (verified on the camera, "
-        "pre-registered), OR-ed with an extract's lane in the same word (measured); and S0's "
-        "compare masks, on the bus one word after the head under f274_275 = 0 (inferred, "
-        "`LANE_MASKS`)",
+        "pre-registered), OR-ed with an extract's lane in the same word (measured); and S0's and "
+        "S1's compare masks, on the bus one word after the head under f274_275 = 0 and 1 "
+        "(verified on the camera, pre-registered; `LANE_MASKS`)",
         values={
             0: "an S head's scalar result on X0's result bus (verified)",
             1: "idle",
@@ -2128,7 +2147,7 @@ UNIT_FACTS = {
     "between boots; no function of the "
     "value's bits and no input of the job gives the masks (inferred): a stored per-lane vector "
     "that the value selects (hypothesis). The value is also bits 15..12 of S0's lane immediate "
-    "(`LANE_IMMEDIATES`, inferred); how one immediate gives a per-lane mask is open",
+    "(`LANE_IMMEDIATES`, verified); how one immediate gives a per-lane mask is open",
     "f244_245": f"its port f163_166 carries grid B's effect at program 13 word 439 ({_CAMERA}); "
     "idling it there equals idling f163_166, byte for byte, and at word 440 changes only the third plane, to the whole word's idle's third "
     "plane (verified on the camera, a flat source, pre-registered); post hoc the register its "

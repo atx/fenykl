@@ -56,9 +56,9 @@ execution units inferred]. Listings group a word's fields by unit, strobes first
 | `s3` | f296_301 | grid A 31, 61, 65, 92, 96 | compute slot: moves, insert, extract, reductions on L3 | inferred |
 | `x0` | f302_307 | f1, f2_6, f69_71, f100_104, f105_109 | an ALU on the register file A, and the lane memory's loads and stores (f69_71 the store's register of O) | verified |
 | `x1` | f308_312 | f7_8, f9_14, f110_114, xreg (f115_119) | X0's copy on the register file B, and the register transfers | verified |
-| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3 (verified but some values), f252_254's the store file O, f232_233's open | verified (the pairing) |
+| `pb` | 17 enables in 232..264 | one grid B nibble each (`fields.PORTS`; f234_235 for f145_146 a hypothesis) | ports; f255..f264's write the scalar files F0..F3, f236..f251's the lane files L0..L3, f252_254's the store file O, f232_233's the third lane file U (all verified) | verified (the pairing) |
 | `pr` | 5 enables in 265..273 | one field of 206..228 each | register write ports of A, B, R and G, the enable value the source (verified) | verified |
-| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held: in the head's own word no S unit select (measured), for a held result the unit (inferred) | hypothesis |
+| `m` | f276 (active low) | f274_275 | f276 = 0 puts an S head's scalar result on X0's result bus (verified); f274_275 held: in the head's own word no S unit select (measured), for a held result the unit, 0 S0, 1 S1, 3 S3 (verified) | verified |
 | `q` | f35_36, f145_146 | - | a section mode of the grid, never set on the E-M10 II | hypothesis |
 | `const` | - | f133_140, f230_231, f277 | constant bits | verified |
 
@@ -150,23 +150,21 @@ from the next word on:
 | F2 | S2 head 0xe and S2's lane scalar t, F2[f88_91] | f261_262 on f198_201: 0 X0, 1 X1, 2 the ALU bus |
 | F3 | S3 head 0x24, F3[f96_99]; S3's lane index F3[f92_95] and value F3[f96_99] | f263_264 on f202_205: 0 X0, 1 X1, 2 the ALU bus |
 
-The sources per enable value (`fields.PB_SOURCES`) are verified on the camera where
-pre-registered; f256_257 / 2, f258 / 0 and f263_264's three were measured once, not
-pre-registered [inferred], as was S3 0x24 = F3[f96_99]. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
+The sources per enable value (`fields.PB_SOURCES`) and S3 0x24 = F3[f96_99] are verified on the
+camera, every cell pre-registered. Program 13's tap loads reach F2 this way, through f261_262 = 2 three words after
 each load, on the registers its S2 words read. The M strobe f276 = 0 puts an S head's scalar
 result on X0's result bus, where f272_273 = 2 takes it in the head's own word [verified];
 f274_275 does not select the S unit in the head's own word [measured, with one head per word];
-S0's compare mask one word after its head passed under 0 and not under 3, and S3's reductions
-and extracts were read under 3 [inferred]; that it names the unit whose held result M puts out
-is a hypothesis (1 and 2 not run). Under M, S0 0x52, S1 0x54,
+for a held result it names the unit whose result M puts out: 0 S0, 1 S1, 3 S3, the other
+values leaving the sentinel [verified, pre-registered; 2 not shown]. Under M, S0 0x52, S1 0x54,
 S2 0xc and 0xe and S3 0x0..0x5, 0xe, 0xf, 0x16, 0x17 and 0x24 have a scalar result
 (`fields.S_RESULTS`; of S0's 0x40..0x5f only 0x52 read): S3 0xe / 0xf extract lane f92_95 + 16 x
 (f31_34 bit 2) of L3[f65_68], 0x16 / 0x17 lane F3[f92_95] & 31, zero- / sign-extended
 [inferred, fitted; 0xf verified on all 32 lanes of built vectors]; S3 0x0..0x5 reduce the 32 lanes of L3[f65_68] to their unsigned maximum, unsigned
 minimum, zero-extended sum, signed maximum, signed minimum and sign-extended sum, a result
 register on M's bus from the third word after the head on [verified]; S2 0xc reads lane
-(f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred]; S0's compare heads give a mask one
-word after the head (below).
+(f53_56 & 3) x 8 + (f88_91 >> 1) of L2[f57_60] [inferred]; S0's and S1's compare heads give a
+mask one word after the head (below).
 
 #### Lanes
 
@@ -177,16 +175,21 @@ unit's lane heads read a and b from it through its two lane nibbles, and the two
 
 | file | unit | a, b | first port (enable): 0, 1, 2 | second port (enable): 0, 1, 2 |
 |---|---|---|---|---|
-| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): a load [inferred], S2's high half [inferred], S0 [inferred] | f151_154 (f238_239): S3, S2's low half, S1 |
-| L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): a load [inferred], S2's high half, S0 [inferred] | f159_162 (f242_243): S3, S2's low half, S1 [inferred] |
+| L0 | S0 | f37_40, f41_44 | f147_150 (f236_237): a load, S2's high half, S0 | f151_154 (f238_239): S3, S2's low half, S1 |
+| L1 | S1 | f45_48, f49_52 | f155_158 (f240_241): a load, S2's high half, S0 | f159_162 (f242_243): S3, S2's low half, S1 |
 | L2 | S2 | f53_56, f57_60 | f163_166 (f244_245): a load, S0, nothing seen | f167_170 (f246_247): S3, S2's low half, S1 |
 | L3 | S3 | f61_64, f65_68 | f171_174 (f248_249): a load, S0, nothing seen | f175_178 (f250_251): S3, S2's low half, S1 |
 
-Enable 0 of a first port takes the vector an X0 load head asked for exactly four words earlier
-(the lane memory, below). A port takes a move's result (S3 0x18,
-0x19, 0x22, S2 0x8) in the head's own word and an arithmetic result exactly one word after the
-head (`fields.LANE_LAG`; verified for the heads timed). A third kind of file, U, named by
-f31_34, fills the lanes S3's lane shifts move in [inferred].
+The operand nibbles were pre-registered at several registers each, 1, 2, 5, 6, 9 and 12 among
+them [verified]. Enable 0 of a first port takes the vector an X0 load head asked for exactly
+four words earlier (the lane memory, below). A port takes a move's or a logic head's result (S3
+0x18, 0x19, 0x22, S2 0x8, S1 0x00..0x09) in the head's own word and an arithmetic or shift
+result exactly one word after the head (`fields.LANE_LAG`; verified for the heads timed, the
+other heads by class inferred). A third kind of file, U, named by f31_34, fills the lanes S3's
+lane shifts move in [inferred, fitted]; its port is f141_144 under f232_233 = 1 beside an S3
+head, which decides what U takes: after 0x1f and 0x21 U's lanes 0..3 hold b's lanes 0..3, after
+0x1b, 0x1e and 0x20 b's lanes 28..31 [verified, pre-registered; U's other lanes not read]
+(`fields.LANE_THIRD_FILE`).
 
 The lane functions by head value are `fields.LANE_FUNCTIONS`, each row tagged: verified where
 its expectation was registered before the run and met on all lanes of two constructed 32-lane
@@ -201,34 +204,40 @@ or a 14-bit immediate and gives the lane number. Halvings and rounded shifts rou
 select by lane by a condition not identified [hypothesis].
 
 Lane masks (`fields.LANE_MASKS`): S0's per-lane condition is a 32-bit mask in a scalar
-register of F0, bit k for lane k.
+register of F0, bit k for lane k; S0's and S1's compare heads make one.
 
 - **Select** [verified, pre-registered: 0x46 under two masks, the others under one]: with bit = bit k of F0[f72_75], S0 0x46
   gives bit ? b : a, 0x45 bit ? b : F0[f76_79], 0x44 bit ? b : imm16, and 0x4b the bit as 0 / 1;
   a lane port (or O under 4) takes them in the head's own word. 0x41 and 0x4d gave b, 0x42
   imm16 and 0x43 F0[f76_79] in every lane under one mask [inferred]. None of these heads hangs
   the engine.
-- **Compare** [inferred, one run, fitted]: S0 0x24 / 0x25 (a != b / a == b), 0x32 / 0x33
-  (a < b / a >= b unsigned), 0x2e / 0x2f (b against imm16 unsigned), 0x30 / 0x31 (b against a
-  register of F0 unsigned), 0x1f and 0x2c (the carry of a + b) and 0x2a (the signed overflow of
-  a + b) put a mask, bit k from lane k, on M's bus one word after the head, in a word with M
-  under f274_275 = 0 and no head (`fields.S_RESULTS`).
-- **Into F0**: in the stock programs every S0 0x13 is followed by a word with M under f274_275 =
-  0 and F0's port f182_185 under f255 = 0 [verified in the bytes]; that this word carries 0x13's
-  mask into F0, where f72_75 can name it, is inferred, and 0x13's operand is not identified.
+- **Compare** [verified, pre-registered]: S0 0x24 / 0x25 (a != b / a == b), 0x32 / 0x33
+  (a < b / a >= b), 0x2e / 0x2f (b > / <= imm16), 0x30 / 0x31 (b > / <= F0[f72_75]), 0x12 /
+  0x13 (b != / == imm16), 0x18 / 0x19 (b != / == F0[f72_75]), 0x1f and 0x2c (the carry of a +
+  b) and 0x2a (the signed overflow of a + b) put a mask, bit k from lane k, on M's bus one word
+  after the head under f274_275 = 0; S1 0x33 and 0x3f (the carry of a + b), 0x3d (its signed
+  overflow), 0x41 / 0x42 (b > / <= imm7), 0x43 / 0x44 (b > / <= F1[f84_87]) and 0x45 / 0x46
+  (a < b / a >= b) under f274_275 = 1 (`fields.S_RESULTS`). The order compares are unsigned; no
+  signed one is known.
+- **Into F0 and F1**: f255 = 0 takes M's bus into F0, f258 = 0 into F1 [verified]. In the stock
+  programs every S0 0x13 is followed by a word with M under f274_275 = 0 and F0's port f182_185
+  under f255 = 0 [verified in the bytes].
 
-So a mask can be computed, kept, built in a scalar register and applied: compare, M, F0, select.
-Every link is measured, but the chain as a whole has not been run in one program.
+So a mask can be computed, kept, built in a scalar register and applied: S0 0x32, M with f255
+= 0 into F0[k], then S0 0x46 with f72_75 = k gave max_u(a, b) as one program [verified,
+pre-registered]. No select of S1's is known.
 `semantics.lane_result` evaluates the select heads with the mask as the scalar "s".
 
-The immediates by field (`fields.LANE_IMMEDIATES`, fitted: inferred): S0
+The immediates by field (`fields.LANE_IMMEDIATES`, fitted, then pre-registered on fresh values:
+verified): S0
 imm16 = f76_79 << 12 | f37_40 << 8 | f23_30; S1 imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1
 | f0); S2 imm7 = sext7(f53_56 << 3 | f88_91 >> 1); S3 imm14 = sext14(f96_99 << 10 | f65_68 << 6
-| f31_34 bits 3..2 << 4 | f92_95). Register nibbles double as immediate bits.
+| f31_34 bits 3..2 << 4 | f92_95). Register nibbles double as immediate bits; f80_83's bits 1..0
+do not enter S1's.
 
 A product's high half goes to S0's and S1's files through their first ports under 1
-(`fields.S2_HIGH_HALVES`): S2 0x5 is signed b x t [verified], 0x2 the unsigned a x the signed b
-and 0x0 the unsigned b x imm [inferred]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
+(`fields.S2_HIGH_HALVES`): S2 0x5 is signed b x t and 0x2 the unsigned a x the signed b
+[verified], 0x0 the unsigned b x imm [inferred]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
 S1's a : b is the 32-bit product and S1 0x29 (or 0x10) gives it scaled, rounded and saturated:
 a fixed-point multiply by a scalar in three words [verified].
 
@@ -260,8 +269,8 @@ the size inferred from five different contents below 0x400 and aliases above].
 | 0x1e, 0x1f | store O[f69_71] | A[f100_104] + A[f105_109] |
 
 A load's 32 lanes arrive exactly four words after the head, at any first lane port under enable
-0 or at the store file's port; at lag 3 or 5, or with no head, the port writes nothing [verified;
-into L0 and L1 inferred]; one load reaches several ports in one word [inferred]. In the five stock programs every word with a load head has
+0 or at the store file's port; at lag 3 or 5, or with no head, the port writes nothing; one load
+reaches all four first ports in one word [verified]. In the five stock programs every word with a load head has
 such a port write four words later, and none lacks its head (379 words; verified in the bytes).
 The store file O holds eight lane registers: the port f179_181 (the register) writes it under
 f252_254 (the source: 0 a load, 1 S3's result, 2 S2's, 3 S1's, 4 S0's, 7 idle; 5 and 6 never
@@ -276,10 +285,13 @@ engine's streams].
 
 The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's load puts
 source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
-element's low 8 bits [verified]. So a kernel with bulk input and output is three jobs: a stock
-copy in, an own vector program, and a stock copy without its load to write the vectors out; a
-16-bit result leaves as two byte planes, its low byte and, stored after a shift by 8, its high
-byte [verified: exact on 512 + 512 + 4096 bytes]. `semantics.LaneMemory` holds the content by
+element's low 8 bits [verified]. A kernel with bulk input and output runs inside one stock copy:
+the load is complete once the copy's word 74 has run, own words between 74 and 75 compute on
+the loaded vectors, and 75..78 store them (`memcpy`; verified: a dense layer of 32 neurons x 64
+inputs, DRAM bytes to DRAM bytes, exact). The store's element format, word 47's value, is the
+number of elements per 16-byte line: 16 bytes, 12 a 10-bit pack, 8 16-bit little-endian, 4
+zero-extended to 32 bits [verified]; 16-bit lanes also leave as bytes, interleaved by S3 0xa /
+0xb with a shift by 8 [verified]. `semantics.LaneMemory` holds the content by
 vector (`load`, `store`, `copy_in`, `copy_out`) and `semantics.lane_address(head, a, b, k)`
 gives a head's vector; the emulator runs neither.
 
