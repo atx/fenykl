@@ -23,7 +23,6 @@ from fenykl.dsp.program import (
 )
 from fenykl.dsp.semantics import OP_SEMANTICS, Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
-from fenykl.dsp.units import PR, S1, OpSlot
 from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
@@ -284,7 +283,7 @@ def test_the_transfer_class_holds_exactly_the_register_transfer_words():
 
 def test_strict_mode_raises_on_a_field_without_semantics():
     # The idle word with one control bit set matches no class.
-    synthetic = Word(s1=S1(f0=1))
+    synthetic = Word.from_fields({"f0": 1})
     program = Program((*stock().words[:3], synthetic, *stock().words[4:]))
     with pytest.raises(
         UnknownSemantics,
@@ -294,7 +293,7 @@ def test_strict_mode_raises_on_a_field_without_semantics():
 
 
 def test_strict_mode_raises_on_a_transfer_with_an_opcode_field_set():
-    word = Word(stock().words[73], pr=PR(f265_266=0))
+    word = Word.from_fields({"f265_266": 0}, base=stock().words[73])
     program = Program((*stock().words[:73], word, *stock().words[74:]))
     with pytest.raises(
         UnknownSemantics,
@@ -304,7 +303,7 @@ def test_strict_mode_raises_on_a_transfer_with_an_opcode_field_set():
 
 
 def test_lenient_mode_ignores_it_and_taints():
-    synthetic = Word(s1=S1(f0=1))
+    synthetic = Word.from_fields({"f0": 1})
     program = Program((*stock().words[:3], synthetic, *stock().words[4:]))
     data = bytes(range(256)) * 4
     result, dst = copy(Boot(), program, data, strict=False)
@@ -418,7 +417,7 @@ def test_table_outcomes_seen_at_1k_are_inferred_at_other_lengths():
 def lenient_program(*words: int) -> Program:
     """The stock copy without `words`, and idle word 3 with control bit 0 set."""
     program = idled(*words) if words else stock()
-    synthetic = Word(s1=S1(f0=1))
+    synthetic = Word.from_fields({"f0": 1})
     return Program((*program.words[:3], synthetic, *program.words[4:]))
 
 
@@ -729,7 +728,7 @@ def inserted(
         return assemble(stmts)
 
 
-LOAD = Word(op_slot=OpSlot(f313_319=0x1A, f15_22=1, f123_127=5, f128_132=0))
+LOAD = Word.from_fields({"f313_319": 0x1A, "f15_22": 1, "f123_127": 5, "f128_132": 0})
 """A 0x1a read of local word r5 + 1, inside what its op semantics covers."""
 
 

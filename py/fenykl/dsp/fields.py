@@ -1060,6 +1060,27 @@ at the lane ports (`LANE_LAG`)."""
 STORE_NOTHING = (5, 6)
 """Values of f252_254 under which O keeps its content, beside a result of every S unit and with
 none (verified on the camera, pre-registered on a second register and other heads)."""
+
+M_UNITS = ("s0", "s1", "s2", "s3")
+"""f274_275's values: the unit whose result M puts out."""
+U_TAKES = {
+    0x1F: range(4),
+    0x21: range(4),
+    0x1C: range(4),
+    0x1B: range(28, 32),
+    0x1E: range(28, 32),
+    0x20: range(28, 32),
+}
+"""What U's port takes beside an S3 head under f232_233 = 1: b's lanes into U's lanes 0..3
+(verified on the camera, pre-registered); U's lanes 4..31 are not known after a write."""
+U_NOTHING = (0x18, 0x19, 0x22, 0x14)
+"""S3 heads beside which U's port wrote nothing (measured on the camera)."""
+U_SAVED = "lanes 0..3 the S3 head beside it saves (`U_TAKES`)"
+U_SOURCES: dict[int, tuple[str, Confidence]] = {1: (U_SAVED, V)}
+"""What f232_233 writes to U[f141_144] by value: 1 what the S3 head beside it saves; 0 and 2
+write nothing (`LANE_THIRD_FILE`, verified on the camera)."""
+VECTOR_PORTS = {"f252_254": ("O", STORE_SOURCES), "f232_233": ("U", U_SOURCES)}
+"""The ports of O and U: the file and its sources by enable value."""
 X0_PARITY = (
     "each head and its even / odd twin (0x1a / 0x1b, 0x1c / 0x1d, 0x1e / 0x1f, 0x20 / 0x21) "
     "showed no difference in address, lanes covered, element width or scalar result, and none "
@@ -2808,8 +2829,6 @@ FIELDS = tuple(
 )
 ID_PATTERN = re.compile(r"f\d")
 """The start of a positional id; no name starts like one."""
-RESERVED = frozenset({"unit", "field", "items"})
-"""Slot attributes, which a slot's field keys must not shadow."""
 
 
 def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
@@ -2825,10 +2844,8 @@ def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
             if owner[bit]:
                 raise ValueError(f"bit {bit} in both {owner[bit]} and {f.id}")
             owner[bit] = f.id
-        if f.name and (
-            ID_PATTERN.match(f.name) or keyword.iskeyword(f.name) or f.name in RESERVED
-        ):
-            raise ValueError(f"{f.id}: name {f.name!r} reads as an id or shadows a key")
+        if f.name and (ID_PATTERN.match(f.name) or keyword.iskeyword(f.name)):
+            raise ValueError(f"{f.id}: name {f.name!r} reads as an id or is a keyword")
         for key in filter(None, (f.id, f.name)):
             if key in by_key:
                 raise ValueError(f"field key {key!r} used twice")

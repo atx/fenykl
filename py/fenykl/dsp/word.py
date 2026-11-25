@@ -1,4 +1,4 @@
-"""The DSP word: an immutable 320-bit value with views by field and by unit.
+"""The DSP word: an immutable 320-bit value with views by field.
 
 Decoding never fails: every 320-bit value is a Word, so bytes -> Word -> bytes is exact.
 Validation of assembled words (constants, allowed values) is `Word.check`.
@@ -10,7 +10,6 @@ from .fields import (
     CONTROL_FLAG,
     CONTROL_OPS,
     FIELDS,
-    HEAD_VIEWS,
     IDLE_VALUE,
     OP_FIELD,
     TARGET,
@@ -25,36 +24,22 @@ from .fields import (
     operands,
     target,
 )
-from .units import SLOTS, UNITS, Slot
 
 
 class Word:
-    """One instruction. Built from slots, unset fields keep `base` (default: the idle word)::
-
-    Word(x1=X1(xreg=3, x1op=0x1C), op_slot=OpSlot(op=0x0B))
-    """
+    """One instruction, by value; `asm` builds words from bundles, `from_fields` by field."""
 
     __slots__ = ("value",)
     value: int
 
-    def __init__(self, base: "Word | None" = None, /, **slots: Slot) -> None:
-        value = IDLE_VALUE if base is None else base.value
-        for unit, slot in slots.items():
-            if unit not in UNITS:
-                raise TypeError(f"no DSP unit {unit!r}")
-            if not isinstance(slot, SLOTS[unit]):
-                raise TypeError(f"{unit}= takes a {SLOTS[unit].__name__}, not {slot!r}")
-            for f, v in slot.items():
-                value = f.put(value, v)
+    def __init__(self, value: int = IDLE_VALUE) -> None:
+        if not 0 <= value < 1 << WORD_BITS:
+            raise ValueError(f"{value:#x} is not a {WORD_BITS}-bit word")
         object.__setattr__(self, "value", value)
 
     @classmethod
     def from_int(cls, value: int) -> "Word":
-        if not 0 <= value < 1 << WORD_BITS:
-            raise ValueError(f"{value:#x} is not a {WORD_BITS}-bit word")
-        word = object.__new__(cls)
-        object.__setattr__(word, "value", value)
-        return word
+        return cls(value)
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "Word":
@@ -80,20 +65,6 @@ class Word:
             raise ValueError(f"op {code:#x} has no operand format")
         word = OP_FIELD.put(IDLE_VALUE if base is None else base.value, code)
         return cls.from_int(fmt.encode(word, args))
-
-    @classmethod
-    def head(cls, unit: str, /, base: "Word | None" = None, **operands: int) -> "Word":
-        """Unit `unit` (s0..s3, x0, x1) by its named operands (`fields.HEAD_VIEWS`), the head as
-        op, immediates composed; other fields keep `base`::
-
-            Word.head("s1", op=0x04, a=4, b=4, imm=0x20)
-        """
-        word = IDLE_VALUE if base is None else base.value
-        return cls.from_int(HEAD_VIEWS[unit].encode(word, operands))
-
-    def head_operands(self, unit: str) -> dict[str, int]:
-        """Unit `unit`'s named operands, as `Word.head` takes them."""
-        return HEAD_VIEWS[unit].decode(self.value)
 
     @classmethod
     def ctl(
@@ -156,27 +127,17 @@ class Word:
         diff = self.value ^ ref
         return [(f, f.get(self.value)) for f in FIELDS if f.get(diff)]
 
-    def slots(self, base: "Word | None" = None) -> dict[str, Slot]:
-        """The fields that differ from `base` as slots, in unit order; `Word(base, **slots) ==
-        self`."""
-        changed = {f.id: v for f, v in self.changed(base)}
-        slots = {}
-        for name, unit in UNITS.items():
-            values = {f.id: changed[f.id] for f in unit.fields if f.id in changed}
-            if values:
-                slots[name] = SLOTS[name](**values)
-        return slots
-
     def check(self) -> None:
         """Raise ValueError if a field holds a value no assembled word may hold."""
         for f in FIELDS:
             f.check(f.get(self.value))
 
     def __repr__(self) -> str:
-        slots = self.slots()
-        if not slots:
+        changed = self.changed()
+        if not changed:
             return "IDLE"
-        return f"Word({', '.join(f'{u}={s!r}' for u, s in slots.items())})"
+        args = ", ".join(f"{f.label!r}: {f.literal(v)}" for f, v in changed)
+        return f"Word.from_fields({{{args}}})"
 
 
 IDLE = Word.from_int(IDLE_VALUE)

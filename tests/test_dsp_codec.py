@@ -65,10 +65,9 @@ def test_every_bit_in_exactly_one_field():
     assert set(owners.values()) == {1}
 
 
-@pytest.mark.parametrize("name", ["f2_6", "f0x", "rb", "class", "unit"])
+@pytest.mark.parametrize("name", ["f2_6", "f0x", "rb", "class"])
 def test_a_name_never_reads_as_an_id_or_another_key(name):
-    # f1 renamed: to another field's id, to an id-like name, to a taken name, to a keyword and
-    # to a slot attribute.
+    # f1 renamed: to another field's id, to an id-like name, to a taken name and to a keyword.
     fields = tuple(replace(f, name=name) if f.id == "f1" else f for f in FIELDS)
     with pytest.raises(ValueError, match=name):
         _index(fields)
@@ -100,10 +99,10 @@ def test_stock_words_rebuild_from_names_and_head_views(items):
             named = {f.label: v for f, v in word.changed()}
             assert Word.from_fields(named) == word, (item, index)
             rest = {k: v for k, v in named.items() if lookup(k).unit not in HEAD_VIEWS}
-            built = Word.from_fields(rest)
-            for unit in HEAD_VIEWS:
-                built = Word.head(unit, built, **word.head_operands(unit))
-            assert built == word, (item, index)
+            built = Word.from_fields(rest).value
+            for view in HEAD_VIEWS.values():
+                built = view.encode(built, view.decode(word.value))
+            assert built == word.value, (item, index)
 
 
 def test_a_head_view_covers_its_unit():
@@ -114,21 +113,25 @@ def test_a_head_view_covers_its_unit():
         assert span == sum(f.span for f in UNITS[unit].fields), unit
 
 
+def head(unit: str, **operands: int) -> Word:
+    return Word(HEAD_VIEWS[unit].encode(IDLE_VALUE, operands))
+
+
 def test_a_head_view_composes_split_immediates():
-    word = Word.head("s0", imm=0xABCD)
+    word = head("s0", imm=0xABCD)
     assert (word["f23_30"], word["f37_40"], word["f76_79"]) == (0xCD, 0xB, 0xA)
-    word = Word.head("s2", imm=0x15)  # f88_91's bit 0 keeps its idle 1
+    word = head("s2", imm=0x15)  # f88_91's bit 0 keeps its idle 1
     assert (word["f88_91"], word["f53_56"]) == (0xB, 0x2)
-    word = Word.head("s1", op=0x04, imm=0x20)
+    word = head("s1", op=0x04, imm=0x20)
     assert (word["f0"], word["f84_87"], word["f80_83"] >> 2) == (0, 0, 1)
-    word = Word.head("s3", imm=0x3ABC - 0x4000)
+    word = head("s3", imm=0x3ABC - 0x4000)
     assert (word["f92_95"], word["f31_34"] >> 2, word["f65_68"], word["f96_99"]) == (
         0xC,
         3,
         0xA,
         0xE,
     )
-    assert word.head_operands("s3")["imm"] == -0x544
+    assert HEAD_VIEWS["s3"].decode(word.value)["imm"] == -0x544
 
 
 @pytest.mark.parametrize(
@@ -143,7 +146,7 @@ def test_a_head_view_composes_split_immediates():
 )
 def test_a_head_view_rejects_bad_operands(unit, operands, error):
     with pytest.raises((ValueError, KeyError), match=error):
-        Word.head(unit, **operands)
+        head(unit, **operands)
 
 
 def test_items_round_trip(items):
@@ -160,11 +163,6 @@ def test_stock_words_pass_the_assembler_checks(items):
 def test_idle_word_is_the_copy_programs_no_op(items):
     words = decode_item(items[16], STOCK[16]).words
     assert [i for i, w in enumerate(words) if w == IDLE] == [3, 4, 6, 7, 8, 9]
-
-
-def test_slots_rebuild_the_word(items):
-    for word in decode_item(items[13], STOCK[13]).words:
-        assert Word(**word.slots()) == word
 
 
 def test_program_16_route_staircase(items):

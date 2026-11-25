@@ -55,6 +55,7 @@ from .fields import (
     LANE_LOAD,
     LANE_SOURCES,
     M_OTHER_OPEN,
+    M_UNITS,
     OP_FIELD,
     PB_FILES,
     PB_SOURCES,
@@ -75,6 +76,8 @@ from .fields import (
     STORE_NOTHING,
     STORE_SOURCES,
     TRANSFER_HEADS,
+    U_NOTHING,
+    U_TAKES,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
     X_IMMEDIATES,
@@ -192,20 +195,6 @@ def _sext(v: int, bits: int) -> int:
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
 
 
-M_UNITS = ("s0", "s1", "s2", "s3")
-"""f274_275's values: the unit whose result M puts out."""
-U_TAKES = {
-    0x1F: range(4),
-    0x21: range(4),
-    0x1C: range(4),
-    0x1B: range(28, 32),
-    0x1E: range(28, 32),
-    0x20: range(28, 32),
-}
-"""What U's port takes beside an S3 head under f232_233 = 1: b's lanes into U's lanes 0..3
-(verified on the camera, pre-registered); U's lanes 4..31 are not known after a write."""
-U_NOTHING = (0x18, 0x19, 0x22, 0x14)
-"""S3 heads beside which U's port wrote nothing (measured on the camera)."""
 LANE_SHIFTS = (0x1B, 0x1C, 0x22)
 HALF = 1 << 16
 
