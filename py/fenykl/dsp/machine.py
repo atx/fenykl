@@ -31,9 +31,13 @@ new content). Buses carry values in the word they arrive in, counted in executed
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
   word; S3's reductions in the third word after the head only.
 
-Strict throughout: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
+Strict by default: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
 give is unknown (None), and a value from a rule below verified carries that tier. Values are 32-bit
 scalars (`Sv`) and 32-lane vectors of 16 bits (`Vec`), each with the weakest tier of what made it.
+Lenient (`Machine.strict` False), a case the facts do not cover lapses instead (`Machine.lapse`):
+what it may write is forgotten, its word's step is unknown and all the job leaves and decides from
+there on is a hypothesis. A control word whose transfer cannot be followed (it leaves its program)
+raises in either mode.
 """
 
 from collections.abc import Mapping, Sequence
@@ -175,6 +179,10 @@ def _cap(x, tier: Confidence):
     return Sv(x.value, tier) if isinstance(x, Sv) else Vec(x.lanes, tier)
 
 
+def _unknown(file: str) -> Sv | Vec:
+    return UNKNOWN_VEC if file in VECTOR_FILES else UNKNOWN
+
+
 def _s32(v: int) -> int:
     return v - (1 << 32) if v & 0x80000000 else v
 
@@ -271,6 +279,9 @@ def _own_word(unit: str, head: int) -> bool:
 class Stream(Protocol):
     """The stream engine's side of X1's transfer heads (`stream.Engine`)."""
 
+    cap: Confidence
+    """The tier cap of what the engine writes from here on (`Machine.limit` lowers it)."""
+
     def transfer(self, m: "Machine", index: int, head: int, value: Sv, t: int) -> None:
         """Transfer `head` of word `index`, executed word `t` of the job, hands `value`
         (B[f115_119]) to the engine."""
@@ -364,12 +375,20 @@ class Machine:
         """Each unit's last such run: its word, head, lag, whether it is the run whose zeros
         were read and whether its word had the port of `ALONE_PORTS`."""
         self._u_write: tuple[int, Vec] | None = None
+        self.cap = V
+        """The tier cap of all the job leaves and decides from here on (`limit`)."""
         self.ceiling = V
-        """The tier cap of what the word being run leaves (`execute`)."""
+        """The tier cap of what the word being run leaves (`execute`), `cap` at most."""
+        self.fitted = False
+        """Whether the word being run runs at all by a fitted rule (`execute`'s ceiling)."""
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
         self.store_src = boot.source("local store", "an own program's family A store")
+        self.strict = True
+        """Whether a case the facts do not cover raises (set by `emu.Executor`), or lapses."""
+        self.lapses: list[str] = []
+        """Lenient: why each lapse of the job (`lapse`), in order."""
 
     def between_jobs(self) -> Carry:
         """The job's end: the stream's outstanding commands complete, and what it leaves."""
@@ -384,6 +403,41 @@ class Machine:
         self.lanes_lost = True
         self.memory.clear()
 
+    def lapse(self, index: int, what: str, why: str, fields: Sequence = ()) -> None:
+        """A case of word `index` the facts do not cover: raises `UnknownSemantics` when strict;
+        lenient, it is recorded and all the job leaves and decides from here on is a hypothesis.
+        The caller forgets what the case may write."""
+        if self.strict:
+            raise UnknownSemantics(index, what, list(fields), why)
+        self.lapses.append(f"{what}: {why}")
+        self.limit(H)
+        self.ceiling = H
+
+    def lose_memories(self, why: str) -> None:
+        """The lane, local and DRAM memories are not known from here on (lenient): something
+        whose reach is not bounded may have written them."""
+        self.lose_lanes()
+        src = self.boot.source("lapse", why)
+        self.boot.local.forget(src)
+        self.boot.dram.backing.clear()
+        for page in self.boot.dram.pages.values():
+            page.forget(src)
+
+    def forget_job(self, why: str) -> None:
+        """Words that ran but are not stepped (lenient): every memory is forgotten and every
+        register is a hypothesis."""
+        self.lose_memories(why)
+        for name in ("G", "A", "B", "R", *self.f, *self.lanes, "U", "O"):
+            regs = self._file(name)
+            regs[:] = [_cap(v, H) for v in regs]
+
+    def limit(self, tier: Confidence) -> None:
+        """Cap all the job leaves and decides from here on at `tier`: the stepping follows a
+        path the caller gave (`emu.Executor`'s branching)."""
+        self.cap = min(self.cap, tier)
+        if self.stream is not None:
+            self.stream.cap = min(self.stream.cap, tier)
+
     def preset(self, regs: Mapping[str, Mapping[int, Preset]]) -> None:
         """Set registers by file and index, e.g. {"B": {3: 0xA0000000}}: an int or `Sv` in G, A,
         B, R and F0..F3, a `Vec` or its 32 lanes in L0..L3, U and O."""
@@ -396,7 +450,7 @@ class Machine:
     def link(self, word: Word) -> tuple[int | None, Confidence]:
         """Op 4's target: the word G[f128_132] names (verified on the camera at r1 and r21)."""
         v = self.g[word["f128_132"]]
-        return v.value, v.tier
+        return v.value, min(v.tier, self.cap)
 
     def decide(
         self,
@@ -413,7 +467,7 @@ class Machine:
             return Branch(None, f"r{word['ra']} unknown", V)
         v = ra.value
         taken = {1: v == 0, 2: v != 0, 0: _s32(v) > 0}[word.op]
-        return Branch(taken, f"r{word['ra']} = {v:#x}", ra.tier)
+        return Branch(taken, f"r{word['ra']} = {v:#x}", min(ra.tier, self.cap))
 
     # ------------------------------------------------------------------ reads
 
@@ -428,7 +482,7 @@ class Machine:
         """Run word `word` (program index `index`) as executed word number `t`; returns a note.
         What it writes (registers, lane and local memory) is capped at `ceiling`: words whose
         running at all was fitted."""
-        self.ceiling = ceiling
+        self.ceiling, self.fitted = min(ceiling, self.cap), ceiling < V
         if word.control and word.op < 4 and word["f120_122"] & 3:
             # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
             raise UnknownSemantics(
@@ -459,7 +513,7 @@ class Machine:
             x1bus = UNKNOWN if x1 is None else x1
         writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
-            self._commit(key, _cap(value, ceiling), t)
+            self._commit(key, _cap(value, self.ceiling), t)
         for due in (
             self.bus_due,
             self.x1_due,
@@ -486,9 +540,9 @@ class Machine:
             return None
         sem = OP_SEMANTICS.get(code)
         if sem is None:
-            raise UnknownSemantics(
-                index, op(code).name, [(OP_FIELD, code)], "no semantics"
-            )
+            self.lapse(index, op(code).name, "no semantics", [(OP_FIELD, code)])
+            self.boot.local.forget(self.store_src)  # the op slot stores there
+            return UNKNOWN
         args = word.operands
         assert args is not None
         ra = self._rd("G", args.ra)
@@ -561,17 +615,15 @@ class Machine:
         offset = rb if by_register else Sv(word.operands.imm)
         if ra.value is None or offset.value is None:
             if code in STORES:
-                raise UnknownSemantics(
-                    index, op(code).name, [], "a local store at an unknown address"
-                )
-            self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
+                self.lapse(index, op(code).name, "a local store at an unknown address")
+            self._unknown_access(code, t)
             return
         ra = Sv(ra.value, min(ra.tier, offset.tier))
         addr = (ra.value + width * offset.value) % LOCAL_BYTES
         if addr % width:
-            raise UnknownSemantics(
-                index, op(code).name, [], f"an unaligned local access at {addr:#x}"
-            )
+            self.lapse(index, op(code).name, f"an unaligned local access at {addr:#x}")
+            self._unknown_access(code, t)
+            return
         if code in STORES:
             datum = self._rd("R", word["f120_122"])
             tier = min(datum.tier, ra.tier, self.ceiling)
@@ -595,6 +647,14 @@ class Machine:
         else:
             datum = Sv(None)
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
+
+    def _unknown_access(self, code: int, t: int) -> None:
+        """A family A access at an address not known or not covered: a store forgets local
+        memory, a load's datum is unknown."""
+        if code in STORES:
+            self.boot.local.forget(self.store_src)
+        else:
+            self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
         # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.
@@ -631,20 +691,16 @@ class Machine:
         a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
         k = X_IMMEDIATES[unit].get(word.value)
         if unit == "x1" and head in TRANSFER_HEADS:
-            if self.ceiling < V:
-                raise UnknownSemantics(
-                    index,
-                    f"x1 {head:#x}",
-                    [],
-                    "a transfer in words run by a fitted rule",
+            if self.fitted:
+                # Lenient: handed as if the word runs.
+                self.lapse(
+                    index, f"x1 {head:#x}", "a transfer in words run by a fitted rule"
                 )
             if self.stream is None:
-                raise UnknownSemantics(
-                    index,
-                    f"x1 {head:#x}",
-                    [],
-                    "a transfer to the stream engine: no stream",
-                )
+                why = "a transfer to the stream engine: no stream"
+                self.lapse(index, f"x1 {head:#x}", why)
+                self.lose_memories(why)
+                return None
             self.stream.transfer(self, index, head, b, t)
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
@@ -673,9 +729,10 @@ class Machine:
         by_reg = head in range(0x1E, 0x22)
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
-                raise UnknownSemantics(
-                    index, f"x0 {head:#x}", [], "a lane store at an unknown address"
-                )
+                why = "a lane store at an unknown address"
+                self.lapse(index, f"x0 {head:#x}", why)
+                self.lose_lanes()
+                return
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
             self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"x0 {head:#x}: address not known")
             return
@@ -1027,9 +1084,8 @@ class Machine:
             # Another unit's held result is not on M here (verified one word after its head).
             return Kept(V if self._quiet(sel, t) else I)
         if len(own) > 1 and sel not in own:
-            raise UnknownSemantics(
-                index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
-            )
+            self.lapse(index, "m", f"own-word results of {sorted(own)}, M under {sel}")
+            return UNKNOWN
         if sel not in own:
             # A lone own-word result under another unit's f274_275 is not on M (verified).
             return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
@@ -1085,9 +1141,8 @@ class Machine:
                 kept[(file, reg)] = value.tier
                 return
             if (file, reg) in writes:
-                raise UnknownSemantics(
-                    index, "ports", [], f"two ports write {file}[{reg}]"
-                )
+                self.lapse(index, "ports", f"two ports write {file}[{reg}]")
+                value = _unknown(file)
             writes[(file, reg)] = value
 
         scalar = {"X0's result": x0bus, "X1's result": x1, ALU_BUS: bus}

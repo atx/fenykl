@@ -742,3 +742,67 @@ def test_a_plain_load_that_wraps_keeps_at_most_inferred_beside_it():
     m, e = machine(bytes(range(64))), stream.Engine()
     drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, (LANE_VECTORS - 1) * 64)])
     assert e.lane_tier(0) == H and e.lane_tier(0x10) == I
+
+
+def lenient_machine() -> tuple[Machine, stream.Engine]:
+    """A lenient machine (`Machine.lapse`) driving its engine, with known src, dst and local
+    bytes."""
+    e = stream.Engine()
+    m = Machine(Boot(), stream=e)
+    m.strict = False
+    m.boot.put(SRC, bytes(64), "src")
+    m.boot.put(DST, bytes(32), "prefill")
+    m.boot.local.write(LOCAL_BASE, Bytes.of(bytes(4), 0))
+    return m, e
+
+
+def forgotten(m: Machine) -> bool:
+    """Every memory forgotten: the lane memory, local memory and DRAM."""
+    local, dram = m.boot.local.read(LOCAL_BASE, 4), m.boot.read(DST, 32)
+    return m.lanes_lost and not any(local.known) and not any(dram.known)
+
+
+@pytest.mark.parametrize(
+    "values, why",
+    [
+        ([0x234, *block(0, 2, 0, 4, 0x10, 0, 0x10, 4, 1)], "grammar was lost"),
+        ([*lanes(0, 1, r6=2), 0x09, SRC, DST, WAIT], "kind 0x9"),
+        ([*lanes(0, 5, r6=10), 4, SRC, DST, WAIT], "outside the shapes it ran in"),
+        ([*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN), WAIT], "DRAM address unknown"),
+    ],
+)
+def test_a_lenient_engine_forgets_every_memory_where_a_reach_is_not_known(values, why):
+    m, e = lenient_machine()
+    drive(m, e, values)
+    assert why in m.lapses[0] and m.cap is H and e.off
+    assert forgotten(m)
+
+
+def test_a_lenient_command_that_never_ends_goes_off_script():
+    m, e = lenient_machine()
+    drive(m, e, [*lanes(0, 1, r6=4), *store(0, 0, DST), WAIT])
+    assert m.lapses == [
+        "stream: transfer 11 (word 11): a store of 64 elements from 32 never ends"
+    ]
+    assert "never ends" in e.off and m.lanes_lost
+    assert not any(m.boot.read(DST, 32).known)  # its destination
+    assert all(m.boot.local.read(LOCAL_BASE, 4).known)  # not reached
+    m, e = lenient_machine()
+    drive(m, e, [*lanes(0, 3, r6=4), *load(0, SRC, 0), WAIT])
+    assert "never ends" in m.lapses[0] and m.lanes_lost
+
+
+def test_a_lenient_wait_that_never_returns_goes_on_at_hypothesis():
+    m, e = lenient_machine()
+    data = [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT]
+    drive(m, e, [*data, WAIT, *load(0, SRC, 0), WAIT])
+    assert m.lapses == ["x1 0x1d: a 0x1d with no command outstanding never ends"]
+    assert m.memory[0] == Vec((0,) * 32, H)  # the load after it lands, a hypothesis
+
+
+def test_a_lenient_queue_past_the_depth_goes_on_at_hypothesis():
+    m, e = lenient_machine()
+    loads = [v for k in range(stream.DEPTH + 1) for v in load(0, SRC, 64 * k)]
+    drive(m, e, [*lanes(0, 1, r6=2), *loads, *[WAIT] * (stream.DEPTH + 1)])
+    assert len(m.lapses) == 1 and "more than 44 commands" in m.lapses[0]
+    assert not e.outstanding and m.memory[stream.DEPTH] == Vec((0,) * 32, H)
