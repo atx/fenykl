@@ -27,11 +27,12 @@ class Cost:
 
 
 JOB = Cost(
-    98.4,
+    97.9,
     I,
     "the job's fixed cost, the interrupt and callback path: the 101 us intercept of loops of "
     "512 to 2048 passes against their pass counts (verified on the camera, in a pre-registered "
-    "range of 95 to 115 us) less the first runs of those jobs' 42 words (2.6 us, fitted)",
+    "range of 95 to 115 us) less the first runs of those jobs' 42 words (2.7 us at `FIRST`) and "
+    "their unrun line words (0.4 us at `UNRUN`), fitted",
 )
 REPEAT = Cost(
     0.00537,
@@ -41,25 +42,27 @@ REPEAT = Cost(
     "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
     "idle words at 5.2 to 5.3 ns in passes of 64 to 1024 words, and in passes that jump 1088 "
     "words away and back by op 2 or op 3 (verified on the camera, pre-registered: no loop "
-    "buffer and no cache smaller than 1024 words; passes of 2000 words 5.24 ns from four "
-    "totals, and a 900-word straight run repeated after 900 other words at the repeat rate, "
-    "pre-registered); in passes of 107 to 2000 words only idle words were "
-    "timed, so other words there repeat at `REPEAT_I`; "
+    "buffer and no cache smaller than 1024 words; passes of exactly 2000 words 5.24 ns from "
+    "four totals, pre-registered); passes of 1536 and 1800 words (4.9 and 5.7 ns) and a "
+    "900-word straight run repeated after 900 other words (at the repeat rate within the "
+    "jitter) were measured outside their registered windows, so those distances repeat at "
+    "`REPEAT_I`; in passes of 107 to 1024 words and of 2000 only idle words were timed, so "
+    "other words there repeat at `REPEAT_I`; "
     "S3 reductions likewise (fitted)",
 )
 REPEAT_I = Cost(
     REPEAT.us,
     I,
     "a word executed again outside the measured passes (a pass under 9 words, over 106 for a "
-    "word that is not idle, over 2000 for an idle word, or "
+    "word that is not idle, other than 9 to 1024 or exactly 2000 for an idle word, or "
     "with an op 4 since the word's last run), or with an S unit's head: S3 reductions "
     "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
     "more than an idle word)",
 )
 PASSES = range(9, 107)
 """Executed words between two runs of a word in the loops timed on the camera, any word class."""
-IDLE_PASSES = range(9, 2001)
-"""Likewise for idle words."""
+IDLE_PASSES = frozenset(range(9, 1025)) | {2000}
+"""Likewise for idle words: passes of 9 to 1024 words and of exactly 2000."""
 FIRST = Cost(
     0.064,
     I,

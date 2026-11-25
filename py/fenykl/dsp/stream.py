@@ -128,7 +128,7 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         ROWS_SHAPE: (V, WRAPPED),
         LOCAL_SHAPE: (V, DIRECT),
     },
-    3: {BASE_SHAPE: (I, None)},
+    3: {BASE_SHAPE: (I, WRAPPED)},
     4: {
         BASE_SHAPE: (I, WRAPPED),
         HALF_SHAPE: (V, DIRECT),
@@ -136,16 +136,16 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         PAIR_SHAPE: (I, DIRECT),
         TRIPLE_SHAPE: (I, DIRECT),
     },
-    5: {BASE_SHAPE: (I, None)},
-    7: {BASE_SHAPE: (I, None)},
+    5: {BASE_SHAPE: (I, WRAPPED)},
+    7: {BASE_SHAPE: (I, WRAPPED)},
     FILL: {
         BASE_SHAPE: (V, WRAPPED),
         HALF_SHAPE: (V, WRAPPED),
         QUAD_SHAPE: (V, WRAPPED),
     },
 }
-"""The shapes each kind ran in: (tier, the memory-side offset's form; None for kinds that move
-nothing). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
+"""The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
+for kinds that move nothing; a fill's "to" also vector-aligned, as every fill ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
 a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 only.
 Another shape, or the other offset form, raises `UnknownSemantics`."""
 DEPTH = 44
@@ -388,8 +388,11 @@ class Engine:
                     f"{cmd.where}: command kind {cmd.kind:#x} outside the shapes it ran in",
                 )
             tier, form = run
-            if form is not None:
-                off = cmd.frm if KIND_AS[cmd.kind] == STORE else cmd.to
+            kind = KIND_AS[cmd.kind]
+            offs = {STORE: (cmd.frm,), NOTHING_MOVES: (cmd.frm, cmd.to)}.get(
+                kind, (cmd.to,)
+            )
+            for off in offs:
                 wrapped = (
                     off.value is not None and off.value >= LANE_VECTORS * VECTOR_BYTES
                 )
@@ -401,8 +404,16 @@ class Engine:
                         f"{cmd.where}: command kind {cmd.kind:#x} with a memory offset "
                         f"not {form} as where it ran",
                     )
-                if form == WRAPPED:
-                    cmd = replace(cmd, wrap_tier=tier)
+            if kind == FILL and cmd.to.value % VECTOR_BYTES:
+                raise UnknownSemantics(
+                    cmd.index,
+                    "stream",
+                    [],
+                    f"{cmd.where}: a fill to {cmd.to.value:#x}, not vector-aligned as "
+                    "every fill ran",
+                )
+            if form == WRAPPED:
+                cmd = replace(cmd, wrap_tier=tier)
             self.cap = min(self.cap, tier)
             cmd = replace(cmd, kind=KIND_AS[cmd.kind])
         if cmd.kind not in (LOAD, NOTHING_MOVES, STORE, FILL):

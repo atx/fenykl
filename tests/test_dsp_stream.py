@@ -369,7 +369,7 @@ def test_kind_4_rows_raise():
 def test_kinds_3_5_and_7_move_nothing_at_inferred(kind):
     m, e = machine(bytes(range(64))), stream.Engine()
     m.memory[0] = Vec((7,) * 32, V)
-    drive(m, e, [*lanes(0, 1, r6=2), kind, SRC, 0, WAIT])
+    drive(m, e, [*lanes(0, 1, r6=2), kind, SRC, DST, WAIT])
     assert m.memory[0].lanes == (7,) * 32 and e.cap == I
 
 
@@ -573,3 +573,17 @@ def test_kinds_with_the_offset_form_they_did_not_run_in_raise(kind, regs, frm, t
     m = machine(bytes(256))
     with pytest.raises(UnknownSemantics, match="memory offset not"):
         drive(m, stream.Engine(), [*block(0, *regs), kind, frm, to, WAIT])
+
+
+@pytest.mark.parametrize("kind", [3, 5, 7])
+@pytest.mark.parametrize(("frm", "to"), [(SRC, 0x40), (0x40, DST)])
+def test_kinds_3_5_and_7_with_a_direct_offset_raise(kind, frm, to):
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="memory offset not"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), kind, frm, to, WAIT])
+
+
+def test_a_fill_not_vector_aligned_raises():
+    m = machine()
+    with pytest.raises(UnknownSemantics, match="not vector-aligned"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x08, 0x1234, DST + 0x20, WAIT])

@@ -121,16 +121,17 @@ def test_a_loops_words_are_counted_and_tiered():
     assert e.tier == I
 
 
-@pytest.mark.parametrize("n", [900, 1990])
-def test_passes_up_to_2000_words_repeat_at_the_verified_rate_for_idle_words_only(n):
+@pytest.mark.parametrize("n", [900, 1994])
+def test_idle_passes_of_up_to_1024_words_and_of_2000_repeat_verified(n):
     """A pass of n + 6 words: its idle words repeat verified, its loop word inferred."""
     parts = {p.name: p.us for p in loop(n).parts}
     idle, other = parts["repeats"] / REPEAT.us, parts["inferred repeats"] / REPEAT_I.us
     assert round(idle) == (n + 5) * round(other) and round(other) > 0
 
 
-def test_idle_passes_over_2000_words_repeat_inferred():
-    parts = {p.name for p in loop(2010).parts}
+@pytest.mark.parametrize("n", [1100, 1530, 1799, 2010])
+def test_idle_passes_between_1024_and_2000_words_and_beyond_repeat_inferred(n):
+    parts = {p.name for p in loop(n).parts}
     assert "repeats" not in parts and "inferred repeats" in parts
 
 

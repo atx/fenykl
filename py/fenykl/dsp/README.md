@@ -490,8 +490,8 @@ figures into a job's time ("Timing" below).
   within 1.5 ns [verified, pre-registered]. A straight-line word costs about 64 ns the first time
   it runs [verified range]; instructions are fetched in lines of 8 words aligned to multiples of 8,
   so a word branched over inside a line that runs costs as if it ran, a whole line branched over
-  costs nothing [inferred]; a word run again later in the same job, even far from a loop, costs the
-  repeat rate [verified]. A job adds about 100 us (the interrupt path), and
+  costs nothing [inferred]; a word run again later in the same job, even far from a loop, costs
+  about the repeat rate [measured, outside its registered window]. A job adds about 100 us (the interrupt path), and
   single jobs jitter by up to 1.5 ms, so timings take the minimum over repeats.
 - The stream engine moves about 2.2 KiB per us for byte loads and stores alike, with well under
   1 us per command besides the bytes, byte loads into local memory at about 0.7 KiB per us;
@@ -945,12 +945,12 @@ as the job's completion time against loop pass counts, minimum over repeats:
   16-word stride cost about 0.8 of a line more than at 0 / 8; strides of 24 and 64 words cost
   2 to 5 words per jump more than the lines predict, unexplained];
 - **repeats**: 5.37 ns for each later execution 9 to 106 executed words after the word's last
-  (an idle word: 9 to 2000), with no op 4 between [verified in loops of 9 to 106 words for idle
+  (an idle word: 9 to 1024 or exactly 2000), with no op 4 between [verified in loops of 9 to 106 words for idle
   words, scalar local loads, X1's divide, X0 lane loads and taken branches with their slots,
   and for idle words in loops of 64 to 1024 words and in loops that jump 1088 words away and
-  back by op 2 or op 3, in 2000-word passes (5.24 ns from four totals) and in a 900-word
-  straight run repeated after 900 other words: no loop buffer, and the image stays fetched
-  for the job]; other repeats, and repeated
+  back by op 2 or op 3, and in 2000-word passes (5.24 ns from four totals): no loop buffer;
+  1536- and 1800-word passes and a 900-word straight run repeated after 900 other words were
+  measured outside their registered windows]; other repeats, and repeated
   words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
   not timed];
 - **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and
