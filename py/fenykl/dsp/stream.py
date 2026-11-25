@@ -257,6 +257,9 @@ class Engine:
     )
     """The completions of the commands handed and not yet waited for, oldest first, each
     called with the cap on what it writes."""
+    spans: list[frozenset[int] | None] = field(default_factory=list)
+    """Per outstanding command the lane-memory vectors it reads or writes; None where not
+    bounded (a local-memory command, one that moves nothing, the engine off script)."""
     commands: int = 0
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); in a job that handed none it returned (inferred, one job)."""
@@ -292,15 +295,43 @@ class Engine:
             if len(self.group) == self.need:
                 self._group(m, where, index, t)
 
-    def lane_tier(self) -> Confidence:
-        """Own words beside an outstanding command meet the engine at work (hypothesis)."""
-        return H if self.outstanding else self.cap
+    def lane_tier(self, vector: int | None = None) -> Confidence:
+        """Own words beside an outstanding command meet the engine at work (hypothesis), unless
+        `vector` lies outside every outstanding command's lane-memory vectors: lane loads and
+        stores on one bank while a load into the other and a store from it were outstanding
+        gave the pre-registered bytes on the camera (verified for byte loads and stores of one
+        row on disjoint vectors)."""
+        if not self.outstanding:
+            return self.cap
+        if vector is None or any(s is None or vector in s for s in self.spans):
+            return H
+        return self.cap
+
+    def _pop(self, m: Machine, cap: Confidence) -> None:
+        self.spans.pop(0)
+        self.outstanding.pop(0)(m, cap)
+
+    def _span(self, cmd: _Command) -> frozenset[int] | None:
+        """The lane vectors a lane-memory load, store or fill touches; None for other memory."""
+        r = cmd.regs
+        if r[0].value != LANE_MEMORY:
+            return None
+        if cmd.kind == FILL:
+            base, n = cmd.to.value // VECTOR_BYTES, r[3].value
+            return frozenset((base + v) % LANE_VECTORS for v in range(n))
+        rows, _ = self._rows(cmd, LANE_MEMORY)
+        per = -(-r[3].value * r[2].value // 0x20)
+        return frozenset(
+            (off // VECTOR_BYTES + v) % LANE_VECTORS
+            for _, off in rows
+            for v in range(per)
+        )
 
     def finish(self, m: Machine) -> None:
         """The job ends: the commands still outstanding complete (inferred for loads: only a
         store outstanding at the end was measured)."""
         while self.outstanding:
-            self.outstanding.pop(0)(m, min(self.cap, I))
+            self._pop(m, min(self.cap, I))
 
     # ------------------------------------------------------------------ the grammar
 
@@ -348,7 +379,7 @@ class Engine:
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
             return
         if self.outstanding:
-            self.outstanding.pop(0)(m, self.cap)
+            self._pop(m, self.cap)
         elif not self.commands:
             self.cap = min(self.cap, I)  # a lone 0x1d returns (inferred)
         else:
@@ -429,6 +460,7 @@ class Engine:
             )
         self.commands += 1
         self.outstanding.append(_nothing)
+        self.spans.append(None)
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
@@ -445,6 +477,7 @@ class Engine:
                 self.outstanding[-1] = self._load(m, cmd)
             else:
                 self.outstanding[-1] = self._store(m, cmd)
+            self.spans[-1] = self._span(cmd)
         except _Off as e:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)

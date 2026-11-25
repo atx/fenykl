@@ -587,3 +587,13 @@ def test_a_fill_not_vector_aligned_raises():
     m = machine()
     with pytest.raises(UnknownSemantics, match="not vector-aligned"):
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x08, 0x1234, DST + 0x20, WAIT])
+
+
+def test_lane_vectors_outside_every_outstanding_command_keep_their_tier():
+    """A load of vectors 0..1 outstanding: vectors 0 and 1 are a hypothesis, vector 2 is not;
+    a command on local memory leaves every vector a hypothesis."""
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0)])
+    assert e.lane_tier(0) == H and e.lane_tier(1) == H and e.lane_tier(2) == V
+    e.finish(m)
+    assert e.lane_tier(0) == V

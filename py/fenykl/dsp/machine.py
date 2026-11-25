@@ -268,8 +268,9 @@ class Stream(Protocol):
         """Transfer `head` of word `index`, executed word `t` of the job, hands `value`
         (B[f115_119]) to the engine."""
 
-    def lane_tier(self) -> Confidence:
-        """The tier of the lane memory's content for own words at the stream's position."""
+    def lane_tier(self, vector: int | None = None) -> Confidence:
+        """The tier of the lane memory's content (at `vector`, or anywhere) for own words at the
+        stream's position."""
 
     def finish(self, m: "Machine") -> None:
         """The job ends: what the engine still has to do completes."""
@@ -622,7 +623,7 @@ class Machine:
             a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1], self.ceiling
         )
         if self.stream is not None:
-            tier = min(tier, self.stream.lane_tier())
+            tier = min(tier, self.stream.lane_tier(addr))
         if self.lanes_lost:
             if head in X0_LANE_LOADS:
                 self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(
