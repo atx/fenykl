@@ -15,6 +15,7 @@ from fenykl.dsp.timing import (
     FIRST,
     LANE_LOAD,
     LANE_LOAD16,
+    LANE_STORE,
     LANE_STORE12,
     LANE_STORE16,
     LOCAL_LOAD,
@@ -282,6 +283,17 @@ def test_byte_lane_loads_are_verified_over_1_to_16_kib_only():
         assert part(e, "stream waits").us == pytest.approx(want)
     for r6 in (0x20, 0x410):
         e = run([*lanes(0, r6), *load(0), WAIT])
+        assert e.us is None and "KiB" in e.unknown
+
+
+def test_byte_lane_stores_are_verified_over_half_to_16_kib_only():
+    assert LANE_STORE.tier == V
+    for r6, kib in ((0x20, 0.5), (0x400, 16)):
+        e = run([*lanes(0, r6), *store(0), WAIT])
+        want = LANE_STORE.per_command + LANE_STORE.per_kib * kib - FIRST.us
+        assert part(e, "stream waits").us == pytest.approx(want)
+    for r6 in (0x10, 0x410):
+        e = run([*lanes(0, r6), *store(0), WAIT])
         assert e.us is None and "KiB" in e.unknown
 
 
