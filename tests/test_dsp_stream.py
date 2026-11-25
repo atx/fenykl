@@ -423,6 +423,13 @@ def test_a_local_fill_raced_by_a_write_leaves_those_bytes_unknown():
     assert list(got.known) == [1] * 4 + [0] * 4 + [1] * 8
 
 
+def test_a_store_of_vectors_nothing_wrote_is_listed():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec((7,) * 32, V)
+    drive(m, e, [*lanes(0, 2, r6=4), *store(0, 0, DST), WAIT])
+    assert e.unwritten == [("transfer 11 (word 11)", 1)]
+
+
 def test_more_commands_outstanding_than_the_depth_raise():
     m = machine(bytes(64))
     loads = [v for k in range(stream.DEPTH) for v in load(0, SRC, 64 * k)]

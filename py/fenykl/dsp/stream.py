@@ -292,6 +292,10 @@ class Engine:
     """(DRAM address, length) of every store row written."""
     events: list[Event] = field(default_factory=list)
     """Every command handed and every 0x1d, in order."""
+    unwritten: list[tuple[str, int]] = field(default_factory=list)
+    """(where, vector) for each lane vector a store read that nothing had written in the job (no
+    load, fill or X0 store; nor carried from an earlier job): a check for programs whose own
+    stores went elsewhere, not a camera fact."""
 
     # ------------------------------------------------------------------ the stream protocol
 
@@ -784,6 +788,13 @@ class Engine:
                 element = _local_elements(data, nb)
             else:
                 taken.append(_lane_source(m, off, n))
+                if not m.lanes_lost:
+                    base = off // VECTOR_BYTES
+                    self.unwritten += [
+                        (cmd.where, (base + v) % LANE_VECTORS)
+                        for v, x in enumerate(taken[-1])
+                        if x is None
+                    ]
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
             out = pack(src, bits, 16 * r6, element, tier, width)
