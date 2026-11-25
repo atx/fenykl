@@ -14,9 +14,10 @@ Grammar (verified): the values form groups, each starting with a key v.
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
   offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
   (inferred: what follows it is capped at inferred). Kinds 2 and 4 load and store as 0 and 6,
-  kinds 3 and 5 move nothing as 1, kind 8 fills (r3 lane-memory vectors from the one "to" names,
-  every lane "from"'s low 16 bits; no DRAM read or written), each only in the shapes it ran in
-  (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
+  kinds 3 and 5 move nothing as 1, kind 8 fills (under r0 1 r3 lane-memory vectors from the one
+  "to" names, every lane "from"'s low 16 bits; under r0 2 r3 local words from "to", each filled
+  with copies of "from"'s low r2-wide element: `LOCAL_FILLS`; no DRAM read or written), each only
+  in the shapes it ran in (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
   `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
@@ -93,7 +94,8 @@ CHANNELS, REGISTERS = 4, 8
 LOAD, NOTHING_MOVES, STORE = 0, 1, 6
 """The command kinds measured."""
 FILL = 8
-"""Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits (no DRAM side)."""
+"""Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits, or under r0 2 the
+local words at "to" with copies of "from"'s low r2-wide element (no DRAM side)."""
 KIND_AS = {
     2: LOAD,
     3: NOTHING_MOVES,
@@ -124,6 +126,23 @@ PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
 """Two vectors of byte elements (four lines)."""
 TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
 """Three vectors of byte elements (six lines)."""
+LOCAL_FILLS: dict[tuple[int, int, int], tuple[int, Confidence]] = {
+    (4, 3, 2): (0x400, I),
+    (4, 5, 2): (0x500, I),
+    (4, 8, 2): (0x400, I),
+    (2, 4, 4): (0x700, I),
+    (2, 8, 2): (0x600, I),
+    (1, 6, 3): (0x600, I),
+    (1, 3, 5): (0x700, I),
+}
+"""Kind 8 under r0 2 on channel 0 (r1 0, r4 0, r5 0x10, r7 1) by the (r2, r3, r6) that ran: the
+"to" it ran at and its tier: inferred, each shape having run in one job (the rule itself, r3 words of
+copies of "from"'s low r2-wide element, matched on pre-registered jobs at every r2). Another word-aligned
+"to" in `LOCAL_FILL_TO` is capped at inferred; other registers, channels and offsets, and a "from"
+at 0x8000 or above or whose element has its top bit set (every value that ran was below 0x8000,
+its element's top bit clear), raise
+`UnknownSemantics`."""
+LOCAL_FILL_TO = range(0x400, 0x701)
 WRAPPED, DIRECT = "wrapped", "direct"
 """How a kind's memory-side offset was handed where it ran: a DRAM address counted modulo
 `fields.LANE_VECTORS` vectors (the job's dst or src), or an offset inside the memory."""
@@ -150,10 +169,15 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         BASE_SHAPE: (V, WRAPPED),
         HALF_SHAPE: (V, WRAPPED),
         QUAD_SHAPE: (V, WRAPPED),
+        **{
+            (2, 0, r2, r3, 0, 0x10, r6, 1): (tier, DIRECT)
+            for (r2, r3, r6), (_, tier) in LOCAL_FILLS.items()
+        },
     },
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
-for kinds that move nothing; a fill's "to" also vector-aligned, as every fill ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
+for kinds that move nothing; a lane fill's "to" also vector-aligned, as every one ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job
+(local fills: `LOCAL_FILLS`);
 a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 (loads) and
 kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
@@ -281,6 +305,10 @@ class Engine:
     """(DRAM address, length) of every store row written."""
     events: list[Event] = field(default_factory=list)
     """Every command handed and every 0x1d, in order."""
+    unwritten: list[tuple[str, int]] = field(default_factory=list)
+    """(where, vector) for each lane vector a store read that nothing had written in the job (no
+    load, fill or X0 store; nor carried from an earlier job): a check for programs whose own
+    stores went elsewhere, not a camera fact."""
 
     # ------------------------------------------------------------------ the stream protocol
 
@@ -459,7 +487,7 @@ class Engine:
                         f"{cmd.where}: command kind {cmd.kind:#x} with a memory offset "
                         f"not {form} as where it ran",
                     )
-            if kind == FILL and cmd.to.value % VECTOR_BYTES:
+            if kind == FILL and form == WRAPPED and cmd.to.value % VECTOR_BYTES:
                 raise UnknownSemantics(
                     cmd.index,
                     "stream",
@@ -508,6 +536,8 @@ class Engine:
 
     def _fill(self, m: Machine, cmd: _Command) -> Callable[[Machine, Confidence], None]:
         """Kind 8: r3 vectors from the one "to" names, every lane "from"'s low 16 bits."""
+        if cmd.regs[0].value == LOCAL_MEMORY:
+            return self._local_fill(m, cmd)
         value = _known(cmd.frm, "the fill value") & 0xFFFF
         base = _known(cmd.to, "a memory offset") // VECTOR_BYTES
         r3 = _known(cmd.regs[3], "r3")
@@ -530,6 +560,49 @@ class Engine:
                     if racing
                     else Vec((value,) * LANE_COUNT, min(tier, cap, wrap))
                 )
+
+        return complete
+
+    def _local_fill(
+        self, m: Machine, cmd: _Command
+    ) -> Callable[[Machine, Confidence], None]:
+        """Kind 8 under r0 2: r3 local words from "to", each copies of "from"'s low element of
+        r2's width (32 / r2 bits)."""
+        r = cmd.regs
+        r2, r3, r6 = (r[i].value for i in (2, 3, 6))  # the shape matched: known
+        to, frm = cmd.to.value, _known(cmd.frm, "the fill value")
+
+        def unmeasured(why: str) -> UnknownSemantics:
+            return UnknownSemantics(cmd.index, "stream", [], f"{cmd.where}: {why}")
+
+        ran_to, tier = LOCAL_FILLS[(r2, r3, r6)]
+        if cmd.channel != 0:
+            raise unmeasured(f"a local fill on channel {cmd.channel}: not measured")
+        if to % 4 or to not in LOCAL_FILL_TO:
+            raise unmeasured(f"a local fill to {to:#x}: not measured")
+        width = LOCAL_WIDTHS[r2]
+        element = frm & (1 << width) - 1
+        if element >> (width - 1) or frm >> 15:
+            # Every "from" that ran was below 0x8000, its element's top bit clear.
+            raise unmeasured(f"a {width}-bit local fill of {frm:#x}: not measured")
+        word = sum(element << k for k in range(0, 32, width))
+        size = 4 * r3
+        tier = min([tier, self.cap, cmd.tier, *(x.tier for x in r)])
+        if to != ran_to:
+            tier = min(tier, I)
+        src = m.boot.source("stream fill in flight", cmd.where)
+        m.boot.local.write(LOCAL_BASE + to, Bytes.unknown(size, src))
+        filled = m.boot.source(
+            "stream fill", "the stream engine's fill of local memory"
+        )
+
+        def complete(m: Machine, cap: Confidence) -> None:
+            out = Bytes.of(word.to_bytes(4, "little") * r3, filled, min(tier, cap))
+            now = m.boot.local.read(LOCAL_BASE + to, size)
+            for i in range(size):
+                if now.src[i] != src:  # written while the fill ran: raced
+                    out.known[i] = 0
+            m.boot.local.write(LOCAL_BASE + to, out)
 
         return complete
 
@@ -727,6 +800,13 @@ class Engine:
                 element = _local_elements(data, nb)
             else:
                 taken.append(_lane_source(m, off, n))
+                if not m.lanes_lost:
+                    base = off // VECTOR_BYTES
+                    self.unwritten += [
+                        (cmd.where, (base + v) % LANE_VECTORS)
+                        for v, x in enumerate(taken[-1])
+                        if x is None
+                    ]
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
             out = pack(src, bits, 16 * r6, element, tier, width)

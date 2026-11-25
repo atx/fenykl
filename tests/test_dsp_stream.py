@@ -374,6 +374,75 @@ def test_kind_8_fills_r3_vectors_with_the_low_16_bits_of_from(r3, r5, r6):
     assert bytes(m.boot.read(DST, 32).data) == bytes(32)
 
 
+def local_fill(r2: int, r3: int, r6: int, channel: int = 0) -> list[int]:
+    """A channel on the local memory as kind 8 ran there."""
+    return block(channel, 2, 0, r2, r3, 0, 0x10, r6, 1)
+
+
+@pytest.mark.parametrize(
+    ("regs", "to", "word", "tier"),
+    [
+        ((4, 5, 2), 0x500, 0x21212121, I),  # each shape ran in one job
+        ((2, 4, 4), 0x700, 0x2A212A21, I),
+        ((1, 3, 5), 0x700, 0x00002A21, I),
+        ((2, 8, 2), 0x600, 0x2A212A21, I),
+        ((4, 5, 2), 0x540, 0x21212121, I),  # another "to"
+    ],
+)
+def test_kind_8_on_local_memory_fills_r3_words_with_copies_of_the_low_element(
+    regs, to, word, tier
+):
+    m, e = machine(), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + to, Bytes.of(bytes(range(64)), 0))
+    r3 = regs[1]
+    drive(m, e, [*local_fill(*regs), 0x08, 0x2A21, to])
+    assert not any(m.boot.local.read(LOCAL_BASE + to, 4 * r3).known)  # in flight
+    drive(m, e, [WAIT])
+    got = m.boot.local.read(LOCAL_BASE + to, 64)
+    assert bytes(got.data[: 4 * r3]) == word.to_bytes(4, "little") * r3
+    assert all(got.known) and got[: 4 * r3].weakest() == tier
+    assert bytes(got.data[4 * r3 :]) == bytes(range(4 * r3, 64))
+    assert not m.memory and not e.off
+
+
+@pytest.mark.parametrize(
+    ("fill", "frm", "to", "why"),
+    [
+        (local_fill(2, 7, 2), 0x11, 0x400, "outside the shapes"),
+        (local_fill(4, 5, 1), 0x11, 0x400, "outside the shapes"),
+        (local_fill(4, 5, 2, channel=1) + [0x48], 0x11, 0x500, "channel 1"),
+        (local_fill(4, 5, 2), 0x11, 0x200, "fill to 0x200"),
+        (local_fill(4, 5, 2), 0x11, 0x502, "fill to 0x502"),
+        (local_fill(4, 5, 2), 0x1180, 0x500, "8-bit local fill"),
+        (local_fill(2, 4, 4), 0x8001, 0x700, "16-bit local fill"),
+        (local_fill(2, 4, 4), 0x12340011, 0x700, "16-bit local fill"),
+        (local_fill(1, 3, 5), 0x8001, 0x700, "32-bit local fill"),
+    ],
+)
+def test_an_unmeasured_local_fill_raises(fill, frm, to, why):
+    """A list ending in its command key runs that key; others kind 8 on channel 0."""
+    command = [] if len(fill) > 9 else [0x08]
+    m = machine()
+    with pytest.raises(UnknownSemantics, match=why):
+        drive(m, stream.Engine(), [*fill, *command, frm, to])
+
+
+def test_a_local_fill_raced_by_a_write_leaves_those_bytes_unknown():
+    m, e = machine(), stream.Engine()
+    drive(m, e, [*local_fill(2, 4, 4), 0x08, 0x1111, 0x600])
+    m.boot.local.write(LOCAL_BASE + 0x604, Bytes.of(bytes(4), 0))
+    drive(m, e, [WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x600, 16)
+    assert list(got.known) == [1] * 4 + [0] * 4 + [1] * 8
+
+
+def test_a_store_of_vectors_nothing_wrote_is_listed():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec((7,) * 32, V)
+    drive(m, e, [*lanes(0, 2, r6=4), *store(0, 0, DST), WAIT])
+    assert e.unwritten == [("transfer 11 (word 11)", 1)]
+
+
 def test_more_commands_outstanding_than_the_depth_raise():
     m = machine(bytes(64))
     loads = [v for k in range(stream.DEPTH) for v in load(0, SRC, 64 * k)]
