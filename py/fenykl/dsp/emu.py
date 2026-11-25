@@ -12,6 +12,7 @@ reads it gets UNKNOWN bytes, never guessed ones.
 `Executor.step` steps a job instead: a program counter that follows the control ops (calls,
 returns, branches and loop ends with their delay slots, the halt) and runs the data ops by the
 op slot's semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
+`Boot.run` steps a program on the datapath executor (`machine.Machine`) in one call.
 
 The emulator does not model time. On the camera a word costs about 62 ns the first time it runs
 (straight-line words; a branch over 1200 idle words cost nothing, running them about 62 ns
@@ -20,7 +21,7 @@ repeats in a loop (0.185 us per 36-word pass, idle and compute words alike; per 
 over three loop sizes, a per-pass cost not excluded) (measured on the camera; inferred).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Protocol
@@ -31,10 +32,11 @@ from .fields import (
     OP_FIELD,
     Confidence,
     Kind,
-    Operands,
     lookup,
     op,
 )
+from .job import Flow, Job, Step, Stop
+from .machine import Carry, Machine, Preset
 from .program import Program
 from .semantics import (
     LOCAL_BYTES,
@@ -51,6 +53,7 @@ from .semantics import (
     destinations,
 )
 from .state import (
+    LOCAL_BASE,
     BootParams,
     Bytes,
     JobView,
@@ -59,12 +62,14 @@ from .state import (
     Source,
     Space,
     SparseSpace,
+    dram_alias,
 )
+from .stream import Engine
+from .timing import Estimate, estimate
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
-LOCAL_BASE = 0x9D000000
 LOCAL_SIZE = LOCAL_BYTES
 """Local memory, 8 KiB, which the scalar addresses wrap in (`semantics.LOCAL_BYTES`)."""
 BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
@@ -76,23 +81,10 @@ LINE_PAIRS = 3 * 2 * 64
 """The resampler's held line pairs: plane c, line parity r, pixel x at (2 c + r) x 64 + x."""
 
 
-def dram_alias(addr: int) -> int:
-    """0x6xxxxxxx (cached) and 0xAxxxxxxx (uncached) are the same DRAM."""
-    return addr & 0x3FFFFFFF
-
-
 class Status(Enum):
     OK = "ok"
     TIMEOUT = "timeout-abort (0xA111)"
     HAZARD = "wedged or link lost"
-
-
-@dataclass(frozen=True)
-class Job:
-    """A program and its request: (offset, bytes) writes to DSP local memory."""
-
-    program: Program
-    local: tuple[tuple[int, bytes], ...]
 
 
 @dataclass
@@ -110,6 +102,28 @@ class JobResult:
     edits: list[tuple[str, Confidence]] = field(default_factory=list)
     """The measured edits of the stock program the job ran, each with the confidence of its
     outcome on this job."""
+
+
+STEP_LIMIT = 100_000
+
+
+class NoHalt(Exception):
+    """A run that stopped short of its halt (`Stop`); its `flow` holds the steps."""
+
+    def __init__(self, flow: Flow) -> None:
+        super().__init__(f"the job did not halt: {flow.stop.value} {flow.why}".strip())
+        self.flow = flow
+
+
+@dataclass(frozen=True)
+class Run:
+    """A job run on the datapath executor (`Boot.run`)."""
+
+    job: Job
+    flow: Flow
+    machine: Machine
+    """The job's machine: its registers and lane memory at the halt, its stream engine."""
+    estimate: Estimate
 
 
 class Boot:
@@ -133,6 +147,9 @@ class Boot:
         self.substitute_at_boot = True
         """Whether the substitute still holds its boot value: no edit has moved it."""
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
+        self.carry: Carry | None = None
+        """What the last job `run` left for the next (`machine.Carry`); None before the first
+        run and after a run that did not halt."""
 
     def source(self, name: str, fact: str = "") -> int:
         """The id of source (name, fact). Equal sources share one id, so the list stays bounded
@@ -174,6 +191,29 @@ class Boot:
         request = self.source("request", "written by the command's CPU setup")
         for offset, data in job.local:
             self.local.write(LOCAL_BASE + offset, Bytes.of(data, request))
+
+    def run(
+        self,
+        program: Program,
+        *,
+        regs: Mapping[str, Mapping[int, Preset]] | None = None,
+        request: tuple[tuple[int, bytes], ...] = (),
+        strict: bool = True,
+        limit: int = STEP_LIMIT,
+    ) -> Run:
+        """Step `program` on a `Machine` with a fresh stream `Engine`, its registers and lane
+        memory those the last run left (`carry`), then `regs` by file and index
+        (`Machine.preset`); keep what it leaves for the next run. Raises `NoHalt` for a run
+        that stops short of its halt."""
+        machine = Machine(self, self.carry, stream=Engine())
+        machine.preset(regs or {})
+        job = Job(program, request)
+        self.carry = None
+        flow = Executor(self, strict=strict, limit=limit, datapath=machine).step(job)
+        if flow.stop is not Stop.HALT:
+            raise NoHalt(flow)
+        self.carry = machine.between_jobs()
+        return Run(job, flow, machine, estimate(job, flow, machine.stream))
 
 
 def start_copy(boot: Boot) -> JobView:
@@ -225,78 +265,6 @@ class Datapath(Protocol):
 HALT_TAIL = 3
 """The words behind a halt that still run: of five stores there the first three wrote (verified
 on the camera in two runs, the second pre-registered)."""
-
-
-class Stop(Enum):
-    HALT = "halt"
-    UNDECIDED = "a conditional control op the branching hypothesis does not decide"
-    STEP_LIMIT = "the step limit"
-
-
-@dataclass(frozen=True)
-class Step:
-    """One executed word."""
-
-    index: int
-    op: int
-    slot: bool = False
-    """In the delay slots of a control op."""
-    operands: Operands | None = None
-    target: int | None = None
-    taken: bool | None = None
-    """For a control op: whether it transfers, None when undecided."""
-    note: str = ""
-    """The control decision and why, or what the data op's semantics did."""
-    unknown: bool = False
-    """A data op without semantics, recorded (lenient mode)."""
-    confidence: Confidence | None = None
-
-    def __str__(self) -> str:
-        args = ""
-        if self.operands is not None:
-            a = self.operands
-            parts = [f"r{a.ra}"] + ([f"r{a.rb}"] if a.rb is not None else [])
-            parts += [f"#{a.imm:#x}"] if a.imm is not None else []
-            args = " " + ", ".join(parts)
-        if self.target is not None:
-            args += f" -> {self.target}"
-        text = f"{self.index:5}{'|' if self.slot else ' '} {op(self.op).name}{args}"
-        if self.note:
-            text += f": {self.note}"
-        if self.confidence is not None:
-            text += f" [{self.confidence.name.lower()}]"
-        return text
-
-
-@dataclass
-class Flow:
-    steps: list[Step]
-    stop: Stop
-    why: str = ""
-
-    def order(self) -> list[int]:
-        return [s.index for s in self.steps]
-
-    def runs(self) -> str:
-        """The executed indices as runs of consecutive words, delay slots after a `|`."""
-        out: list[str] = []
-        start = prev = None
-        for s in self.steps:
-            if prev is not None and s.index == prev.index + 1 and s.slot == prev.slot:
-                prev = s
-                continue
-            if start is not None:
-                out.append(_run(start, prev))
-            start = prev = s
-        if start is not None:
-            out.append(_run(start, prev))
-        return ", ".join(out)
-
-
-def _run(a: Step, b: Step) -> str:
-    text = str(a.index) if a.index == b.index else f"{a.index}..{b.index}"
-    return f"|{text}" if a.slot else text
-
 
 HALT_OP = 7
 
@@ -399,7 +367,7 @@ class Executor:
         *,
         branching: Branching | None = None,
         ops: dict[int, OpSemantics] | None = None,
-        limit: int = 100_000,
+        limit: int = STEP_LIMIT,
         local_op3_jump: bool = False,
         datapath: "Datapath | None" = None,
     ) -> None:

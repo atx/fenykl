@@ -17,13 +17,14 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
-| `emu.py` | `Boot`, `Job`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow (`Flow`, `Step`) |
+| `job.py` | `Job`, a program and its request; `Flow`, `Step`, `Stop`: what stepping a job executed |
+| `emu.py` | `Boot`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow; `Boot.run` steps a program on the datapath executor |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `stream.py` | `Engine`: the stream engine's channel registers, loads and stores as X1's transfers program them |
 | `timing.py` | `estimate`: a job's minimum time from a run of the datapath executor, with tiers |
 | `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
-| `exec.py` | the field-level executor of a window of stock words: symbolic values, the machine state (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
+| `exec.py` | the field-level executor of a window of stock words: symbolic values, the window state `WindowState` (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
 | `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
 | `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
 | `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
@@ -1040,15 +1041,23 @@ flow.
 ### The datapath executor
 
 ```python
-from fenykl.dsp.machine import Machine
+from fenykl.dsp.emu import Boot
 
 boot = Boot()
-m = Machine(boot)  # or Machine(boot, carry): what an earlier job of the boot left
-Executor(boot, datapath=m, limit=5_000_000).step(commands.copy(program, src, dst, n))
-boot.local.read(
-    LOCAL_BASE + 0x40, 4
-)  # what the program stored, known or not, with its tier
+boot.put(SRC, data, "src")
+r = boot.run(program, regs={"B": {3: SRC, 2: DST}})  # registers by file, over the carry
+r.machine.g[16], r.flow.runs(), r.estimate  # registers at the halt, the words run, the time
+boot.read(DST, n)  # what the program stored, known or not, with its tier
+boot.run(program2)  # starts with the registers and lane memory the run before left
 ```
+
+`Boot.run` steps a program from word 0 (`request` its local-memory request, `limit` the step
+limit) on a `Machine` with a fresh stream `Engine`, under `Executor(boot, datapath=machine)`, keeps
+what the job leaves for the next run (`Boot.carry`, `Machine.between_jobs`) and estimates its time
+(`timing.estimate`). `regs` takes an int or an `Sv` in G, A, B, R and F0..F3, a `Vec` or its 32
+lanes in L0..L3, U and O. A run that stops short of its halt raises `NoHalt` and drops the carry.
+By hand, per job: `m = Machine(boot, carry, stream=Engine())`, `Executor(boot, datapath=m).step(job)`,
+`m.between_jobs()`.
 
 `Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,
 a `Branching`, to decide ops 0..2 on G[ra]). One clock rule: every unit reads the state from
@@ -1117,11 +1126,7 @@ no transfer: its signed quotient a / b is on X1's result bus four words after th
 ### Timing
 
 ```python
-from fenykl.dsp.timing import estimate
-
-flow = Executor(boot, datapath=m).step(job)  # m = Machine(boot, stream=Engine()), per job
-m.between_jobs()
-e = estimate(job, flow, m.stream)
+e = boot.run(program).estimate  # by hand: timing.estimate(job, flow, m.stream)
 e.us, e.tier, e.parts  # None when not known; e.unknown says why
 ```
 

@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Job
+from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Job, NoHalt, Stop
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
 from fenykl.dsp.program import Program
@@ -165,9 +165,7 @@ def test_a_counted_loop_stores_through_r():
     halt = Word.from_fields({"op": 7}, base=IDLE)
     words = [li, zero, add, end, IDLE, IDLE, IDLE, IDLE, to_r, store, halt]
     boot = Boot()
-    m = Machine(boot)
-    m.g[31] = Sv(0)
-    Executor(boot, datapath=m).step(Job(Program(tuple(words)), ()))
+    boot.run(Program(tuple(words)), regs={"G": {31: 0}})
     got = boot.local.read(LOCAL_BASE + 0x40, 4)
     assert all(got.known)
     assert int.from_bytes(got.data, "little") == 4 * 5
@@ -440,15 +438,9 @@ def inc(reg: int) -> Word:
 
 
 def stepped(words: list[Word], **regs: int) -> Machine:
-    boot = Boot()
-    m = Machine(boot)
-    m.g[30] = Sv(1)
-    for name, value in regs.items():
-        m.g[int(name[1:])] = Sv(value)
-    Executor(boot, datapath=m).step(
-        Job(Program((*words, Word.from_fields({"f313_319": 7}, base=IDLE))), ())
-    )
-    return m
+    g = {30: 1} | {int(name[1:]): value for name, value in regs.items()}
+    program = Program((*words, Word.from_fields({"f313_319": 7}, base=IDLE)))
+    return Boot().run(program, regs={"G": g}).machine
 
 
 def test_op_4_jumps_to_the_word_its_register_names():
@@ -478,6 +470,24 @@ def test_a_loop_end_into_its_own_slots_runs_them_again():
     words = [loop, inc(16), inc(17), inc(18), inc(19), inc(20)]
     m = stepped(words, r8=3, r16=0, r17=0, r18=0, r19=0, r20=0)
     assert [m.g[r].value for r in (8, 16, 17, 18, 19, 20)] == [2, 1, 1, 2, 2, 1]
+
+
+def test_a_run_reads_what_the_run_before_on_its_boot_left():
+    boot = Boot()
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    program = Program((inc(16), halt))
+    boot.run(program, regs={"G": {30: 1, 16: 5}})
+    assert boot.run(program).machine.g[16] == Sv(7)
+
+
+def test_a_run_that_does_not_halt_raises_and_leaves_no_carry():
+    boot = Boot()
+    boot.run(Program((Word.from_fields({"f313_319": 7}, base=IDLE),)))
+    assert boot.carry is not None
+    with pytest.raises(NoHalt, match="the step limit") as e:
+        boot.run(Program((control(3, 0), *[IDLE] * 4)), limit=50)
+    assert e.value.flow.stop is Stop.STEP_LIMIT
+    assert boot.carry is None
 
 
 def test_a_job_starts_with_the_registers_the_job_before_left(m):
@@ -555,10 +565,7 @@ def test_m_replaces_an_active_x0_heads_result(m):
 
 def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
-    boot = Boot()
-    m = Machine(boot)
-    m.g[30], m.g[16] = Sv(1), Sv(0)
-    Executor(boot, datapath=m).step(Job(Program((halt, *[inc(16)] * 4)), ()))
+    m = Boot().run(Program((halt, *[inc(16)] * 4)), regs={"G": {30: 1, 16: 0}}).machine
     assert m.g[16] == Sv(3)
     with pytest.raises(UnknownSemantics, match="a control op behind a halt"):
         boot = Boot()
@@ -771,10 +778,8 @@ def test_a_halt_in_an_unmeasured_jump_shape_raises(before, behind, match):
 
 def control_tiers(words: list[Word]) -> dict[int, Confidence | None]:
     """The tier of each control word's step, by index."""
-    boot = Boot()
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
-    program = Program((*words, halt, *[IDLE] * 3))
-    flow = Executor(boot, datapath=Machine(boot)).step(Job(program, ()))
+    flow = Boot().run(Program((*words, halt, *[IDLE] * 3))).flow
     return {s.index: s.confidence for s in flow.steps if s.taken is not None}
 
 

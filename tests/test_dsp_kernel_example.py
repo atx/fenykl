@@ -8,7 +8,7 @@ four vectors are loaded (X0 0x1d), moved into S1's lane file through its first p
 (X0 0x1b). A kernel of this shape ran on the camera at 4 and 16 KiB, its dst exact and its
 minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 to 16 passes).
 
-The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine. Each
+The registers the job's setup would provide (B3 = src, B2 = dst) are preset by `Boot.run`. Each
 word is a bundle of unit instructions and ports (`fenykl.dsp.asm`): `X0.load(A[1], k=i)` loads
 vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later. `Label("top")` names
 the word it is bundled with, `NOP` is the idle word.
@@ -36,12 +36,9 @@ from fenykl.dsp.asm import (
     Reg,
     to,
 )
-from fenykl.dsp.emu import Boot, Executor, Job, Stop
+from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
-from fenykl.dsp.machine import Machine, Sv
 from fenykl.dsp.program import Program, assemble
-from fenykl.dsp.stream import Engine
-from fenykl.dsp.timing import estimate
 
 SRC, DST = 0xA0000000, 0xA1000000
 B_SRC, B_DST, B_LOAD, B_STORE = 3, 2, 13, 12
@@ -139,14 +136,10 @@ def xor_kernel(nbytes: int) -> Program:
 
 
 def run(nbytes: int, data: bytes):
-    m = Machine(Boot(), stream=Engine())
-    m.boot.put(SRC, data, "src")
-    m.b[B_SRC], m.b[B_DST], m.b[1] = Sv(SRC), Sv(DST), Sv(1)
-    job = Job(xor_kernel(nbytes), ())
-    flow = Executor(m.boot, strict=True, datapath=m).step(job)
-    assert flow.stop is Stop.HALT
-    m.between_jobs()
-    return m.boot.read(DST, nbytes), estimate(job, flow, m.stream)
+    boot = Boot()
+    boot.put(SRC, data, "src")
+    r = boot.run(xor_kernel(nbytes), regs={"B": {B_SRC: SRC, B_DST: DST, 1: 1}})
+    return boot.read(DST, nbytes), r.estimate
 
 
 @pytest.mark.parametrize("nbytes", [0x1000, 0x4000])
