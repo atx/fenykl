@@ -975,6 +975,22 @@ pre-registered (verified); S3 0x6 at 1: 0 in every lane there and nothing in its
 pre-registered on two fresh operand sets in two jobs and the earlier lag runs (verified). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
+ALONE_ZEROS: dict[str, tuple[range, int]] = {
+    "s0": (range(0x54, 0x60), 1),
+    "s1": (range(0x57, 0x60), 0),
+}
+"""S heads that give 0 at one lag and nothing at the other in a job whose S0, S1 and S2 heads so
+far are only this head value, by unit: (heads, lag). Verified on the camera in such jobs only:
+one head value per job after the operands' setup (S3 words only), run twice, the unit's port
+into L3 in the head's word only and then one word later only, lanes 0..15 read at each lag:
+0 at the lag given, the sentinel at the other, on three operand sets (edge values, a == b lanes,
+and a != b with both nonzero in every lane), the last pre-registered. In jobs with other heads
+before them S1 0x55..0x5f gave b, or left the sentinel at either single lag (`LANE_FUNCTIONS`),
+so the zeros are predicted in such a job only. Lanes 16..31 were not read, and M, the latched
+operand and the heads' lags in other jobs stay unknown."""
+ALONE_ZERO_LANES = range(16)
+"""The lanes read in `ALONE_ZEROS`' runs."""
+
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
 LANE_MEMORY = (
@@ -1287,7 +1303,8 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             H,
             "b with the port in the head's word and the next in an earlier run (0x55, 0x5a, "
             "0x5f), nothing with the port in a single word at either lag nor, in a later run, "
-            "in both; 0x55 once b in its own word right after an 0x53",
+            "in both; 0x55 once b in its own word right after an 0x53; 0x57..0x5f 0 at lag 0 "
+            "in a job with no other S0..S2 head before them (`ALONE_ZEROS`)",
         ),
         **_rows(
             range(0x60, 0x7F),

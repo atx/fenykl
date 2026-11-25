@@ -42,6 +42,8 @@ from typing import Protocol
 
 from .emu import LOCAL_BASE, Boot
 from .fields import (
+    ALONE_ZERO_LANES,
+    ALONE_ZEROS,
     ALU_BUS,
     DIVIDE_HEAD,
     DIVIDE_LAG,
@@ -342,6 +344,8 @@ class Machine:
         """The word of the last S head run."""
         self.head_values: set[tuple[str, int]] = set()
         """The (unit, head) pairs that ran in that word."""
+        self.heads_run: set[tuple[str, int]] = set()
+        """The S0, S1 and S2 (unit, head) pairs run so far in the job (`ALONE_ZEROS`)."""
         self._u_write: tuple[int, Vec] | None = None
         self.ceiling = V
         """The tier cap of what the word being run leaves (`execute`)."""
@@ -694,6 +698,8 @@ class Machine:
             a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
+            if unit != "s3":
+                self.heads_run.add((unit, head))
             if self.last_head != t:
                 self.head_values = set()
             self.head_values.add((unit, head))
@@ -788,15 +794,18 @@ class Machine:
         rule = LANE_RULES[unit].get(head)
         if rule is None and head in S_RULES[unit]:
             return
+        zeros = self._alone_zeros(unit, head, t)
         if rule is None:
-            # A head without a rule: its lane result is unknown at either lag, and so is M's
-            # result of its unit in those words.
+            # A head without a rule: its lane result is unknown at either lag (but for
+            # `ALONE_ZEROS`), and so is M's result of its unit in those words.
             for when in (t, t + 1):
+                self.open_m.setdefault(when, set()).add(unit)
+                if zeros:
+                    continue
                 unknown = Vec(UNKNOWN_VEC.lanes, H)
                 self.lane_due.setdefault(when, {}).setdefault(unit, []).append(
                     (unknown, unknown)
                 )
-                self.open_m.setdefault(when, set()).add(unit)
                 self._why(when, unit, f"{unit} {head:#x} has no rule")
             if unit == "s3" and word["f232_233"] == 1:
                 self._u_write = (word["f141_144"], Vec(UNKNOWN_VEC.lanes, H))
@@ -804,6 +813,8 @@ class Machine:
         if rule.value is None:
             if unit == "s3" and word["f232_233"] == 1:
                 self._u_port(index, head, b, word)
+            return
+        if zeros:
             return
         sc = _Scalars(scalars)
         ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
@@ -842,6 +853,19 @@ class Machine:
                 self._why(when, unit, why)
         if unit == "s3" and word["f232_233"] == 1:
             self._u_port(index, head, b, word)
+
+    def _alone_zeros(self, unit: str, head: int, t: int) -> bool:
+        """Schedules the zeros of an `ALONE_ZEROS` head in a job whose S0..S2 heads so far are
+        only this one; False for any other head or job."""
+        heads, lag = ALONE_ZEROS.get(unit, ((), 0))
+        if head not in heads or not self.heads_run <= {(unit, head)}:
+            return False
+        lanes = tuple(0 if k in ALONE_ZERO_LANES else None for k in range(LANE_COUNT))
+        self.lane_due.setdefault(t + lag, {}).setdefault(unit, []).append(
+            (Vec(lanes, V), None)
+        )
+        self._why(t + lag, unit, f"{unit} {head:#x}: lanes 16..31 not read")
+        return True
 
     def _unknown_operands(
         self, unit: str, head: int, word: Word, a: Vec, b: Vec, reads: str

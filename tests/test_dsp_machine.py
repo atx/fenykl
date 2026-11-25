@@ -932,3 +932,79 @@ def test_the_trace_follows_a_load_of_an_unwritten_vector():
     (entry,) = m.trace.values()
     assert m.trace == {"L3[5]": entry} and entry.index == 4
     assert entry.reason == "memory[0x42] not written by the datapath"
+
+
+ALONE_HEAD = {"s0": "f278_284", "s1": "f285_291"}
+"""The head fields of the units with `fields.ALONE_ZEROS`."""
+SENT = Vec((0x0A5A,) * 32)
+ZEROS_0_15 = Vec((0,) * 16 + (None,) * 16)
+
+
+def alone_port(unit: str, reg: int) -> dict[str, int]:
+    """The unit's port into L3[reg]: f248_249 / 1 for S0's result, f250_251 / 2 for S1's."""
+    return {"f248_249": 1, "f171_174": reg} if unit == "s0" else l3_port(reg, 2)
+
+
+def alone_head(unit: str, head: int) -> dict[str, int]:
+    nibs = ("f37_40", "f41_44") if unit == "s0" else ("f45_48", "f49_52")
+    return {ALONE_HEAD[unit]: head, nibs[0]: 1, nibs[1]: 2}
+
+
+def alone_operands(m: Machine) -> None:
+    for f in ("L0", "L1"):
+        m.lanes[f][1], m.lanes[f][2] = Vec(A), Vec(B)
+    m.lanes["L3"][8] = m.lanes["L3"][9] = SENT
+
+
+@pytest.mark.parametrize(
+    ("unit", "head", "lag"),
+    [("s0", 0x54, 1), ("s0", 0x5F, 1), ("s1", 0x57, 0), ("s1", 0x5F, 0)],
+)
+def test_a_parked_head_alone_in_its_job_gives_zeros_at_its_lag_only(m, unit, head, lag):
+    """As run on the camera: the head twice, its port in its own word, then one word later."""
+    alone_operands(m)
+    h = alone_head(unit, head)
+    run(
+        m, [w(**h, **alone_port(unit, 8)), IDLE, IDLE, w(**h), w(**alone_port(unit, 9))]
+    )
+    got = (m.lanes["L3"][8], m.lanes["L3"][9])
+    assert got == ((ZEROS_0_15, SENT) if lag == 0 else (SENT, ZEROS_0_15))
+
+
+@pytest.mark.parametrize(
+    ("unit", "head", "lag", "before"),
+    [
+        ("s0", 0x54, 1, alone_head("s0", 0x55)),  # another value of the unit
+        ("s0", 0x54, 1, {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}),  # an S1 head
+        ("s1", 0x57, 0, {"f278_284": 0x07, "f37_40": 1, "f41_44": 2}),  # an S0 head
+        ("s1", 0x57, 0, {"f292_295": 0x02, "f53_56": 1, "f57_60": 2}),  # an S2 head
+    ],
+)
+def test_a_parked_head_after_another_head_is_not_known(m, unit, head, lag, before):
+    alone_operands(m)
+    h = alone_head(unit, head)
+    port = alone_port(unit, 8)
+    run(
+        m,
+        [
+            w(**before),
+            IDLE,
+            IDLE,
+            *([w(**h, **port)] if lag == 0 else [w(**h), w(**port)]),
+        ],
+    )
+    assert m.lanes["L3"][8].lanes == (None,) * 32
+
+
+@pytest.mark.parametrize("at", [0, 1])
+def test_an_alone_s0_zero_head_leaves_m_and_the_latch_unknown(m, at):
+    alone_operands(m)
+    m.r[0] = Sv(0x0A5A)
+    h = alone_head("s0", 0x54)
+    m_read = {**R0_UNDER, "f274_275": 0}
+    words = [w(**h, **m_read)] if at == 0 else [w(**h), w(**m_read)]
+    # S0 0x61 gives the a S0's last head latched, one word later.
+    latch = [w(**alone_head("s0", 0x61)), w(**alone_port("s0", 9))]
+    run(m, [*words, IDLE, *latch])
+    assert m.r[0].value is None
+    assert m.lanes["L3"][9].lanes == (None,) * 32

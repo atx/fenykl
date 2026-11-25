@@ -201,7 +201,13 @@ predicts it across units. S2 0x7 comes in the head's word [verified, pre-registe
 later nothing; S3 0x7 / 0x8 (block selects of b by a's first lanes) one word later and S1
 0x60..0x7e in the head's word, S0's one word later (their unit's latched operand) [verified,
 pre-registered]; S3 0x6 gives 0 in every lane one word later and nothing in its own word [verified,
-pre-registered on two fresh operand sets in two jobs and earlier runs]. A register a
+pre-registered on two fresh operand sets in two jobs and earlier runs]. S0 0x54..0x5f give 0
+one word later and nothing in their own word, S1 0x57..0x5f 0 in their own word and nothing one
+word later, in lanes 0..15, in a job whose S0, S1 and S2 heads so far are only that head value
+(`fields.ALONE_ZEROS`) [verified, pre-registered on the third of three operand sets, the head
+run twice per job after an operand setup of S3 words only]; lanes 16..31 were not read, and
+after other heads S1 0x55..0x5f gave b or nothing on a state not identified, so in other jobs
+these heads stay unknown, as do their M results and S0's latched operand after them. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word reads the old content, in every lane file and in U [verified, pre-registered].
