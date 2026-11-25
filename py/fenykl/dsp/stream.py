@@ -115,7 +115,7 @@ ROWS_SHAPE = (1, 0x80, 0x20, 1, 0x100, 0x10, 2, 3)
 STORE_ROWS2 = (1, 0x40, 0x20, 1, 0x100, 0x10, 2, 2)
 STORE_ROWS3 = (1, 0x40, 0x20, 1, 0x200, 0x10, 2, 3)
 """Two rows at DRAM pitch 0x100 and three at 0x200 of one vector each, memory pitch one vector:
-the store rows run for kinds 4 and 6."""
+the store rows run for kind 4, one job each (inferred)."""
 LOCAL_SHAPE = (2, None, 4, 8, None, 0x10, 2, 1)
 """32 bytes as bytes in local memory (eight words)."""
 QUAD_SHAPE = (1, None, 0x20, 4, None, 0x10, 8, 1)
@@ -141,8 +141,8 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         LOCAL_SHAPE: (V, DIRECT),
         PAIR_SHAPE: (I, DIRECT),
         TRIPLE_SHAPE: (I, DIRECT),
-        STORE_ROWS2: (V, DIRECT),
-        STORE_ROWS3: (V, DIRECT),
+        STORE_ROWS2: (I, DIRECT),
+        STORE_ROWS3: (I, DIRECT),
     },
     5: {BASE_SHAPE: (I, WRAPPED)},
     7: {BASE_SHAPE: (I, WRAPPED)},
@@ -339,13 +339,14 @@ class Engine:
             per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
         else:
             per = r[3].value
-        vectors = frozenset(
-            (off // VECTOR_BYTES + v) % LANE_VECTORS
-            for _, off in rows
-            for v in range(per)
-        )
+        raw = [off // VECTOR_BYTES + v for _, off in rows for v in range(per)]
+        vectors = frozenset(x % LANE_VECTORS for x in raw)
         byte_row = (
-            plain and r[7].value == 1 and r[2].value == 0x20 and r[5].value == 0x10
+            plain
+            and r[7].value == 1
+            and r[2].value == 0x20
+            and r[5].value == 0x10
+            and max(raw, default=0) < LANE_VECTORS  # a wrap is only inferred
         )
         return vectors, V if byte_row else I
 
@@ -555,14 +556,6 @@ class Engine:
         if rows < 1:
             raise _Off("no rows: not measured")
         tier = I if rows > (2 if cmd.kind == STORE else 4) else V
-        if (
-            cmd.kind == STORE
-            and rows == 3
-            and (r[1].value, r[4].value) == (0x40, 0x200)
-        ):
-            tier = (
-                V  # three store rows at memory pitch 0x40, DRAM pitch 0x200 (verified)
-            )
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0

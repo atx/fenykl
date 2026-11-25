@@ -610,7 +610,8 @@ def test_words_beside_other_shapes_keep_at_most_inferred():
 
 
 def test_kind_4_rows_on_channel_1_store_as_run():
-    """Kind 4 stores two rows at DRAM pitch 0x100 and three at 0x200 as kind 6 (verified)."""
+    """Kind 4 stores two rows at DRAM pitch 0x100 and three at 0x200 as kind 6, each shape run in
+    one job: inferred."""
     for r7, r4 in ((2, 0x100), (3, 0x200)):
         m, e = machine(), stream.Engine()
         for v in range(r7):
@@ -621,7 +622,7 @@ def test_kind_4_rows_on_channel_1_store_as_run():
         for v in range(r7):
             got = m.boot.read(DST + r4 * v, 32)
             assert bytes(got.data) == bytes(range(32 * v, 32 * v + 32))
-            assert got.weakest() == V
+            assert got.weakest() == I
 
 
 def test_kind_4_rows_in_another_pitch_raise():
@@ -629,3 +630,25 @@ def test_kind_4_rows_in_another_pitch_raise():
     m.memory[0] = m.memory[1] = Vec(tuple(range(32)))
     with pytest.raises(UnknownSemantics):
         drive(m, e, [*lanes(1, 1, r6=2, r7=2, r1=0x40, r4=0x200), 1 << 6 | 4, 0, DST])
+
+
+def test_three_store_rows_are_inferred_whatever_their_pitch():
+    """Kind 6 rows past two, also at the pitches kind 4 ran (r1 0x40, r4 0x200) and with
+    overlapping 64-byte rows (r3 2, r6 4): inferred."""
+    for r3, r6 in ((1, 2), (2, 4)):
+        m, e = machine(), stream.Engine()
+        for v in range(4):
+            m.memory[v] = Vec(tuple(range(32)))
+        drive(
+            m,
+            e,
+            [*lanes(1, r3, r6=r6, r7=3, r1=0x40, r4=0x200), *store(1, 0, DST), WAIT],
+        )
+        assert m.boot.read(DST, 32).weakest() == I
+
+
+def test_a_plain_load_that_wraps_keeps_at_most_inferred_beside_it():
+    """A byte load of two vectors from vector 0x3ff wraps to vector 0: outside it inferred."""
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, (LANE_VECTORS - 1) * 64)])
+    assert e.lane_tier(0) == H and e.lane_tier(0x10) == I
