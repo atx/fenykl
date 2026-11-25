@@ -269,18 +269,13 @@ on the camera in two runs, the second pre-registered)."""
 HALT_OP = 7
 
 TAIL_SHAPES: dict[tuple[int, int], Confidence] = {
-    (3, 1): V,
-    (3, 2): V,
-    (3, 3): V,
-    (3, 4): V,
-    (4, 2): V,
-    (4, 3): V,
-    (4, 4): V,
+    (code, k): V for code in (0, 1, 2, 3, 4) for k in range(1, DELAY_SLOTS + 1)
 }
-"""The tier of the words behind a halt in delay slot k of a taken jump, by (op, k). They are
-the next three words fetched: in slot 1 the jump falls due after them and is not taken
-(verified on the camera for op 3); in slots 2..4 of an op 3 or op 4 the rest of the slots, then
-the target's words (verified on the camera, pre-registered). Other ops and slots raise."""
+"""The tier of the words behind a halt in delay slot k of a taken control op, by (op, k). They
+are the next three words fetched: in slot 1 the rest of the slots, the jump falling due after
+them and not taken; in slots 2..4 the rest of the slots, then the target's words (verified on
+the camera, pre-registered, for the loop end, brf, br, op 3 and op 4 in every slot). A loop
+end's write-back port there is not measured."""
 PASSIVE_BEHIND_HALT: dict[tuple[int, int], Confidence] = {
     (HALT_OP, 0): V,
     (3, 1): V,

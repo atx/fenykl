@@ -1087,8 +1087,7 @@ head's own word; inferred there, beside two units' heads in one word and with no
 An S3 extract ORs with a reduction in the reduction's first word and comes alone later
 [verified]. Behind a halt the next three words fetched run and the job ends: a taken jump due
 among them puts its target's words there, one due after them is not taken (`TAIL_SHAPES`:
-verified for op 3 in slot 1 and op 4 in slots 2 and 3, inferred for op 3's fitted slots 2..4
-and op 4's slot 4, whose writes are capped at inferred); a halt first and an op 3 or op 4
+verified for every taken control op, ops 0..4, in each of its four slots); a halt first and an op 3 or op 4
 second among them are not taken [verified, with no jump pending], a halt third ends the job
 [inferred]; other control words there and other pending jumps raise.
 

@@ -633,10 +633,22 @@ def test_a_jump_second_behind_a_halt_is_not_taken():
     assert (m.g[16], m.g[17]) == (Sv(2), Sv(0))
 
 
-def test_a_halt_in_a_taken_jumps_first_slot_wins():
+# Each control op taken to word 9: op 3, op 4 through g20, the loop end and br on g30 = 1, brf
+# on g12 = 0.
+TAKEN = [
+    control(3, 9),
+    control(4, f128_132=20),
+    control(0, 9, ra=30),
+    control(1, 9, ra=12),
+    control(2, 9, ra=30),
+]
+
+
+@pytest.mark.parametrize("jump", TAKEN)
+def test_a_halt_in_a_taken_jumps_first_slot_wins(jump):
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
     words = (
-        control(3, 9),
+        jump,
         halt,
         inc(16),
         inc(16),
@@ -648,7 +660,7 @@ def test_a_halt_in_a_taken_jumps_first_slot_wins():
         inc(17),
         halt,
     )
-    m = stepped(list(words), g16=0, g17=0)
+    m = stepped(list(words), g16=0, g17=0, g20=9, g12=0)
     assert (m.g[16], m.g[17]) == (Sv(3), Sv(0))
 
 
@@ -667,20 +679,9 @@ def test_m_without_any_head_is_quiet_at_inferred(m):
     assert m.r[0] == Sv(0x0A5A, I)
 
 
-@pytest.mark.parametrize(
-    ("jump", "k", "slots_tier", "target_tier"),
-    [
-        (control(3, 9), 2, V, V),
-        (control(3, 9), 3, V, V),
-        (control(3, 9), 4, V, V),
-        (control(4, f128_132=20), 2, V, V),
-        (control(4, f128_132=20), 3, V, V),
-        (control(4, f128_132=20), 4, V, V),
-    ],
-)
-def test_a_jump_due_among_the_words_behind_a_halt_redirects_them(
-    jump, k, slots_tier, target_tier
-):
+@pytest.mark.parametrize("k", [2, 3, 4])
+@pytest.mark.parametrize("jump", TAKEN)
+def test_a_jump_due_among_the_words_behind_a_halt_redirects_them(jump, k):
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
     slots = [inc(16)] * 4
     slots[k - 1] = halt
@@ -696,12 +697,9 @@ def test_a_jump_due_among_the_words_behind_a_halt_redirects_them(
         inc(17),
         inc(17),
     )
-    m = stepped(list(words), g16=0, g17=0, g20=9)
+    m = stepped(list(words), g16=0, g17=0, g20=9, g12=0)
     among_slots = 4 - k
-    assert (m.g[16], m.g[17]) == (
-        Sv(k - 1 + among_slots, slots_tier),
-        Sv(3 - among_slots, target_tier),
-    )
+    assert (m.g[16], m.g[17]) == (Sv(k - 1 + among_slots), Sv(3 - among_slots))
 
 
 def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
@@ -772,9 +770,6 @@ PENDING = "a jump pending behind a halt"
 @pytest.mark.parametrize(
     ("before", "behind", "match"),
     [
-        ([control(2, 7, ra=30)], [], PENDING),  # a taken br, not an op 3 or op 4
-        # Op 4 with the halt in its first slot.
-        ([control(4, f128_132=20)], [], PENDING),
         # Two jumps pending: an op 3 in an op 3's first slot, the halt in its first slot.
         ([control(3, 12), control(3, 12)], [], PENDING),
         # The two measured shapes together: a halt in an op 3's first slot, an op 3 behind it.
