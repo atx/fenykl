@@ -987,7 +987,8 @@ the worked example in `tests/test_dsp_kernel_example.py`.
 
 A case that was not timed makes the estimate unknown: a command of another kind, memory, r2 or
 r5, of more than one row, with r3 other than the units its r6 lines fill or outside the sizes
-measured, a command that moves nothing (kind 1, or a register not handed), more than 16 commands handed before their 0x1d, an engine
+measured, with row pitches r1 or r4 other than the 0 every timed command ran with (`Rate.r1`,
+`Rate.r4`; one row does not step by them, but other values were not timed), a command that moves nothing (kind 1, or a register not handed), more than 16 commands handed before their 0x1d, an engine
 off script, and commands still outstanding at the halt (whether the job waits for them was not
 measured). A flow that did not halt raises `ValueError`.
 

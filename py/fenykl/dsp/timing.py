@@ -93,13 +93,17 @@ class Rate:
     """A transfer's time: `per_command` plus `per_kib` per KiB of DRAM it moves, for commands
     of one row of `kib` KiB of DRAM (the sizes measured, inclusive). Measured as the pass time
     of loops whose pass hands one command and its 0x1d, fitted over the sizes; `per_command` is
-    the fit's intercept less the pass's own words (about 0.06 us)."""
+    the fit's intercept less the pass's own words (about 0.06 us). `r1` and `r4`, the row pitches
+    on the memory and the DRAM side, are the values every timed command ran with (0 in all of
+    them); a command with other values has no time."""
 
     per_kib: float
     per_command: float
     kib: tuple[float, float]
     fact: str
     tier: Confidence = I
+    r1: int = 0
+    r4: int = 0
 
 
 LANE_LOAD = Rate(
@@ -240,11 +244,15 @@ def rate_of(event: Event) -> Rate:
 def transfer_us(event: Event) -> float:
     """The time of the command `event` hands, from its registers; raises `Unmeasured`."""
     rate = rate_of(event)
-    _, _, r2, r3, _, r5, r6, r7 = event.regs
+    _, r1, r2, r3, r4, r5, r6, r7 = event.regs
     if r3 != -(-r5 * r6 // r2):
         raise Unmeasured(f"r3 {r3:#x} short of or past what r6 fills: not timed")
     if r7 != 1:
         raise Unmeasured(f"a command of {r7} rows: only one row was timed")
+    if (r1, r4) != (rate.r1, rate.r4):
+        raise Unmeasured(
+            f"r1 {r1:#x}, r4 {r4:#x}: timed at r1 {rate.r1:#x}, r4 {rate.r4:#x} only"
+        )
     kib = 16 * r6 / 1024
     if not rate.kib[0] <= kib <= rate.kib[1]:
         raise Unmeasured(

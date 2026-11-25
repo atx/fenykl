@@ -33,10 +33,13 @@ HALT = Word.from_fields({"op": 7}, base=IDLE)
 THREE = Sv(3)
 
 
-def lanes(channel: int, r6: int, r5: int = 0x10, r7: int = 1) -> list[int]:
-    """A block for a channel on the lane memory moving r6 16-byte lines per row."""
+def lanes(
+    channel: int, r6: int, r5: int = 0x10, r7: int = 1, r1: int = 0, r4: int = 0
+) -> list[int]:
+    """A block for a channel on the lane memory moving r6 16-byte lines per row, with the row
+    pitches r1 and r4 the timed commands ran with."""
     r3 = -(-r5 * r6 // 0x20)
-    return [0x20 | channel << 6, 1, 0x400, 0x20, r3, 0x400, r5, r6, r7]
+    return [0x20 | channel << 6, 1, r1, 0x20, r3, r4, r5, r6, r7]
 
 
 def local(channel: int, r6: int) -> list[int]:
@@ -216,6 +219,22 @@ def test_shapes_not_timed_have_no_time():
     for name, values in cases.items():
         e = run(values)
         assert e.us is None and e.tier is None, name
+
+
+@pytest.mark.parametrize(
+    ("block", "command"),
+    [
+        (lanes(0, 0x40, r1=0x400), load(0)),
+        (lanes(0, 0x40, r4=0x400), load(0)),
+        (lanes(0, 0x40, r5=0x08, r4=0x400), store(0)),
+        ([0x20, 2, 4, 4, 0x100, 0, 0x10, 0x40, 1], load(0, 0x800)),
+    ],
+)
+def test_one_row_with_pitches_other_than_the_timed_ones_has_no_time(block, command):
+    """Every timed command ran with r1 = r4 = 0; one row does not step by them, but other
+    values were not timed."""
+    e = run([*block, *command, WAIT])
+    assert e.us is None and "r1" in e.unknown
 
 
 def test_more_commands_than_the_queue_held_have_no_time():
