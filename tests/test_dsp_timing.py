@@ -13,7 +13,9 @@ from fenykl.dsp.timing import (
     FIRST,
     LANE_LOAD,
     LANE_LOAD16,
+    LANE_STORE12,
     LANE_STORE16,
+    LOCAL_LOAD,
     LOCAL_LOAD32,
     REPEAT,
     REPEAT_I,
@@ -184,7 +186,8 @@ def test_shapes_not_timed_have_no_time():
         "16-bit load under 1 KiB": [*lanes(0, 0x20, r5=0x08), *load(0), WAIT],
         "16-bit store of 32 B": [*lanes(0, 2, r5=0x08), *store(0), WAIT],
         "16-bit store of 32 KiB": [*lanes(0, 0x800, r5=0x08), *store(0), WAIT],
-        "12-bit store of 1 KiB": [*lanes(0, 0x40, r5=0x0A), *store(0), WAIT],
+        "12-bit store of 512 B": [*lanes(0, 0x20, r5=0x0A), *store(0), WAIT],
+        "12-bit store of 32 KiB": [*lanes(0, 0x800, r5=0x0A), *store(0), WAIT],
         "32-bit local load of 128 B": [*local32(0, 8), *load(0, 0x800), WAIT],
         "32-bit local load of 4.25 KiB": [*local32(0, 0x110), *load(0, 0x400), WAIT],
         "32-bit local load, r3 short": [0x20, 2, 0, 1, 0x10, 0, 0x04, 0x10, 1]
@@ -194,7 +197,8 @@ def test_shapes_not_timed_have_no_time():
         "r3 short of r6": [0x20, 1, 0x400, 0x20, 0x10, 0x400, 0x10, 0x40, 1]
         + [*load(0), WAIT],
         "under 1 KiB": [*lanes(0, 0x20), *load(0), WAIT],
-        "2 KiB into local memory": [*local(0, 0x80), *load(0, 0x800), WAIT],
+        "128 B into local memory": [*local(0, 8), *load(0, 0x800), WAIT],
+        "4.25 KiB into local memory": [*local(0, 0x110), *load(0, 0x400), WAIT],
         "nothing moves": [*lanes(0, 0x40), 1, SRC, 0, WAIT],
         "r1 and r4 not handed": [
             *[
@@ -233,9 +237,13 @@ def test_4_kib_into_local_memory_is_timed():
         (lanes(0, 0x400, r5=0x08), store(0), LANE_STORE16, 16),
         (local32(0, 0x10), load(0, 0x800), LOCAL_LOAD32, 0.25),
         (local32(0, 0x100), load(0, 0x800), LOCAL_LOAD32, 4),
+        (lanes(0, 0x40, r5=0x0A), store(0), LANE_STORE12, 1),
+        (lanes(0, 0x400, r5=0x0A), store(0), LANE_STORE12, 16),
+        (local(0, 0x10), load(0, 0x800), LOCAL_LOAD, 0.25),
+        (local(0, 0x80), load(0, 0x800), LOCAL_LOAD, 2),
     ],
 )
-def test_16_bit_and_32_bit_local_transfers_are_timed_at_their_measured_sizes(
+def test_packed_and_local_transfers_are_timed_at_their_measured_sizes(
     block, command, rate, kib
 ):
     """A command joined at once waits for its whole transfer: the rate at the command's size."""
