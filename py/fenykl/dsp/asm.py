@@ -255,7 +255,9 @@ class Raw(Part):
         return min(lookup(k).confidence for k in self.fields)
 
     def __repr__(self) -> str:
-        args = (f"{lookup(k).label}={v:#x}" for k, v in self.fields.items())
+        args = (
+            f"{lookup(k).label}={lookup(k).literal(v)}" for k, v in self.fields.items()
+        )
         return f"raw({', '.join(args)})"
 
     def __hash__(self) -> int:
@@ -691,7 +693,7 @@ S2 = Unit(
     01,00 mul_imm b imm
     06,02,04 mul a b
     05,03 mul_t b t
-    07 pick a b imm
+    07 pick a b t
     0d,08 mov b
     09 ltz b
     0a lane
@@ -718,9 +720,9 @@ S3 = Unit(
     0b zip_hi a b
     0c unzip_odd a b
     0d unzip_even a b
-    0e ext_u b imm
-    0f ext b imm
-    10 ins b val imm
+    0e ext_u b idx u
+    0f ext b idx u
+    10 ins b val idx u
     11 mov_imm imm
     12 ltz b
     13 gez b
@@ -973,6 +975,8 @@ def _op(value: int, labels: Mapping[int, str]) -> Instr | None:
             target = TARGET.get(value)
             given["to"], claimed = labels.get(target, target), claimed | TARGET.span
     fmt = FORMATS.get(code)
+    if fmt is not None and fmt.imm is not None and fmt.imm.get(value) >> fmt.imm_bits:
+        return None  # an immediate wider than the op's: the slot stays raw
     if fmt is not None:
         args = fmt.decode(value)
         reads = OP.reads.get(code, ())
@@ -1011,10 +1015,15 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
     parts: list[Part] = []
     candidates: list[Part | None] = [_op(value, labels)]
     candidates += [_head(UNITS_BY_KEY[u], value) for u in HEAD_VIEWS]
+    target = {p.id for p in TARGET.parts}
     for instr in candidates:
-        if instr is not None and all(
-            lookup(f).get(value) == v for f, v in instr.fields.items()
-        ):
+        if instr is None:
+            continue
+        # A label target's fields are reserved, not set; any other field must match the word.
+        fields = {
+            f: v for f, v in instr.fields.items() if not instr.label or f not in target
+        }
+        if all(lookup(f).get(value) == v for f, v in fields.items()):
             parts.append(instr)
     if lookup("m_n").get(value) == 0:
         parts.append(M(UNITS_BY_KEY[M_UNITS[lookup("msel").get(value)]]))

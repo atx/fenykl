@@ -1,4 +1,4 @@
-"""Listings of programs, and DSL source for them.
+"""Listings of programs, and DSL source (`asm` bundles) for them.
 
 A listing shows per word the fields that differ from the idle word, grouped by unit (strobes
 first), under their semantic names or ids; the units of the heads S0..S3, X0 and X1 show their
@@ -17,6 +17,7 @@ marks the delay slots of a control word.
 
 from collections.abc import Iterator, Mapping
 
+from .asm import EXPORTS, Bundle
 from .fields import (
     CONTROL_FLAG,
     HEAD_VIEWS,
@@ -100,8 +101,8 @@ def word_parts(word: Word, base: Word = IDLE) -> list[str]:
     parts = [head]
     for name, unit in UNITS.items():
         if name in HEAD_VIEWS:
-            view, now = HEAD_VIEWS[name], word.head_operands(name)
-            was = base.head_operands(name)
+            view = HEAD_VIEWS[name]
+            now, was = view.decode(word.value), view.decode(base.value)
             items = [
                 _operand(k, o, now[k])
                 for k, o in view.operands.items()
@@ -163,52 +164,20 @@ def listing(program: Program, title: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
-def word_source(word: Word) -> str:
-    """`word` as a DSL expression."""
-    if word == IDLE:
-        return "IDLE"
-    slots = word.slots()
-    return f"Word({', '.join(f'{unit}={slot!r}' for unit, slot in slots.items())})"
-
-
-def _ctl_source(word: Word, label: str) -> str:
-    """Control word `word` as a `Ctl` to `label`, its other fields as the base."""
-    value = word.value
-    for f in (OP_FIELD, CONTROL_FLAG, *TARGET.parts):
-        value = f.put(value, f.get(IDLE.value))
-    base = Word.from_int(value)
-    args = f"{word.op}, {label!r}" + ("" if base == IDLE else f", {word_source(base)}")
-    return f"Ctl({args})"
-
-
-def _immediates(word: Word) -> str:
-    """The composed immediates of the active heads, as " s1.imm=0x20"."""
-    parts = []
-    for unit, view in HEAD_VIEWS.items():
-        if view.operands["op"].get(word.value) == view.operands["op"].idle:
-            continue
-        for name, o in view.operands.items():
-            if isinstance(o, Composite):
-                parts.append(f" {unit}.{name}={_number(o.get(word.value))}")
-    return "".join(parts)
-
-
 def source(
     program: Program,
     name: str = "PROGRAM",
     labels: Mapping[str, int] | None = None,
     origin: int = 0,
 ) -> str:
-    """Python source that rebuilds `program` from slot objects (constants left out).
+    """Python source that rebuilds `program` as bundles of `asm` (constants left out).
 
     With `labels` (`labels(statements, origin)` of `program.py`) the source is a statement
     list for `assemble(..., origin=origin)`: each label before its word, a control op whose
-    target has a label as a `Ctl`; the comments give word indices from `origin`, then the op
-    and the immediates of the active heads composed."""
-    classes = ", ".join(cls for cls in (u.cls_name for u in UNITS.values()))
+    target has a label naming it; the comments give word indices from `origin` and the op."""
     lines = [
-        f"from fenykl.dsp.units import {classes}",
-        "from fenykl.dsp.word import IDLE, Word",
+        f"from fenykl.dsp.asm import {', '.join(EXPORTS)}",
+        "from fenykl.dsp.word import IDLE",
     ]
     at: dict[int, list[str]] = {}
     for label, index in (labels or {}).items():
@@ -216,14 +185,13 @@ def source(
             raise ValueError(f"label {label!r} at {index}, outside the program")
         at.setdefault(index, []).append(label)
     if labels:
-        lines.append("from fenykl.dsp.program import Ctl, Label")
+        lines.append("from fenykl.dsp.program import Label")
+    named = {index: names[0] for index, names in at.items()}
     lines += ["", f"{name} = ["]
     for index, word in enumerate(program.words, origin):
         lines += [f"    Label({label!r})," for label in at.get(index, [])]
         note = "" if word.op == IDLE_OP else f" {_head(word, marks=False)[0]}"
-        note += _immediates(word)
-        named = at.get(word.target) if word.target is not None else None
-        text = _ctl_source(word, named[0]) if named else word_source(word)
+        text = "IDLE" if word == IDLE else repr(Bundle.of(word, named))
         lines.append(f"    {text},  # {index}{note}")
     lines += [f"    Label({label!r})," for label in at.get(origin + len(program), [])]
     lines.append("]")

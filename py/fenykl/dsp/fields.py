@@ -2808,8 +2808,6 @@ FIELDS = tuple(
 )
 ID_PATTERN = re.compile(r"f\d")
 """The start of a positional id; no name starts like one."""
-RESERVED = frozenset({"unit", "field", "items"})
-"""Slot attributes, which a slot's field keys must not shadow."""
 
 
 def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
@@ -2825,10 +2823,8 @@ def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
             if owner[bit]:
                 raise ValueError(f"bit {bit} in both {owner[bit]} and {f.id}")
             owner[bit] = f.id
-        if f.name and (
-            ID_PATTERN.match(f.name) or keyword.iskeyword(f.name) or f.name in RESERVED
-        ):
-            raise ValueError(f"{f.id}: name {f.name!r} reads as an id or shadows a key")
+        if f.name and (ID_PATTERN.match(f.name) or keyword.iskeyword(f.name)):
+            raise ValueError(f"{f.id}: name {f.name!r} reads as an id or is a keyword")
         for key in filter(None, (f.id, f.name)):
             if key in by_key:
                 raise ValueError(f"field key {key!r} used twice")
