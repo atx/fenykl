@@ -160,7 +160,7 @@ def test_lane_tables_verified_rows():
 
 
 def test_a_head_field_is_verified_once_every_value_has_a_verified_row():
-    # S2's fifteen values all have verified rows and lags; S0, S1, S3 still have open rows.
+    # S2's and S3's values all have verified rows and lags (S3's last, 0x6's lag); S0, S1 still have open rows.
     tiers = {
         u: lookup(f"f{lo}_{hi}").confidence
         for u, (lo, hi) in HEADS.items()
@@ -170,7 +170,7 @@ def test_a_head_field_is_verified_once_every_value_has_a_verified_row():
         "s0": Confidence.INFERRED,
         "s1": Confidence.INFERRED,
         "s2": Confidence.VERIFIED,
-        "s3": Confidence.INFERRED,
+        "s3": Confidence.VERIFIED,
     }
 
 

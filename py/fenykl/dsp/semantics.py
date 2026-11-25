@@ -1499,7 +1499,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
     "s3": {
         **dict.fromkeys((*range(0x06), 0x0E, 0x0F, 0x16, 0x17, 0x1A, 0x1D, 0x1E, 0x1F)),
         **dict.fromkeys(range(0x24, 0x3F)),
-        0x06: _open,
+        0x06: lambda a, b, c: [0] * LANE_COUNT,
         0x07: _block_select(8),
         0x08: _block_select(16),
         0x09: _lookup,

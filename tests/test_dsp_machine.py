@@ -89,6 +89,19 @@ def test_a_port_takes_a_head_result_at_its_lag_only(m, head, lag, at):
         assert got == tuple(x for k in range(16) for x in (B[k], A[k]))
 
 
+@pytest.mark.parametrize("at", [0, 1])
+def test_s3_0x6_gives_zeros_one_word_after_its_head_only(m, at):
+    m.lanes["L3"][1] = Vec(A)
+    m.lanes["L3"][2] = Vec(B)
+    m.lanes["L3"][9] = Vec((0x5555,) * 32)
+    s3 = {"f296_301": 0x6, "f61_64": 1, "f65_68": 2}
+    words = [w(**s3, **l3_port(9, 0))] if at == 0 else [w(**s3), w(**l3_port(9, 0))]
+    run(m, words)
+    got = m.lanes["L3"][9]
+    assert got.lanes == ((0x5555,) * 32 if at == 0 else (0,) * 32)
+    assert got.tier == Confidence.VERIFIED
+
+
 def test_the_mask_chain_holds_one_word(m):
     m.lanes["L0"][1] = Vec(A)
     m.lanes["L0"][2] = Vec(tuple(a + (k % 2) * 2 - 1 for k, a in enumerate(A)))
