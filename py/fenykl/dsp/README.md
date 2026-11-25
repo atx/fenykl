@@ -302,8 +302,9 @@ A product's high half goes to S0's and S1's files through their first ports unde
 (`fields.S2_HIGH_HALVES`): of S2's seven multiplies 0x0 is the unsigned b x imm's 16 bits,
 0x1 the signed b x imm, 0x2 the unsigned a x the signed b, 0x3 the unsigned b x t, 0x4 the
 unsigned a x the unsigned b, 0x5 the signed b x t and 0x6 the signed a x the signed b
-[verified; with t's bit 15 set 0x3 and 0x5 inferred: t was positive in every run]. With f155 / 1 and f159 / 1 in the word after S2 0x5,
-S1's a : b is the 32-bit product and S1 0x29 (or 0x10) gives it scaled, rounded and saturated:
+[verified; 0x3 and 0x5 take t's low 16 bits, 0x3 unsigned and 0x5 signed, pre-registered
+with t's bit 15 set and its bits 16..31 both set and clear]. With f155 / 1 and f159 / 1 in the
+word after S2 0x5, S1's a : b is the 32-bit product and S1 0x29 (or 0x10) gives it scaled, rounded and saturated:
 a fixed-point multiply by a scalar in three words [verified].
 
 These pieces make layers that run exact from DRAM to DRAM as one job [verified, pre-registered,

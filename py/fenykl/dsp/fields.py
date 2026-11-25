@@ -1436,8 +1436,9 @@ signedness: 0x0 / 0x1 and 0x3 / 0x5 unsigned / signed b, 0x4 / 0x2 / 0x6 unsigne
 b, unsigned a x signed b, signed a x signed b; under a negative immediate 0x0 multiplies by its
 16 bits taken unsigned, 0x1 by the signed value (fitted on all 32 lanes of 16-bit edge
 operands, then pre-registered on swapped operands and immediates -1 / -30 and met, both halves
-of all seven multiplies: verified on the camera). t was positive in every run, so whether
-0x3 / 0x5 take it signed is open."""
+of all seven multiplies: verified on the camera). 0x3 multiplies by t's low 16 bits unsigned,
+0x5 by them signed, t's bits 16..31 not read (verified on the camera, pre-registered on all 32
+lanes with t's bit 15 set and its bits 16..31 both set and clear)."""
 LANE_IMMEDIATES: dict[str, tuple[str, Confidence]] = {
     "s0": ("imm16 = f76_79 << 12 | f37_40 << 8 | f23_30", V),
     "s1": ("imm7 = sext7(f80_83 bits 3..2 << 5 | f84_87 << 1 | f0)", V),

@@ -1631,8 +1631,8 @@ def lane_result(
     floor shifts) and "imm"; S2 "t" (F2[f88_91]), "imm" (0x0 / 0x1's multiplier) and the
     nibble "f88_91" (0x7's choice); S3 the
     nibbles "f31_34", "f65_68", "f92_95", "f96_99" and "index" = F3[f92_95], "value" =
-    F3[f96_99]. A scalar enters with its low 16 bits (how a wider value enters is open), but
-    the select heads read all 32 bits of "s" and the carry-in heads and S1's floor shifts all
+    F3[f96_99]. A scalar enters with its low 16 bits (S2's t verified so, its bits 16..31 not
+    read; how the others' wider values enter is open), but the select heads read all 32 bits of "s" and the carry-in heads and S1's floor shifts all
     32 of "r" as a lane mask; a shift count enters as imm & 15
     or t & 15."""
     if len(a) != LANE_COUNT or len(b) != LANE_COUNT:
