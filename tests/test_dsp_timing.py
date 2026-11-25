@@ -137,6 +137,12 @@ def test_a_loops_words_are_counted_and_tiered():
     assert e.tier == I
 
 
+def test_a_looped_idle_word_costs_the_registered_5_2_ns_verified():
+    """Four passes of a 16-word idle pass: its 48 words run again cost 5.2 ns each."""
+    parts = {p.name: (p.us, p.tier) for p in loop(10).parts}
+    assert parts["repeats"] == (pytest.approx(48 * 0.0052), V)
+
+
 @pytest.mark.parametrize("n", [900, 1994])
 def test_idle_passes_of_up_to_1024_words_and_of_2000_repeat_verified(n):
     """A pass of n + 6 words: its idle words repeat verified, its loop word inferred."""
