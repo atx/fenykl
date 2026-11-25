@@ -37,6 +37,7 @@ from .fields import (
     NO_LANE,
     PR_SOURCES,
     S2_HIGH_HALVES,
+    S_IMMEDIATES,
     S_RESULTS,
     X0_LANE_BY_REGISTER,
     X0_LANE_MEMORY,
@@ -1230,8 +1231,7 @@ def _insert(b: Sequence[int], lane: int, value: int) -> Lanes:
 
 
 def _imm14(c: Scalars) -> int:
-    v = c["f96_99"] << 10 | c["f65_68"] << 6 | (c["f31_34"] >> 2 & 3) << 4 | c["f92_95"]
-    return v - 0x4000 if v & 0x2000 else v
+    return S_IMMEDIATES["s3"].compose(c)
 
 
 def _lane_shift(a: Sequence[int], b: Sequence[int], c: Scalars) -> Lanes:

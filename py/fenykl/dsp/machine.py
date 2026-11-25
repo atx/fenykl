@@ -51,7 +51,6 @@ from .fields import (
     DIVIDE_LAG,
     HEADS,
     LANE_FILES,
-    LANE_IMMEDIATES,
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
@@ -69,6 +68,7 @@ from .fields import (
     S2_LOW,
     S2_RESULT,
     S3_RESULT,
+    S_IMMEDIATES,
     S_NEXT_NONE,
     S_NEXT_VALUES,
     S_OWN_OPEN,
@@ -754,25 +754,25 @@ class Machine:
                 "f96_99",
             )
         }
+        if unit != "s3":
+            layout = S_IMMEDIATES[unit]
+            imm = Sv(layout.get(word.value), layout.confidence)
         if unit == "s0":
-            imm = n["f76_79"] << 12 | n["f37_40"] << 8 | n["f23_30"]
             return {
                 "s": self._rd("F0", word["f72_75"]),
                 "r": self._rd("F0", n["f76_79"]),
-                "imm": Sv(imm, LANE_IMMEDIATES["s0"][1]),
+                "imm": imm,
             }
         if unit == "s1":
-            imm = _sext((n["f80_83"] >> 2) << 5 | n["f84_87"] << 1 | n["f0"], 7)
             return {
                 "t": self._rd("F1", n["f84_87"]),
                 "r": self._rd("F1", n["f80_83"]),
-                "imm": Sv(imm, LANE_IMMEDIATES["s1"][1]),
+                "imm": imm,
             }
         if unit == "s2":
-            imm = _sext(n["f53_56"] << 3 | n["f88_91"] >> 1, 7)
             return {
                 "t": self._rd("F2", n["f88_91"]),
-                "imm": Sv(imm, LANE_IMMEDIATES["s2"][1]),
+                "imm": imm,
                 "f53_56": Sv(n["f53_56"]),
                 "f88_91": Sv(n["f88_91"]),
             }

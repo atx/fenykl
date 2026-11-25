@@ -10,6 +10,7 @@ from .fields import (
     CONTROL_FLAG,
     CONTROL_OPS,
     FIELDS,
+    HEAD_VIEWS,
     IDLE_VALUE,
     OP_FIELD,
     TARGET,
@@ -79,6 +80,20 @@ class Word:
             raise ValueError(f"op {code:#x} has no operand format")
         word = OP_FIELD.put(IDLE_VALUE if base is None else base.value, code)
         return cls.from_int(fmt.encode(word, args))
+
+    @classmethod
+    def head(cls, unit: str, /, base: "Word | None" = None, **operands: int) -> "Word":
+        """Unit `unit` (s0..s3, x0, x1) by its named operands (`fields.HEAD_VIEWS`), the head as
+        op, immediates composed; other fields keep `base`::
+
+            Word.head("s1", op=0x04, a=4, b=4, imm=0x20)
+        """
+        word = IDLE_VALUE if base is None else base.value
+        return cls.from_int(HEAD_VIEWS[unit].encode(word, operands))
+
+    def head_operands(self, unit: str) -> dict[str, int]:
+        """Unit `unit`'s named operands, as `Word.head` takes them."""
+        return HEAD_VIEWS[unit].decode(self.value)
 
     @classmethod
     def ctl(

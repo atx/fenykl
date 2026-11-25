@@ -76,7 +76,7 @@ def test_listing_names_ops_targets_and_delay_slots():
     text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0   call! -> 1443!  x0: x0k_lo=1!",
+        "0   call! -> 1443!  x0: k=0x7c1!",
         "1..4 | idle x4",
         "5..6   idle x2",
         "7   ret!  op_slot: rb=r1!",
@@ -92,10 +92,10 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
         "0..1   idle x2",
-        "2..4   x3 idle~  op_slot: ra=r2!  x1: xreg=r3!",
-        "5   idle~  ^  x1: xreg=r7!",
+        "2..4   x3 idle~  op_slot: ra=r2!  x1: b=r3! k=0x300!",
+        "5   idle~  ^  x1: b=r7! k=0x700!",
         "6   idle",
-        "7   idle~  op_slot: ra=r2!  x1: xreg=r7!",
+        "7   idle~  op_slot: ra=r2!  x1: b=r7! k=0x700!",
     ]
 
 

@@ -109,6 +109,11 @@ class Field:
     def mask(self) -> int:
         return (1 << self.width) - 1
 
+    @property
+    def span(self) -> int:
+        """Its bits in the word."""
+        return self.mask << self.lo
+
     def literal(self, value: int) -> str:
         """`value` as a Python literal: decimal for registers, hex otherwise."""
         return str(value) if self.kind is Kind.REG else f"{value:#x}"
@@ -2665,30 +2670,85 @@ IDLE_VALUE = sum(f.idle << f.lo for f in FIELDS)
 
 
 @dataclass(frozen=True)
-class Composite:
-    """A value whose bits lie in several positional fields, lowest part first."""
+class Bits:
+    """Bits lo..hi of `field`, counted from the field's own bit 0."""
 
-    name: str
-    parts: tuple[Field, ...]
-    confidence: Confidence
-    fact: str
-
-    def get(self, word: int) -> int:
-        value = 0
-        for f in reversed(self.parts):
-            value = value << f.width | f.get(word)
-        return value
+    field: Field
+    lo: int
+    hi: int
 
     @property
     def width(self) -> int:
-        return sum(f.width for f in self.parts)
+        return self.hi - self.lo + 1
+
+    @property
+    def span(self) -> int:
+        return ((1 << self.width) - 1) << (self.field.lo + self.lo)
+
+    def get(self, word: int) -> int:
+        return self.field.get(word) >> self.lo & ((1 << self.width) - 1)
 
     def put(self, word: int, value: int) -> int:
-        if not 0 <= value < 1 << self.width:
-            raise ValueError(f"{self.name}: {value:#x} does not fit {self.width} bits")
-        for f in self.parts:
-            word = f.put(word, value & f.mask)
-            value >>= f.width
+        mask = (1 << self.width) - 1
+        if not 0 <= value <= mask:
+            raise ValueError(
+                f"{self.field.label}: {value:#x} does not fit {self.width} bits"
+            )
+        return self.field.put(
+            word, self.field.get(word) & ~(mask << self.lo) | value << self.lo
+        )
+
+
+@dataclass(frozen=True)
+class Composite:
+    """A value whose bits lie in several fields or parts of fields, lowest part first; two's
+    complement when `signed`."""
+
+    name: str
+    parts: tuple[Field | Bits, ...]
+    confidence: Confidence
+    fact: str
+    signed: bool = False
+
+    @property
+    def width(self) -> int:
+        return sum(p.width for p in self.parts)
+
+    @property
+    def span(self) -> int:
+        """Its bits in the word."""
+        span = 0
+        for p in self.parts:
+            span |= p.span
+        return span
+
+    def get(self, word: int) -> int:
+        value = 0
+        for p in reversed(self.parts):
+            value = value << p.width | p.get(word)
+        if self.signed and value >> (self.width - 1):
+            value -= 1 << self.width
+        return value
+
+    def compose(self, values: Mapping[str, int]) -> int:
+        """The value from the values of its fields by id."""
+        word = 0
+        for p in self.parts:
+            f = p.field if isinstance(p, Bits) else p
+            word = f.put(word, values[f.id])
+        return self.get(word)
+
+    def put(self, word: int, value: int) -> int:
+        lo = -(1 << (self.width - 1)) if self.signed else 0
+        if not lo <= value < lo + (1 << self.width):
+            sign = " signed" if self.signed else ""
+            raise ValueError(
+                f"{self.name}: {value:#x} does not fit {self.width}{sign} bits"
+            )
+        value &= (1 << self.width) - 1
+        for p in self.parts:
+            word = p.put(word, value & ((1 << p.width) - 1))
+            value >>= p.width
         return word
 
 
@@ -2722,7 +2782,88 @@ X_IMMEDIATES = {
         f"X1's 13-bit immediate K, f7_8 | f9_14 << 2 | f115_119 << 8 ({EXACT})",
     ),
 }
-"""Each X unit's immediate; its high bits are the register field of its operand b."""
+"""Each X unit's immediate; its high bits are the register field of its operand b. K is raw: each
+head reads it zero- or sign-extended (`semantics.X_RULES`)."""
+_S_IMM_PARTS = {
+    "s0": (BY_KEY["f23_30"], BY_KEY["f37_40"], BY_KEY["f76_79"]),
+    "s1": (BY_KEY["f0"], BY_KEY["f84_87"], Bits(BY_KEY["f80_83"], 2, 3)),
+    "s2": (Bits(BY_KEY["f88_91"], 1, 3), BY_KEY["f53_56"]),
+    "s3": (
+        BY_KEY["f92_95"],
+        Bits(BY_KEY["f31_34"], 2, 3),
+        BY_KEY["f65_68"],
+        BY_KEY["f96_99"],
+    ),
+}
+S_IMMEDIATES = {
+    unit: Composite(
+        f"{unit}imm",
+        parts,
+        LANE_IMMEDIATES[unit][1],
+        LANE_IMMEDIATES[unit][0],
+        unit != "s0",
+    )
+    for unit, parts in _S_IMM_PARTS.items()
+}
+"""Each S unit's lane immediate as the machine reads it (`LANE_IMMEDIATES`)."""
+
+
+@dataclass(frozen=True)
+class HeadView:
+    """A head's unit by named operands: the head as op, its registers and its immediate composed
+    from its pieces, which share bits with register operands."""
+
+    unit: str
+    operands: Mapping[str, Field | Composite]
+
+    def decode(self, word: int) -> dict[str, int]:
+        return {name: o.get(word) for name, o in self.operands.items()}
+
+    def encode(self, word: int, values: Mapping[str, int]) -> int:
+        """`word` with the operands `values`; raises on a name not in the view, a value out of
+        range and two operands that disagree on a shared bit."""
+        given = 0
+        for name, value in values.items():
+            if name not in self.operands:
+                raise KeyError(f"{self.unit} has no operand {name!r}")
+            o = self.operands[name]
+            new = o.put(word, value)
+            if (new ^ word) & given:
+                raise ValueError(
+                    f"{self.unit}: {name}={value:#x} disagrees with another operand"
+                )
+            given |= o.span
+            word = new
+        return word
+
+
+def _view(unit: str, **operands: str | Composite) -> HeadView:
+    head = BY_KEY[_fid(*HEADS[unit])]
+    named = {k: BY_KEY[o] if isinstance(o, str) else o for k, o in operands.items()}
+    return HeadView(unit, {"op": head, **named})
+
+
+HEAD_VIEWS = {
+    "s0": _view("s0", a="s0a", b="s0b", s="s0s", c="s0c", imm=S_IMMEDIATES["s0"]),
+    "s1": _view("s1", a="s1a", b="s1b", t="s1t", c="s1c", imm=S_IMMEDIATES["s1"]),
+    "s2": _view("s2", a="s2a", b="s2b", t="s2t", imm=S_IMMEDIATES["s2"]),
+    "s3": _view(
+        "s3",
+        a="s3a",
+        b="s3b",
+        u="s3u",
+        idx="s3idx",
+        val="s3val",
+        imm=S_IMMEDIATES["s3"],
+    ),
+    "x0": _view("x0", a="x0a", b="x0b", o="x0o", k=X_IMMEDIATES["x0"]),
+    "x1": _view("x1", a="x1a", b="xreg", k=X_IMMEDIATES["x1"]),
+}
+"""The operand view of each head's unit, every field of the unit in some operand: S0 a, b
+(L0[a], L0[b]), s (F0[s]), c (the carry-in register F0[c]), imm16; S1 a, b, t (F1[t]), c, imm7;
+S2 a, b, t (F2[t]), imm7; S3 a, b, u (U[u]), idx (the lane, the shift count or F3[idx]), val
+(F3[val]), imm14; X0 a, b (A[a], A[b]), o (O[o], the store register), K; X1 a, b (B[a], B[b]), K
+(`LANE_OPERANDS`, `LANE_IMMEDIATES`, `X_IMMEDIATES`)."""
 
 RA = BY_KEY["ra"]
 RB = BY_KEY["f128_132"]
