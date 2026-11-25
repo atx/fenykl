@@ -115,6 +115,10 @@ def test_a_head_view_covers_its_unit():
 
 
 def test_a_head_view_composes_split_immediates():
+    word = Word.head("s0", imm=0xABCD)
+    assert (word["f23_30"], word["f37_40"], word["f76_79"]) == (0xCD, 0xB, 0xA)
+    word = Word.head("s2", imm=0x15)  # f88_91's bit 0 keeps its idle 1
+    assert (word["f88_91"], word["f53_56"]) == (0xB, 0x2)
     word = Word.head("s1", op=0x04, imm=0x20)
     assert (word["f0"], word["f84_87"], word["f80_83"] >> 2) == (0, 0, 1)
     word = Word.head("s3", imm=0x3ABC - 0x4000)
