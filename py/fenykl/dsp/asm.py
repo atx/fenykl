@@ -5,8 +5,10 @@
 An instruction holds the fields of its own unit only, composed through the head views
 (`fields.HEAD_VIEWS`) or the op slot's format (`fields.FORMATS`); a port, `to(dst, src)`, the
 enable and register of the one port of dst's file that takes src. A bundle's word is the idle
-word with its parts' fields set, and two parts that set one field raise. `Bundle.of` reads any
-word back, the fields no instruction or port expresses in a raw part, so decoding is exact.
+word with its parts' fields set; two parts that set one field, or two ports that write one
+register, raise. `Label("top")` names the word of its bundle, `NOP` is the idle word. `Bundle.of`
+reads any word back, the fields no instruction or port expresses in a raw part, so decoding is
+exact.
 """
 
 import keyword
@@ -155,17 +157,27 @@ Value = Reg | int | str
 
 
 class Part:
-    """One part of a bundle; `a | b` bundles parts."""
+    """One part of a bundle; `a | b` bundles parts. `target` is the label a control op jumps to."""
 
     fields: Mapping[str, int]
     tier: Confidence
-    label: str | None = None
+    target: str | None = None
 
     def __or__(self, other: "Part | Bundle") -> "Bundle":
         return Bundle((self,)) | other
 
+    def __ror__(self, other: object) -> "Bundle":
+        _not_a_part(other)
+
     def word(self, labels: Mapping[str, int] | None = None) -> Word:
         return Bundle((self,)).word(labels)
+
+
+def _not_a_part(other: object):
+    raise TypeError(
+        f"`|` bundles parts and bundles, not {type(other).__name__}: "
+        "a word goes in as raw(word), the idle word as NOP"
+    )
 
 
 def _text(value: Value) -> str:
@@ -177,14 +189,14 @@ def _text(value: Value) -> str:
 @dataclass(frozen=True)
 class Instr(Part):
     """An instruction of one unit: its code, the operands as given, its fields and tier; equal
-    when unit, code, fields and label are."""
+    when unit, code, fields and target are."""
 
     unit: "Unit"
     code: int
     args: tuple[tuple[str, Value], ...] = field(compare=False)
     fields: Mapping[str, int] = field(repr=False)
     tier: Confidence = field(compare=False)
-    label: str | None = None
+    target: str | None = None
 
     @property
     def name(self) -> str | None:
@@ -201,7 +213,7 @@ class Instr(Part):
         return f"{self.unit.key}.{self.name}({', '.join(args)})"
 
     def __hash__(self) -> int:
-        return hash((self.unit.key, self.code, tuple(self.fields.items()), self.label))
+        return hash((self.unit.key, self.code, tuple(self.fields.items()), self.target))
 
 
 @dataclass(frozen=True)
@@ -253,7 +265,7 @@ class Raw(Part):
 
     @property
     def tier(self) -> Confidence:
-        return min(lookup(k).confidence for k in self.fields)
+        return min((lookup(k).confidence for k in self.fields), default=V)
 
     def __repr__(self) -> str:
         args = (
@@ -265,8 +277,11 @@ class Raw(Part):
         return hash(tuple(self.fields.items()))
 
 
-def raw(**values: int) -> Raw:
-    """Fields by id or name, each checked against its width."""
+def raw(word: Word | None = None, /, **values: int) -> Raw:
+    """Fields by id or name, each checked against its width; `raw(word)` the fields where
+    `word` differs from the idle word."""
+    if word is not None:
+        values = {f.id: v for f, v in word.changed()} | values
     fields = {}
     for key, value in values.items():
         f = lookup(key)
@@ -276,57 +291,109 @@ def raw(**values: int) -> Raw:
 
 
 @dataclass(frozen=True)
+class Label(Part):
+    """`Label("top") | ...`: the word is the one named "top"; alone, an idle word."""
+
+    name: str
+    fields: Mapping[str, int] = field(default_factory=dict, init=False, repr=False)
+    tier: Confidence = field(default=V, init=False, repr=False)
+
+    def __repr__(self) -> str:
+        return f"Label({self.name!r})"
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+@dataclass(frozen=True)
 class Bundle:
-    """The parts of one word; any field set by two parts raises."""
+    """The parts of one word; a field set by two parts, a register written by two ports and
+    two labels or targets raise."""
 
     parts: tuple[Part, ...]
 
     def __post_init__(self) -> None:
+        names = [p.name for p in self.parts if isinstance(p, Label)]
+        if len(names) > 1:
+            raise ValueError(f"two labels on one word: {names}")
+        targets = [p.target for p in self.parts if p.target is not None]
+        if len(targets) > 1:
+            raise ValueError(f"two targets in one bundle: {targets}")
         seen: dict[str, Part] = {}
-        labels = [p.label for p in self.parts if p.label is not None]
-        if len(labels) > 1:
-            raise ValueError(f"two targets in one bundle: {labels}")
+        writes: dict[Reg, Port] = {}
         for p in self.parts:
             for f in p.fields:
                 if f in seen:
                     raise ValueError(f"{lookup(f).label} set by {seen[f]!r} and {p!r}")
                 seen[f] = p
+            if isinstance(p, Port):
+                if p.dst in writes:
+                    raise ValueError(
+                        f"two ports write {p.dst!r}: {writes[p.dst]!r} and {p!r}"
+                    )
+                writes[p.dst] = p
 
     @classmethod
-    def of(cls, word: Word, labels: Mapping[int, str] | None = None) -> "Bundle":
-        """The bundle of `word`; a control op whose target `labels` names gets the label."""
-        return cls(tuple(_decode(word.value, labels or {})))
+    def of(
+        cls, word: Word, labels: Mapping[int, str] | None = None, at: int | None = None
+    ) -> "Bundle":
+        """The bundle of `word` at index `at`: its `Label` where `labels` names `at`, and a
+        control op whose target `labels` names gets that label as its target."""
+        labels = labels or {}
+        parts = _decode(word.value, labels)
+        return cls((Label(labels[at]), *parts) if at in labels else tuple(parts))
 
     def __or__(self, other: "Part | Bundle") -> "Bundle":
-        more = other.parts if isinstance(other, Bundle) else (other,)
-        return Bundle((*self.parts, *more))
+        if isinstance(other, Bundle):
+            return Bundle((*self.parts, *other.parts))
+        if isinstance(other, Part):
+            return Bundle((*self.parts, other))
+        _not_a_part(other)
+
+    def __ror__(self, other: object) -> "Bundle":
+        _not_a_part(other)
 
     @property
     def label(self) -> str | None:
-        return next((p.label for p in self.parts if p.label is not None), None)
+        """The name the word defines."""
+        return next((p.name for p in self.parts if isinstance(p, Label)), None)
+
+    @property
+    def target(self) -> str | None:
+        """The label its control op jumps to."""
+        return next((p.target for p in self.parts if p.target is not None), None)
 
     @property
     def tier(self) -> Confidence:
         return min((p.tier for p in self.parts), default=V)
 
     def word(self, labels: Mapping[str, int] | None = None) -> Word:
-        """The idle word with the parts' fields; a label target is looked up in `labels`."""
+        """The idle word with the parts' fields; a target is looked up in `labels`."""
         value = IDLE_VALUE
         for p in self.parts:
             for f, v in p.fields.items():
                 value = lookup(f).put(value, v)
-        if self.label is not None:
-            if labels is None or self.label not in labels:
-                raise KeyError(f"label {self.label!r} is not defined")
-            value = TARGET.put(value, labels[self.label])
+        if self.target is not None:
+            if labels is None or self.target not in labels:
+                raise KeyError(f"label {self.target!r} is not defined")
+            value = TARGET.put(value, labels[self.target])
         return Word.from_int(value)
 
     def __repr__(self) -> str:
-        return " | ".join(map(repr, self.parts)) if self.parts else "Bundle(())"
+        return " | ".join(map(repr, self.parts)) if self.parts else "NOP"
+
+
+NOP = Bundle(())
+"""The idle word."""
 
 
 def bundle(statement: "Part | Bundle") -> Bundle:
-    return statement if isinstance(statement, Bundle) else Bundle((statement,))
+    """`statement` as a bundle; a raw `Word` raises a TypeError naming `raw(word)`."""
+    if isinstance(statement, Bundle):
+        return statement
+    if isinstance(statement, Part):
+        return Bundle((statement,))
+    _not_a_part(statement)
 
 
 # Units ------------------------------------------------------------------------------------
@@ -462,18 +529,18 @@ def _function_tier(unit: str, code: int) -> Confidence:
 def _instr(unit: Unit, code: int, operands: Mapping[str, Value]) -> Instr:
     numbers = {k: _number(unit, code, k, v) for k, v in operands.items() if k != "to"}
     if unit.unit == "op":
-        value, span, label = _op_encode(code, numbers, operands.get("to"))
+        value, span, target = _op_encode(code, numbers, operands.get("to"))
     else:
         view = VIEWS[unit.unit]
         value = view.encode(IDLE_VALUE, {"op": code, **numbers})
         span = 0
         for k in ("op", *numbers):
             span |= view.operands[k].span
-        label = None
+        target = None
     owned = [f for f in UNITS[_UNIT_OF[unit.unit]].fields if f.span & span]
     fields = {f.id: f.get(value) for f in owned}
     tier = min(_function_tier(unit.unit, code), *(f.confidence for f in owned))
-    return Instr(unit, code, tuple(operands.items()), fields, tier, label)
+    return Instr(unit, code, tuple(operands.items()), fields, tier, target)
 
 
 _UNIT_OF = {"op": "op_slot"} | {u: u for u in HEAD_VIEWS}
@@ -485,7 +552,7 @@ def _op_encode(
     code: int, numbers: Mapping[str, int], to: Value | None
 ) -> tuple[int, int, str | None]:
     """The op slot's value, the span of what it sets and its label target."""
-    value, span, label = OP_FIELD.put(IDLE_VALUE, code), OP_FIELD.span, None
+    value, span, target = OP_FIELD.put(IDLE_VALUE, code), OP_FIELD.span, None
     numbers = dict(numbers)
     if code in CONTROL_OPS:
         value = CONTROL_FLAG.put(value, numbers.pop("ctl_n", 0))
@@ -493,7 +560,7 @@ def _op_encode(
     if (to is not None) != (code in TARGET_OPS):
         raise ValueError(f"op {code:#x}: target {to!r}")
     if isinstance(to, str):
-        label, span = to, span | TARGET.span
+        target, span = to, span | TARGET.span
     elif to is not None:
         if not isinstance(to, int):
             raise TypeError(f"a target is a label or a word index, not {to!r}")
@@ -515,7 +582,7 @@ def _op_encode(
         if f is None or f.span & span:
             raise ValueError(f"op {code:#x}: {name} is part of its format or target")
         value, span = f.put(value, v), span | f.span
-    return value, span, label
+    return value, span, target
 
 
 @dataclass(frozen=True)
@@ -1033,23 +1100,30 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
     parts: list[Part] = []
     candidates: list[Part | None] = [_op(value, labels)]
     candidates += [_head(UNITS_BY_KEY[u], value) for u in HEAD_VIEWS]
-    target = {p.id for p in TARGET.parts}
+    reserved = {p.id for p in TARGET.parts}
     for instr in candidates:
         if instr is None:
             continue
         # A label target's fields are reserved, not set; any other field must match the word.
         fields = {
-            f: v for f, v in instr.fields.items() if not instr.label or f not in target
+            f: v
+            for f, v in instr.fields.items()
+            if not instr.target or f not in reserved
         }
         if all(lookup(f).get(value) == v for f, v in fields.items()):
             parts.append(instr)
     if lookup("m_n").get(value) == 0:
         parts.append(M(UNITS_BY_KEY[M_UNITS[lookup("msel").get(value)]]))
+    written = set()
     for spec in PORT_SPECS:
         v = spec.enable.get(value)
-        if v != spec.enable.idle and v in spec.sources:
-            src = SOURCES[spec.sources[v][0]]
-            parts.append(Port(spec.file[spec.dst.get(value)], src, spec, v))
+        if v == spec.enable.idle or v not in spec.sources:
+            continue
+        dst = spec.file[spec.dst.get(value)]
+        if dst in written:
+            continue  # a second port on one register stays raw
+        written.add(dst)
+        parts.append(Port(dst, SOURCES[spec.sources[v][0]], spec, v))
     taken = {f for p in parts for f in p.fields}
     rest = {
         f.id: f.get(value)
@@ -1152,5 +1226,7 @@ EXPORTS = (
     "S2_HI",
     "to",
     "raw",
+    "Label",
+    "NOP",
 )
 """The names DSL source imports."""

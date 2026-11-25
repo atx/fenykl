@@ -6,8 +6,8 @@ An item is a run of 64-byte slots, one word in the first 40 bytes of each (bytes
 zero up to an optional constant block, then zero to its end. The constants are read only by the
 CPU setup of the command, which copies them to DSP local memory 0x9D000000.
 
-`assemble` takes statements: words, bundles and parts of `asm` (whose control op may name a
-label), `Label`s and `Ctl`s, control ops whose target is a label.
+`assemble` takes bundles and parts of `asm`, one per word; a bundle's `Label` names its word, a
+control op's target may name a label.
 """
 
 import struct
@@ -187,62 +187,32 @@ def stock_programs(image: bytes) -> dict[int, Program]:
     }
 
 
-@dataclass(frozen=True)
-class Label:
-    """Marks the statement after it; a `Ctl` names it as its target."""
-
-    name: str
-
-
-@dataclass(frozen=True)
-class Ctl:
-    """Control op 0..3 `op` to label `to`: `Word.ctl(op, index of to, base)` once assembled."""
-
-    op: int
-    to: str
-    base: Word = IDLE
-
-
-Statement = Word | Bundle | Part | Label | Ctl
-
-
-def labels(stmts: Iterable[Statement], origin: int = 0) -> dict[str, int]:
-    """Each label's word index: `origin` plus the number of words before it."""
+def labels(bundles: Iterable[Bundle | Part], origin: int = 0) -> dict[str, int]:
+    """Each label's word index: `origin` plus the number of words before its bundle."""
     names: dict[str, int] = {}
-    index = origin
-    for s in stmts:
-        if not isinstance(s, Label):
-            index += 1
+    for index, b in enumerate(map(bundle, bundles), origin):
+        if b.label is None:
             continue
-        if s.name in names:
-            raise AssemblyError(f"label {s.name!r} defined twice")
-        names[s.name] = index
+        if b.label in names:
+            raise AssemblyError(f"label {b.label!r} defined twice")
+        names[b.label] = index
     return names
 
 
 def assemble(
-    stmts: Iterable[Statement], constants: bytes = b"", *, origin: int = 0
+    bundles: Iterable[Bundle | Part], constants: bytes = b"", *, origin: int = 0
 ) -> Program:
-    """A program from DSL statements placed at word index `origin`, in two passes: the labels'
-    indices, then the words, each `Ctl` and bundle with a label targeting its label's index (a
-    target over 13 bits raises ValueError). A word's own target stays as it is, absolute. Checks every word and warns once
+    """A program from bundles placed at word index `origin`, in two passes: the labels'
+    indices, then the words, each target looked up (one over 13 bits raises ValueError). A
+    target given as a word index stays as it is, absolute. Checks every word and warns once
     about hypothesis fields."""
-    stmts = tuple(stmts)
-    names = labels(stmts, origin)
+    bundles = tuple(map(bundle, bundles))
+    names = labels(bundles, origin)
     words = []
-    for s in stmts:
-        if isinstance(s, Label):
-            continue
-        if isinstance(s, Ctl):
-            if s.to not in names:
-                raise AssemblyError(f"label {s.to!r} is not defined")
-            s = Word.ctl(s.op, names[s.to], s.base)
-        elif isinstance(s, (Bundle, Part)):
-            s = bundle(s)
-            if s.label is not None and s.label not in names:
-                raise AssemblyError(f"label {s.label!r} is not defined")
-            s = s.word(names)
-        words.append(s)
+    for b in bundles:
+        if b.target is not None and b.target not in names:
+            raise AssemblyError(f"label {b.target!r} is not defined")
+        words.append(b.word(names))
     weak = set()
     for word in words:
         word.check()

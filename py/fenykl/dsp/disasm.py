@@ -172,27 +172,19 @@ def source(
 ) -> str:
     """Python source that rebuilds `program` as bundles of `asm` (constants left out).
 
-    With `labels` (`labels(statements, origin)` of `program.py`) the source is a statement
-    list for `assemble(..., origin=origin)`: each label before its word, a control op whose
-    target has a label naming it; the comments give word indices from `origin` and the op."""
-    lines = [
-        f"from fenykl.dsp.asm import {', '.join(EXPORTS)}",
-        "from fenykl.dsp.word import IDLE",
-    ]
-    at: dict[int, list[str]] = {}
+    With `labels` (`labels(bundles, origin)` of `program.py`) the source is a bundle list for
+    `assemble(..., origin=origin)`: a labelled word starts with its `Label`, a control op whose
+    target has a label names it; the comments give word indices from `origin` and the op."""
+    at: dict[int, str] = {}
     for label, index in (labels or {}).items():
-        if not origin <= index <= origin + len(program):
+        if not origin <= index < origin + len(program):
             raise ValueError(f"label {label!r} at {index}, outside the program")
-        at.setdefault(index, []).append(label)
-    if labels:
-        lines.append("from fenykl.dsp.program import Label")
-    named = {index: names[0] for index, names in at.items()}
-    lines += ["", f"{name} = ["]
+        if index in at:
+            raise ValueError(f"labels {at[index]!r} and {label!r} on one word")
+        at[index] = label
+    lines = [f"from fenykl.dsp.asm import {', '.join(EXPORTS)}", "", f"{name} = ["]
     for index, word in enumerate(program.words, origin):
-        lines += [f"    Label({label!r})," for label in at.get(index, [])]
         note = "" if word.op == IDLE_OP else f" {_head(word, marks=False)[0]}"
-        text = "IDLE" if word == IDLE else repr(Bundle.of(word, named))
-        lines.append(f"    {text},  # {index}{note}")
-    lines += [f"    Label({label!r})," for label in at.get(origin + len(program), [])]
+        lines.append(f"    {Bundle.of(word, at, index)!r},  # {index}{note}")
     lines.append("]")
     return "\n".join(lines) + "\n"
