@@ -107,13 +107,18 @@ LANE_LOAD = Rate(
     0.2,
     (1, 16),
     "byte loads into the lane memory: 0.91, 1.72 and 7.38 us at 1, 4 and 16 KiB, fitted "
-    "(about 2.2 KiB per us)",
+    "(about 2.2 KiB per us); the line's times registered at 1 to 16 KiB on a later boot held within "
+    "10 % + 0.15 us at 1, 2, 8 and 16 KiB (0.72, 1.13, 3.82, 6.75 us) but not at 4 KiB (1.49 us, "
+    "below, its shorter loop 33 us long; 1.75 and 1.89 us on two more boots, inside): inferred",
 )
 LANE_STORE = Rate(
     0.427,
     0.3,
     (1, 16),
-    "byte stores from the lane memory: 0.74, 2.14 and 7.19 us for 1, 4 and 16 KiB, fitted",
+    "byte stores from the lane memory: 0.74, 2.14 and 7.19 us for 1, 4 and 16 KiB, fitted; the "
+    "line's times registered at 1 to 16 KiB held within 10 % + 0.15 us on a later boot (0.54, 1.04, "
+    "2.13, 4.19, 7.94 us at 1, 2, 4, 8, 16 KiB), on a third boot 8 KiB held (4.07 us) and 16 KiB "
+    "lay above (8.25 us): inferred",
 )
 LANE_STORE12 = Rate(
     0.4208,
