@@ -115,26 +115,63 @@ LANE_STORE = Rate(
     (1, 16),
     "byte stores from the lane memory: 0.74, 2.14 and 7.19 us for 1, 4 and 16 KiB, fitted",
 )
-PACKED_STORE = Rate(
-    LANE_STORE.per_kib,
-    LANE_STORE.per_command,
-    (4, 4),
-    "16-bit and 12-bit stores from the lane memory: 1.73 to 1.94 and 1.56 us per 4 KiB of DRAM, "
-    "the byte store's rate within the jitter (fitted, at 4 KiB only)",
+LANE_STORE12 = Rate(
+    0.4208,
+    0.084,
+    (1, 16),
+    "12-bit stores from the lane memory (r3 = ceil(10 r6 / 32) vectors): 0.50, 1.77 and 6.82 us "
+    "at 1, 4 and 16 KiB of DRAM, each within its registered window around the byte store's "
+    "rate, fitted; the fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (0.97, "
+    "3.29 us)",
+    V,
+)
+LANE_LOAD16 = Rate(
+    0.4665,
+    0.139,
+    (1, 16),
+    "16-bit loads into the lane memory (r3 = r6 / 4 vectors): 0.71, 1.88 and 7.63 us at 1, 4 "
+    "and 16 KiB of DRAM, each within its registered window around the byte load's rate, fitted; "
+    "the fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (1.13, 3.63 us)",
+    V,
+)
+LANE_STORE16 = Rate(
+    0.4326,
+    0.055,
+    (0.0625, 16),
+    "16-bit stores from the lane memory (r3 = r6 / 4 vectors): 0.11, 0.20, 0.48, 1.68 and 7.00 "
+    "us at 64 B, 192 B, 1, 4 and 16 KiB of DRAM, each within its registered window around the "
+    "byte store's rate, fitted; the fit's times registered at 512 B and 8 KiB held within 10 % + "
+    "0.15 us (0.26, 3.07 us)",
+    V,
+)
+LOCAL_LOAD32 = Rate(
+    1.3293,
+    0.377,
+    (0.25, 4),
+    "32-bit loads into local memory at r2 = 1 (one element per word): 0.69, 1.39, 1.71 and 5.69 "
+    "us at 0.25, 0.75, 1 and 4 KiB of DRAM, fitted; the 0.25 KiB time lies above its registered "
+    "window (the byte local load's rate per KiB, which holds at the other sizes); the fit's "
+    "times registered at 0.5 and 2 KiB held within 10 % + 0.15 us (1.02, 3.04 us; inferred: "
+    "the 0.25 KiB time missed its window)",
 )
 LOCAL_LOAD = Rate(
-    1.44,
-    0.0,
-    (4, 4),
-    "byte loads into local memory at r2 = 4: 5.77 us per 4 KiB, one size (about 0.7 KiB per "
-    "us, a third of the lane memory's rate)",
+    1.3499,
+    0.312,
+    (0.25, 4),
+    "byte loads into local memory at r2 = 4: 0.67, 1.65, 2.99 and 5.72 us at 0.25, 1, 2 and 4 "
+    "KiB of DRAM, fitted (about 0.75 KiB per us, a third of the lane memory's rate, plus a "
+    "per-command part that puts 0.25 KiB above the per-KiB rate's window); the fit's times "
+    "registered at 0.5 and 3 KiB held within 10 % + 0.15 us (0.99, 4.24 us; inferred: the "
+    "0.25 KiB time missed its window)",
 )
 RATES: dict[tuple[int, int, int, int], Rate] = {
     (LOAD, LANE_MEMORY, 0x20, 0x10): LANE_LOAD,
     (STORE, LANE_MEMORY, 0x20, 0x10): LANE_STORE,
-    (STORE, LANE_MEMORY, 0x20, 0x08): PACKED_STORE,
-    (STORE, LANE_MEMORY, 0x20, 0x0A): PACKED_STORE,
+    (LOAD, LANE_MEMORY, 0x20, 0x08): LANE_LOAD16,
+    (STORE, LANE_MEMORY, 0x20, 0x08): LANE_STORE16,
+    (STORE, LANE_MEMORY, 0x20, 0x0A): LANE_STORE12,
     (LOAD, LOCAL_MEMORY, 4, 0x10): LOCAL_LOAD,
+    (LOAD, LOCAL_MEMORY, 1, 0x04): LOCAL_LOAD32,
 }
 """(kind, r0, r2, r5): the transfers timed on the camera, each a command of one row (r7 = 1)
 handed and joined by a 0x1d, with r3 the units its r5 r6 elements fill. Other shapes have no
