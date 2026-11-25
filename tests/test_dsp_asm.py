@@ -65,7 +65,7 @@ def test_every_stock_word_decodes_to_its_bundle_exactly():
 
 
 def test_any_word_decodes_exactly():
-    rng = random.Random(616)
+    rng = random.Random(0)
     for _ in range(500):
         word = Word(rng.getrandbits(320))
         assert Bundle.of(word).word() == word
