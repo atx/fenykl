@@ -151,8 +151,8 @@ LOCAL_LOAD32 = Rate(
     "32-bit loads into local memory at r2 = 1 (one element per word): 0.69, 1.39, 1.71 and 5.69 "
     "us at 0.25, 0.75, 1 and 4 KiB of DRAM, fitted; the 0.25 KiB time lies above its registered "
     "window (the byte local load's rate per KiB, which holds at the other sizes); the fit's "
-    "times registered at 0.5 and 2 KiB held within 10 % + 0.15 us (1.02, 3.04 us)",
-    V,
+    "times registered at 0.5 and 2 KiB held within 10 % + 0.15 us (1.02, 3.04 us; inferred: "
+    "the 0.25 KiB time missed its window)",
 )
 LOCAL_LOAD = Rate(
     1.3499,
@@ -161,8 +161,8 @@ LOCAL_LOAD = Rate(
     "byte loads into local memory at r2 = 4: 0.67, 1.65, 2.99 and 5.72 us at 0.25, 1, 2 and 4 "
     "KiB of DRAM, fitted (about 0.75 KiB per us, a third of the lane memory's rate, plus a "
     "per-command part that puts 0.25 KiB above the per-KiB rate's window); the fit's times "
-    "registered at 0.5 and 3 KiB held within 10 % + 0.15 us (0.99, 4.24 us)",
-    V,
+    "registered at 0.5 and 3 KiB held within 10 % + 0.15 us (0.99, 4.24 us; inferred: the "
+    "0.25 KiB time missed its window)",
 )
 RATES: dict[tuple[int, int, int, int], Rate] = {
     (LOAD, LANE_MEMORY, 0x20, 0x10): LANE_LOAD,

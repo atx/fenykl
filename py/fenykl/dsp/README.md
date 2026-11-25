@@ -499,7 +499,8 @@ figures into a job's time ("Timing" below).
   bytes at the byte format's rate (1 to 16 KiB loads, 64 B / 1 KiB to 16 KiB stores, each size
   inside its registered window); byte and 32-bit loads into local memory run at about 0.75 KiB
   per us plus 0.3 to 0.4 us per command (0.25 to 4 KiB) [fitted; each of these five lines' times
-  at two sizes it was not fitted on held within 10 % + 0.15 us: verified, pre-registered];
+  at two sizes it was not fitted on held within 10 % + 0.15 us, so the three lane-memory lines are
+  verified; the two local ones stay inferred, their 0.25 KiB time missed its registered window];
   commands on different channels run one after the other; words between a command and its 0x1d
   hide its transfer [inferred from pass-count slopes]. Of 32-byte loads handed before the first 0x1d the first 19
   run and the rest wait until 0x1d's free room; 32 commands and 32 waits returned [verified], the
