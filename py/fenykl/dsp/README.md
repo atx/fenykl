@@ -498,7 +498,8 @@ figures into a job's time ("Timing" below).
   1 us per command besides the bytes, byte loads into local memory at about 0.7 KiB per us;
   16-bit lane loads and stores move DRAM bytes at the byte format's rate (1 to 16 KiB loads,
   64 B to 16 KiB stores, each size inside its registered window), 32-bit loads into local memory
-  at about 0.75 KiB per us plus about 0.4 us per command (0.25 to 4 KiB) [fitted];
+  at about 0.75 KiB per us plus about 0.4 us per command (0.25 to 4 KiB) [fitted; each fit's
+  times at two sizes it was not fitted on held within 10 % + 0.15 us: verified, pre-registered];
   commands on different channels run one after the other; words between a command and its 0x1d
   hide its transfer [inferred from pass-count slopes]. Of 32-byte loads handed before the first 0x1d the first 19
   run and the rest wait until 0x1d's free room; 32 commands and 32 waits returned [verified], the

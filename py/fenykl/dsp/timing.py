@@ -127,7 +127,9 @@ LANE_LOAD16 = Rate(
     0.139,
     (1, 16),
     "16-bit loads into the lane memory (r3 = r6 / 4 vectors): 0.71, 1.88 and 7.63 us at 1, 4 "
-    "and 16 KiB of DRAM, each within its registered window around the byte load's rate, fitted",
+    "and 16 KiB of DRAM, each within its registered window around the byte load's rate, fitted; "
+    "the fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (1.13, 3.63 us)",
+    V,
 )
 LANE_STORE16 = Rate(
     0.4326,
@@ -135,7 +137,9 @@ LANE_STORE16 = Rate(
     (0.0625, 16),
     "16-bit stores from the lane memory (r3 = r6 / 4 vectors): 0.11, 0.20, 0.48, 1.68 and 7.00 "
     "us at 64 B, 192 B, 1, 4 and 16 KiB of DRAM, each within its registered window around the "
-    "byte store's rate, fitted",
+    "byte store's rate, fitted; the fit's times registered at 512 B and 8 KiB held within 10 % + "
+    "0.15 us (0.26, 3.07 us)",
+    V,
 )
 LOCAL_LOAD32 = Rate(
     1.3293,
@@ -143,7 +147,9 @@ LOCAL_LOAD32 = Rate(
     (0.25, 4),
     "32-bit loads into local memory at r2 = 1 (one element per word): 0.69, 1.39, 1.71 and 5.69 "
     "us at 0.25, 0.75, 1 and 4 KiB of DRAM, fitted; the 0.25 KiB time lies above its registered "
-    "window (the byte local load's rate per KiB, which holds at the other sizes)",
+    "window (the byte local load's rate per KiB, which holds at the other sizes); the fit's "
+    "times registered at 0.5 and 2 KiB held within 10 % + 0.15 us (1.02, 3.04 us)",
+    V,
 )
 LOCAL_LOAD = Rate(
     1.44,
