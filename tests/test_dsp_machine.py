@@ -894,3 +894,16 @@ def test_two_divides_in_flight_are_inferred(m, gap):
     run(m, words)
     tier = V if gap > 4 else I
     assert m.g[5] == Sv(142, tier) and m.g[6] == Sv(100, tier)
+
+
+@pytest.mark.parametrize(
+    ("count", "lane", "tier"),
+    [(2, 0b10, V), (10, 0x200, I), (10, 0x201, V), (0, 0x8000, V)],
+)
+def test_s1s_rounding_of_a_tie_is_verified_only_at_the_counts_met(count, lane, tier):
+    # S1 0xe by imm & 15 = f84_87 << 1; the tie in lane 7 only.
+    m = Machine(Boot())
+    m.lanes["L1"][2] = Vec(tuple(lane if k == 7 else 0 for k in range(32)))
+    head = w(f285_291=0x0E, f49_52=2, f84_87=count >> 1)
+    run(m, [head, w(f242_243=2, f159_162=9)])
+    assert m.lanes["L1"][9].tier == tier and None not in m.lanes["L1"][9].lanes

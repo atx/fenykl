@@ -771,7 +771,6 @@ class Machine:
             return
         sc = _Scalars(scalars)
         ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
-        tier = min([lane_tier(unit, head, sc), *(v.tier for v in ins)])
         high = None
         if any(x is None for v in ins for x in v.lanes):
             low = UNKNOWN_VEC
@@ -780,6 +779,7 @@ class Machine:
             bl = [x or 0 for x in b.lanes]
             try:
                 lanes = lane_result(unit, head, al, bl, sc)
+                tier = min([lane_tier(unit, head, al, bl, sc), *(v.tier for v in ins)])
                 if unit == "s3" and head in LANE_SHIFTS:
                     lanes, tier = self._shift_in(lanes, scalars, tier)
                 low = Vec(tuple(lanes), min(tier, sc.tier))

@@ -1612,9 +1612,34 @@ LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
 """The S units' lane functions by head value, each with its tier (`fields.LANE_FUNCTIONS`)."""
 
 
-def lane_tier(unit: str, head: int, scalars: Scalars) -> Confidence:
-    """The tier of S unit `unit`'s lane result at head value `head` on `scalars`."""
-    return LANE_RULES[unit][head].confidence
+TIES_MET = range(1, 4)
+"""The counts at which S1's rounding shifts by imm & 15 met ties to even; at the others a tie
+lane is inferred (`fields.TIES_AT_10`)."""
+
+
+def _ties_by_imm(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
+    # The count is under 16, so the bits rounded off are b's in the 32-bit a : b too.
+    n = _n(c)
+    if n == 0 or n in TIES_MET:
+        return V
+    half = 1 << (n - 1)
+    return I if any(y & (2 * half - 1) == half for y in b) else V
+
+
+LANE_CAPS: dict[
+    tuple[str, int], Callable[[Sequence[int], Sequence[int], Scalars], Confidence]
+] = {("s1", h): _ties_by_imm for h in (0x0E, 0x10, 0x14, 0x15)}
+"""Rows whose tier depends on their operands' values: the cap at given lanes and scalars."""
+
+
+def lane_tier(
+    unit: str, head: int, a: Sequence[int], b: Sequence[int], scalars: Scalars
+) -> Confidence:
+    """The tier of S unit `unit`'s lane result at head value `head` on lanes a and b and
+    `scalars`: the row's, capped where it depends on the values (`LANE_CAPS`)."""
+    tier = LANE_RULES[unit][head].confidence
+    cap = LANE_CAPS.get((unit, head))
+    return tier if cap is None else min(tier, cap(a, b, scalars))
 
 
 def lane_result(
