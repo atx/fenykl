@@ -957,8 +957,7 @@ LANE_LAG: dict[str, dict[int, tuple[int, Confidence]]] = {
     "s3": _lags(1, V, range(0xA, 0xE))
     | _lags(0, V, range(0x10, 0x16), 0x18, 0x19, 0x1B, 0x1C, range(0x20, 0x24))
     | _lags(1, V, 0x9)
-    | _lags(1, V, 0x7, 0x8)
-    | _lags(1, H, 0x6),
+    | _lags(1, V, 0x6, 0x7, 0x8),
 }
 """Words from a head to the one word whose lane port takes its result, with the tier, by head (verified on the camera,
 pre-registered with the rule's lanes at that lag and a sentinel at the other: per head one cell
@@ -972,7 +971,8 @@ units. S2 0x9, 0xa and 0xb at 0 were measured against a registration at 1, then 
 shifts 0x16..0x19, 0x1f..0x22 and carry-in heads 0x32, 0x3d..0x40 at 1: pre-registered on four
 lanes each (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
 one word later wrote nothing (measured). S3 0x7, 0x8 at 1 and S1 0x60..0x7e at 0, S0's at 1:
-pre-registered (verified); S3 0x6 at 1 (hypothesis: it gives 0). The other heads' lags
+pre-registered (verified); S3 0x6 at 1: 0 in every lane there and nothing in its own word,
+pre-registered on two fresh operand sets in two jobs and the earlier lag runs (verified). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
 LANE_VECTORS = 0x400
