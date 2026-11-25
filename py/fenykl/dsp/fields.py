@@ -2764,14 +2764,41 @@ ROLES = dict(_table_roles()) | {
     "f276": "the active-low strobe M: under 0 an S head's scalar result goes on X0's result "
     "bus (`S_RESULTS`, verified)",
 }
-"""What each named field does, with its tier; its fact leads with it, the evidence after."""
+"""What each named field does, with its tier: its fact, with one sentence of evidence after."""
 FIELDS = tuple(replace(f, name=NAMES[f.id]) if f.id in NAMES else f for f in FIELDS)
 _roleless = {f.id for f in FIELDS if f.name} ^ set(ROLES)
 if _roleless:
     raise ValueError(f"named fields and roles differ: {sorted(_roleless)}")
+
+_RESTATED = {"f15_22": "; ", "f221_223": ": ", "f229": "; ", "f313_319": ": "}
+"""Fields whose first sentence goes on to restate the role after this separator."""
+
+
+def _evidence(f: Field) -> str:
+    """The one sentence of a named field's boundary and ownership evidence: for a grid nibble
+    its owner's share of its changes, else the first sentence of the fact it was built with.
+    The rest of that fact is in the tables its role names (`NIBBLES`, `UNIT_FACTS`, ...)."""
+    if f.lo in GRID_A_UNITS:
+        unit, p = GRID_A_UNITS[f.lo]
+        tag = "verified in the bytes" if p >= WEAK_OWNER else "inferred"
+        return (
+            f"A grid A nibble, its boundaries from segmentation and the lag-110 repeat in grid "
+            f"B; it changes where {_fid(*HEADS[unit])} is active in {p:.2f} of its changes ({tag})"
+        )
+    if f.kind is Kind.ROUTE and f.id in _OWNER:
+        return (
+            f"A grid B nibble, its boundaries from segmentation and the lag-110 repeat of grid "
+            f"A; it changes where its enable {_OWNER[f.id]} is active in {_PORT_P[f.id]:.2f} of "
+            f"its changes, {OWNERSHIP}"
+        )
+    first = f.fact.split(". ", 1)[0]
+    if f.id in _RESTATED:
+        first = first.split(_RESTATED[f.id], 1)[0]
+    return f"{first[0].upper()}{first[1:]}"
+
+
 FIELDS = tuple(
-    replace(f, fact=f"{ROLES[f.id]}. {f.fact[0].upper()}{f.fact[1:]}") if f.name else f
-    for f in FIELDS
+    replace(f, fact=f"{ROLES[f.id]}. {_evidence(f)}") if f.name else f for f in FIELDS
 )
 ID_PATTERN = re.compile(r"f\d")
 """The start of a positional id; no name starts like one."""

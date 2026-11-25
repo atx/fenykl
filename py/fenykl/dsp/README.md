@@ -101,8 +101,9 @@ Names are short, lowercase and prefixed with what they belong to:
 - `msel` and `m_n` for M (`_n`: active low, as `ctl_n`); `ra`, `rb`, `rr`, `imm`, `op` in the op
   slot.
 
-Each named field's fact starts with its role and tier (`fields.ROLES`), then the boundary and
-other evidence. Fields whose role is open keep their id only: f35_36 and f145_146 (Q), f234_235
+Each named field's fact is its role and tier (`fields.ROLES`) and one sentence of the evidence
+for its boundary and unit; the measurements behind the role stay in the tables it names
+(`NIBBLES`, `UNIT_FACTS`, `LANE_FILES`, ...). Fields whose role is open keep their id only: f35_36 and f145_146 (Q), f234_235
 (a hypothesis) and the constants f133_140, f230_231, f277.
 
 | id | name | unit | role |
@@ -222,7 +223,10 @@ word = Word.head("s1", op=0x04, a=4, b=4, c=4, imm=0x20)  # S1 0x04: b ^ 0x20
 word.head_operands("s1")  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'c': 4, 'imm': 32}
 ```
 
-Listings show these units by their operands where they differ (`s1: op=4! a=4! ... imm=0x20!`);
+A view is per unit, not per head value: no table gives which of s, t, c, u, idx, val or the
+immediate a head reads (the rules' `reads` cover a and b only), so a listing shows every operand
+that differs, also one the word's head does not read. Listings show these units by their operands
+where they differ (`s1: op=4! a=4! ... imm=0x20!`);
 DSL source names fields and gives the active heads' composed immediates in its comments.
 
 To add or refine a field, edit `FIELDS`: split or merge entries so that the bits stay covered
