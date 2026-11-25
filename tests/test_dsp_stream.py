@@ -382,10 +382,10 @@ def local_fill(r2: int, r3: int, r6: int, channel: int = 0) -> list[int]:
 @pytest.mark.parametrize(
     ("regs", "to", "word", "tier"),
     [
-        ((4, 5, 2), 0x500, 0x21212121, V),
-        ((2, 4, 4), 0x700, 0x2A212A21, V),
-        ((1, 3, 5), 0x700, 0x00002A21, V),
-        ((2, 8, 2), 0x600, 0x2A212A21, I),  # measured once
+        ((4, 5, 2), 0x500, 0x21212121, I),  # each shape ran in one job
+        ((2, 4, 4), 0x700, 0x2A212A21, I),
+        ((1, 3, 5), 0x700, 0x00002A21, I),
+        ((2, 8, 2), 0x600, 0x2A212A21, I),
         ((4, 5, 2), 0x540, 0x21212121, I),  # another "to"
     ],
 )

@@ -127,16 +127,17 @@ PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
 TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
 """Three vectors of byte elements (six lines)."""
 LOCAL_FILLS: dict[tuple[int, int, int], tuple[int, Confidence]] = {
-    (4, 3, 2): (0x400, V),
-    (4, 5, 2): (0x500, V),
+    (4, 3, 2): (0x400, I),
+    (4, 5, 2): (0x500, I),
     (4, 8, 2): (0x400, I),
-    (2, 4, 4): (0x700, V),
+    (2, 4, 4): (0x700, I),
     (2, 8, 2): (0x600, I),
-    (1, 6, 3): (0x600, V),
-    (1, 3, 5): (0x700, V),
+    (1, 6, 3): (0x600, I),
+    (1, 3, 5): (0x700, I),
 }
 """Kind 8 under r0 2 on channel 0 (r1 0, r4 0, r5 0x10, r7 1) by the (r2, r3, r6) that ran: the
-"to" it ran at and its tier (verified pre-registered, inferred measured once). Another word-aligned
+"to" it ran at and its tier: inferred, each shape having run in one job (the rule itself, r3 words of
+copies of "from"'s low r2-wide element, matched on pre-registered jobs at every r2). Another word-aligned
 "to" in `LOCAL_FILL_TO` is capped at inferred; other registers, channels and offsets, and a "from"
 at 0x8000 or above or whose element has its top bit set (every value that ran was below 0x8000,
 its element's top bit clear), raise
@@ -176,7 +177,7 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
 for kinds that move nothing; a lane fill's "to" also vector-aligned, as every one ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job
-(local fills: verified where one pre-registered job matched, `LOCAL_FILLS`);
+(local fills: `LOCAL_FILLS`);
 a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 (loads) and
 kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
