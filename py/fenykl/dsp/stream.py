@@ -68,7 +68,9 @@ running at once change only when a held load lands, not what it writes. The emul
 hand until its 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a
 store handed after it runs after it), a store takes its source as of the hand and writes DRAM at
 once (inferred where the source is rewritten before the store completes: that race was not
-measured), and the lane memory read while any command is outstanding is a hypothesis.
+measured), and the lane memory read while any command is outstanding is a hypothesis, but
+outside every outstanding command's vectors: there verified beside one-row byte loads and stores
+of kinds 0 / 6, inferred beside other lane-memory shapes (`Engine.lane_tier`).
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
 job and what later commands write is unknown (`off` says why). A command whose destination cannot
@@ -110,6 +112,10 @@ HALF_SHAPE = (1, None, 0x20, 1, None, 0x08, 4, 1)
 """One vector of 32 16-bit elements (four lines)."""
 ROWS_SHAPE = (1, 0x80, 0x20, 1, 0x100, 0x10, 2, 3)
 """Three rows of one vector, memory pitch two vectors, DRAM pitch 0x100."""
+STORE_ROWS2 = (1, 0x40, 0x20, 1, 0x100, 0x10, 2, 2)
+STORE_ROWS3 = (1, 0x40, 0x20, 1, 0x200, 0x10, 2, 3)
+"""Two rows at DRAM pitch 0x100 and three at 0x200 of one vector each, memory pitch one vector:
+the store rows run for kinds 4 and 6."""
 LOCAL_SHAPE = (2, None, 4, 8, None, 0x10, 2, 1)
 """32 bytes as bytes in local memory (eight words)."""
 QUAD_SHAPE = (1, None, 0x20, 4, None, 0x10, 8, 1)
@@ -135,6 +141,8 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         LOCAL_SHAPE: (V, DIRECT),
         PAIR_SHAPE: (I, DIRECT),
         TRIPLE_SHAPE: (I, DIRECT),
+        STORE_ROWS2: (V, DIRECT),
+        STORE_ROWS3: (V, DIRECT),
     },
     5: {BASE_SHAPE: (I, WRAPPED)},
     7: {BASE_SHAPE: (I, WRAPPED)},
@@ -146,7 +154,8 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
 for kinds that move nothing; a fill's "to" also vector-aligned, as every fill ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
-a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 only.
+a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 (loads) and
+kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
 DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
@@ -257,7 +266,7 @@ class Engine:
     )
     """The completions of the commands handed and not yet waited for, oldest first, each
     called with the cap on what it writes."""
-    spans: list[frozenset[int] | None] = field(default_factory=list)
+    spans: list[tuple[frozenset[int], Confidence] | None] = field(default_factory=list)
     """Per outstanding command the lane-memory vectors it reads or writes; None where not
     bounded (a local-memory command, one that moves nothing, the engine off script)."""
     commands: int = 0
@@ -298,34 +307,47 @@ class Engine:
     def lane_tier(self, vector: int | None = None) -> Confidence:
         """Own words beside an outstanding command meet the engine at work (hypothesis), unless
         `vector` lies outside every outstanding command's lane-memory vectors: lane loads and
-        stores on one bank while a load into the other and a store from it were outstanding
-        gave the pre-registered bytes on the camera (verified for byte loads and stores of one
-        row on disjoint vectors)."""
+        stores on one bank while a byte load of one row into the other and a byte store of one
+        row from it were outstanding gave the pre-registered bytes on the camera (verified for
+        those shapes); beside any other lane-memory shape outside its vectors inferred."""
         if not self.outstanding:
             return self.cap
-        if vector is None or any(s is None or vector in s for s in self.spans):
+        if vector is None or any(s is None or vector in s[0] for s in self.spans):
             return H
-        return self.cap
+        return min([self.cap, *(s[1] for s in self.spans)])
 
     def _pop(self, m: Machine, cap: Confidence) -> None:
         self.spans.pop(0)
         self.outstanding.pop(0)(m, cap)
 
-    def _span(self, cmd: _Command) -> frozenset[int] | None:
-        """The lane vectors a lane-memory load, store or fill touches; None for other memory."""
+    def _span(
+        self, cmd: _Command, plain: bool
+    ) -> tuple[frozenset[int], Confidence] | None:
+        """The lane vectors a lane-memory load, store or fill writes or reads, as the command
+        does (a load r3 per row, a store its elements' vectors per row, a fill r3), and the tier
+        of words beside it elsewhere: verified for a plain (kind 0 / 6) one-row byte command at
+        r2 0x20, inferred for other shapes; None for other memory."""
         r = cmd.regs
         if r[0].value != LANE_MEMORY:
             return None
         if cmd.kind == FILL:
-            base, n = cmd.to.value // VECTOR_BYTES, r[3].value
-            return frozenset((base + v) % LANE_VECTORS for v in range(n))
+            base = cmd.to.value // VECTOR_BYTES
+            return frozenset((base + v) % LANE_VECTORS for v in range(r[3].value)), I
         rows, _ = self._rows(cmd, LANE_MEMORY)
-        per = -(-r[3].value * r[2].value // 0x20)
-        return frozenset(
+        if cmd.kind == STORE:
+            bits, _ = STORE_FORMATS[r[5].value]
+            per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
+        else:
+            per = r[3].value
+        vectors = frozenset(
             (off // VECTOR_BYTES + v) % LANE_VECTORS
             for _, off in rows
             for v in range(per)
         )
+        byte_row = (
+            plain and r[7].value == 1 and r[2].value == 0x20 and r[5].value == 0x10
+        )
+        return vectors, V if byte_row else I
 
     def finish(self, m: Machine) -> None:
         """The job ends: the commands still outstanding complete (inferred for loads: only a
@@ -399,6 +421,7 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
+        plain = cmd.kind in (LOAD, STORE)
         if cmd.kind in KIND_AS:
             shape = tuple(None if r is None else r.value for r in cmd.regs)
             run = next(
@@ -477,7 +500,7 @@ class Engine:
                 self.outstanding[-1] = self._load(m, cmd)
             else:
                 self.outstanding[-1] = self._store(m, cmd)
-            self.spans[-1] = self._span(cmd)
+            self.spans[-1] = self._span(cmd, plain)
         except _Off as e:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)
@@ -532,6 +555,14 @@ class Engine:
         if rows < 1:
             raise _Off("no rows: not measured")
         tier = I if rows > (2 if cmd.kind == STORE else 4) else V
+        if (
+            cmd.kind == STORE
+            and rows == 3
+            and (r[1].value, r[4].value) == (0x40, 0x200)
+        ):
+            tier = (
+                V  # three store rows at memory pitch 0x40, DRAM pitch 0x200 (verified)
+            )
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0

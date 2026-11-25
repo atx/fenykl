@@ -6,7 +6,7 @@ it; each chunk is stored back from its bank once its compute is done. Per pass o
 four vectors are loaded (X0 0x1d), moved into S1's lane file through its first port, XORed by S1
 0x04 (b ^ imm7) into the store file O in the head's own word, and stored back to their vectors
 (X0 0x1b). A kernel of this shape ran on the camera at 4 and 16 KiB, its dst exact and its
-minimum time within 10 us of `timing.estimate` (the jobs' 112 to 446 us).
+minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 to 16 passes).
 
 The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine.
 """

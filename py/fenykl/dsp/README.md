@@ -914,8 +914,9 @@ completes at the job's end (`finish`, called by `Machine.between_jobs`) [verifie
 inferred for a load]. A load's destination is unknown until then and its DRAM source is read
 when handed; a store takes its source when handed [inferred where the source is rewritten
 before the store completes]; lane reads beside an outstanding command are a hypothesis, unless
-they touch no vector of any outstanding lane-memory command [verified: lane loads and stores on
-one bank while a load into the other and a store from it were outstanding]; a
+they touch no vector of any outstanding lane-memory command: then verified beside one-row byte
+loads and stores of kinds 0 / 6 (lane loads and stores on one bank while a load into the other
+and a store from it were outstanding), inferred beside any other lane-memory shape; a
 command with a register not handed moves nothing [inferred]. What was not measured takes the
 engine off script (`Engine.off`: the lane memory unknown, later destinations unknown); a
 destination that cannot be bounded, and any value after the grammar is lost, raise. X1 0x1e is
