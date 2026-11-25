@@ -76,7 +76,10 @@ of kinds 0 / 6, inferred beside other lane-memory shapes (`Engine.lane_tier`).
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
 job and what later commands write is unknown (`off` says why). A command whose destination cannot
 be bounded, a value handed after the grammar is lost and a 0x1d among a command's values raise
-`UnknownSemantics`.
+`UnknownSemantics`, as do kinds and shapes not run and a job that never ends or wedges; on a
+lenient machine they lapse instead (`Machine.lapse`): a command that never ends goes off script,
+a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d that never
+returns or a queue past `DEPTH` goes on as if it had not.
 """
 
 from collections.abc import Callable
@@ -84,7 +87,7 @@ from dataclasses import dataclass, field, replace
 
 from .fields import LANE_VECTORS, Confidence
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
-from .semantics import LANE_COUNT, LOCAL_BYTES, UnknownSemantics
+from .semantics import LANE_COUNT, LOCAL_BYTES
 from .state import LOCAL_BASE, Bytes, dram_alias
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -317,9 +320,9 @@ class Engine:
         self.count += 1
         where = f"transfer {k} (word {index})"
         if self.lost and head != 0x1D:
-            raise UnknownSemantics(
-                index, "stream", [], f"{where}: a value after the grammar was lost"
-            )
+            why = f"{where}: a value after the grammar was lost"
+            m.lapse(index, "stream", why)
+            m.lose_memories(why)
         if self.lost:
             return
         if head == 0x1D:
@@ -424,9 +427,7 @@ class Engine:
     def _wait(self, m: Machine, index: int, where: str) -> None:
         if self.key is not None:
             if self.key.value & 0x20 == 0:
-                raise UnknownSemantics(
-                    index, "x1 0x1d", [], f"{where}: a 0x1d inside a command's values"
-                )
+                m.lapse(index, "x1 0x1d", f"{where}: a 0x1d inside a command's values")
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
             return
         if self.outstanding:
@@ -434,9 +435,8 @@ class Engine:
         elif not self.commands:
             self.cap = min(self.cap, I)  # a lone 0x1d returns (inferred)
         else:
-            raise UnknownSemantics(
-                index, "x1 0x1d", [], "a 0x1d with no command outstanding never ends"
-            )
+            # Lenient: as if it returned.
+            m.lapse(index, "x1 0x1d", "a 0x1d with no command outstanding never ends")
 
     def _go_off(self, m: Machine, why: str, lost: bool = False) -> None:
         if not self.off:
@@ -464,12 +464,9 @@ class Engine:
                 None,
             )
             if run is None:
-                raise UnknownSemantics(
-                    cmd.index,
-                    "stream",
-                    [],
-                    f"{cmd.where}: command kind {cmd.kind:#x} outside the shapes it ran in",
-                )
+                why = f"command kind {cmd.kind:#x} outside the shapes it ran in"
+                self._unmeasured(m, cmd, why)
+                return
             tier, form = run
             kind = KIND_AS[cmd.kind]
             offs = {STORE: (cmd.frm,), NOTHING_MOVES: (cmd.frm, cmd.to)}.get(
@@ -480,34 +477,29 @@ class Engine:
                     off.value is not None and off.value >= LANE_VECTORS * VECTOR_BYTES
                 )
                 if off.value is None or (form == WRAPPED) != wrapped:
-                    raise UnknownSemantics(
-                        cmd.index,
-                        "stream",
-                        [],
-                        f"{cmd.where}: command kind {cmd.kind:#x} with a memory offset "
-                        f"not {form} as where it ran",
+                    why = (
+                        f"command kind {cmd.kind:#x} with a memory offset "
+                        f"not {form} as where it ran"
                     )
+                    self._unmeasured(m, cmd, why)
+                    return
             if kind == FILL and form == WRAPPED and cmd.to.value % VECTOR_BYTES:
-                raise UnknownSemantics(
-                    cmd.index,
-                    "stream",
-                    [],
-                    f"{cmd.where}: a fill to {cmd.to.value:#x}, not vector-aligned as "
-                    "every fill ran",
+                why = (
+                    f"a fill to {cmd.to.value:#x}, not vector-aligned as every fill ran"
                 )
+                self._unmeasured(m, cmd, why)
+                return
             if form == WRAPPED:
                 cmd = replace(cmd, wrap_tier=tier)
             self.cap = min(self.cap, tier)
             cmd = replace(cmd, kind=KIND_AS[cmd.kind])
         if cmd.kind not in (LOAD, NOTHING_MOVES, STORE, FILL):
-            raise UnknownSemantics(
-                cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
-            )
+            self._unmeasured(m, cmd, f"command kind {cmd.kind:#x}")
+            return
         if len(self.outstanding) >= DEPTH:
-            raise UnknownSemantics(
+            m.lapse(
                 cmd.index,
                 "stream",
-                [],
                 f"{cmd.where}: more than {DEPTH} commands outstanding: the camera wedged at 48",
             )
         self.commands += 1
@@ -572,8 +564,9 @@ class Engine:
         r2, r3, r6 = (r[i].value for i in (2, 3, 6))  # the shape matched: known
         to, frm = cmd.to.value, _known(cmd.frm, "the fill value")
 
-        def unmeasured(why: str) -> UnknownSemantics:
-            return UnknownSemantics(cmd.index, "stream", [], f"{cmd.where}: {why}")
+        def unmeasured(why: str) -> _Off:
+            m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+            return _Off(why)
 
         ran_to, tier = LOCAL_FILLS[(r2, r3, r6)]
         if cmd.channel != 0:
@@ -677,12 +670,9 @@ class Engine:
             raise _Off(f"r0 {memory:#x}: not measured")
         needed = -(-n // per)
         if r3 > needed:
-            raise UnknownSemantics(
-                cmd.index,
-                "stream",
-                [],
-                f"{cmd.where}: a load of {r3} units for {needed} never ends",
-            )
+            why = f"a load of {r3} units for {needed} never ends"
+            m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+            raise _Off(why)
         if memory == LANE_MEMORY:
             if r2 != 0x10 or r5 not in ZERO_FORMATS or r3 != needed:
                 tier = min(tier, LANE_UNITS[r2])
@@ -781,12 +771,9 @@ class Engine:
         else:
             raise _Off(f"r0 {memory:#x}: not measured")
         if r2 * r3 < n:
-            raise UnknownSemantics(
-                cmd.index,
-                "stream",
-                [],
-                f"{cmd.where}: a store of {n} elements from {r2 * r3} never ends",
-            )
+            why = f"a store of {n} elements from {r2 * r3} never ends"
+            m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+            raise _Off(why)
         if memory == LOCAL_MEMORY:
             nb = 4 // r2
             for _, off in rows:
@@ -838,15 +825,26 @@ class Engine:
 
     # ------------------------------------------------------------------ off script
 
+    def _unmeasured(self, m: Machine, cmd: _Command, why: str) -> None:
+        """A command of a kind or shape not run (`Machine.lapse`): lenient, it counts as a
+        command, the engine goes off script, and since what such a command reaches is not known,
+        every memory is forgotten."""
+        m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+        self.commands += 1
+        self.outstanding.append(_nothing)
+        self.spans.append(None)
+        self._go_off(m, f"{cmd.where} {why}")
+        m.lose_memories(f"{cmd.where} {why}")
+
     def _spoil(self, m: Machine, cmd: _Command) -> None:
         """What a command the engine cannot run writes is not known: its destination becomes
-        unknown, and a destination that cannot be bounded raises."""
+        unknown, and a destination that cannot be bounded lapses (`Machine.lapse`)."""
         try:
             self._spoil_reach(m, cmd)
         except _Off as e:
-            raise UnknownSemantics(
-                cmd.index, "stream", [], f"{cmd.where} off script: {e}"
-            ) from e
+            why = f"{cmd.where} off script: {e}"
+            m.lapse(cmd.index, "stream", why)
+            m.lose_memories(why)
 
     def _spoil_reach(self, m: Machine, cmd: _Command) -> None:
         lost = m.boot.source("stream off script", self.off)

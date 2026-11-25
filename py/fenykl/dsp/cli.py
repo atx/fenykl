@@ -47,28 +47,34 @@ def cmd_source(args: argparse.Namespace) -> None:
 
 def cmd_flow(args: argparse.Namespace) -> None:
     from . import commands
-    from .emu import Boot, Executor, start_copy
-    from .memcpy import ITEM, copy_branches
+    from .emu import Boot, Executor
+    from .machine import Machine
+    from .memcpy import ITEM
+    from .stream import Engine
 
     args.item = ITEM
     job = commands.copy(_program(args), args.src, args.dst, args.len)
-    branching = copy_branches(args.len)
-    if args.branch:
-        given = dict(branching.decisions)
-        for text in args.branch:
-            index, _, taken = text.partition("=")
-            given[int(index, 0)] = taken == "1"
-        branching = Given(given, fact="the copy runs' decisions and the command line's")
-    flow = Executor(Boot(), branching=branching, strict=False).step(job, start_copy)
+    given = dict(args.branch or ())
+    branching = Given(given, fact="given on the command line") if given else None
+    boot = Boot()
+    machine = Machine(boot, None, Engine())
+    flow = Executor(boot, strict=False, branching=branching, datapath=machine).step(job)
     print(flow.runs())
     for step in flow.steps:
         if step.op != 0x7F:
             print(step)
     unknown = sum(s.unknown for s in flow.steps)
     print(
-        f"{len(flow.steps)} steps, {unknown} data ops without semantics; stop: "
+        f"{len(flow.steps)} steps, {unknown} not covered; stop: "
         f"{flow.stop.value}{': ' + flow.why if flow.why else ''}"
     )
+
+
+def _branch(text: str) -> tuple[int, bool]:
+    index, _, taken = text.partition("=")
+    if taken not in ("0", "1"):
+        raise argparse.ArgumentTypeError(f"{text!r} is not INDEX=0 or INDEX=1")
+    return int(index, 0), taken == "1"
 
 
 def cmd_fields(args: argparse.Namespace) -> None:
@@ -144,7 +150,8 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     src.set_defaults(func=cmd_source)
     flow = dsp_commands.add_parser(
         "flow",
-        help="step the stock copy (item 16) and print the words it executes in order",
+        help="step the stock copy (item 16) on the datapath executor, lenient, and print the "
+        "words it executes in order",
     )
     flow.add_argument("--len", type=lambda v: int(v, 0), default=0x400)
     flow.add_argument("--src", type=lambda v: int(v, 0), default=0xA0FCA800)
@@ -152,8 +159,10 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     flow.add_argument(
         "--branch",
         action="append",
+        type=_branch,
         metavar="INDEX=0|1",
-        help="decide the conditional control op at INDEX (every visit); repeatable",
+        help="decide the conditional control op at INDEX (every visit) in place of the "
+        "datapath; repeatable",
     )
     flow.add_argument(
         "file",

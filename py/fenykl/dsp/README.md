@@ -1035,8 +1035,7 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
   (`Boot.regs`, the file B); R and A are not modelled.
 
 Stepping models neither the register transfers nor the datapath, so it says which words run in
-which order, not what they move. `fenykl dsp flow [--len N] [--branch I=0|1]` prints the copy's
-flow.
+which order, not what they move.
 
 ### The datapath executor
 
@@ -1058,6 +1057,25 @@ what the job leaves for the next run (`Boot.carry`, `Machine.between_jobs`) and 
 lanes in L0..L3, U and O. A run that stops short of its halt raises `NoHalt` and drops the carry.
 By hand, per job: `m = Machine(boot, carry, stream=Engine())`, `Executor(boot, datapath=m).step(job)`,
 `m.between_jobs()`.
+
+With a `branching` beside the machine (`Executor(boot, branching=Given({...}), datapath=m)`) the
+given decisions come first and the machine decides the rest; from a given decision on, all the job
+leaves and decides is capped at that decision's tier (`Machine.limit`). `strict=False` makes the
+machine lenient: a case its facts do not cover lapses (`Machine.lapse`) instead of raising. What
+the case may write is forgotten: local memory after a store at an unknown or unaligned address or
+an op without semantics, the lane memory after a lane store at an unknown address, the register
+two ports write or M beside several own-word results, and every memory after a transfer with no
+stream engine, a command of a kind or shape not run, or a command whose reach cannot be bounded.
+A command that never ends takes the engine off script; a 0x1d that never returns, or more than
+`stream.DEPTH` commands outstanding, goes on as if it had not. The word's step is `unknown`, all
+the job leaves and decides after it is a hypothesis, a run that lapsed leaves no carry
+(`Run.lapses` says why) and its time is not estimated. An unmeasured shape behind a halt ends the
+job at the halt: every memory is forgotten and every register is a hypothesis. A control word that
+leaves its program and a step past the program's end raise in either mode, as do the cases that
+no word can reach (an enable or head value the field tables leave out).
+
+`fenykl dsp flow [--len N] [--branch I=0|1]` steps the stock copy on a `Machine` with a stream
+engine, lenient, and prints its flow: `--branch` decisions first, the machine's own for the rest.
 
 `Machine` runs every unit of a word (`Executor.step` keeps the control flow and asks the machine,
 a `Branching`, to decide ops 0..2 on G[ra]). One clock rule: every unit reads the state from

@@ -124,6 +124,10 @@ class Run:
     machine: Machine
     """The job's machine: its registers and lane memory at the halt, its stream engine."""
     estimate: Estimate
+    """Not known for a run that lapsed."""
+    lapses: tuple[str, ...] = ()
+    """Why the run lapsed (`Machine.lapse`, lenient), in order; empty for a run its facts
+    cover."""
 
 
 class Boot:
@@ -149,7 +153,7 @@ class Boot:
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
         self.carry: Carry | None = None
         """What the last job `run` left for the next (`machine.Carry`); None before the first
-        run and after a run that did not halt or raised."""
+        run and after a run that did not halt, raised or lapsed (`Machine.lapse`)."""
 
     def source(self, name: str, fact: str = "") -> int:
         """The id of source (name, fact). Equal sources share one id, so the list stays bounded
@@ -212,8 +216,10 @@ class Boot:
         flow = Executor(self, strict=strict, limit=limit, datapath=machine).step(job)
         if flow.stop is not Stop.HALT:
             raise NoHalt(flow)
-        self.carry = machine.between_jobs()
-        return Run(job, flow, machine, estimate(job, flow, machine.stream))
+        carry = machine.between_jobs()
+        self.carry = None if machine.lapses else carry
+        timed = estimate(job, flow, machine.stream)
+        return Run(job, flow, machine, timed, tuple(machine.lapses))
 
 
 def start_copy(boot: Boot) -> JobView:
@@ -242,7 +248,19 @@ class Datapath(Protocol):
     """What runs a word's units under `Executor.step` (`machine.Machine`): `execute` runs word
     `word` at program index `index` as executed word number `t`, what it leaves capped at
     `ceiling`, and returns a note; as a `Branching` it decides the conditional control ops,
-    before the control word's own units run."""
+    before the control word's own units run. Not `strict`, a case it does not cover lapses
+    (`lapse`) instead of raising."""
+
+    strict: bool
+    lapses: list[str]
+    """Why each lapse of the job, in order."""
+    cap: Confidence
+    """The tier cap of all the job leaves and decides from here on (`limit`)."""
+
+    def lapse(self, index: int, what: str, why: str) -> None:
+        """Raises `UnknownSemantics` when strict; else records why and caps all the job leaves
+        and decides from here on at a hypothesis."""
+        ...
 
     def execute(
         self, index: int, word: Word, t: int, ceiling: Confidence = V
@@ -250,6 +268,14 @@ class Datapath(Protocol):
 
     def link(self, word: Word) -> tuple[int | None, Confidence]:
         """The word an op 4 jumps to, G[f128_132], with its tier (None: not known)."""
+        ...
+
+    def limit(self, tier: Confidence) -> None:
+        """Cap all the job leaves and decides from here on at `tier`."""
+        ...
+
+    def forget_job(self, why: str) -> None:
+        """Forget all the job's memories and registers may hold (words run but not stepped)."""
         ...
 
     def decide(
@@ -326,10 +352,12 @@ class Executor:
     inferred), brf / br / a loop end go to T when `branching` takes them;
     every control op has four delay slots that run before its transfer takes effect, and op 7
     halts at any word and call depth, the return stack unchecked; on a `datapath` the next three
-    words fetched behind a halt still run (`HALT_TAIL`, `TAIL_SHAPES`). `branching` decides ops 0..2; the default `Given()`
-    decides none of them. A control op in another's delay slots jumps after its own four, and
-    so does a loop end whose T lies in its own slots (verified on the camera for a br in a br's
-    first slot and a loop end into its third slot; other such shapes are stepped the same way,
+    words fetched behind a halt still run (`HALT_TAIL`, `TAIL_SHAPES`). `branching` decides ops
+    0..2; the default `Given()` decides none of them. On a `datapath` the datapath decides what
+    `branching` leaves undecided, and a decision `branching` gives caps the datapath at its tier
+    from there on. A control op in another's delay slots jumps after its own four, and so does
+    a loop end whose T lies in its own slots (verified on the camera for a br in a br's first
+    slot and a loop end into its third slot; other such shapes are stepped the same way,
     their steps inferred at most). On the camera
     op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
     the stock convention: a call's delay slots hold 0x0b #(i + 5) on r1 (verified on the
@@ -350,7 +378,8 @@ class Executor:
     at an undecided control op; lenient mode stops there. Stepping does not model the register
     transfers or any datapath unit.
 
-    strict=False ignores fields without semantics (and taints).
+    strict=False ignores fields without semantics (and taints); on a `datapath` it makes the
+    datapath lenient (`Datapath.lapse`), each word that lapses an unknown step.
     """
 
     def __init__(
@@ -370,6 +399,8 @@ class Executor:
         self.local_op3_jump = local_op3_jump
         self.sequencer = sequencer or Sequencer()
         self.datapath = datapath
+        if datapath is not None:
+            datapath.strict = strict
         self.branching = branching or datapath or Given()
         self.ops = OP_SEMANTICS if ops is None else ops
         self._landing: list[tuple[int, RegisterFile, int, Reg | None]] = []
@@ -410,7 +441,8 @@ class Executor:
             slot = slots > 0
             slots = max(slots - 1, 0)
             if word.op == HALT_OP:
-                steps.append(Step(pc, word.op, slot, confidence=op(HALT_OP).confidence))
+                halt = Step(pc, word.op, slot, confidence=op(HALT_OP).confidence)
+                steps.append(self._capped(halt))
                 self._behind_halt(words, pc + 1, steps, jumps)
                 return Flow(steps, Stop.HALT)
             target = None
@@ -418,8 +450,10 @@ class Executor:
                 if self.datapath is None:
                     steps.append(self._data(pc, word, slot, len(steps)))
                 else:
+                    lapses = len(self.datapath.lapses)
                     note = self.datapath.execute(pc, word, len(steps))
-                    steps.append(Step(pc, word.op, slot, word.operands, note=note))
+                    step = Step(pc, word.op, slot, word.operands, note=note)
+                    steps.append(self._lapsed(step, lapses))
             else:
                 visit = visits.get(pc, 0)
                 visits[pc] = visit + 1
@@ -428,7 +462,9 @@ class Executor:
                 else:
                     step, target = self._control(pc, visit, word, stack)
                 if self.datapath is not None:
+                    lapses = len(self.datapath.lapses)
                     self.datapath.execute(pc, word, len(steps))
+                    step = self._lapsed(self._capped(step), lapses)
                 step = _nested(pc, word, step, target, jumps)
                 steps.append(step)
                 if step.taken is None:
@@ -460,18 +496,23 @@ class Executor:
         `datapath` only: plain stepping ends at the halt. The job ends after them. A taken jump
         due among them redirects the fetch to its target's words, one due after them is not
         taken; the tail's tier follows the jump's shape (`TAIL_SHAPES`), other pending jumps
-        raise. Control words and halts in the tail are passive where measured
-        (`PASSIVE_BEHIND_HALT`) and raise elsewhere; words past the program's end are not run."""
+        lapse (`Datapath.lapse`). Control words and halts in the tail are passive where measured
+        (`PASSIVE_BEHIND_HALT`) and lapse elsewhere; words past the program's end are not run.
+        A lapse in the tail ends the job there, marks the halt's step and forgets what the rest
+        of the tail may write (`Datapath.forget_job`)."""
         if self.datapath is None:
             return
+        halt, lapses = len(steps) - 1, len(self.datapath.lapses)
         ceiling = V
         if jumps:
             (left, _, code), *others = jumps
             shape = TAIL_SHAPES.get((code, DELAY_SLOTS + 1 - left))
             if others or shape is None:
-                raise UnknownSemantics(
-                    at - 1, "halt", [], "a jump pending behind a halt"
-                )
+                why = "a jump pending behind a halt"
+                self.datapath.lapse(at - 1, "halt", why)
+                self.datapath.forget_job(why)
+                steps[halt] = self._lapsed(steps[halt], lapses)
+                return
             ceiling = shape
         pending = [list(jump) for jump in jumps]
 
@@ -488,30 +529,48 @@ class Executor:
             if i >= len(words):
                 return
             word = words[i]
+            lapses = len(self.datapath.lapses)
             if not (word.control or word.op == HALT_OP):
                 note = self.datapath.execute(i, word, len(steps), ceiling)
-                steps.append(Step(i, word.op, False, word.operands, note=note))
+                step = Step(i, word.op, False, word.operands, note=note)
+                steps.append(self._lapsed(step, lapses))
                 i = fetched(i + 1)
                 continue
             passive = PASSIVE_BEHIND_HALT.get((word.op, n))
             # Measured with no jump pending, but for the third word's halt (on a target).
             if passive is None or (jumps and n != HALT_TAIL - 1):
-                raise UnknownSemantics(
-                    i, op(word.op).name, [], "a control op behind a halt"
-                )
+                why = "a control op behind a halt"
+                self.datapath.lapse(i, op(word.op).name, why)
+                self.datapath.forget_job(why)  # the rest of the tail runs unstepped
+                steps[halt] = self._lapsed(steps[halt], lapses)
+                return
             if word.op != HALT_OP:
                 self.datapath.execute(i, word, len(steps), ceiling)
-            steps.append(
-                Step(
-                    i,
-                    word.op,
-                    False,
-                    word.operands,
-                    note="behind a halt: not taken",
-                    confidence=min(passive, ceiling),
-                )
+            step = Step(
+                i,
+                word.op,
+                False,
+                word.operands,
+                note="behind a halt: not taken",
+                confidence=min(passive, ceiling, self.datapath.cap),
             )
+            steps.append(self._lapsed(step, lapses))
             i = fetched(i + 1)
+
+    def _capped(self, step: Step) -> Step:
+        """`step` at the datapath's cap at most (`Datapath.limit`)."""
+        if self.datapath is None or step.confidence is None:
+            return step
+        return replace(step, confidence=min(step.confidence, self.datapath.cap))
+
+    def _lapsed(self, step: Step, lapses: int) -> Step:
+        """`step`, unknown and a hypothesis when the datapath lapsed in its word (the lapses
+        past the first `lapses`)."""
+        new = self.datapath.lapses[lapses:]
+        if not new:
+            return step
+        note = "; ".join([step.note, *new] if step.note else new)
+        return replace(step, note=note, unknown=True, confidence=H)
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
         t, conf = word.target, op(word.op).confidence
@@ -572,6 +631,12 @@ class Executor:
                 i, word.op, taken=True, note=f"to {back}", confidence=conf
             ), back
         b = self.branching.decide(i, visit, word, self.boot.slot, self.boot.regs)
+        if self.datapath is not None and self.branching is not self.datapath:
+            if b.taken is None:
+                b = self.datapath.decide(i, visit, word, self.boot.slot, self.boot.regs)
+            else:
+                # The path is the caller's from here: what the datapath computes on it too.
+                self.datapath.limit(b.confidence)
         ra = f"r{word['ra']}"
         if b.taken is None:
             return Step(i, word.op, target=t, note=f"{ra} undecided: {b.why}"), None
