@@ -312,7 +312,8 @@ class Machine:
         self.boot = boot
         self.trace: dict[str, Unknown] | None = {} if trace else None
         """With `trace`: the first unknown write to each register ("L1[9]") and lane memory
-        vector ("memory[0x12]") of the job. An unknown one without an entry was not written."""
+        vector ("memory[0x12]") of the job by the datapath; the stream engine's writes to the
+        lane memory are not traced. An unknown register without an entry was not written."""
         self.why_due: dict[int, dict[str, str]] = {}
         """With `trace`: why a bus's value is unknown, by word and source (a unit, a load)."""
         self.stream = stream
@@ -667,13 +668,18 @@ class Machine:
             v = self.memory.get(addr, UNKNOWN_VEC)
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(_cap(v, tier))
             if self.trace is not None and not _known(v):
-                state = "not known" if addr in self.memory else "not written"
+                state = (
+                    "not known"
+                    if addr in self.memory
+                    else "not written by the datapath"
+                )
                 self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"memory[{addr:#x}] {state}")
             return
         reg = word["f69_71"]
         self.memory[addr] = _cap(self._rv("O", reg), tier)
-        source = f"x0 {head:#x}'s store of O[{reg}]"
-        self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
+        if self.trace is not None:
+            source = f"x0 {head:#x}'s store of O[{reg}]"
+            self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
 
     # ------------------------------------------------------------------ S units
 

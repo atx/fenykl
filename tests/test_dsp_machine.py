@@ -788,10 +788,10 @@ def test_a_jump_into_its_own_delay_slots_is_inferred(target, tier):
     assert control_tiers([control(3, target), *[IDLE] * 5]) == {0: tier}
 
 
-def s2_high_half(head: int, t: int) -> Vec:
+def s2_high_half(head: int, t: int, tier: Confidence = V) -> Vec:
     m = Machine(Boot())
     m.lanes["L2"][1], m.lanes["L2"][2] = Vec(A), Vec(B)
-    m.f["F2"][4] = Sv(t)
+    m.f["F2"][4] = Sv(t, tier)
     run(m, [w(f292_295=head, f53_56=1, f57_60=2, f88_91=4), w(f236_237=1, f147_150=9)])
     return m.lanes["L0"][9]
 
@@ -801,6 +801,7 @@ def test_s2s_high_half_by_a_negative_t_is_verified(head):
     # Measured with t's bit 15 set, its bits 16..31 set and clear: those bits are not read.
     wide, narrow = s2_high_half(head, 0xFFFF8003), s2_high_half(head, 0x8003)
     assert wide == narrow and wide.tier == V and None not in wide.lanes
+    assert s2_high_half(head, 0x8003, I).tier == I
 
 
 def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job():
@@ -930,4 +931,4 @@ def test_the_trace_follows_a_load_of_an_unwritten_vector():
     run(m, [load, *[IDLE] * 3, w(f248_249=0, f171_174=5), w(f248_249=0, f171_174=6)])
     (entry,) = m.trace.values()
     assert m.trace == {"L3[5]": entry} and entry.index == 4
-    assert entry.reason == "memory[0x42] not written"
+    assert entry.reason == "memory[0x42] not written by the datapath"

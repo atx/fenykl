@@ -958,7 +958,8 @@ as the job's completion time against loop pass counts, minimum over repeats:
   measured outside their registered windows]; other repeats, and repeated
   words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
   not timed];
-- **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and
+- **stream waits**: what the 0x1d words wait [inferred, and at most the tier of each
+  command's rate, `Rate.tier`]. The engine records every command and
   0x1d at its executed word (`Engine.events`). A command runs from its hand-off, after the one
   before it on any channel (one engine), for `per_command` + `per_kib` x its KiB of DRAM
   (`timing.RATES`: lane-memory byte loads 0.442 us per KiB + 0.2 us and byte stores 0.427 us
