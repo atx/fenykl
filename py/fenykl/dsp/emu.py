@@ -249,6 +249,8 @@ class Datapath(Protocol):
     strict: bool
     lapses: list[str]
     """Why each lapse of the job, in order."""
+    cap: Confidence
+    """The tier cap of all the job leaves and decides from here on (`limit`)."""
 
     def lapse(self, index: int, what: str, why: str) -> None:
         """Raises `UnknownSemantics` when strict; else records why and caps all the job leaves
@@ -435,7 +437,8 @@ class Executor:
             slot = slots > 0
             slots = max(slots - 1, 0)
             if word.op == HALT_OP:
-                steps.append(Step(pc, word.op, slot, confidence=op(HALT_OP).confidence))
+                halt = Step(pc, word.op, slot, confidence=op(HALT_OP).confidence)
+                steps.append(self._capped(halt))
                 self._behind_halt(words, pc + 1, steps, jumps)
                 return Flow(steps, Stop.HALT)
             target = None
@@ -457,7 +460,7 @@ class Executor:
                 if self.datapath is not None:
                     lapses = len(self.datapath.lapses)
                     self.datapath.execute(pc, word, len(steps))
-                    step = self._lapsed(step, lapses)
+                    step = self._lapsed(self._capped(step), lapses)
                 step = _nested(pc, word, step, target, jumps)
                 steps.append(step)
                 if step.taken is None:
@@ -540,10 +543,16 @@ class Executor:
                 False,
                 word.operands,
                 note="behind a halt: not taken",
-                confidence=min(passive, ceiling),
+                confidence=min(passive, ceiling, self.datapath.cap),
             )
             steps.append(self._lapsed(step, lapses))
             i = fetched(i + 1)
+
+    def _capped(self, step: Step) -> Step:
+        """`step` at the datapath's cap at most (`Datapath.limit`)."""
+        if self.datapath is None or step.confidence is None:
+            return step
+        return replace(step, confidence=min(step.confidence, self.datapath.cap))
 
     def _lapsed(self, step: Step, lapses: int) -> Step:
         """`step`, unknown and a hypothesis when the datapath lapsed in its word (the lapses

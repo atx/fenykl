@@ -503,6 +503,7 @@ def test_a_given_decision_comes_first_and_caps_the_path_the_machine_decides_on()
     given, decided = flow.steps[0], flow.steps[5]
     assert given.note.endswith("given by the caller") and given.confidence is H
     assert decided.note.endswith("r12 = 0x1") and decided.confidence is H
+    assert flow.steps[-1].confidence is H  # the halt
     assert (m.g[16], m.g[17], m.g[18]) == (Sv(4, H), Sv(0), Sv(4, H))
 
 
