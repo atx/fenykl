@@ -7,9 +7,9 @@ from dataclasses import replace
 import pytest
 
 from fenykl.dsp import stream, timing
-from fenykl.dsp.emu import Boot, Executor, Job
+from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
-from fenykl.dsp.machine import Machine, Sv
+from fenykl.dsp.machine import Sv
 from fenykl.dsp.program import Program
 from fenykl.dsp.timing import (
     FIRST,
@@ -23,7 +23,6 @@ from fenykl.dsp.timing import (
     REPEAT,
     REPEAT_I,
     Estimate,
-    estimate,
 )
 from fenykl.dsp.word import IDLE, Word
 
@@ -67,21 +66,14 @@ def run(
     """Hands `values` (None a 0x1d) from B registers, with `between[k]` idle words before the
     k-th value, then `body` and a halt; `g` presets G registers."""
     regs = sorted({v for v in values if v is not WAIT})
-    m = Machine(Boot(), stream=stream.Engine())
-    for r, v in (g or {}).items():
-        m.g[r] = v
-    for k, v in enumerate(regs):
-        m.b[k] = Sv(v)
     words = []
     for k, v in enumerate(values):
         words += [IDLE] * (between or {}).get(k, 0)
         head = 0x1D if v is WAIT else 0x1C
         f115 = 0 if v is WAIT else regs.index(v)
         words.append(Word.from_fields({"f308_312": head, "f115_119": f115}, base=IDLE))
-    job = Job(Program((*words, *body, HALT)), ())
-    flow = Executor(m.boot, datapath=m).step(job)
-    m.between_jobs()
-    return estimate(job, flow, m.stream)
+    program = Program((*words, *body, HALT))
+    return Boot().run(program, regs={"G": g or {}, "B": dict(enumerate(regs))}).estimate
 
 
 def part(e: Estimate, name: str):

@@ -26,6 +26,13 @@ from .fields import Confidence
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
+LOCAL_BASE = 0x9D000000
+
+
+def dram_alias(addr: int) -> int:
+    """0x6xxxxxxx (cached) and 0xAxxxxxxx (uncached) are the same DRAM."""
+    return addr & 0x3FFFFFFF
+
 
 @dataclass(frozen=True)
 class Source:

@@ -1,5 +1,6 @@
-"""A field-level executor for windows of a stock program: the machine state of the window, its
-step loop with a latency queue, the coverage rule per (word, field) and symbolic values.
+"""A field-level executor for windows of a stock program: the state of the window
+(`WindowState`), its step loop with a latency queue, the coverage rule per (word, field) and
+symbolic values.
 
 The executor does not run a program from word 0: it runs a window of words inside a stock region
 whose contract stays the region's law (the frame: geometry, edges, trip counts). Per (word,
@@ -366,7 +367,7 @@ class Write:
 
 
 @dataclass
-class Machine:
+class WindowState:
     """The window's state: the operand registers R0..R15 (per lane), the coefficient
     registers C0..C15, the load latch, the accumulators and the queue of scheduled writes.
     `tiers` gives the confidence per (word index, semantic name) of the edited fields; every
@@ -540,11 +541,11 @@ def run_window(
             tiers[index, sem.name] = tier
             cell = (sem.name, index, sem.key(w))
             one_cell &= measured(anchors, probe, cell) is not None
-    edited = Machine(anchors, tiers)
+    edited = WindowState(anchors, tiers)
     acc = edited.run(words)
     if one_cell and len(tiers) <= 1:
         return Window(acc, tuple(edits))
-    base = Machine(anchors)
+    base = WindowState(anchors)
     base.run(stock)
     reads = readers(anchors, stock)
     # One pass suffices across the loop's back edge: 433 / 434 rewrite C4 / C5 and 434 / 435

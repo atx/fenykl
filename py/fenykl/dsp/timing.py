@@ -11,8 +11,8 @@ its tier; fitted figures are inferred. A case none of them covers makes the esti
 from collections import deque
 from dataclasses import dataclass
 
-from .emu import Flow, Job, Stop
 from .fields import CONTROL_OPS, IDLE_OP, Confidence, lookup
+from .job import Flow, Job, Stop
 from .machine import HEAD_IDS
 from .stream import LANE_MEMORY, LOAD, LOCAL_MEMORY, STORE, Engine, Event
 

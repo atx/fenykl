@@ -82,11 +82,10 @@ be bounded, a value handed after the grammar is lost and a 0x1d among a command'
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
-from .emu import LOCAL_BASE, dram_alias
 from .fields import LANE_VECTORS, Confidence
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
 from .semantics import LANE_COUNT, LOCAL_BYTES, UnknownSemantics
-from .state import Bytes
+from .state import LOCAL_BASE, Bytes, dram_alias
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 

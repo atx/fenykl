@@ -36,11 +36,10 @@ give is unknown (None), and a value from a rule below verified carries that tier
 scalars (`Sv`) and 32-lane vectors of 16 bits (`Vec`), each with the weakest tier of what made it.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .emu import LOCAL_BASE, Boot
 from .fields import (
     ALONE_PORTS,
     ALONE_SELECTS,
@@ -115,7 +114,7 @@ from .semantics import (
     s_result,
     x_result,
 )
-from .state import Bytes, RegisterFile
+from .state import LOCAL_BASE, Bytes, RegisterFile, Space, SparseSpace
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -284,6 +283,34 @@ class Stream(Protocol):
         """The job ends: what the engine still has to do completes."""
 
 
+VECTOR_FILES = frozenset(("U", "O", *LANE_FILES))
+Preset = int | Sv | Vec | Sequence[int | None]
+
+
+def _preset(file: str, v: Preset) -> Sv | Vec:
+    if file in VECTOR_FILES:
+        vec = v if isinstance(v, Vec) else Vec(tuple(v))
+        if len(vec.lanes) != LANE_COUNT:
+            raise ValueError(f"{file} takes {LANE_COUNT} lanes, not {len(vec.lanes)}")
+        return vec
+    if isinstance(v, Sv):
+        return v
+    if not isinstance(v, int):
+        raise TypeError(f"{file} takes an int or an Sv, not {v!r}")
+    return Sv(v)
+
+
+class BootState(Protocol):
+    """What the machine and the stream engine use of the boot they run on (`emu.Boot`)."""
+
+    local: Space
+    dram: SparseSpace
+
+    def source(self, name: str, fact: str = "") -> int: ...
+
+    def read(self, addr: int, n: int) -> Bytes: ...
+
+
 class Machine:
     """The datapath of one job on `boot` (its local memory is `boot.local`), with what an earlier
     job of the boot left (`carry`). It is the `datapath` of `emu.Executor` and decides the
@@ -291,7 +318,7 @@ class Machine:
 
     def __init__(
         self,
-        boot: Boot,
+        boot: BootState,
         carry: Carry | None = None,
         stream: "Stream | None" = None,
         trace: bool = False,
@@ -356,6 +383,13 @@ class Machine:
         """The lane memory is not known from now on (the stream engine's activity is not)."""
         self.lanes_lost = True
         self.memory.clear()
+
+    def preset(self, regs: Mapping[str, Mapping[int, Preset]]) -> None:
+        """Set registers by file and index, e.g. {"B": {3: 0xA0000000}}: an int or `Sv` in G, A,
+        B, R and F0..F3, a `Vec` or its 32 lanes in L0..L3, U and O."""
+        for file, values in regs.items():
+            for reg, v in values.items():
+                self._file(file)[reg] = _preset(file, v)
 
     # ------------------------------------------------------------------ branching
 
