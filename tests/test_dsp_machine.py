@@ -996,6 +996,43 @@ def test_a_parked_head_after_another_head_is_not_known(m, unit, head, lag, befor
     assert m.lanes["L3"][8].lanes == (None,) * 32
 
 
+@pytest.mark.parametrize(
+    "beside",
+    [{"f296_301": 0x19, "f65_68": 1}, {"f292_295": 0x02, "f53_56": 1, "f57_60": 2}],
+)
+@pytest.mark.parametrize(("unit", "head", "lag"), [("s0", 0x54, 1), ("s1", 0x57, 0)])
+def test_a_parked_head_beside_another_s_head_is_not_known(m, unit, head, lag, beside):
+    alone_operands(m)
+    h = {**alone_head(unit, head), **beside}
+    port = alone_port(unit, 8)
+    run(m, [w(**h, **port)] if lag == 0 else [w(**h), w(**port)])
+    assert m.lanes["L3"][8].lanes == (None,) * 32
+
+
+@pytest.mark.parametrize(
+    ("unit", "head", "lag", "runs", "tier"),
+    [
+        ("s0", 0x54, 1, 1, I),  # the zeros were read on S0's second run
+        ("s0", 0x54, 1, 3, None),
+        ("s1", 0x57, 0, 2, I),  # and on S1's first
+        ("s1", 0x57, 0, 3, None),
+    ],
+)
+def test_a_parked_heads_zeros_on_a_run_not_read_are_inferred_then_unknown(
+    m, unit, head, lag, runs, tier
+):
+    alone_operands(m)
+    h = alone_head(unit, head)
+    port = alone_port(unit, 8)
+    last = [w(**h, **port)] if lag == 0 else [w(**h), w(**port)]
+    run(m, [*[w(**h), IDLE, IDLE] * (runs - 1), *last])
+    got = m.lanes["L3"][8]
+    if tier is None:
+        assert got.lanes == (None,) * 32
+    else:
+        assert got == Vec(ZEROS_0_15.lanes, tier)
+
+
 @pytest.mark.parametrize("at", [0, 1])
 def test_an_alone_s0_zero_head_leaves_m_and_the_latch_unknown(m, at):
     alone_operands(m)

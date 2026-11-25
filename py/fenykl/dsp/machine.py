@@ -344,8 +344,8 @@ class Machine:
         """The word of the last S head run."""
         self.head_values: set[tuple[str, int]] = set()
         """The (unit, head) pairs that ran in that word."""
-        self.heads_run: set[tuple[str, int]] = set()
-        """The S0, S1 and S2 (unit, head) pairs run so far in the job (`ALONE_ZEROS`)."""
+        self.heads_run: dict[tuple[str, int], int] = {}
+        """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
         self._u_write: tuple[int, Vec] | None = None
         self.ceiling = V
         """The tier cap of what the word being run leaves (`execute`)."""
@@ -699,7 +699,7 @@ class Machine:
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             if unit != "s3":
-                self.heads_run.add((unit, head))
+                self.heads_run[unit, head] = self.heads_run.get((unit, head), 0) + 1
             if self.last_head != t:
                 self.head_values = set()
             self.head_values.add((unit, head))
@@ -794,7 +794,7 @@ class Machine:
         rule = LANE_RULES[unit].get(head)
         if rule is None and head in S_RULES[unit]:
             return
-        zeros = self._alone_zeros(unit, head, t)
+        zeros = self._alone_zeros(unit, head, word, t)
         if rule is None:
             # A head without a rule: its lane result is unknown at either lag (but for
             # `ALONE_ZEROS`), and so is M's result of its unit in those words.
@@ -854,15 +854,24 @@ class Machine:
         if unit == "s3" and word["f232_233"] == 1:
             self._u_port(index, head, b, word)
 
-    def _alone_zeros(self, unit: str, head: int, t: int) -> bool:
-        """Schedules the zeros of an `ALONE_ZEROS` head in a job whose S0..S2 heads so far are
-        only this one; False for any other head or job."""
-        heads, lag = ALONE_ZEROS.get(unit, ((), 0))
-        if head not in heads or not self.heads_run <= {(unit, head)}:
+    def _alone_zeros(self, unit: str, head: int, word: Word, t: int) -> bool:
+        """Schedules the zeros of an `ALONE_ZEROS` head alone in its word, in a job whose S0..S2
+        heads so far are only one run of it or none; False for any other head or job."""
+        heads, lag, read = ALONE_ZEROS.get(unit, ((), 0, 0))
+        if head not in heads or set(self.heads_run) - {(unit, head)}:
+            return False
+        if any(
+            word[HEAD_IDS[u]] != lookup(HEAD_IDS[u]).idle
+            for u in S_OPERANDS
+            if u != unit
+        ):
+            return False
+        runs = self.heads_run.get((unit, head), 0)
+        if runs > 1:
             return False
         lanes = tuple(0 if k in ALONE_ZERO_LANES else None for k in range(LANE_COUNT))
         self.lane_due.setdefault(t + lag, {}).setdefault(unit, []).append(
-            (Vec(lanes, V), None)
+            (Vec(lanes, V if runs == read else I), None)
         )
         self._why(t + lag, unit, f"{unit} {head:#x}: lanes 16..31 not read")
         return True

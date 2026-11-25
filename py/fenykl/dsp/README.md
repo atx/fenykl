@@ -203,9 +203,11 @@ later nothing; S3 0x7 / 0x8 (block selects of b by a's first lanes) one word lat
 pre-registered]; S3 0x6 gives 0 in every lane one word later and nothing in its own word [verified,
 pre-registered on two fresh operand sets in two jobs and earlier runs]. S0 0x54..0x5f give 0
 one word later and nothing in their own word, S1 0x57..0x5f 0 in their own word and nothing one
-word later, in lanes 0..15, in a job whose S0, S1 and S2 heads so far are only that head value
-(`fields.ALONE_ZEROS`) [verified, pre-registered on the third of three operand sets, the head
-run twice per job after an operand setup of S3 words only]; lanes 16..31 were not read, and
+word later, in lanes 0..15, alone in their word, in a job whose S0, S1 and S2 heads so far are
+only that head value (`fields.ALONE_ZEROS`) [verified, pre-registered on the third of three
+operand sets, the head run twice per job after an operand setup of S3 words only, the zeros
+read on S0's second run and S1's first; on the other of the two runs inferred, from a third run
+on not predicted]; lanes 16..31 were not read, and
 after other heads S1 0x55..0x5f gave b or nothing on a state not identified, so in other jobs
 these heads stay unknown, as do their M results and S0's latched operand after them. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's

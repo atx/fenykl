@@ -975,19 +975,22 @@ pre-registered (verified); S3 0x6 at 1: 0 in every lane there and nothing in its
 pre-registered on two fresh operand sets in two jobs and the earlier lag runs (verified). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
-ALONE_ZEROS: dict[str, tuple[range, int]] = {
-    "s0": (range(0x54, 0x60), 1),
-    "s1": (range(0x57, 0x60), 0),
+ALONE_ZEROS: dict[str, tuple[range, int, int]] = {
+    "s0": (range(0x54, 0x60), 1, 1),
+    "s1": (range(0x57, 0x60), 0, 0),
 }
 """S heads that give 0 at one lag and nothing at the other in a job whose S0, S1 and S2 heads so
-far are only this head value, by unit: (heads, lag). Verified on the camera in such jobs only:
-one head value per job after the operands' setup (S3 words only), run twice, the unit's port
-into L3 in the head's word only and then one word later only, lanes 0..15 read at each lag:
-0 at the lag given, the sentinel at the other, on three operand sets (edge values, a == b lanes,
-and a != b with both nonzero in every lane), the last pre-registered. In jobs with other heads
-before them S1 0x55..0x5f gave b, or left the sentinel at either single lag (`LANE_FUNCTIONS`),
-so the zeros are predicted in such a job only. Lanes 16..31 were not read, and M, the latched
-operand and the heads' lags in other jobs stay unknown."""
+far are only this head value, alone in its word: by unit (heads, lag, earlier runs). Measured
+on the camera in such jobs only: one head value per job after the operands' setup (S3 words
+only), run twice with no other S head in its word, the unit's port into L3 in the head's word
+only on the first run and one word later only on the second, lanes 0..15 read at each: 0 at the
+lag given, the sentinel at the other, on three operand sets (edge values, a == b lanes, and
+a != b with both nonzero in every lane), the last pre-registered (verified). So the zeros were
+read on the run after the earlier runs given (S0's second run, S1's first): verified there,
+inferred on the other of the two runs, not predicted from a third run on. In jobs with other
+heads before them S1 0x55..0x5f gave b, or left the sentinel at either single lag
+(`LANE_FUNCTIONS`), so the zeros are predicted in such a job only. Lanes 16..31 were not read,
+and M, the latched operand and the heads' lags in other jobs stay unknown."""
 ALONE_ZERO_LANES = range(16)
 """The lanes read in `ALONE_ZEROS`' runs."""
 
