@@ -138,7 +138,8 @@ LOCAL_FILLS: dict[tuple[int, int, int], tuple[int, Confidence]] = {
 """Kind 8 under r0 2 on channel 0 (r1 0, r4 0, r5 0x10, r7 1) by the (r2, r3, r6) that ran: the
 "to" it ran at and its tier (verified pre-registered, inferred measured once). Another word-aligned
 "to" in `LOCAL_FILL_TO` is capped at inferred; other registers, channels and offsets, and a "from"
-whose element has its top bit set (every value that ran was below 0x8000), raise
+at 0x8000 or above or whose element has its top bit set (every value that ran was below 0x8000,
+its element's top bit clear), raise
 `UnknownSemantics`."""
 LOCAL_FILL_TO = range(0x400, 0x701)
 WRAPPED, DIRECT = "wrapped", "direct"
@@ -174,7 +175,8 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
     },
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
-for kinds that move nothing; a lane fill's "to" also vector-aligned, as every one ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
+for kinds that move nothing; a lane fill's "to" also vector-aligned, as every one ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job
+(local fills: verified where one pre-registered job matched, `LOCAL_FILLS`);
 a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 (loads) and
 kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
@@ -579,7 +581,7 @@ class Engine:
             raise unmeasured(f"a local fill to {to:#x}: not measured")
         width = LOCAL_WIDTHS[r2]
         element = frm & (1 << width) - 1
-        if element >> (width - 1) or (width == 32 and frm >> 15):
+        if element >> (width - 1) or frm >> 15:
             # Every "from" that ran was below 0x8000, its element's top bit clear.
             raise unmeasured(f"a {width}-bit local fill of {frm:#x}: not measured")
         word = sum(element << k for k in range(0, 32, width))

@@ -415,6 +415,7 @@ def test_kind_8_on_local_memory_fills_r3_words_with_copies_of_the_low_element(
         (local_fill(4, 5, 2), 0x11, 0x502, "fill to 0x502"),
         (local_fill(4, 5, 2), 0x1180, 0x500, "8-bit local fill"),
         (local_fill(2, 4, 4), 0x8001, 0x700, "16-bit local fill"),
+        (local_fill(2, 4, 4), 0x12340011, 0x700, "16-bit local fill"),
         (local_fill(1, 3, 5), 0x8001, 0x700, "32-bit local fill"),
     ],
 )
