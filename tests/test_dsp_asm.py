@@ -76,10 +76,10 @@ def test_listing_names_ops_targets_and_delay_slots():
     text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0   call! -> 1443!  x0: f1=1!",
+        "0   call! -> 1443!  x0: k=0x7c1!",
         "1..4 | idle x4",
         "5..6   idle x2",
-        "7   ret!  op_slot: f128_132=r1!",
+        "7   ret!  op_slot: rb=r1!",
         "8 | op1f! r2, #0xc",
         "9 | call! -> 10! ctl_n=1!",
     ]
@@ -92,10 +92,10 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
         "0..1   idle x2",
-        "2..4   x3 idle~  op_slot: ra=r2!  x1: xreg=r3!",
-        "5   idle~  ^  x1: xreg=r7!",
+        "2..4   x3 idle~  op_slot: ra=r2!  x1: b=r3! k=0x300!",
+        "5   idle~  ^  x1: b=r7! k=0x700!",
         "6   idle",
-        "7   idle~  op_slot: ra=r2!  x1: xreg=r7!",
+        "7   idle~  op_slot: ra=r2!  x1: b=r7! k=0x700!",
     ]
 
 
@@ -124,7 +124,7 @@ def test_listing_shows_data_ops_in_their_format():
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body[::2] == [
         "0   op3f! r2, r2, #5",
-        "2   op0c! r3, #-7  op_slot: f120_122=r1!",
+        "2   op0c! r3, #-7  op_slot: rr=r1!",
         "4   op0b! r1, #0x2468",
         "6   op49! r1, r2  op_slot: imm=4!",
     ]
@@ -199,7 +199,7 @@ def test_labelled_source_reassembles_the_program():
     text = source(program, "P", labels(labelled(), 32), 32)
     assert "    Ctl(3, 'routine'),  # 32 call -> 38\n    IDLE,  # 33\n" in text
     assert "    Label('routine'),\n    Word(x1=X1(xreg=3)),  # 38\n" in text
-    assert "    Ctl(0, 'routine', Word(x0=X0(f1=0x1))),  # 39 loop -> 38\n" in text
+    assert "    Ctl(0, 'routine', Word(x0=X0(x0k_lo=0x1))),  # 39 loop -> 38\n" in text
     assert text.endswith("  # 48\n    Label('end'),\n]\n")
     namespace: dict = {}
     exec(text, namespace)  # noqa: S102 (our own generated source)

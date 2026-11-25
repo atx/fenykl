@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 from conftest import stock_image
@@ -10,6 +11,7 @@ from fenykl.dsp.fields import (
     DATA_OPS,
     FIELDS,
     FORMATS,
+    HEAD_VIEWS,
     HEADS,
     IDLE_OP,
     IDLE_VALUE,
@@ -29,10 +31,12 @@ from fenykl.dsp.fields import (
     X_IMMEDIATES,
     Confidence,
     Operands,
+    _index,
     lookup,
     op,
 )
 from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
+from fenykl.dsp.units import UNITS
 from fenykl.dsp.word import IDLE, Word
 
 
@@ -61,6 +65,15 @@ def test_every_bit_in_exactly_one_field():
     assert set(owners.values()) == {1}
 
 
+@pytest.mark.parametrize("name", ["f2_6", "f0x", "rb", "class", "unit"])
+def test_a_name_never_reads_as_an_id_or_another_key(name):
+    # f1 renamed: to another field's id, to an id-like name, to a taken name, to a keyword and
+    # to a slot attribute.
+    fields = tuple(replace(f, name=name) if f.id == "f1" else f for f in FIELDS)
+    with pytest.raises(ValueError, match=name):
+        _index(fields)
+
+
 @pytest.fixture(scope="module")
 def items() -> dict[int, bytes]:
     return stock_items(stock_image("em10ii"))
@@ -79,6 +92,58 @@ def test_words_round_trip_through_fields(items):
         for index, word in enumerate(decode_item(data, STOCK[item]).words):
             rebuilt = Word.from_fields(word.fields(), base=zero)
             assert rebuilt.to_bytes() == word.to_bytes(), (item, index)
+
+
+def test_stock_words_rebuild_from_names_and_head_views(items):
+    for item, data in items.items():
+        for index, word in enumerate(decode_item(data, STOCK[item]).words):
+            named = {f.label: v for f, v in word.changed()}
+            assert Word.from_fields(named) == word, (item, index)
+            rest = {k: v for k, v in named.items() if lookup(k).unit not in HEAD_VIEWS}
+            built = Word.from_fields(rest)
+            for unit in HEAD_VIEWS:
+                built = Word.head(unit, built, **word.head_operands(unit))
+            assert built == word, (item, index)
+
+
+def test_a_head_view_covers_its_unit():
+    for unit, view in HEAD_VIEWS.items():
+        span = 0
+        for o in view.operands.values():
+            span |= o.span
+        assert span == sum(f.span for f in UNITS[unit].fields), unit
+
+
+def test_a_head_view_composes_split_immediates():
+    word = Word.head("s0", imm=0xABCD)
+    assert (word["f23_30"], word["f37_40"], word["f76_79"]) == (0xCD, 0xB, 0xA)
+    word = Word.head("s2", imm=0x15)  # f88_91's bit 0 keeps its idle 1
+    assert (word["f88_91"], word["f53_56"]) == (0xB, 0x2)
+    word = Word.head("s1", op=0x04, imm=0x20)
+    assert (word["f0"], word["f84_87"], word["f80_83"] >> 2) == (0, 0, 1)
+    word = Word.head("s3", imm=0x3ABC - 0x4000)
+    assert (word["f92_95"], word["f31_34"] >> 2, word["f65_68"], word["f96_99"]) == (
+        0xC,
+        3,
+        0xA,
+        0xE,
+    )
+    assert word.head_operands("s3")["imm"] == -0x544
+
+
+@pytest.mark.parametrize(
+    "unit, operands, error",
+    [
+        ("s1", {"t": 1, "imm": 0}, "disagrees"),
+        ("x1", {"b": 3, "k": 0x100}, "disagrees"),
+        ("s2", {"imm": 64}, "does not fit 7 signed bits"),
+        ("x0", {"k": -1}, "does not fit 11 bits"),
+        ("s0", {"t": 1}, "no operand 't'"),
+    ],
+)
+def test_a_head_view_rejects_bad_operands(unit, operands, error):
+    with pytest.raises((ValueError, KeyError), match=error):
+        Word.head(unit, **operands)
 
 
 def test_items_round_trip(items):

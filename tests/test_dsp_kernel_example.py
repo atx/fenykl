@@ -8,13 +8,15 @@ four vectors are loaded (X0 0x1d), moved into S1's lane file through its first p
 (X0 0x1b). A kernel of this shape ran on the camera at 4 and 16 KiB, its dst exact and its
 minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 to 16 passes).
 
-The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine.
+The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine. The
+words are written by field name (`fields.NAMES`), data op (`Word.data`) and head view
+(`Word.head`), whose immediates compose from their split fields.
 """
 
 import pytest
 
 from fenykl.dsp.emu import Boot, Executor, Job, Stop
-from fenykl.dsp.fields import Confidence
+from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv
 from fenykl.dsp.program import Program
 from fenykl.dsp.stream import Engine
@@ -25,39 +27,29 @@ SRC, DST = 0xA0000000, 0xA1000000
 B_SRC, B_DST, B_LOAD, B_STORE = 3, 2, 13, 12
 CHUNK = 0x1000
 BANKS = (0x000, 0x080)
-HALT = Word.from_fields({"op": 7}, base=IDLE)
+HALT = Word.from_fields({"op": 7})
 
 
 def w(**fields: int) -> Word:
-    return Word.from_fields(fields, base=IDLE)
+    return Word.from_fields(fields)
 
 
 def li(v: int, **port: int) -> Word:
     """Op 0x0b: the 16-bit immediate v (sign-extended) to the ports given."""
-    return w(
-        f313_319=0x0B, f15_22=v & 0xFF, f128_132=v >> 8 & 0x1F, f120_122=v >> 13, **port
-    )
+    return Word.data(0x0B, Operands(ra=31, imm=v), base=w(**port))
 
 
 def to_b(v: int, r: int) -> Word:
-    return li(v, f267_268=1, f211_215=r)
+    return li(v, bsrc=1, bdst=r)
 
 
 def to_g(v: int, r: int) -> Word:
-    return li(v, f272_273=1, f224_228=r)
+    return li(v, gsrc=1, gdst=r)
 
 
 def b_add(r: int, src: int, k: int) -> Word:
-    """X1 0x03: B[r] := B[src] + k (13-bit k) through f267_268 = 0."""
-    return w(
-        f308_312=0x03,
-        f110_114=src,
-        f115_119=k >> 8,
-        f9_14=k >> 2 & 63,
-        f7_8=k & 3,
-        f267_268=0,
-        f211_215=r,
-    )
+    """X1 0x03: B[r] := B[src] + k (13-bit k) through bsrc = 0."""
+    return Word.head("x1", w(bsrc=0, bdst=r), op=0x03, a=src, k=k)
 
 
 def hand(*items: int | tuple[str, int]) -> list[Word]:
@@ -66,12 +58,12 @@ def hand(*items: int | tuple[str, int]) -> list[Word]:
     out, scratch = [], 14
     for it in items:
         if isinstance(it, int):
-            out += [to_b(it, scratch), w(f308_312=0x1C, f115_119=scratch)]
+            out += [to_b(it, scratch), Word.head("x1", op=0x1C, b=scratch)]
             scratch ^= 1
         elif it[0] == "b":
-            out.append(w(f308_312=0x1C, f115_119=it[1]))
+            out.append(Word.head("x1", op=0x1C, b=it[1]))
         else:
-            out.append(w(f308_312=0x1D, f115_119=1))
+            out.append(Word.head("x1", op=0x1D, b=1))
     return out
 
 
@@ -82,57 +74,25 @@ def block(channel: int, nbytes: int) -> list[int]:
 
 def chunk(bank: int, start: int) -> list[Word]:
     """y = x ^ 0x20 over the bank's 128 vectors, four per pass; G8 counts, G9 / A[1] walk."""
-    body = [
-        w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=i >> 1, f1=i & 1)
-        for i in range(4)
-    ]
-    body += [w(f240_241=0, f155_158=4 + i) for i in range(4)] + [IDLE] * 5
+    body = [Word.head("x0", op=0x1D, a=1, b=0, k=i) for i in range(4)]
+    body += [w(l1src=0, l1dst=4 + i) for i in range(4)] + [IDLE] * 5
     for i in range(4):
-        body[6 + i] = Word.from_fields(
-            {
-                "f285_291": 0x04,
-                "f45_48": 4 + i,
-                "f49_52": 4 + i,
-                "f80_83": 4,
-                "f84_87": 0,
-                "f252_254": 3,
-                "f179_181": 1 + i,
-            },
-            base=body[6 + i],
-        )
-        body[7 + i] = Word.from_fields(
-            {
-                "f302_307": 0x1B,
-                "f100_104": 1,
-                "f105_109": 0,
-                "f2_6": i >> 1,
-                "f1": i & 1,
-                "f69_71": 1 + i,
-            },
-            base=body[7 + i],
-        )
-    body[10] = Word.from_fields(
-        {
-            "f313_319": 0x1F,
-            "f123_127": 9,
-            "f15_22": 4,
-            "f128_132": 0,
-            "f120_122": 0,
-            "f272_273": 1,
-            "f224_228": 9,
-            "f265_266": 2,
-            "f206_210": 1,
-        },
-        base=body[10],
+        # S1 0x04, b ^ imm7, into O[1 + i] in the head's word; imm7 holds only bits 3..2 of
+        # s1r, r = 4 sets all four.
+        into_o = Word.from_fields({"osrc": 3, "odst": 1 + i}, base=body[6 + i])
+        body[6 + i] = Word.head("s1", into_o, op=0x04, a=4 + i, b=4 + i, r=4, imm=0x20)
+        body[7 + i] = Word.head("x0", body[7 + i], op=0x1B, a=1, b=0, k=i, o=1 + i)
+    ports = Word.from_fields(
+        {"gsrc": 1, "gdst": 9, "asrc": 2, "adst": 1}, base=body[10]
     )
+    body[10] = Word.data(0x1F, Operands(ra=9, imm=4), base=ports)
     top = start + 5
     loop = Word.from_fields(
-        {"f123_127": 8, "f120_122": 0, "f272_273": 1, "f224_228": 8},
-        base=Word.ctl(0, top, IDLE),
+        {"ra": 8, "rr": 0, "gsrc": 1, "gdst": 8}, base=Word.ctl(0, top, IDLE)
     )
     return [
         to_g(bank, 9),
-        li(bank, f265_266=2, f206_210=1),
+        li(bank, asrc=2, adst=1),
         to_g(128 // 4 - 1, 8),
         IDLE,
         IDLE,

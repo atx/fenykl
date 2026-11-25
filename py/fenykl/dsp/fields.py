@@ -2,8 +2,8 @@
 
 Bit k of a word is bit (k % 8) of byte k // 8 of its 40 bytes. Every bit belongs to exactly one
 field. A field has a permanent positional id that names both ends of its bits (`f115_119`, `f229`),
-an optional semantic name that may be renamed at will, a kind, its value in the
-idle word, a confidence and a one-line fact.
+a semantic name where its role is measured (`NAMES`, its role `ROLES`), a kind, its value in the
+idle word, a confidence and a fact.
 
 Confidence qualifies the field itself: that these bits form one field of this kind. Facts about
 single values or words carry their own tags in `fact` and `values`. The emulator does not use
@@ -39,6 +39,8 @@ names the source they take (`LANE_SOURCES`); the S heads' lane functions are
 `LANE_FUNCTIONS`, their immediates `LANE_IMMEDIATES`.
 """
 
+import keyword
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
@@ -106,6 +108,11 @@ class Field:
     @property
     def mask(self) -> int:
         return (1 << self.width) - 1
+
+    @property
+    def span(self) -> int:
+        """Its bits in the word."""
+        return self.mask << self.lo
 
     def literal(self, value: int) -> str:
         """`value` as a Python literal: decimal for registers, hex otherwise."""
@@ -1907,6 +1914,14 @@ PORTS: dict[str, str] = {
 its enable is active."""
 _PORT_P = {_width_id(owned): p for _, _, owned, p in (*B_PORTS, *R_PORTS)}
 _OWNER = {owned: enable for enable, owned in PORTS.items()}
+LANE_FILE_OF = {n: file for file, (_, *nibs) in LANE_FILES.items() for n in nibs}
+"""The lane file each lane operand nibble names a register of."""
+
+
+def lane_file(enable: str) -> str:
+    """The lane file a lane port writes: the file of the nibble 110 bits below its own."""
+    lo = int(PORTS[enable][1:4]) - 110
+    return LANE_FILE_OF[_fid(lo, lo + 3)]
 
 
 def _enable(
@@ -1943,7 +1958,7 @@ def _lane_enable(lo: int, fact: str = "") -> Field:
     enable = _fid(lo, lo + 1)
     port = PORTS[enable]
     nibble = _fid(int(port[1:4]) - 110, int(port[1:4]) - 107)
-    file = next(f for f, (_, *nibs) in LANE_FILES.items() if nibble in nibs)
+    file = lane_file(enable)
     rows = LANE_SOURCES[enable]
     lane = (
         f"The enable of the lane port that writes {file}[{port}], the file {nibble} reads: its "
@@ -2557,6 +2572,245 @@ _unfacted = set(UNIT_FACTS) - {f.id for f in FIELDS}
 if _unfacted:
     raise ValueError(f"unit facts without a field: {sorted(_unfacted)}")
 
+NAMES = {
+    "f0": "s1imm_lo",
+    "f1": "x0k_lo",
+    "f2_6": "x0k_mid",
+    "f7_8": "x1k_lo",
+    "f9_14": "x1k_mid",
+    "f23_30": "s0imm_lo",
+    "f31_34": "s3u",
+    "f37_40": "s0a",
+    "f41_44": "s0b",
+    "f45_48": "s1a",
+    "f49_52": "s1b",
+    "f53_56": "s2a",
+    "f57_60": "s2b",
+    "f61_64": "s3a",
+    "f65_68": "s3b",
+    "f69_71": "x0o",
+    "f72_75": "s0s",
+    "f76_79": "s0r",
+    "f80_83": "s1r",
+    "f84_87": "s1t",
+    "f88_91": "s2t",
+    "f92_95": "s3idx",
+    "f96_99": "s3val",
+    "f120_122": "rr",
+    "f128_132": "rb",
+    "f141_144": "udst",
+    "f147_150": "l0dst",
+    "f151_154": "l0dst2",
+    "f155_158": "l1dst",
+    "f159_162": "l1dst2",
+    "f163_166": "l2dst",
+    "f167_170": "l2dst2",
+    "f171_174": "l3dst",
+    "f175_178": "l3dst2",
+    "f179_181": "odst",
+    "f182_185": "sf0dst",
+    "f186_189": "sf0dst2",
+    "f190_193": "sf1dst",
+    "f194_197": "sf1dst2",
+    "f198_201": "sf2dst",
+    "f202_205": "sf3dst",
+    "f232_233": "usrc",
+    "f236_237": "l0src",
+    "f238_239": "l0src2",
+    "f240_241": "l1src",
+    "f242_243": "l1src2",
+    "f244_245": "l2src",
+    "f246_247": "l2src2",
+    "f248_249": "l3src",
+    "f250_251": "l3src2",
+    "f252_254": "osrc",
+    "f255": "sf0src",
+    "f256_257": "sf0src2",
+    "f258": "sf1src",
+    "f259_260": "sf1src2",
+    "f261_262": "sf2src",
+    "f263_264": "sf3src",
+    "f274_275": "msel",
+    "f276": "m_n",
+    "f278_284": "s0op",
+    "f285_291": "s1op",
+    "f292_295": "s2op",
+    "f296_301": "s3op",
+}
+"""The semantic names of the fields named after their measured role, by id (README, Fields)."""
+_IMM_BITS = {
+    "f37_40": "; bits 11..8 of S0's lane immediate",
+    "f53_56": "; bits 6..3 of S2's lane immediate",
+    "f65_68": "; bits 9..6 of S3's lane immediate",
+}
+
+
+_HEAD_TIERS = {
+    V: "verified: every value has a verified row and lag",
+    I: "inferred: not every value has a verified row and lag",
+}
+
+
+def _table_roles() -> Iterator[tuple[str, str]]:
+    """The roles of the lane operand registers, the PB ports and the S heads, from their
+    tables."""
+    names = {f.id: f.name for f in FIELDS} | NAMES
+    for file, (unit, *nibbles) in LANE_FILES.items():
+        for operand, nibble in zip("ab", nibbles, strict=True):
+            bits = _IMM_BITS.get(nibble, "")
+            yield (
+                nibble,
+                (
+                    f"{unit.upper()}'s lane operand {operand}: the register of {file} its lane "
+                    f"heads read as {operand}{bits} (`LANE_FILES`, verified)"
+                ),
+            )
+    lane_ports = {enable: lane_file(enable) for enable in LANE_SOURCES}
+    for table, files in (("LANE_SOURCES", lane_ports), ("PB_SOURCES", PB_FILES)):
+        for enable, file in files.items():
+            port = PORTS[enable]
+            yield (
+                port,
+                f"the register of {file} its port writes under {names[enable]} (verified)",
+            )
+            yield (
+                enable,
+                (
+                    f"the enable of a port of {file}, its value the source it writes to "
+                    f"{file}[{names[port]}] (`{table}`, verified)"
+                ),
+            )
+    for enable, file in PR_FILES.items():
+        port = PORTS[enable]
+        yield (
+            port,
+            f"the register of {file} its port writes under {names[enable]} (verified)",
+        )
+        yield (
+            enable,
+            (
+                f"the enable of a port of {file}, its value the source it writes to "
+                f"{file}[{names[port]}] (`PR_SOURCES`, verified)"
+            ),
+        )
+    heads = {_fid(*HEADS[u]): u for u in ("s0", "s1", "s2", "s3")}
+    for f in FIELDS:
+        if f.id in heads:
+            yield (
+                f.id,
+                (
+                    f"the head of {heads[f.id].upper()}: its value names the lane function and "
+                    f"the scalar result (`LANE_FUNCTIONS`, `S_RESULTS`; {_HEAD_TIERS[f.confidence]})"
+                ),
+            )
+
+
+_K = "(`X_IMMEDIATES`, verified)"
+_S_IMM = "(`LANE_IMMEDIATES`, verified)"
+ROLES = dict(_table_roles()) | {
+    "f0": f"bit 0 of S1's lane immediate {_S_IMM}",
+    "f1": f"bit 0 of X0's immediate K {_K}",
+    "f2_6": f"bits 5..1 of X0's immediate K {_K}",
+    "f7_8": f"bits 1..0 of X1's immediate K {_K}",
+    "f9_14": f"bits 7..2 of X1's immediate K {_K}",
+    "f23_30": f"bits 7..0 of S0's lane immediate {_S_IMM}",
+    "f31_34": "the register of U whose lanes 0..3 S3's lane shifts move in (`LANE_THIRD_FILE`); "
+    "its bit 2 is bit 4 of the lane of 0xe, 0xf and 0x10, its bits 3..2 are bits 5..4 of S3's "
+    "lane immediate (verified)",
+    "f69_71": "the register of O that X0's store heads store (`STORE_FILE`, verified)",
+    "f72_75": "S0's scalar s: the register of F0 read as the bound of its clamps and as its "
+    "select heads' lane mask (`LANE_OPERANDS`, `LANE_MASKS`, verified)",
+    "f76_79": "S0's scalar r: the register of F0 whose bit k is lane k's carry-in, the lane "
+    "value of 0x43 and 0x45, and head 0x52's result; bits 15..12 of S0's lane immediate "
+    "(`LANE_OPERANDS`, `LANE_FUNCTIONS`, `SCALAR_READS`, verified)",
+    "f80_83": "S1's scalar r: the register of F1 whose bit k is lane k's carry-in in the "
+    "carry-in heads and the floor shifts; its bits 3..2 are bits 6..5 of S1's lane immediate "
+    "(`LANE_OPERANDS`, verified)",
+    "f84_87": "S1's scalar t: the register of F1 its lane heads read, and head 0x54's result; "
+    "bits 4..1 of S1's lane immediate (`LANE_OPERANDS`, `SCALAR_READS`, verified)",
+    "f88_91": "S2's scalar t: the register of F2 the multiplies 0x3 / 0x5 read, and head 0xe's "
+    "result; its bits 3..1 are bits 2..0 of S2's lane immediate, its bit 1 head 0x7's choice "
+    "(`LANE_OPERANDS`, `SCALAR_READS`, verified)",
+    "f92_95": "S3's lane select and shift count, and the register of F3 read as the lane index; "
+    "bits 3..0 of S3's lane immediate (verified)",
+    "f96_99": "S3's value: the register of F3 head 0x24 returns and 0x10 inserts; bits 13..10 "
+    "of S3's lane immediate (`SCALAR_READS`, `LANE_FUNCTIONS`, verified)",
+    "f120_122": "the op slot's R register: a family A or A' store's datum and the third operand "
+    "of 0x46 / 0x47; bits 15..13 of a family B or D immediate (`FAMILIES`, verified)",
+    "f128_132": "the op slot's register rb in families A' and E, and op 4's link register "
+    "G[rb]; bits 12..8 of an immediate and of a control op's target (`FAMILIES`, `TARGET`, "
+    "verified)",
+    "f141_144": "the register of U its port writes under usrc (`LANE_THIRD_FILE`, verified)",
+    "f179_181": "the register of O its port writes under osrc (`STORE_FILE`, verified)",
+    "f232_233": "the enable of U's port: 1 writes U[udst] beside S3 0x1b, 0x1c and 0x1e..0x21, "
+    "0 and 2 write nothing (verified); under 1 nothing beside 0x14, 0x18, 0x19 and 0x22 "
+    "(measured), a content not identified beside 0x1a and 0x1d (inferred) "
+    "(`LANE_THIRD_FILE`)",
+    "f252_254": "the enable of O's port, its value the source it writes to O[odst] "
+    "(`STORE_SOURCES`, verified)",
+    "f15_22": "the op slot's 8-bit immediate: the low byte of a data op's immediate and of a "
+    "control op's target (`FAMILIES`, `TARGET`, verified)",
+    "f100_104": "X0's register a, A[x0a] (`X_FUNCTIONS`, verified)",
+    "f105_109": "X0's register b, A[x0b]; bits 10..6 of X0's immediate K (`X_IMMEDIATES`, "
+    "verified)",
+    "f110_114": "X1's register a, B[x1a] (`X_FUNCTIONS`, verified)",
+    "f115_119": "X1's register b, B[xreg], also the register X1 0x1c hands to the stream "
+    "engine; bits 12..8 of X1's immediate K (`X_IMMEDIATES`, verified)",
+    "f123_127": "the op slot's register ra, G[ra], in every data op (`FAMILIES`, verified)",
+    "f229": "clear in exactly the words whose op is a control op (verified)",
+    "f302_307": "the head of X0: its value names the function, a lane memory load or store "
+    "among them (`X_FUNCTIONS`, `X0_LANE_MEMORY`, verified)",
+    "f308_312": "the head of X1: its value names the function or a register transfer "
+    "(`X_FUNCTIONS`, verified)",
+    "f313_319": "the op: control ops 0..4, data ops 8..73 in their families, idle 0x7f (`OPS`, "
+    "`FAMILIES`, verified)",
+    "f274_275": "the S unit whose scalar result M puts out, 0..3 for S0..S3 (verified)",
+    "f276": "the active-low strobe M: under 0 an S head's scalar result goes on X0's result "
+    "bus (`S_RESULTS`, verified)",
+}
+"""What each named field does, with its tier: its fact, with one sentence of evidence after."""
+FIELDS = tuple(replace(f, name=NAMES[f.id]) if f.id in NAMES else f for f in FIELDS)
+_roleless = {f.id for f in FIELDS if f.name} ^ set(ROLES)
+if _roleless:
+    raise ValueError(f"named fields and roles differ: {sorted(_roleless)}")
+
+_RESTATED = {"f15_22": "; ", "f221_223": ": ", "f229": "; ", "f313_319": ": "}
+"""Fields whose first sentence goes on to restate the role after this separator."""
+
+
+def _evidence(f: Field) -> str:
+    """The one sentence of a named field's boundary and ownership evidence: for a grid nibble
+    its owner's share of its changes, else the first sentence of the fact it was built with.
+    The rest of that fact is in the tables its role names (`NIBBLES`, `UNIT_FACTS`, ...)."""
+    if f.lo in GRID_A_UNITS:
+        unit, p = GRID_A_UNITS[f.lo]
+        tag = "verified in the bytes" if p >= WEAK_OWNER else "inferred"
+        return (
+            f"A grid A nibble, its boundaries from segmentation and the lag-110 repeat in grid "
+            f"B; it changes where {_fid(*HEADS[unit])} is active in {p:.2f} of its changes ({tag})"
+        )
+    if f.kind is Kind.ROUTE and f.id in _OWNER:
+        p = _PORT_P[f.id]
+        tag = "verified in the bytes" if p >= WEAK_OWNER else "inferred"
+        return (
+            f"A grid B nibble, its boundaries from segmentation and the lag-110 repeat of grid "
+            f"A; it changes where its enable {_OWNER[f.id]} is active in {p:.2f} of its "
+            f"changes, across later firmware versions of the same family ({tag})"
+        )
+    first = f.fact.split(". ", 1)[0]
+    if f.id in _RESTATED:
+        first = first.split(_RESTATED[f.id], 1)[0]
+    return f"{first[0].upper()}{first[1:]}"
+
+
+FIELDS = tuple(
+    replace(f, fact=f"{ROLES[f.id]}. {_evidence(f)}") if f.name else f for f in FIELDS
+)
+ID_PATTERN = re.compile(r"f\d")
+"""The start of a positional id; no name starts like one."""
+RESERVED = frozenset({"unit", "field", "items"})
+"""Slot attributes, which a slot's field keys must not shadow."""
+
 
 def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
     """Fields by id and by semantic name; raises on overlaps, gaps and name clashes."""
@@ -2571,6 +2825,10 @@ def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
             if owner[bit]:
                 raise ValueError(f"bit {bit} in both {owner[bit]} and {f.id}")
             owner[bit] = f.id
+        if f.name and (
+            ID_PATTERN.match(f.name) or keyword.iskeyword(f.name) or f.name in RESERVED
+        ):
+            raise ValueError(f"{f.id}: name {f.name!r} reads as an id or shadows a key")
         for key in filter(None, (f.id, f.name)):
             if key in by_key:
                 raise ValueError(f"field key {key!r} used twice")
@@ -2587,30 +2845,85 @@ IDLE_VALUE = sum(f.idle << f.lo for f in FIELDS)
 
 
 @dataclass(frozen=True)
-class Composite:
-    """A value whose bits lie in several positional fields, lowest part first."""
+class Bits:
+    """Bits lo..hi of `field`, counted from the field's own bit 0."""
 
-    name: str
-    parts: tuple[Field, ...]
-    confidence: Confidence
-    fact: str
-
-    def get(self, word: int) -> int:
-        value = 0
-        for f in reversed(self.parts):
-            value = value << f.width | f.get(word)
-        return value
+    field: Field
+    lo: int
+    hi: int
 
     @property
     def width(self) -> int:
-        return sum(f.width for f in self.parts)
+        return self.hi - self.lo + 1
+
+    @property
+    def span(self) -> int:
+        return ((1 << self.width) - 1) << (self.field.lo + self.lo)
+
+    def get(self, word: int) -> int:
+        return self.field.get(word) >> self.lo & ((1 << self.width) - 1)
 
     def put(self, word: int, value: int) -> int:
-        if not 0 <= value < 1 << self.width:
-            raise ValueError(f"{self.name}: {value:#x} does not fit {self.width} bits")
-        for f in self.parts:
-            word = f.put(word, value & f.mask)
-            value >>= f.width
+        mask = (1 << self.width) - 1
+        if not 0 <= value <= mask:
+            raise ValueError(
+                f"{self.field.label}: {value:#x} does not fit {self.width} bits"
+            )
+        return self.field.put(
+            word, self.field.get(word) & ~(mask << self.lo) | value << self.lo
+        )
+
+
+@dataclass(frozen=True)
+class Composite:
+    """A value whose bits lie in several fields or parts of fields, lowest part first; two's
+    complement when `signed`."""
+
+    name: str
+    parts: tuple[Field | Bits, ...]
+    confidence: Confidence
+    fact: str
+    signed: bool = False
+
+    @property
+    def width(self) -> int:
+        return sum(p.width for p in self.parts)
+
+    @property
+    def span(self) -> int:
+        """Its bits in the word."""
+        span = 0
+        for p in self.parts:
+            span |= p.span
+        return span
+
+    def get(self, word: int) -> int:
+        value = 0
+        for p in reversed(self.parts):
+            value = value << p.width | p.get(word)
+        if self.signed and value >> (self.width - 1):
+            value -= 1 << self.width
+        return value
+
+    def compose(self, values: Mapping[str, int]) -> int:
+        """The value from the values of its fields by id."""
+        word = 0
+        for p in self.parts:
+            f = p.field if isinstance(p, Bits) else p
+            word = f.put(word, values[f.id])
+        return self.get(word)
+
+    def put(self, word: int, value: int) -> int:
+        lo = -(1 << (self.width - 1)) if self.signed else 0
+        if not lo <= value < lo + (1 << self.width):
+            sign = " signed" if self.signed else ""
+            raise ValueError(
+                f"{self.name}: {value:#x} does not fit {self.width}{sign} bits"
+            )
+        value &= (1 << self.width) - 1
+        for p in self.parts:
+            word = p.put(word, value & ((1 << p.width) - 1))
+            value >>= p.width
         return word
 
 
@@ -2644,7 +2957,88 @@ X_IMMEDIATES = {
         f"X1's 13-bit immediate K, f7_8 | f9_14 << 2 | f115_119 << 8 ({EXACT})",
     ),
 }
-"""Each X unit's immediate; its high bits are the register field of its operand b."""
+"""Each X unit's immediate; its high bits are the register field of its operand b. K is raw: each
+head reads it zero- or sign-extended (`semantics.X_RULES`)."""
+_S_IMM_PARTS = {
+    "s0": (BY_KEY["f23_30"], BY_KEY["f37_40"], BY_KEY["f76_79"]),
+    "s1": (BY_KEY["f0"], BY_KEY["f84_87"], Bits(BY_KEY["f80_83"], 2, 3)),
+    "s2": (Bits(BY_KEY["f88_91"], 1, 3), BY_KEY["f53_56"]),
+    "s3": (
+        BY_KEY["f92_95"],
+        Bits(BY_KEY["f31_34"], 2, 3),
+        BY_KEY["f65_68"],
+        BY_KEY["f96_99"],
+    ),
+}
+S_IMMEDIATES = {
+    unit: Composite(
+        f"{unit}imm",
+        parts,
+        LANE_IMMEDIATES[unit][1],
+        LANE_IMMEDIATES[unit][0],
+        unit != "s0",
+    )
+    for unit, parts in _S_IMM_PARTS.items()
+}
+"""Each S unit's lane immediate as the machine reads it (`LANE_IMMEDIATES`)."""
+
+
+@dataclass(frozen=True)
+class HeadView:
+    """A head's unit by named operands: the head as op, its registers and its immediate composed
+    from its pieces, which share bits with register operands."""
+
+    unit: str
+    operands: Mapping[str, Field | Composite]
+
+    def decode(self, word: int) -> dict[str, int]:
+        return {name: o.get(word) for name, o in self.operands.items()}
+
+    def encode(self, word: int, values: Mapping[str, int]) -> int:
+        """`word` with the operands `values`; raises on a name not in the view, a value out of
+        range and two operands that disagree on a shared bit."""
+        given = 0
+        for name, value in values.items():
+            if name not in self.operands:
+                raise KeyError(f"{self.unit} has no operand {name!r}")
+            o = self.operands[name]
+            new = o.put(word, value)
+            if (new ^ word) & given:
+                raise ValueError(
+                    f"{self.unit}: {name}={value:#x} disagrees with another operand"
+                )
+            given |= o.span
+            word = new
+        return word
+
+
+def _view(unit: str, **operands: str | Composite) -> HeadView:
+    head = BY_KEY[_fid(*HEADS[unit])]
+    named = {k: BY_KEY[o] if isinstance(o, str) else o for k, o in operands.items()}
+    return HeadView(unit, {"op": head, **named})
+
+
+HEAD_VIEWS = {
+    "s0": _view("s0", a="s0a", b="s0b", s="s0s", r="s0r", imm=S_IMMEDIATES["s0"]),
+    "s1": _view("s1", a="s1a", b="s1b", t="s1t", r="s1r", imm=S_IMMEDIATES["s1"]),
+    "s2": _view("s2", a="s2a", b="s2b", t="s2t", imm=S_IMMEDIATES["s2"]),
+    "s3": _view(
+        "s3",
+        a="s3a",
+        b="s3b",
+        u="s3u",
+        idx="s3idx",
+        val="s3val",
+        imm=S_IMMEDIATES["s3"],
+    ),
+    "x0": _view("x0", a="x0a", b="x0b", o="x0o", k=X_IMMEDIATES["x0"]),
+    "x1": _view("x1", a="x1a", b="xreg", k=X_IMMEDIATES["x1"]),
+}
+"""The operand view of each head's unit, every field of the unit in some operand: S0 a, b
+(L0[a], L0[b]), s (F0[s]), r (F0[r], the carry-in mask), imm16; S1 a, b, t (F1[t]), r, imm7;
+S2 a, b, t (F2[t]), imm7; S3 a, b, u (U[u]), idx (the lane, the shift count or F3[idx]), val
+(F3[val]), imm14; X0 a, b (A[a], A[b]), o (O[o], the store register), K; X1 a, b (B[a], B[b]), K
+(`LANE_OPERANDS`, `LANE_IMMEDIATES`, `X_IMMEDIATES`)."""
 
 RA = BY_KEY["ra"]
 RB = BY_KEY["f128_132"]

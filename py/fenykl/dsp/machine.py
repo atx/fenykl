@@ -51,7 +51,6 @@ from .fields import (
     DIVIDE_LAG,
     HEADS,
     LANE_FILES,
-    LANE_IMMEDIATES,
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
@@ -69,6 +68,7 @@ from .fields import (
     S2_LOW,
     S2_RESULT,
     S3_RESULT,
+    S_IMMEDIATES,
     S_NEXT_NONE,
     S_NEXT_VALUES,
     S_OWN_OPEN,
@@ -79,6 +79,7 @@ from .fields import (
     X0_LANE_MEMORY,
     X_IMMEDIATES,
     Confidence,
+    lane_file,
     lookup,
     op,
 )
@@ -224,14 +225,7 @@ LATCH_MEASURED = {
 }
 """Heads whose read was latched on the camera; other heads latch at inferred. S1 0x39, which
 reads a only, kept S1's latch (measured)."""
-LANE_PORT_FILE = {
-    enable: next(
-        f
-        for f, (_, *nibs) in LANE_FILES.items()
-        if _id(int(PORTS[enable][1:4]) - 110, int(PORTS[enable][1:4]) - 107) in nibs
-    )
-    for enable in LANE_SOURCES
-}
+LANE_PORT_FILE = {enable: lane_file(enable) for enable in LANE_SOURCES}
 """The lane file each lane port writes: its register nibble lies 110 bits above the file's nibble."""
 S_OPERANDS = {
     "s0": ("L0", "f37_40", "f41_44"),
@@ -740,10 +734,7 @@ class Machine:
         n = {
             k: word[k]
             for k in (
-                "f0",
-                "f23_30",
                 "f31_34",
-                "f37_40",
                 "f53_56",
                 "f65_68",
                 "f76_79",
@@ -754,25 +745,25 @@ class Machine:
                 "f96_99",
             )
         }
+        if unit != "s3":
+            layout = S_IMMEDIATES[unit]
+            imm = Sv(layout.get(word.value), layout.confidence)
         if unit == "s0":
-            imm = n["f76_79"] << 12 | n["f37_40"] << 8 | n["f23_30"]
             return {
                 "s": self._rd("F0", word["f72_75"]),
                 "r": self._rd("F0", n["f76_79"]),
-                "imm": Sv(imm, LANE_IMMEDIATES["s0"][1]),
+                "imm": imm,
             }
         if unit == "s1":
-            imm = _sext((n["f80_83"] >> 2) << 5 | n["f84_87"] << 1 | n["f0"], 7)
             return {
                 "t": self._rd("F1", n["f84_87"]),
                 "r": self._rd("F1", n["f80_83"]),
-                "imm": Sv(imm, LANE_IMMEDIATES["s1"][1]),
+                "imm": imm,
             }
         if unit == "s2":
-            imm = _sext(n["f53_56"] << 3 | n["f88_91"] >> 1, 7)
             return {
                 "t": self._rd("F2", n["f88_91"]),
-                "imm": Sv(imm, LANE_IMMEDIATES["s2"][1]),
+                "imm": imm,
                 "f53_56": Sv(n["f53_56"]),
                 "f88_91": Sv(n["f88_91"]),
             }

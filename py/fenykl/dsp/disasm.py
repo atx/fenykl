@@ -1,7 +1,9 @@
 """Listings of programs, and DSL source for them.
 
 A listing shows per word the fields that differ from the idle word, grouped by unit (strobes
-first), under their semantic names or ids; a mark after the value gives the field's confidence
+first), under their semantic names or ids; the units of the heads S0..S3, X0 and X1 show their
+operand view instead (`fields.HEAD_VIEWS`: op, the registers, an immediate composed and signed as
+the machine reads it, each where it differs); a mark after the value gives the field's confidence
 (`!` verified, `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
 Every word but the idle word starts with its op's name (`fields.op`) in place of f313_319; a
@@ -15,7 +17,18 @@ marks the delay slots of a control word.
 
 from collections.abc import Iterator, Mapping
 
-from .fields import CONTROL_FLAG, IDLE_OP, OP_FIELD, TARGET, Field, Kind, Operands, op
+from .fields import (
+    CONTROL_FLAG,
+    HEAD_VIEWS,
+    IDLE_OP,
+    OP_FIELD,
+    TARGET,
+    Composite,
+    Field,
+    Kind,
+    Operands,
+    op,
+)
 from .program import Program
 from .semantics import OP_SEMANTICS
 from .units import UNITS
@@ -30,8 +43,21 @@ def _value(f: Field, value: int) -> str:
     return f"{f.label}={text}{f.confidence.mark}"
 
 
+def _operand(name: str, o: Field | Composite, value: int) -> str:
+    """A head view's operand: registers as rN, immediates signed, the others in hex."""
+    if isinstance(o, Composite):
+        text = _number(value)
+    else:
+        text = f"r{value}" if o.kind is Kind.REG else f"{value:x}"
+    return f"{name}={text}{o.confidence.mark}"
+
+
+def _number(value: int) -> str:
+    return f"{value}" if -10 < value < 10 else f"{value:#x}"
+
+
 def _imm(value: int) -> str:
-    return f"#{value}" if -10 < value < 10 else f"#{value:#x}"
+    return f"#{_number(value)}"
 
 
 def operand_text(args: Operands) -> str:
@@ -73,7 +99,16 @@ def word_parts(word: Word, base: Word = IDLE) -> list[str]:
     changed = {f.id: v for f, v in word.changed(base) if f.id not in shown}
     parts = [head]
     for name, unit in UNITS.items():
-        items = [_value(f, changed[f.id]) for f in unit.fields if f.id in changed]
+        if name in HEAD_VIEWS:
+            view, now = HEAD_VIEWS[name], word.head_operands(name)
+            was = base.head_operands(name)
+            items = [
+                _operand(k, o, now[k])
+                for k, o in view.operands.items()
+                if now[k] != was[k]
+            ]
+        else:
+            items = [_value(f, changed[f.id]) for f in unit.fields if f.id in changed]
         if items:
             parts.append(f"{name}: {' '.join(items)}")
     return parts
@@ -146,6 +181,18 @@ def _ctl_source(word: Word, label: str) -> str:
     return f"Ctl({args})"
 
 
+def _immediates(word: Word) -> str:
+    """The composed immediates of the active heads, as " s1.imm=0x20"."""
+    parts = []
+    for unit, view in HEAD_VIEWS.items():
+        if view.operands["op"].get(word.value) == view.operands["op"].idle:
+            continue
+        for name, o in view.operands.items():
+            if isinstance(o, Composite):
+                parts.append(f" {unit}.{name}={_number(o.get(word.value))}")
+    return "".join(parts)
+
+
 def source(
     program: Program,
     name: str = "PROGRAM",
@@ -156,7 +203,8 @@ def source(
 
     With `labels` (`labels(statements, origin)` of `program.py`) the source is a statement
     list for `assemble(..., origin=origin)`: each label before its word, a control op whose
-    target has a label as a `Ctl`; the comments give word indices from `origin`."""
+    target has a label as a `Ctl`; the comments give word indices from `origin`, then the op
+    and the immediates of the active heads composed."""
     classes = ", ".join(cls for cls in (u.cls_name for u in UNITS.values()))
     lines = [
         f"from fenykl.dsp.units import {classes}",
@@ -173,6 +221,7 @@ def source(
     for index, word in enumerate(program.words, origin):
         lines += [f"    Label({label!r})," for label in at.get(index, [])]
         note = "" if word.op == IDLE_OP else f" {_head(word, marks=False)[0]}"
+        note += _immediates(word)
         named = at.get(word.target) if word.target is not None else None
         text = _ctl_source(word, named[0]) if named else word_source(word)
         lines.append(f"    {text},  # {index}{note}")
