@@ -201,7 +201,7 @@ predicts it across units. S2 0x7 comes in the head's word [verified, pre-registe
 later nothing; S3 0x7 / 0x8 (block selects of b by a's first lanes) one word later and S1
 0x60..0x7e in the head's word, S0's one word later (their unit's latched operand) [verified,
 pre-registered]; S3 0x6 gives 0 in every lane one word later and nothing in its own word [verified,
-pre-registered on three operand sets]. A register a
+pre-registered on two fresh operand sets in two jobs and earlier runs]. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word reads the old content, in every lane file and in U [verified, pre-registered].

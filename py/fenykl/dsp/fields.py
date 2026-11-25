@@ -972,7 +972,7 @@ shifts 0x16..0x19, 0x1f..0x22 and carry-in heads 0x32, 0x3d..0x40 at 1: pre-regi
 lanes each (verified). S2 0x7 at 0: pre-registered with the port in the head's word (verified); a port
 one word later wrote nothing (measured). S3 0x7, 0x8 at 1 and S1 0x60..0x7e at 0, S0's at 1:
 pre-registered (verified); S3 0x6 at 1: 0 in every lane there and nothing in its own word,
-pre-registered on three operand sets in two jobs (verified). The other heads' lags
+pre-registered on two fresh operand sets in two jobs and the earlier lag runs (verified). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
 LANE_VECTORS = 0x400
