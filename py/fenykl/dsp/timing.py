@@ -119,8 +119,31 @@ PACKED_STORE = Rate(
     LANE_STORE.per_kib,
     LANE_STORE.per_command,
     (4, 4),
-    "16-bit and 12-bit stores from the lane memory: 1.73 to 1.94 and 1.56 us per 4 KiB of DRAM, "
-    "the byte store's rate within the jitter (fitted, at 4 KiB only)",
+    "12-bit stores from the lane memory: 1.56 us per 4 KiB of DRAM, the byte store's rate within "
+    "the jitter (fitted, at 4 KiB only)",
+)
+LANE_LOAD16 = Rate(
+    0.4665,
+    0.139,
+    (1, 16),
+    "16-bit loads into the lane memory (r3 = r6 / 4 vectors): 0.71, 1.88 and 7.63 us at 1, 4 "
+    "and 16 KiB of DRAM, each within its registered window around the byte load's rate, fitted",
+)
+LANE_STORE16 = Rate(
+    0.4326,
+    0.055,
+    (0.0625, 16),
+    "16-bit stores from the lane memory (r3 = r6 / 4 vectors): 0.11, 0.20, 0.48, 1.68 and 7.00 "
+    "us at 64 B, 192 B, 1, 4 and 16 KiB of DRAM, each within its registered window around the "
+    "byte store's rate, fitted",
+)
+LOCAL_LOAD32 = Rate(
+    1.3293,
+    0.377,
+    (0.25, 4),
+    "32-bit loads into local memory at r2 = 1 (one element per word): 0.69, 1.39, 1.71 and 5.69 "
+    "us at 0.25, 0.75, 1 and 4 KiB of DRAM, fitted; the 0.25 KiB time lies above its registered "
+    "window (the byte local load's rate per KiB, which holds at the other sizes)",
 )
 LOCAL_LOAD = Rate(
     1.44,
@@ -132,9 +155,11 @@ LOCAL_LOAD = Rate(
 RATES: dict[tuple[int, int, int, int], Rate] = {
     (LOAD, LANE_MEMORY, 0x20, 0x10): LANE_LOAD,
     (STORE, LANE_MEMORY, 0x20, 0x10): LANE_STORE,
-    (STORE, LANE_MEMORY, 0x20, 0x08): PACKED_STORE,
+    (LOAD, LANE_MEMORY, 0x20, 0x08): LANE_LOAD16,
+    (STORE, LANE_MEMORY, 0x20, 0x08): LANE_STORE16,
     (STORE, LANE_MEMORY, 0x20, 0x0A): PACKED_STORE,
     (LOAD, LOCAL_MEMORY, 4, 0x10): LOCAL_LOAD,
+    (LOAD, LOCAL_MEMORY, 1, 0x04): LOCAL_LOAD32,
 }
 """(kind, r0, r2, r5): the transfers timed on the camera, each a command of one row (r7 = 1)
 handed and joined by a 0x1d, with r3 the units its r5 r6 elements fill. Other shapes have no
