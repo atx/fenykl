@@ -13,6 +13,7 @@ from fenykl.dsp import commands
 from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
+from fenykl.dsp.memcpy import copy_branches
 from fenykl.dsp.program import Program, stock_programs
 from fenykl.dsp.semantics import (
     LANE_RULES,
@@ -1255,3 +1256,209 @@ def test_program_13_reaches_its_halt_on_a_lenient_machine_past_unmeasured_comman
     assert flow.stop is Stop.HALT and flow.order()[-4:] == [5, 6, 7, 8]
     assert any("kind 0x4 outside the shapes" in why for why in m.lapses)
     assert any("never ends" in why for why in m.lapses)
+
+
+SRC, DST, LENGTH = 0xA0FCA800, 0xA1113600, 0x400
+M32 = 0xFFFFFFFF
+TAKE = Word.from_fields({"f272_273": 1, "f224_228": 12}, base=IDLE)
+"""G[12] takes the ALU bus."""
+
+
+def span(*runs: tuple[int, int]) -> list[int]:
+    return [i for a, b in runs for i in range(a, b + 1)]
+
+
+def copy_job(program: Program | None = None) -> Job:
+    return commands.copy(program or stock(16), SRC, DST, LENGTH)
+
+
+# Call 0 -> 10 with slots 1..4; 27 falls through (slots 28..31); 45 jumps over 50..57 to 58
+# after its slots 46..49; the return 79 goes back to 5 after its slots 80..83; 5 halts, and the
+# three words behind it run.
+COPY_ORDER = span((0, 4), (10, 49), (58, 83), (5, 8))
+
+
+def test_the_copy_flows_through_its_call_slots_to_the_halt_and_its_tail():
+    boot = Boot()
+    flow = Executor(boot, datapath=Machine(boot, None, Engine())).step(copy_job())
+    assert flow.stop is Stop.HALT and flow.order() == COPY_ORDER
+    by_index = {s.index: s for s in flow.steps}
+    assert [by_index[i].taken for i in (0, 27, 45, 79)] == [True, False, True, True]
+    assert {by_index[i].confidence for i in (0, 27, 45, 79)} == {V}
+    slots = [s.index for s in flow.steps if s.slot]
+    assert slots == span((1, 4), (28, 31), (46, 49), (80, 83))
+
+
+def test_a_halt_inside_a_called_routine_ends_the_job_after_its_tail():
+    words = list(stock(16).words)
+    words[11] = words[5]
+    boot = Boot()
+    flow = Executor(
+        boot, datapath=Machine(boot, None, Engine()), branching=copy_branches(LENGTH)
+    ).step(copy_job(Program(tuple(words))))
+    assert flow.stop is Stop.HALT and flow.order() == span((0, 4), (10, 14))
+
+
+def test_guard_45_not_taken_switches_the_copy_into_its_loop():
+    # No stream engine: the loop's lane loads on one take minutes (lenient: the transfers lapse).
+    once = Given({45: False, 53: [True, False]})
+    boot = Boot()
+    flow = Executor(boot, strict=False, datapath=Machine(boot), branching=once).step(
+        copy_job()
+    )
+    assert flow.stop is Stop.HALT
+    assert flow.order() == span((0, 4), (10, 57), (50, 83), (5, 8))
+
+
+def test_an_undecided_branch_stops_or_raises():
+    job = Job(stock(16), ())  # no request: r7 is not known at 27
+    boot = Boot()
+    flow = Executor(boot, strict=False, datapath=Machine(boot, None, Engine())).step(
+        job
+    )
+    assert flow.stop is Stop.UNDECIDED and flow.order()[-1] == 27
+    with pytest.raises(UnknownSemantics, match="word 27: .*r7 undecided: r7 unknown"):
+        boot = Boot()
+        Executor(boot, datapath=Machine(boot, None, Engine())).step(job)
+
+
+def test_a_program_without_a_halt_runs_past_its_end():
+    boot = Boot()
+    executor = Executor(boot, strict=False, datapath=Machine(boot))
+    with pytest.raises(UnknownSemantics, match="word 2: .*past the program end"):
+        executor.step(Job(Program((IDLE, IDLE)), ()))
+
+
+def requested() -> Machine:
+    """A machine whose local memory holds a copy's request: src, dst and len at bytes 0, 4, 8."""
+    boot = Boot()
+    boot.setup(copy_job(Program((HALT,))))
+    return Machine(boot)
+
+
+@pytest.mark.parametrize(
+    "code, imm, base, value",
+    [
+        # Local word 0 holds src: 0x1a reads it whole, 0x16 its halfwords (signed), 0x10 its bytes.
+        (0x1A, 0, 0, SRC),
+        (0x16, 1, 0, 0xFFFF0000 | SRC >> 16),
+        (0x10, 1, 0, SRC >> 8 & 0xFF),
+        (0x16, 2, 0, DST & 0xFFFF),
+        (0x10, -1, 0, None),  # byte 0x1fff: the address wraps at 8 KiB
+        # A base of byte 4 (dst) moves both by 4 bytes.
+        (0x16, 1, 4, 0xFFFF0000 | DST >> 16),
+        (0x10, 1, 4, DST >> 8 & 0xFF),
+        # The offset is width x the signed imm13; 0x14 loads halfwords unsigned.
+        (0x1A, -1, 8, DST),
+        (0x16, -2, 8, DST & 0xFFFF),
+        (0x14, -1, 8, DST >> 16),
+        (0x14, 1, 8, 0),
+        (0x16, -0x800, 0x1000, 0xFFFF0000 | SRC & 0xFFFF),
+        *((0x1A, 0, base, DST) for base in (0x2004, 0x10004, -0x1FFC, 0x9D000004)),
+    ],
+)
+def test_a_local_load_reads_at_ra_plus_width_times_imm13(code, imm, base, value):
+    m = requested()
+    m.g[4] = Sv(base & M32)
+    run(m, [op_word(code, 4, imm=imm), IDLE, IDLE, TAKE])
+    assert m.g[12].value == value
+    assert m.g[4] == Sv(base & M32)  # ra is the base, not written
+
+
+@pytest.mark.parametrize("code, base", [(0x1A, 2), (0x16, 1), (0x18, 6)])
+def test_an_unaligned_local_access_is_not_covered(code, base):
+    m = requested()
+    m.g[4] = Sv(base)
+    with pytest.raises(UnknownSemantics, match="an unaligned local access"):
+        run(m, [op_word(code, 4, imm=0)])
+    m.strict = False
+    run(m, [op_word(code, 4, imm=0)])
+    assert m.lapses == [f"op{code:02x}: an unaligned local access at {base:#x}"]
+
+
+@pytest.mark.parametrize(
+    "code, operands, a, b, value",
+    [
+        # B, C, D, F: ra and the immediate as the op's format extends it; rb unused.
+        (0x0B, Operands(ra=2, imm=-13), 0x1010, None, -13),
+        (0x0A, Operands(ra=2, imm=0x1234), 0x10, None, 0x12340010),
+        (0x37, Operands(ra=2, imm=0x7001), 0x10, None, 0x7011),
+        (0x38, Operands(ra=2, imm=-0x20), 0xA1113610, None, 0xA1113600),  # imm16 signed
+        (0x38, Operands(ra=2, imm=0xF), 0x13, None, 3),
+        (0x3E, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, -0x10),
+        (0x3F, Operands(ra=2, rb=3, imm=4), -0x100, 0x1234, 0x0FFFFFF0),
+        (0x40, Operands(ra=2, rb=3, imm=4), 0x10, 0x1234, 0x100),
+        (0x1F, Operands(ra=2, imm=0xE010), 0x1010, None, 0xF020),  # zero-extended
+        (0x25, Operands(ra=2, imm=0x7F0), 0x1010, None, 0x7F0),
+        (0x25, Operands(ra=2, imm=-1), 0x10, None, -1),  # sign-extended
+        (0x23, Operands(ra=2, imm=0xFFFF), 0x10, None, 1),
+        (0x21, Operands(ra=2, imm=-1), 0x10, None, 0),
+        (0x44, Operands(ra=2, imm=0x408), 7, None, 0),  # 7 + 1 wraps at L = 8
+        (0x44, Operands(ra=2, imm=0x408), 2, None, 3),
+        # E, on (r2, r3).
+        (0x28, Operands(ra=2, rb=3), -0x10, 0x1010, 0),  # unsigned <=
+        (0x2A, Operands(ra=2, rb=3), -0x10, 0x1010, 1),  # signed <=
+        (0x31, Operands(ra=2, rb=3), -1, 0xFFFFFFFF, 1),
+        (0x2E, Operands(ra=2, rb=3), 0xFFFFFFF0, 0x10, 0x10),
+        (0x3D, Operands(ra=2, rb=3), 0x400, 0, -0x401),
+        (0x32, Operands(ra=2, rb=3), 0, -5, 5),
+        (0x2F, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000),
+        (0x2E, Operands(ra=2, rb=3), -0x1000, 0x1010, 0x1010),
+        (0x2C, Operands(ra=2, rb=3), -0x1000, 0x1010, -0x1000),  # unsigned
+        (0x41, Operands(ra=2, rb=3), 0x1010, 0x22, 0x1010 >> 2),  # rb & 31
+        (0x41, Operands(ra=2, rb=3), -0x1400, 1, -0xA00),  # arithmetic
+        (0x42, Operands(ra=2, rb=3), -0x10, 4, 0x0FFFFFFF),  # logical
+        (0x43, Operands(ra=2, rb=3), 0x10, 0x21, 0x20),
+        # The seven values unused in stock code; imm16 zero-extended on both sides of ra.
+        (0x22, Operands(ra=2, imm=0x0B00), 0x24681234, None, 0),
+        (0x22, Operands(ra=2, imm=0x0B00), 0xB00, None, 1),  # equal
+        (0x22, Operands(ra=2, imm=0x8000), 0xFFFF8000, None, 0),  # not sign-extended
+        (0x26, Operands(ra=2, imm=0x8E12), 0xDB97EDCB, None, 0xDB97EDCB),
+        (0x26, Operands(ra=2, imm=0x8E12), 0x10, None, 0x8E12),
+        (0x27, Operands(ra=2, imm=0xEFFF), 0x24681234, None, 0xEFFF),
+        (0x27, Operands(ra=2, imm=0xFFFF), 0x8000, None, 0x8000),
+        (0x2D, Operands(ra=2, rb=3), 0xFFFFFFF3, 0x1234, 0x1234),  # unsigned
+        (0x39, Operands(ra=2, rb=3), 0x24681234, 0x1234, 0x24680000),
+        (0x3B, Operands(ra=2, rb=3), 0xFFFFFFF3, 0x1234, 0xFFFFEDC3),
+        (0x45, Operands(ra=2, rb=3), 0x24681234, 0x210, 0x24681235 - 0x210),
+        (0x45, Operands(ra=2, rb=3), 5, 0x210, 6),
+    ],
+)
+def test_measured_op_rules(m, code, operands, a, b, value):
+    m.g[2] = Sv(a & M32)
+    if b is not None:
+        m.g[3] = Sv(b & M32)
+    word = op_word(code, operands.ra, operands.rb, operands.imm, f272_273=1, f224_228=9)
+    run(m, [word])
+    assert m.g[9] == Sv(value & M32)
+
+
+def test_ops_chain_through_g_until_an_op_without_semantics():
+    """A mask into r2, a shift of it in the next word; an op without semantics into r2 lapses
+    (lenient), and the shift of r2 after it is unknown."""
+    words = (
+        op_word(0x38, 2, imm=-0x10, f272_273=1, f224_228=2),
+        op_word(0x3F, 2, 2, 2, f272_273=1, f224_228=7),
+        Word.from_fields({"f313_319": 0x4A, "f272_273": 1, "f224_228": 2}, base=IDLE),
+        op_word(0x3F, 2, 2, 1, f272_273=1, f224_228=8),
+        HALT,
+    )
+    job = Job(Program(words), ())
+    boot = Boot()
+    m = Machine(boot)
+    m.g[2] = Sv(0x40F)
+    flow = Executor(boot, strict=False, datapath=m).step(job)
+    assert m.g[7] == Sv(0x100)
+    assert flow.steps[2].unknown and flow.steps[2].note == "op4a: no semantics"
+    assert m.g[2] == Sv(None, H) and m.g[8] == Sv(None, H)
+    with pytest.raises(
+        UnknownSemantics, match="word 2: no semantics for f313_319=0x4a"
+    ):
+        boot = Boot()
+        Executor(boot, datapath=Machine(boot)).step(job)
+
+
+def test_a_multiply_writes_nothing_in_its_own_word(m):
+    m.g[2], m.g[3], m.g[4] = Sv(-13 & M32), Sv(7), Sv(0x5555)
+    run(m, [op_word(0x49, 2, 3, f272_273=1, f224_228=4), TAKE])
+    assert m.g[4] == Sv(0x5555) and m.g[12] == Sv(-91 & M32)
