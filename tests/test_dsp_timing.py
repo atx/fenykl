@@ -2,9 +2,11 @@
 words before their 0x1d, one engine for all channels, the tiers of the parts and the cases
 without a measured time."""
 
+from dataclasses import replace
+
 import pytest
 
-from fenykl.dsp import stream
+from fenykl.dsp import stream, timing
 from fenykl.dsp.emu import Boot, Executor, Job
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Machine, Sv
@@ -19,7 +21,7 @@ from fenykl.dsp.timing import (
 )
 from fenykl.dsp.word import IDLE, Word
 
-V, I = Confidence.VERIFIED, Confidence.INFERRED
+H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 SRC, DST = 0xA0000000, 0xA1000000
 WAIT = None
 HALT = Word.from_fields({"op": 7}, base=IDLE)
@@ -233,3 +235,12 @@ def test_words_branched_over_cost_only_inside_a_fetch_line_that_runs():
         == 3 * UNRUN.us
     )
     assert part(near, "first runs").us == part(far, "first runs").us
+
+
+def test_a_hypothesis_rate_caps_the_waits(monkeypatch):
+    key = next(k for k, r in timing.RATES.items() if r is LANE_LOAD)
+    monkeypatch.setitem(timing.RATES, key, replace(LANE_LOAD, tier=H))
+    values = [*lanes(0, 0x400), *load(0), WAIT]
+    for between in ({}, {len(values) - 1: 300}):
+        e = run(values, between)
+        assert part(e, "stream waits").tier == H and e.tier == H

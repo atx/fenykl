@@ -149,6 +149,8 @@ OVERLAP = (
     "a 0x1d waits for what the words since its command did not hide (idle words between an "
     "8 KiB load and its 0x1d hid it: fitted)"
 )
+OVERLAP_TIER = I
+"""`OVERLAP`'s tier: the waits are at most it and their commands' rates' (`Rate.tier`)."""
 
 
 class Unmeasured(Exception):
@@ -185,16 +187,23 @@ class Estimate:
         return f"{self.us:.1f} us [{self.tier.name.lower()}] ({parts})"
 
 
-def transfer_us(event: Event) -> float:
-    """The time of the command `event` hands, from its registers; raises `Unmeasured`."""
+def rate_of(event: Event) -> Rate:
+    """The rate of the command `event` hands, by its shape (`RATES`); raises `Unmeasured`."""
     if None in event.regs:
         raise Unmeasured("a register not handed: the command moves nothing, not timed")
-    r0, _, r2, r3, _, r5, r6, r7 = event.regs
-    rate = RATES.get((event.kind, r0, r2, r5))
-    if rate is None:
+    r0, _, r2, _, _, r5, _, _ = event.regs
+    found = RATES.get((event.kind, r0, r2, r5))
+    if found is None:
         raise Unmeasured(
             f"a command of kind {event.kind} at r0 {r0}, r2 {r2}, r5 {r5}: not timed"
         )
+    return found
+
+
+def transfer_us(event: Event) -> float:
+    """The time of the command `event` hands, from its registers; raises `Unmeasured`."""
+    rate = rate_of(event)
+    _, _, r2, r3, _, r5, r6, r7 = event.regs
     if r3 != -(-r5 * r6 // r2):
         raise Unmeasured(f"r3 {r3:#x} short of or past what r6 fills: not timed")
     if r7 != 1:
@@ -211,6 +220,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
     """The time of `job` as `flow` executed it (`Executor.step` on a `Machine`), with the stream
     `engine` the machine drove (a fresh one per job, as the machine needs). The word parts and
     the waits are capped at the weakest control step's tier: the flow decides which words run.
+    The waits are also capped at the overlap model's tier and their commands' rates'.
     Raises ValueError for a flow that did not halt."""
     if flow.stop is not Stop.HALT:
         raise ValueError(f"the job did not halt: {flow.why}")
@@ -226,6 +236,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
     flow_tier = V
     counts = {FIRST: 0, REPEAT: 0, REPEAT_I: 0}
     now, free, waited, joined = 0.0, 0.0, 0.0, False
+    wait_tier = OVERLAP_TIER
     ends: deque[float] = deque()
     for t, step in enumerate(flow.steps):
         if step.op in CONTROL_OPS and step.confidence is not None:
@@ -250,6 +261,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
                 try:
                     start = max(now, free)
                     free = start + transfer_us(e)
+                    wait_tier = min(wait_tier, rate_of(e).tier)
                 except Unmeasured as x:
                     return Estimate(unknown=f"word {step.index}: {x}")
                 ends.append(free)
@@ -291,7 +303,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
             Part("unrun line words", unrun * UNRUN.us, min(UNRUN.tier, flow_tier))
         )
     if joined:
-        parts.append(Part("stream waits", waited, min(I, flow_tier)))
+        parts.append(Part("stream waits", waited, min(wait_tier, flow_tier)))
     return Estimate(tuple(parts))
 
 
