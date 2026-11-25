@@ -1507,9 +1507,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x0B: lambda a, b, c: [v for k in range(16, 32) for v in (b[k], a[k])],
         0x0C: lambda a, b, c: [*b[1::2], *a[1::2]],
         0x0D: lambda a, b, c: [*b[0::2], *a[0::2]],
-        0x10: lambda a, b, c: _insert(
-            b, c["f92_95"] | (c["f31_34"] & 4) << 2, c["value"]
-        ),
+        0x10: lambda a, b, c: _insert(b, _imm14(c) & 31, c["value"]),
         0x11: lambda a, b, c: [_imm14(c)] * LANE_COUNT,
         0x12: _NEGATIVE,
         0x13: _NOT_NEGATIVE,
@@ -1824,7 +1822,7 @@ _S_VALUES: dict[str, dict[int, ScalarValue | None]] = {
         0x46: _mask_ab(lambda x, y: x >= y),
     },
     "s2": {
-        0xC: _lane_of(lambda c: c["f53_56"] % 4 * 8 + (c["f88_91"] >> 1), signed=True),
+        0xC: _lane_of(lambda c: S_IMMEDIATES["s2"].compose(c) & 31, signed=True),
         0xE: _scalar("t"),
     },
     "s3": {
@@ -1834,8 +1832,8 @@ _S_VALUES: dict[str, dict[int, ScalarValue | None]] = {
         0x3: _reduce(max, signed=True),
         0x4: _reduce(min, signed=True),
         0x5: _reduce(sum, signed=True),
-        0xE: _lane_of(lambda c: c["f92_95"] | (c["f31_34"] & 4) << 2, signed=False),
-        0xF: _lane_of(lambda c: c["f92_95"] | (c["f31_34"] & 4) << 2, signed=True),
+        0xE: _lane_of(lambda c: _imm14(c) & 31, signed=False),
+        0xF: _lane_of(lambda c: _imm14(c) & 31, signed=True),
         0x16: _lane_of(lambda c: c["index"], signed=False),
         0x17: _lane_of(lambda c: c["index"], signed=True),
         0x24: _scalar("value"),

@@ -78,9 +78,9 @@ def chunk(bank: int, start: int) -> list[Word]:
     body += [w(l1src=0, l1dst=4 + i) for i in range(4)] + [IDLE] * 5
     for i in range(4):
         # S1 0x04, b ^ imm7, into O[1 + i] in the head's word; imm7 holds only bits 3..2 of
-        # s1c, c = 4 sets all four.
+        # s1r, r = 4 sets all four.
         into_o = Word.from_fields({"osrc": 3, "odst": 1 + i}, base=body[6 + i])
-        body[6 + i] = Word.head("s1", into_o, op=0x04, a=4 + i, b=4 + i, c=4, imm=0x20)
+        body[6 + i] = Word.head("s1", into_o, op=0x04, a=4 + i, b=4 + i, r=4, imm=0x20)
         body[7 + i] = Word.head("x0", body[7 + i], op=0x1B, a=1, b=0, k=i, o=1 + i)
     ports = Word.from_fields(
         {"gsrc": 1, "gdst": 9, "asrc": 2, "adst": 1}, base=body[10]

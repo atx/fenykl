@@ -2590,8 +2590,8 @@ NAMES = {
     "f65_68": "s3b",
     "f69_71": "x0o",
     "f72_75": "s0s",
-    "f76_79": "s0c",
-    "f80_83": "s1c",
+    "f76_79": "s0r",
+    "f80_83": "s1r",
     "f84_87": "s1t",
     "f88_91": "s2t",
     "f92_95": "s3idx",
@@ -2715,33 +2715,37 @@ ROLES = dict(_table_roles()) | {
     "f9_14": f"bits 7..2 of X1's immediate K {_K}",
     "f23_30": f"bits 7..0 of S0's lane immediate {_S_IMM}",
     "f31_34": "the register of U whose lanes 0..3 S3's lane shifts move in (`LANE_THIRD_FILE`); "
-    "bit 2 bit 4 of the lane of 0xe, 0xf and 0x10, bits 3..2 bits 5..4 of S3's lane immediate "
-    "(verified)",
+    "its bit 2 is bit 4 of the lane of 0xe, 0xf and 0x10, its bits 3..2 are bits 5..4 of S3's "
+    "lane immediate (verified)",
     "f69_71": "the register of O that X0's store heads store (`STORE_FILE`, verified)",
     "f72_75": "S0's scalar s: the register of F0 read as the bound of its clamps and as its "
     "select heads' lane mask (`LANE_OPERANDS`, `LANE_MASKS`, verified)",
-    "f76_79": "S0's carry-in c: the register of F0 whose bit k is lane k's carry-in, and head "
-    "0x52's result; bits 15..12 of S0's lane immediate (`LANE_OPERANDS`, `SCALAR_READS`, "
-    "verified)",
-    "f80_83": "S1's carry-in c: the register of F1 whose bit k is lane k's carry-in; its bits "
-    "3..2 bits 6..5 of S1's lane immediate (`LANE_OPERANDS`, verified)",
+    "f76_79": "S0's scalar r: the register of F0 whose bit k is lane k's carry-in, the lane "
+    "value of 0x43 and 0x45, and head 0x52's result; bits 15..12 of S0's lane immediate "
+    "(`LANE_OPERANDS`, `LANE_FUNCTIONS`, `SCALAR_READS`, verified)",
+    "f80_83": "S1's scalar r: the register of F1 whose bit k is lane k's carry-in in the "
+    "carry-in heads and the floor shifts; its bits 3..2 are bits 6..5 of S1's lane immediate "
+    "(`LANE_OPERANDS`, verified)",
     "f84_87": "S1's scalar t: the register of F1 its lane heads read, and head 0x54's result; "
     "bits 4..1 of S1's lane immediate (`LANE_OPERANDS`, `SCALAR_READS`, verified)",
     "f88_91": "S2's scalar t: the register of F2 the multiplies 0x3 / 0x5 read, and head 0xe's "
-    "result; bits 3..1 bits 2..0 of S2's lane immediate, bit 1 head 0x7's choice "
+    "result; its bits 3..1 are bits 2..0 of S2's lane immediate, its bit 1 head 0x7's choice "
     "(`LANE_OPERANDS`, `SCALAR_READS`, verified)",
     "f92_95": "S3's lane select and shift count, and the register of F3 read as the lane index; "
     "bits 3..0 of S3's lane immediate (verified)",
-    "f96_99": "S3's value: the register of F3 head 0x24 returns; bits 13..10 of S3's lane "
-    "immediate (`SCALAR_READS`, verified)",
+    "f96_99": "S3's value: the register of F3 head 0x24 returns and 0x10 inserts; bits 13..10 "
+    "of S3's lane immediate (`SCALAR_READS`, `LANE_FUNCTIONS`, verified)",
     "f120_122": "the op slot's R register: a family A or A' store's datum and the third operand "
     "of 0x46 / 0x47; bits 15..13 of a family B or D immediate (`FAMILIES`, verified)",
-    "f128_132": "the op slot's register rb in families A' and E; bits 12..8 of an immediate and "
-    "of a control op's target (`FAMILIES`, `TARGET`, verified)",
+    "f128_132": "the op slot's register rb in families A' and E, and op 4's link register "
+    "G[rb]; bits 12..8 of an immediate and of a control op's target (`FAMILIES`, `TARGET`, "
+    "verified)",
     "f141_144": "the register of U its port writes under usrc (`LANE_THIRD_FILE`, verified)",
     "f179_181": "the register of O its port writes under osrc (`STORE_FILE`, verified)",
-    "f232_233": "the enable of U's port: 1 writes beside an S3 head, 0 and 2 write nothing "
-    "(`LANE_THIRD_FILE`, verified)",
+    "f232_233": "the enable of U's port: 1 writes U[udst] beside S3 0x1b, 0x1c and 0x1e..0x21, "
+    "0 and 2 write nothing (verified); under 1 nothing beside 0x14, 0x18, 0x19 and 0x22 "
+    "(measured), a content not identified beside 0x1a and 0x1d (inferred) "
+    "(`LANE_THIRD_FILE`)",
     "f252_254": "the enable of O's port, its value the source it writes to O[odst] "
     "(`STORE_SOURCES`, verified)",
     "f15_22": "the op slot's 8-bit immediate: the low byte of a data op's immediate and of a "
@@ -2786,10 +2790,12 @@ def _evidence(f: Field) -> str:
             f"B; it changes where {_fid(*HEADS[unit])} is active in {p:.2f} of its changes ({tag})"
         )
     if f.kind is Kind.ROUTE and f.id in _OWNER:
+        p = _PORT_P[f.id]
+        tag = "verified in the bytes" if p >= WEAK_OWNER else "inferred"
         return (
             f"A grid B nibble, its boundaries from segmentation and the lag-110 repeat of grid "
-            f"A; it changes where its enable {_OWNER[f.id]} is active in {_PORT_P[f.id]:.2f} of "
-            f"its changes, {OWNERSHIP}"
+            f"A; it changes where its enable {_OWNER[f.id]} is active in {p:.2f} of its "
+            f"changes, across later firmware versions of the same family ({tag})"
         )
     first = f.fact.split(". ", 1)[0]
     if f.id in _RESTATED:
@@ -3013,8 +3019,8 @@ def _view(unit: str, **operands: str | Composite) -> HeadView:
 
 
 HEAD_VIEWS = {
-    "s0": _view("s0", a="s0a", b="s0b", s="s0s", c="s0c", imm=S_IMMEDIATES["s0"]),
-    "s1": _view("s1", a="s1a", b="s1b", t="s1t", c="s1c", imm=S_IMMEDIATES["s1"]),
+    "s0": _view("s0", a="s0a", b="s0b", s="s0s", r="s0r", imm=S_IMMEDIATES["s0"]),
+    "s1": _view("s1", a="s1a", b="s1b", t="s1t", r="s1r", imm=S_IMMEDIATES["s1"]),
     "s2": _view("s2", a="s2a", b="s2b", t="s2t", imm=S_IMMEDIATES["s2"]),
     "s3": _view(
         "s3",
@@ -3029,7 +3035,7 @@ HEAD_VIEWS = {
     "x1": _view("x1", a="x1a", b="xreg", k=X_IMMEDIATES["x1"]),
 }
 """The operand view of each head's unit, every field of the unit in some operand: S0 a, b
-(L0[a], L0[b]), s (F0[s]), c (the carry-in register F0[c]), imm16; S1 a, b, t (F1[t]), c, imm7;
+(L0[a], L0[b]), s (F0[s]), r (F0[r], the carry-in mask), imm16; S1 a, b, t (F1[t]), r, imm7;
 S2 a, b, t (F2[t]), imm7; S3 a, b, u (U[u]), idx (the lane, the shift count or F3[idx]), val
 (F3[val]), imm14; X0 a, b (A[a], A[b]), o (O[o], the store register), K; X1 a, b (B[a], B[b]), K
 (`LANE_OPERANDS`, `LANE_IMMEDIATES`, `X_IMMEDIATES`)."""
