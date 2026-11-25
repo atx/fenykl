@@ -7,7 +7,7 @@ import pytest
 
 from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Job
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.machine import Machine, Sv, Vec
+from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
 from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import (
     LANE_RULES,
@@ -788,13 +788,20 @@ def test_a_jump_into_its_own_delay_slots_is_inferred(target, tier):
     assert control_tiers([control(3, target), *[IDLE] * 5]) == {0: tier}
 
 
-@pytest.mark.parametrize(("t", "tier"), [(3, V), (0x8003, V)])
-def test_s2s_high_half_by_a_negative_t_is_verified(m, t, tier):
+def s2_high_half(head: int, t: int, tier: Confidence = V) -> Vec:
+    m = Machine(Boot())
     m.lanes["L2"][1], m.lanes["L2"][2] = Vec(A), Vec(B)
-    m.f["F2"][4] = Sv(t)
-    head = w(f292_295=0x3, f53_56=1, f57_60=2, f88_91=4)
-    run(m, [head, w(f236_237=1, f147_150=9)])
-    assert m.lanes["L0"][9].tier == tier
+    m.f["F2"][4] = Sv(t, tier)
+    run(m, [w(f292_295=head, f53_56=1, f57_60=2, f88_91=4), w(f236_237=1, f147_150=9)])
+    return m.lanes["L0"][9]
+
+
+@pytest.mark.parametrize("head", [0x3, 0x5])
+def test_s2s_high_half_by_a_negative_t_is_verified(head):
+    # Measured with t's bit 15 set, its bits 16..31 set and clear: those bits are not read.
+    wide, narrow = s2_high_half(head, 0xFFFF8003), s2_high_half(head, 0x8003)
+    assert wide == narrow and wide.tier == V and None not in wide.lanes
+    assert s2_high_half(head, 0x8003, I).tier == I
 
 
 def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job():
@@ -888,3 +895,40 @@ def test_two_divides_in_flight_are_inferred(m, gap):
     run(m, words)
     tier = V if gap > 4 else I
     assert m.g[5] == Sv(142, tier) and m.g[6] == Sv(100, tier)
+
+
+@pytest.mark.parametrize(
+    ("count", "lane", "tier"),
+    [(2, 0b10, V), (10, 0x200, I), (10, 0x201, V), (0, 0x8000, V)],
+)
+def test_s1s_rounding_of_a_tie_is_verified_only_at_the_counts_met(count, lane, tier):
+    # S1 0xe by imm & 15 = f84_87 << 1; the tie in lane 7 only.
+    m = Machine(Boot())
+    m.lanes["L1"][2] = Vec(tuple(lane if k == 7 else 0 for k in range(32)))
+    head = w(f285_291=0x0E, f49_52=2, f84_87=count >> 1)
+    run(m, [head, w(f242_243=2, f159_162=9)])
+    assert m.lanes["L1"][9].tier == tier and None not in m.lanes["L1"][9].lanes
+
+
+def test_the_trace_is_off_by_default(m):
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2), w(f242_243=2, f159_162=9)])
+    assert m.trace is None and None in m.lanes["L1"][9].lanes
+
+
+def test_the_trace_names_a_heads_unknown_operand():
+    m = Machine(Boot(), trace=True)
+    m.lanes["L1"][1] = Vec(A)
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2), w(f242_243=2, f159_162=9)])
+    assert m.trace == {
+        "L1[9]": Unknown(1, "S1's result", "s1 0x34: operand b = L1[2] not known")
+    }
+
+
+def test_the_trace_follows_a_load_of_an_unwritten_vector():
+    m = Machine(Boot(), trace=True)
+    m.a[1] = Sv(0x40)
+    load = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=1, f1=0)  # A[1] + 2
+    run(m, [load, *[IDLE] * 3, w(f248_249=0, f171_174=5), w(f248_249=0, f171_174=6)])
+    (entry,) = m.trace.values()
+    assert m.trace == {"L3[5]": entry} and entry.index == 4
+    assert entry.reason == "memory[0x42] not written by the datapath"
