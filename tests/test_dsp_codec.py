@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 from conftest import stock_image
@@ -29,6 +30,7 @@ from fenykl.dsp.fields import (
     X_IMMEDIATES,
     Confidence,
     Operands,
+    _index,
     lookup,
     op,
 )
@@ -59,6 +61,15 @@ def test_every_bit_in_exactly_one_field():
     owners = Counter(bit for f in FIELDS for bit in range(f.lo, f.hi + 1))
     assert sorted(owners) == list(range(WORD_BITS))
     assert set(owners.values()) == {1}
+
+
+@pytest.mark.parametrize("name", ["f2_6", "f0x", "rb", "class", "unit"])
+def test_a_name_never_reads_as_an_id_or_another_key(name):
+    # f1 renamed: to another field's id, to an id-like name, to a taken name, to a keyword and
+    # to a slot attribute.
+    fields = tuple(replace(f, name=name) if f.id == "f1" else f for f in FIELDS)
+    with pytest.raises(ValueError, match=name):
+        _index(fields)
 
 
 @pytest.fixture(scope="module")

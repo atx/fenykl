@@ -39,6 +39,8 @@ names the source they take (`LANE_SOURCES`); the S heads' lane functions are
 `LANE_FUNCTIONS`, their immediates `LANE_IMMEDIATES`.
 """
 
+import keyword
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
@@ -2557,6 +2559,78 @@ _unfacted = set(UNIT_FACTS) - {f.id for f in FIELDS}
 if _unfacted:
     raise ValueError(f"unit facts without a field: {sorted(_unfacted)}")
 
+NAMES = {
+    "f0": "s1imm_lo",
+    "f1": "x0k_lo",
+    "f2_6": "x0k_mid",
+    "f7_8": "x1k_lo",
+    "f9_14": "x1k_mid",
+    "f23_30": "s0imm_lo",
+    "f31_34": "s3u",
+    "f37_40": "s0a",
+    "f41_44": "s0b",
+    "f45_48": "s1a",
+    "f49_52": "s1b",
+    "f53_56": "s2a",
+    "f57_60": "s2b",
+    "f61_64": "s3a",
+    "f65_68": "s3b",
+    "f69_71": "x0o",
+    "f72_75": "s0s",
+    "f76_79": "s0c",
+    "f80_83": "s1c",
+    "f84_87": "s1t",
+    "f88_91": "s2t",
+    "f92_95": "s3idx",
+    "f96_99": "s3val",
+    "f120_122": "rr",
+    "f128_132": "rb",
+    "f141_144": "udst",
+    "f147_150": "l0dst",
+    "f151_154": "l0dst2",
+    "f155_158": "l1dst",
+    "f159_162": "l1dst2",
+    "f163_166": "l2dst",
+    "f167_170": "l2dst2",
+    "f171_174": "l3dst",
+    "f175_178": "l3dst2",
+    "f179_181": "odst",
+    "f182_185": "sf0dst",
+    "f186_189": "sf0dst2",
+    "f190_193": "sf1dst",
+    "f194_197": "sf1dst2",
+    "f198_201": "sf2dst",
+    "f202_205": "sf3dst",
+    "f232_233": "usrc",
+    "f236_237": "l0src",
+    "f238_239": "l0src2",
+    "f240_241": "l1src",
+    "f242_243": "l1src2",
+    "f244_245": "l2src",
+    "f246_247": "l2src2",
+    "f248_249": "l3src",
+    "f250_251": "l3src2",
+    "f252_254": "osrc",
+    "f255": "sf0src",
+    "f256_257": "sf0src2",
+    "f258": "sf1src",
+    "f259_260": "sf1src2",
+    "f261_262": "sf2src",
+    "f263_264": "sf3src",
+    "f274_275": "msel",
+    "f276": "m_n",
+    "f278_284": "s0op",
+    "f285_291": "s1op",
+    "f292_295": "s2op",
+    "f296_301": "s3op",
+}
+"""The semantic names of the fields named after their measured role, by id (README, Fields)."""
+FIELDS = tuple(replace(f, name=NAMES[f.id]) if f.id in NAMES else f for f in FIELDS)
+ID_PATTERN = re.compile(r"f\d")
+"""The start of a positional id; no name starts like one."""
+RESERVED = frozenset({"unit", "field", "items"})
+"""Slot attributes, which a slot's field keys must not shadow."""
+
 
 def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
     """Fields by id and by semantic name; raises on overlaps, gaps and name clashes."""
@@ -2571,6 +2645,10 @@ def _index(fields: tuple[Field, ...]) -> dict[str, Field]:
             if owner[bit]:
                 raise ValueError(f"bit {bit} in both {owner[bit]} and {f.id}")
             owner[bit] = f.id
+        if f.name and (
+            ID_PATTERN.match(f.name) or keyword.iskeyword(f.name) or f.name in RESERVED
+        ):
+            raise ValueError(f"{f.id}: name {f.name!r} reads as an id or shadows a key")
         for key in filter(None, (f.id, f.name)):
             if key in by_key:
                 raise ValueError(f"field key {key!r} used twice")
