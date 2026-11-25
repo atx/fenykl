@@ -146,6 +146,20 @@ class Kept:
     tier: Confidence
 
 
+@dataclass(frozen=True)
+class Unknown:
+    """Where a register or lane memory vector first went unknown (`Machine.trace`): the
+    word's program index, the source it took and, where known, why that was unknown."""
+
+    index: int
+    source: str
+    reason: str
+
+
+def _known(x) -> bool:
+    return x.value is not None if isinstance(x, Sv) else None not in x.lanes
+
+
 def _cap(x, tier: Confidence):
     if x is NOTHING or x.tier <= tier:
         return x
@@ -215,6 +229,13 @@ LANE_PORT_FILE = {
     for enable in LANE_SOURCES
 }
 """The lane file each lane port writes: its register nibble lies 110 bits above the file's nibble."""
+S_OPERANDS = {
+    "s0": ("L0", "f37_40", "f41_44"),
+    "s1": ("L1", "f45_48", "f49_52"),
+    "s2": ("L2", "f53_56", "f57_60"),
+    "s3": ("L3", "f61_64", "f65_68"),
+}
+"""Each S unit's lane file and the fields naming its operands a and b."""
 LANE_UNIT = {
     S0_RESULT: "s0",
     S1_RESULT: "s1",
@@ -282,9 +303,18 @@ class Machine:
     conditional control ops on its own register values (a `semantics.Branching`)."""
 
     def __init__(
-        self, boot: Boot, carry: Carry | None = None, stream: "Stream | None" = None
+        self,
+        boot: Boot,
+        carry: Carry | None = None,
+        stream: "Stream | None" = None,
+        trace: bool = False,
     ) -> None:
         self.boot = boot
+        self.trace: dict[str, Unknown] | None = {} if trace else None
+        """With `trace`: the first unknown write to each register ("L1[9]") and lane memory
+        vector ("memory[0x12]") of the job. An unknown one without an entry was not written."""
+        self.why_due: dict[int, dict[str, str]] = {}
+        """With `trace`: why a bus's value is unknown, by word and source (a unit, a load)."""
         self.stream = stream
         self.lanes_lost = False
         self.g = [UNKNOWN] * 32
@@ -409,6 +439,7 @@ class Machine:
             self.held_due,
             self.open_m,
             self.open_next,
+            self.why_due,
         ):
             due.pop(t, None)
         return "; ".join(notes)
@@ -617,6 +648,7 @@ class Machine:
                     index, f"x0 {head:#x}", [], "a lane store at an unknown address"
                 )
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
+            self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"x0 {head:#x}: address not known")
             return
         addr = lane_address(head, a.value, b.value if b.value is not None else 0, k)
         tier = min(
@@ -629,13 +661,19 @@ class Machine:
                 self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(
                     Vec(UNKNOWN_VEC.lanes, H)
                 )
+                self._why(t + LANE_LOAD_LAG, LANE_LOAD, "the lane memory is lost")
             return
         if head in X0_LANE_LOADS:
             v = self.memory.get(addr, UNKNOWN_VEC)
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(_cap(v, tier))
+            if self.trace is not None and not _known(v):
+                state = "not known" if addr in self.memory else "not written"
+                self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"memory[{addr:#x}] {state}")
             return
         reg = word["f69_71"]
         self.memory[addr] = _cap(self._rv("O", reg), tier)
+        source = f"x0 {head:#x}'s store of O[{reg}]"
+        self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
 
     # ------------------------------------------------------------------ S units
 
@@ -643,16 +681,7 @@ class Machine:
         """Run the active S heads: lane results scheduled at their lag, held results scheduled;
         returns the own-word scalar results by unit."""
         own: dict[str, Sv] = {}
-        for unit, (file, a_id, b_id) in zip(
-            ("s0", "s1", "s2", "s3"),
-            (
-                ("L0", "f37_40", "f41_44"),
-                ("L1", "f45_48", "f49_52"),
-                ("L2", "f53_56", "f57_60"),
-                ("L3", "f61_64", "f65_68"),
-            ),
-            strict=True,
-        ):
+        for unit, (file, a_id, b_id) in S_OPERANDS.items():
             head = word[HEAD_IDS[unit]]
             if head == lookup(HEAD_IDS[unit]).idle:
                 continue
@@ -762,6 +791,7 @@ class Machine:
                     (unknown, unknown)
                 )
                 self.open_m.setdefault(when, set()).add(unit)
+                self._why(when, unit, f"{unit} {head:#x} has no rule")
             if unit == "s3" and word["f232_233"] == 1:
                 self._u_write = (word["f141_144"], Vec(UNKNOWN_VEC.lanes, H))
             return
@@ -771,9 +801,11 @@ class Machine:
             return
         sc = _Scalars(scalars)
         ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
-        high = None
+        high, why = None, ""
         if any(x is None for v in ins for x in v.lanes):
             low = UNKNOWN_VEC
+            if self.trace is not None:
+                why = self._unknown_operands(unit, head, word, a, b, rule.reads)
         else:
             al = [x or 0 for x in a.lanes]
             bl = [x or 0 for x in b.lanes]
@@ -787,8 +819,11 @@ class Machine:
                     hi = product_high(head, al, bl, sc)
                     htier = min(tier, S2_HIGH_HALVES[head][1], sc.tier)
                     high = Vec(tuple(hi), htier)
-            except UnknownInput:
+                if self.trace is not None and None in lanes:
+                    why = f"{unit} {head:#x}: lanes not predicted"
+            except UnknownInput as e:
                 low = UNKNOWN_VEC
+                why = f"{unit} {head:#x}: scalar {e.args[0]} not known"
         lag = LANE_LAG[unit].get(head)
         if lag is None:
             landings = [(t, H), (t + 1, H)]
@@ -797,8 +832,41 @@ class Machine:
         for when, ltier in landings:
             entry = (_cap(low, ltier), None if high is None else _cap(high, ltier))
             self.lane_due.setdefault(when, {}).setdefault(unit, []).append(entry)
+            if why:
+                self._why(when, unit, why)
         if unit == "s3" and word["f232_233"] == 1:
             self._u_port(index, head, b, word)
+
+    def _unknown_operands(
+        self, unit: str, head: int, word: Word, a: Vec, b: Vec, reads: str
+    ) -> str:
+        file, a_id, b_id = S_OPERANDS[unit]
+        if unit in LATCH_OPERAND and head in LATCHED:
+            return f"{unit} {head:#x}: the latched operand not known"
+        names = {"a": f"{file}[{word[a_id]}]", "b": f"{file}[{word[b_id]}]"}
+        bad = [
+            f"{k} = {names[k]}"
+            for k, v in (("a", a), ("b", b))
+            if k in reads and None in v.lanes
+        ]
+        return f"{unit} {head:#x}: operand {', '.join(bad)} not known"
+
+    def _why(self, t: int, source: str, reason: str) -> None:
+        """With `trace`: why `source`'s value in word t is unknown, the first reason kept."""
+        if self.trace is not None:
+            self.why_due.setdefault(t, {}).setdefault(source, reason)
+
+    def _note(self, index: int, dest: str, source: str, value, reason: str) -> None:
+        """With `trace`: `dest`'s first unknown write."""
+        if (
+            self.trace is None
+            or dest in self.trace
+            or value is NOTHING
+            or isinstance(value, Kept)
+            or _known(value)
+        ):
+            return
+        self.trace[dest] = Unknown(index, source, reason)
 
     def _shift_in(
         self, lanes: list[int | None], scalars: dict[str, Sv], tier: Confidence
@@ -921,7 +989,11 @@ class Machine:
         writes: dict[tuple[str, int], object] = {}
         kept: dict[tuple[str, int], Confidence] = {}
 
-        def put(file: str, reg: int, value) -> None:
+        def put(file: str, reg: int, value, source: str) -> None:
+            if self.trace is not None:
+                key = LANE_UNIT.get(source, "s2" if source == S2_HIGH else source)
+                why = self.why_due.get(t, {}).get(key, "")
+                self._note(index, f"{file}[{reg}]", source, value, why)
             if value is NOTHING:
                 return
             if isinstance(value, Kept):
@@ -942,7 +1014,7 @@ class Machine:
                 raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PR_SOURCES[enable][v]
             if src is not None:
-                put(PR_FILES[enable], word[reg_id], scalar[src])
+                put(PR_FILES[enable], word[reg_id], scalar[src], src)
         for enable, file in PB_FILES.items():
             v = word[enable]
             if v == lookup(enable).idle:
@@ -951,7 +1023,7 @@ class Machine:
                 raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PB_SOURCES[enable][v]
             if src is not None:
-                put(file, word[PORTS[enable]], scalar[src])
+                put(file, word[PORTS[enable]], scalar[src], src)
         for enable, file in LANE_PORT_FILE.items():
             v = word[enable]
             if v == lookup(enable).idle:
@@ -959,7 +1031,8 @@ class Machine:
             src = LANE_SOURCES[enable].get(v)
             if src is None:
                 continue  # wrote nothing from any S head (measured on the camera)
-            put(file, word[PORTS[enable]], _cap(self._lane_source(src[0], t), src[1]))
+            value = _cap(self._lane_source(src[0], t), src[1])
+            put(file, word[PORTS[enable]], value, src[0])
         v = word["f252_254"]
         if v in STORE_NOTHING:
             kept[("O", word["f179_181"])] = V
@@ -967,12 +1040,12 @@ class Machine:
             if v not in STORE_SOURCES:
                 raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
             text, tier = STORE_SOURCES[v]
-            put("O", word["f179_181"], _cap(self._lane_source(text, t), tier))
+            put("O", word["f179_181"], _cap(self._lane_source(text, t), tier), text)
         u = word["f232_233"]
         if u == 1:
             # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
             if self._u_write is not None:
-                put("U", *self._u_write)
+                put("U", *self._u_write, "S3's U port")
         elif u != lookup("f232_233").idle and u not in (0, 2):
             raise UnknownSemantics(index, "f232_233", [], f"enable {u}")
         self._u_write = None
@@ -984,6 +1057,8 @@ class Machine:
     def _lane_source(self, text: str, t: int):
         if text == LANE_LOAD:
             due = self.load_due.get(t, [])
+            if len(due) > 1:
+                self._why(t, LANE_LOAD, "two lane loads arrive in one word")
             return NOTHING if not due else due[0] if len(due) == 1 else UNKNOWN_VEC
         unit = LANE_UNIT.get(text, "s2" if text == S2_HIGH else None)
         if unit is None:
@@ -993,6 +1068,7 @@ class Machine:
             return NOTHING
         if text == S2_HIGH:
             if len(due) > 1:
+                self._why(t, "s2", "two S2 high halves in one word")
                 return Vec(
                     UNKNOWN_VEC.lanes, H
                 )  # two high halves in one word: not measured

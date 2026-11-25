@@ -7,7 +7,7 @@ import pytest
 
 from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Job
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.machine import Machine, Sv, Vec
+from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
 from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import (
     LANE_RULES,
@@ -907,3 +907,27 @@ def test_s1s_rounding_of_a_tie_is_verified_only_at_the_counts_met(count, lane, t
     head = w(f285_291=0x0E, f49_52=2, f84_87=count >> 1)
     run(m, [head, w(f242_243=2, f159_162=9)])
     assert m.lanes["L1"][9].tier == tier and None not in m.lanes["L1"][9].lanes
+
+
+def test_the_trace_is_off_by_default(m):
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2), w(f242_243=2, f159_162=9)])
+    assert m.trace is None and None in m.lanes["L1"][9].lanes
+
+
+def test_the_trace_names_a_heads_unknown_operand():
+    m = Machine(Boot(), trace=True)
+    m.lanes["L1"][1] = Vec(A)
+    run(m, [w(f285_291=0x34, f45_48=1, f49_52=2), w(f242_243=2, f159_162=9)])
+    assert m.trace == {
+        "L1[9]": Unknown(1, "S1's result", "s1 0x34: operand b = L1[2] not known")
+    }
+
+
+def test_the_trace_follows_a_load_of_an_unwritten_vector():
+    m = Machine(Boot(), trace=True)
+    m.a[1] = Sv(0x40)
+    load = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=1, f1=0)  # A[1] + 2
+    run(m, [load, *[IDLE] * 3, w(f248_249=0, f171_174=5), w(f248_249=0, f171_174=6)])
+    (entry,) = m.trace.values()
+    assert m.trace == {"L3[5]": entry} and entry.index == 4
+    assert entry.reason == "memory[0x42] not written"
