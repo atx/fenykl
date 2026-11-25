@@ -1047,6 +1047,19 @@ def test_a_parked_head_after_its_own_run_beside_another_head_is_not_known(m):
     assert m.lanes["L3"][8].lanes == (None,) * 32
 
 
+@pytest.mark.parametrize("port_at", [1, 2])
+def test_a_parked_heads_adjacent_runs_are_not_known(m, port_at):
+    """S0 0x54 in two consecutive words, its port in the second word or the third."""
+    alone_operands(m)
+    h = w(**alone_head("s0", 0x54))
+    words = [h, h, IDLE]
+    words[port_at] = w(**alone_head("s0", 0x54), **alone_port("s0", 8))
+    if port_at == 2:
+        words[port_at] = w(**alone_port("s0", 8))
+    run(m, words)
+    assert m.lanes["L3"][8].lanes == (None,) * 32
+
+
 @pytest.mark.parametrize(
     ("unit", "head", "other"),
     [

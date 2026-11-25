@@ -872,6 +872,8 @@ class Machine:
             or set(self.heads_run) - {key}
             or runs > 1
             or self.alone_runs.get(key, 0) != runs
+            # The previous run can still deliver: adjacent runs were not run.
+            or (unit in self.alone and t - self.alone[unit][0] <= 1)
             or any(word[f] != v for f, v in ALONE_SELECTS[unit].items())
             or any(
                 word[HEAD_IDS[u]] != lookup(HEAD_IDS[u]).idle
