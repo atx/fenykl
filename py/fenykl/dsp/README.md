@@ -201,7 +201,18 @@ predicts it across units. S2 0x7 comes in the head's word [verified, pre-registe
 later nothing; S3 0x7 / 0x8 (block selects of b by a's first lanes) one word later and S1
 0x60..0x7e in the head's word, S0's one word later (their unit's latched operand) [verified,
 pre-registered]; S3 0x6 gives 0 in every lane one word later and nothing in its own word [verified,
-pre-registered on two fresh operand sets in two jobs and earlier runs]. A register a
+pre-registered on two fresh operand sets in two jobs and earlier runs]. S0 0x54..0x5f give 0
+one word later and nothing in their own word, S1 0x57..0x5f 0 in their own word and nothing one
+word later, in lanes 0..15, in the form they ran (`fields.ALONE_ZEROS`): in a job with no other
+S0, S1 or S2 head, each run alone in its word, at the register selects that ran
+(`fields.ALONE_SELECTS`), the result taken by one L3 port (`fields.ALONE_PORTS`) in one of the
+two words [verified, pre-registered on the third of three operand sets, the head run twice per
+job, the zeros read on S0's second run and S1's first and the other lag's nothing on the other
+run; each inferred on the run where it was not read]. From a third run on, after a run in
+another form, with the port in both words or another reader of the result they are not
+predicted; lanes 16..31 were not read, and after other heads S1 0x55..0x5f gave b or nothing on
+a state not identified. S0's M results beside these heads and its latched operand after them
+stay unknown; S1's M follows the rules of its heads without a scalar result. A register a
 port writes in one word is read by a head in the next [verified, pre-registered: L3 after S3's
 and after S2's result, L2 after a load, L0 after S0's and L1 after S1's]; a head in the port's
 own word reads the old content, in every lane file and in U [verified, pre-registered].
@@ -987,7 +998,8 @@ the worked example in `tests/test_dsp_kernel_example.py`.
 
 A case that was not timed makes the estimate unknown: a command of another kind, memory, r2 or
 r5, of more than one row, with r3 other than the units its r6 lines fill or outside the sizes
-measured, a command that moves nothing (kind 1, or a register not handed), more than 16 commands handed before their 0x1d, an engine
+measured, with row pitches r1 or r4 other than the 0 every timed command ran with (`Rate.r1`,
+`Rate.r4`; one row does not step by them, but other values were not timed), a command that moves nothing (kind 1, or a register not handed), more than 16 commands handed before their 0x1d, an engine
 off script, and commands still outstanding at the halt (whether the job waits for them was not
 measured). A flow that did not halt raises `ValueError`.
 

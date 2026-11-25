@@ -975,6 +975,36 @@ pre-registered (verified); S3 0x6 at 1: 0 in every lane there and nothing in its
 pre-registered on two fresh operand sets in two jobs and the earlier lag runs (verified). The other heads' lags
 are open (hypothesis: as their nearest timed relative)."""
 
+ALONE_ZEROS: dict[str, tuple[range, int, int]] = {
+    "s0": (range(0x54, 0x60), 1, 1),
+    "s1": (range(0x57, 0x60), 0, 0),
+}
+"""S heads that give 0 at one lag and nothing at the other in the form they ran on the camera, by
+unit: (heads, lag, earlier runs). The form: in a job with no other S0, S1 or S2 head (the
+operands' setup before them ran S3, X0 and X1 heads), the head value run twice, each run with
+no other S head in its word, with the register selects of `ALONE_SELECTS`, and its result taken
+by the port of `ALONE_PORTS` alone, in the head's word only on the first run and one word later
+only on the second; lanes 0..15 read at each: 0 at the lag given, the sentinel at the other, on
+three operand sets (edge values, a == b lanes, and a != b with both nonzero in every lane), the
+last pre-registered (verified). So the zeros were read on the run after the earlier runs given
+(S0's second run, S1's first) and the other lag's nothing on the other run: each verified on
+the run where it was read and inferred on the other; from a third run on, after a run in
+another form, with the port in both words or with another reader of the unit's result, not
+predicted. In jobs with other heads
+before them S1 0x55..0x5f gave b, or left the sentinel at either single lag (`LANE_FUNCTIONS`).
+Lanes 16..31 were not read. S0's M results beside these heads and its latched operand after them
+stay unknown; S1's M follows the rules of its heads without a scalar result."""
+ALONE_ZERO_LANES = range(16)
+"""The lanes read in `ALONE_ZEROS`' runs."""
+ALONE_SELECTS = {
+    "s0": {"f37_40": 1, "f41_44": 2, "f72_75": 4, "f76_79": 5, "f23_30": 0x5A},
+    "s1": {"f45_48": 1, "f49_52": 2, "f80_83": 4, "f84_87": 5, "f0": 0},
+}
+"""The fields of the head's word that select its operands, scalars and immediate in every
+`ALONE_ZEROS` run."""
+ALONE_PORTS = {"s0": ("f248_249", 1), "s1": ("f250_251", 2)}
+"""The lane port (an L3 port) and its enable that took the result in every `ALONE_ZEROS` run."""
+
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
 LANE_MEMORY = (
@@ -1287,7 +1317,8 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             H,
             "b with the port in the head's word and the next in an earlier run (0x55, 0x5a, "
             "0x5f), nothing with the port in a single word at either lag nor, in a later run, "
-            "in both; 0x55 once b in its own word right after an 0x53",
+            "in both; 0x55 once b in its own word right after an 0x53; 0x57..0x5f 0 at lag 0 "
+            "in the form of `ALONE_ZEROS`",
         ),
         **_rows(
             range(0x60, 0x7F),
