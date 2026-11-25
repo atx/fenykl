@@ -121,7 +121,9 @@ LANE_STORE12 = Rate(
     (1, 16),
     "12-bit stores from the lane memory (r3 = ceil(10 r6 / 32) vectors): 0.50, 1.77 and 6.82 us "
     "at 1, 4 and 16 KiB of DRAM, each within its registered window around the byte store's "
-    "rate, fitted",
+    "rate, fitted; the fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (0.97, "
+    "3.29 us)",
+    V,
 )
 LANE_LOAD16 = Rate(
     0.4665,
@@ -158,7 +160,9 @@ LOCAL_LOAD = Rate(
     (0.25, 4),
     "byte loads into local memory at r2 = 4: 0.67, 1.65, 2.99 and 5.72 us at 0.25, 1, 2 and 4 "
     "KiB of DRAM, fitted (about 0.75 KiB per us, a third of the lane memory's rate, plus a "
-    "per-command part that puts 0.25 KiB above the per-KiB rate's window)",
+    "per-command part that puts 0.25 KiB above the per-KiB rate's window); the fit's times "
+    "registered at 0.5 and 3 KiB held within 10 % + 0.15 us (0.99, 4.24 us)",
+    V,
 )
 RATES: dict[tuple[int, int, int, int], Rate] = {
     (LOAD, LANE_MEMORY, 0x20, 0x10): LANE_LOAD,
