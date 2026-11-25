@@ -51,7 +51,11 @@ REPEAT = Cost(
     "jitter) were measured outside their registered windows, so those distances repeat at "
     "`REPEAT_I`; in passes of 107 to 1024 words and of 2000 only idle words were timed, so "
     "other words there repeat at `REPEAT_I`; "
-    "S3 reductions likewise (fitted)",
+    "S3 reductions likewise (fitted); on a later boot idle passes of 9, 16, 18, 36, 106, 256 and "
+    "1024 words repeated at 5.10 to 5.24 ns with no per-pass cost (the pass time 5.16 ns per word "
+    "+ 0.6 ns per pass), and 18-word passes of S-head, X0 and mixed words at 5.15 to 5.22 ns, all "
+    "below 5.37 by more than 0.1 ns; a registered 5.22 +- 0.1 ns held at six of the seven lengths "
+    "(the 18-word idle pass 5.10) and in every class, so the figure is unchanged",
 )
 REPEAT_I = Cost(
     REPEAT.us,
@@ -123,13 +127,16 @@ LANE_LOAD = Rate(
     V,
 )
 LANE_STORE = Rate(
-    0.427,
-    0.3,
-    (1, 16),
-    "byte stores from the lane memory: 0.74, 2.14 and 7.19 us for 1, 4 and 16 KiB, fitted; the "
-    "line's times registered at 1 to 16 KiB held within 10 % + 0.15 us on a later boot (0.54, 1.04, "
-    "2.13, 4.19, 7.94 us at 1, 2, 4, 8, 16 KiB), on a third boot 8 KiB held (4.07 us) and 16 KiB "
-    "lay above (8.25 us): inferred",
+    0.4872,
+    0.119,
+    (0.5, 16),
+    "byte stores from the lane memory: a line fitted, weighted by relative error, over ten earlier "
+    "times (0.74, 2.14, 7.19 us at 1, 4, 16 KiB on one boot; 0.54, 1.04, 2.13, 4.19, 7.94 us at 1, "
+    "2, 4, 8, 16 KiB on a second; 4.07, 8.25 us at 8, 16 KiB on a third), then registered at 0.5 to "
+    "16 KiB on a fourth boot, where all six sizes held within 10 % + 0.15 us (0.30, 0.59, 1.11, "
+    "2.02, 3.79, 8.07 us; three repeats per pass count); the earlier line, 0.427 us per KiB + 0.3, "
+    "missed there at 0.5 and 16 KiB",
+    V,
 )
 LANE_STORE12 = Rate(
     0.4208,
