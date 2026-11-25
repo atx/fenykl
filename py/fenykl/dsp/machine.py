@@ -31,9 +31,13 @@ new content). Buses carry values in the word they arrive in, counted in executed
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
   word; S3's reductions in the third word after the head only.
 
-Strict throughout: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
+Strict by default: a case the facts do not cover raises `UnknownSemantics`, a value the facts do not
 give is unknown (None), and a value from a rule below verified carries that tier. Values are 32-bit
 scalars (`Sv`) and 32-lane vectors of 16 bits (`Vec`), each with the weakest tier of what made it.
+Lenient (`Machine.strict` False), a case the facts do not cover lapses instead (`Machine.lapse`):
+what it may write is forgotten, its word's step is unknown and all the job leaves and decides from
+there on is a hypothesis. A control word whose transfer cannot be followed (it leaves its program)
+raises in either mode.
 """
 
 from collections.abc import Mapping, Sequence
@@ -173,6 +177,10 @@ def _cap(x, tier: Confidence):
     if isinstance(x, Kept):
         return Kept(tier)
     return Sv(x.value, tier) if isinstance(x, Sv) else Vec(x.lanes, tier)
+
+
+def _unknown(file: str) -> Sv | Vec:
+    return UNKNOWN_VEC if file in VECTOR_FILES else UNKNOWN
 
 
 def _s32(v: int) -> int:
@@ -377,6 +385,10 @@ class Machine:
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
         self.store_src = boot.source("local store", "an own program's family A store")
+        self.strict = True
+        """Whether a case the facts do not cover raises (set by `emu.Executor`), or lapses."""
+        self.lapses: list[str] = []
+        """Lenient: why each lapse of the job (`lapse`), in order."""
 
     def between_jobs(self) -> Carry:
         """The job's end: the stream's outstanding commands complete, and what it leaves."""
@@ -390,6 +402,26 @@ class Machine:
         """The lane memory is not known from now on (the stream engine's activity is not)."""
         self.lanes_lost = True
         self.memory.clear()
+
+    def lapse(self, index: int, what: str, why: str, fields: Sequence = ()) -> None:
+        """A case of word `index` the facts do not cover: raises `UnknownSemantics` when strict;
+        lenient, it is recorded and all the job leaves and decides from here on is a hypothesis.
+        The caller forgets what the case may write."""
+        if self.strict:
+            raise UnknownSemantics(index, what, list(fields), why)
+        self.lapses.append(f"{what}: {why}")
+        self.limit(H)
+        self.ceiling = H
+
+    def lose_memories(self, why: str) -> None:
+        """The lane, local and DRAM memories are not known from here on (lenient): something
+        whose reach is not bounded may have written them."""
+        self.lose_lanes()
+        src = self.boot.source("lapse", why)
+        self.boot.local.forget(src)
+        self.boot.dram.backing.clear()
+        for page in self.boot.dram.pages.values():
+            page.forget(src)
 
     def limit(self, tier: Confidence) -> None:
         """Cap all the job leaves and decides from here on at `tier`: the stepping follows a
@@ -500,9 +532,8 @@ class Machine:
             return None
         sem = OP_SEMANTICS.get(code)
         if sem is None:
-            raise UnknownSemantics(
-                index, op(code).name, [(OP_FIELD, code)], "no semantics"
-            )
+            self.lapse(index, op(code).name, "no semantics", [(OP_FIELD, code)])
+            return UNKNOWN
         args = word.operands
         assert args is not None
         ra = self._rd("G", args.ra)
@@ -575,17 +606,15 @@ class Machine:
         offset = rb if by_register else Sv(word.operands.imm)
         if ra.value is None or offset.value is None:
             if code in STORES:
-                raise UnknownSemantics(
-                    index, op(code).name, [], "a local store at an unknown address"
-                )
-            self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
+                self.lapse(index, op(code).name, "a local store at an unknown address")
+            self._unknown_access(code, t)
             return
         ra = Sv(ra.value, min(ra.tier, offset.tier))
         addr = (ra.value + width * offset.value) % LOCAL_BYTES
         if addr % width:
-            raise UnknownSemantics(
-                index, op(code).name, [], f"an unaligned local access at {addr:#x}"
-            )
+            self.lapse(index, op(code).name, f"an unaligned local access at {addr:#x}")
+            self._unknown_access(code, t)
+            return
         if code in STORES:
             datum = self._rd("R", word["f120_122"])
             tier = min(datum.tier, ra.tier, self.ceiling)
@@ -609,6 +638,14 @@ class Machine:
         else:
             datum = Sv(None)
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
+
+    def _unknown_access(self, code: int, t: int) -> None:
+        """A family A access at an address not known or not covered: a store forgets local
+        memory, a load's datum is unknown."""
+        if code in STORES:
+            self.boot.local.forget(self.store_src)
+        else:
+            self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
         # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.
@@ -646,19 +683,15 @@ class Machine:
         k = X_IMMEDIATES[unit].get(word.value)
         if unit == "x1" and head in TRANSFER_HEADS:
             if self.fitted:
-                raise UnknownSemantics(
-                    index,
-                    f"x1 {head:#x}",
-                    [],
-                    "a transfer in words run by a fitted rule",
+                # Lenient: handed as if the word runs.
+                self.lapse(
+                    index, f"x1 {head:#x}", "a transfer in words run by a fitted rule"
                 )
             if self.stream is None:
-                raise UnknownSemantics(
-                    index,
-                    f"x1 {head:#x}",
-                    [],
-                    "a transfer to the stream engine: no stream",
-                )
+                why = "a transfer to the stream engine: no stream"
+                self.lapse(index, f"x1 {head:#x}", why)
+                self.lose_memories(why)
+                return None
             self.stream.transfer(self, index, head, b, t)
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
@@ -671,7 +704,10 @@ class Machine:
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
         if head not in X_RULES[unit]:
-            raise UnknownSemantics(index, f"{unit} {head:#x}", [], "no rule")
+            self.lapse(index, f"{unit} {head:#x}", "no rule")
+            if unit == "x0":
+                self.lose_lanes()  # X0's heads reach the lane memory
+            return UNKNOWN
         rule = X_RULES[unit][head]
         if rule.value is None:
             return None
@@ -687,9 +723,10 @@ class Machine:
         by_reg = head in range(0x1E, 0x22)
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
-                raise UnknownSemantics(
-                    index, f"x0 {head:#x}", [], "a lane store at an unknown address"
-                )
+                why = "a lane store at an unknown address"
+                self.lapse(index, f"x0 {head:#x}", why)
+                self.lose_lanes()
+                return
             self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
             self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"x0 {head:#x}: address not known")
             return
@@ -1041,9 +1078,8 @@ class Machine:
             # Another unit's held result is not on M here (verified one word after its head).
             return Kept(V if self._quiet(sel, t) else I)
         if len(own) > 1 and sel not in own:
-            raise UnknownSemantics(
-                index, "m", [], f"own-word results of {sorted(own)}, M under {sel}"
-            )
+            self.lapse(index, "m", f"own-word results of {sorted(own)}, M under {sel}")
+            return UNKNOWN
         if sel not in own:
             # A lone own-word result under another unit's f274_275 is not on M (verified).
             return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
@@ -1099,9 +1135,8 @@ class Machine:
                 kept[(file, reg)] = value.tier
                 return
             if (file, reg) in writes:
-                raise UnknownSemantics(
-                    index, "ports", [], f"two ports write {file}[{reg}]"
-                )
+                self.lapse(index, "ports", f"two ports write {file}[{reg}]")
+                value = _unknown(file)
             writes[(file, reg)] = value
 
         scalar = {"X0's result": x0bus, "X1's result": x1, ALU_BUS: bus}
@@ -1110,7 +1145,9 @@ class Machine:
             if v == lookup(enable).idle:
                 continue
             if v not in PR_SOURCES[enable]:
-                raise UnknownSemantics(index, enable, [], f"enable {v}")
+                self.lapse(index, enable, f"enable {v}")
+                put(PR_FILES[enable], word[reg_id], _unknown(PR_FILES[enable]), enable)
+                continue
             src = PR_SOURCES[enable][v]
             if src is not None:
                 put(PR_FILES[enable], word[reg_id], scalar[src], src)
@@ -1119,7 +1156,9 @@ class Machine:
             if v == lookup(enable).idle:
                 continue
             if v not in PB_SOURCES[enable]:
-                raise UnknownSemantics(index, enable, [], f"enable {v}")
+                self.lapse(index, enable, f"enable {v}")
+                put(file, word[PORTS[enable]], _unknown(file), enable)
+                continue
             src = PB_SOURCES[enable][v]
             if src is not None:
                 put(file, word[PORTS[enable]], scalar[src], src)
@@ -1137,16 +1176,21 @@ class Machine:
             kept[("O", word["f179_181"])] = V
         elif v != lookup("f252_254").idle:
             if v not in STORE_SOURCES:
-                raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
-            text, tier = STORE_SOURCES[v]
-            put("O", word["f179_181"], _cap(self._lane_source(text, t), tier), text)
+                self.lapse(index, "f252_254", f"O's source {v}")
+                put("O", word["f179_181"], UNKNOWN_VEC, "f252_254")
+            else:
+                text, tier = STORE_SOURCES[v]
+                value = _cap(self._lane_source(text, t), tier)
+                put("O", word["f179_181"], value, text)
         u = word["f232_233"]
         if u == 1:
             # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
             if self._u_write is not None:
                 put("U", *self._u_write, "S3's U port")
         elif u != lookup("f232_233").idle and u not in (0, 2):
-            raise UnknownSemantics(index, "f232_233", [], f"enable {u}")
+            self.lapse(index, "f232_233", f"enable {u}")
+            for reg in range(len(self.u)):
+                put("U", reg, UNKNOWN_VEC, "f232_233")
         self._u_write = None
         for (file, reg), tier in kept.items():
             if (file, reg) not in writes:

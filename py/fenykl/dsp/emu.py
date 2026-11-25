@@ -149,7 +149,7 @@ class Boot:
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
         self.carry: Carry | None = None
         """What the last job `run` left for the next (`machine.Carry`); None before the first
-        run and after a run that did not halt or raised."""
+        run and after a run that did not halt, raised or lapsed (`Machine.lapse`)."""
 
     def source(self, name: str, fact: str = "") -> int:
         """The id of source (name, fact). Equal sources share one id, so the list stays bounded
@@ -212,7 +212,8 @@ class Boot:
         flow = Executor(self, strict=strict, limit=limit, datapath=machine).step(job)
         if flow.stop is not Stop.HALT:
             raise NoHalt(flow)
-        self.carry = machine.between_jobs()
+        carry = machine.between_jobs()
+        self.carry = None if machine.lapses else carry
         return Run(job, flow, machine, estimate(job, flow, machine.stream))
 
 
@@ -242,7 +243,17 @@ class Datapath(Protocol):
     """What runs a word's units under `Executor.step` (`machine.Machine`): `execute` runs word
     `word` at program index `index` as executed word number `t`, what it leaves capped at
     `ceiling`, and returns a note; as a `Branching` it decides the conditional control ops,
-    before the control word's own units run."""
+    before the control word's own units run. Not `strict`, a case it does not cover lapses
+    (`lapse`) instead of raising."""
+
+    strict: bool
+    lapses: list[str]
+    """Why each lapse of the job, in order."""
+
+    def lapse(self, index: int, what: str, why: str) -> None:
+        """Raises `UnknownSemantics` when strict; else records why and caps all the job leaves
+        and decides from here on at a hypothesis."""
+        ...
 
     def execute(
         self, index: int, word: Word, t: int, ceiling: Confidence = V
@@ -361,7 +372,8 @@ class Executor:
     at an undecided control op; lenient mode stops there. Stepping does not model the register
     transfers or any datapath unit.
 
-    strict=False ignores fields without semantics (and taints).
+    strict=False ignores fields without semantics (and taints); on a `datapath` it makes the
+    datapath lenient (`Datapath.lapse`), each word that lapses an unknown step.
     """
 
     def __init__(
@@ -381,6 +393,8 @@ class Executor:
         self.local_op3_jump = local_op3_jump
         self.sequencer = sequencer or Sequencer()
         self.datapath = datapath
+        if datapath is not None:
+            datapath.strict = strict
         self.branching = branching or datapath or Given()
         self.ops = OP_SEMANTICS if ops is None else ops
         self._landing: list[tuple[int, RegisterFile, int, Reg | None]] = []
@@ -429,8 +443,10 @@ class Executor:
                 if self.datapath is None:
                     steps.append(self._data(pc, word, slot, len(steps)))
                 else:
+                    lapses = len(self.datapath.lapses)
                     note = self.datapath.execute(pc, word, len(steps))
-                    steps.append(Step(pc, word.op, slot, word.operands, note=note))
+                    step = Step(pc, word.op, slot, word.operands, note=note)
+                    steps.append(self._lapsed(step, lapses))
             else:
                 visit = visits.get(pc, 0)
                 visits[pc] = visit + 1
@@ -439,7 +455,9 @@ class Executor:
                 else:
                     step, target = self._control(pc, visit, word, stack)
                 if self.datapath is not None:
+                    lapses = len(self.datapath.lapses)
                     self.datapath.execute(pc, word, len(steps))
+                    step = self._lapsed(step, lapses)
                 step = _nested(pc, word, step, target, jumps)
                 steps.append(step)
                 if step.taken is None:
@@ -471,18 +489,20 @@ class Executor:
         `datapath` only: plain stepping ends at the halt. The job ends after them. A taken jump
         due among them redirects the fetch to its target's words, one due after them is not
         taken; the tail's tier follows the jump's shape (`TAIL_SHAPES`), other pending jumps
-        raise. Control words and halts in the tail are passive where measured
-        (`PASSIVE_BEHIND_HALT`) and raise elsewhere; words past the program's end are not run."""
+        lapse (`Datapath.lapse`). Control words and halts in the tail are passive where measured
+        (`PASSIVE_BEHIND_HALT`) and lapse elsewhere; words past the program's end are not run.
+        A lapse in the tail ends the job there and marks the halt's step."""
         if self.datapath is None:
             return
+        halt, lapses = len(steps) - 1, len(self.datapath.lapses)
         ceiling = V
         if jumps:
             (left, _, code), *others = jumps
             shape = TAIL_SHAPES.get((code, DELAY_SLOTS + 1 - left))
             if others or shape is None:
-                raise UnknownSemantics(
-                    at - 1, "halt", [], "a jump pending behind a halt"
-                )
+                self.datapath.lapse(at - 1, "halt", "a jump pending behind a halt")
+                steps[halt] = self._lapsed(steps[halt], lapses)
+                return
             ceiling = shape
         pending = [list(jump) for jump in jumps]
 
@@ -499,30 +519,40 @@ class Executor:
             if i >= len(words):
                 return
             word = words[i]
+            lapses = len(self.datapath.lapses)
             if not (word.control or word.op == HALT_OP):
                 note = self.datapath.execute(i, word, len(steps), ceiling)
-                steps.append(Step(i, word.op, False, word.operands, note=note))
+                step = Step(i, word.op, False, word.operands, note=note)
+                steps.append(self._lapsed(step, lapses))
                 i = fetched(i + 1)
                 continue
             passive = PASSIVE_BEHIND_HALT.get((word.op, n))
             # Measured with no jump pending, but for the third word's halt (on a target).
             if passive is None or (jumps and n != HALT_TAIL - 1):
-                raise UnknownSemantics(
-                    i, op(word.op).name, [], "a control op behind a halt"
-                )
+                self.datapath.lapse(i, op(word.op).name, "a control op behind a halt")
+                steps[halt] = self._lapsed(steps[halt], lapses)
+                return
             if word.op != HALT_OP:
                 self.datapath.execute(i, word, len(steps), ceiling)
-            steps.append(
-                Step(
-                    i,
-                    word.op,
-                    False,
-                    word.operands,
-                    note="behind a halt: not taken",
-                    confidence=min(passive, ceiling),
-                )
+            step = Step(
+                i,
+                word.op,
+                False,
+                word.operands,
+                note="behind a halt: not taken",
+                confidence=min(passive, ceiling),
             )
+            steps.append(self._lapsed(step, lapses))
             i = fetched(i + 1)
+
+    def _lapsed(self, step: Step, lapses: int) -> Step:
+        """`step`, unknown and a hypothesis when the datapath lapsed in its word (the lapses
+        past the first `lapses`)."""
+        new = self.datapath.lapses[lapses:]
+        if not new:
+            return step
+        note = "; ".join([step.note, *new] if step.note else new)
+        return replace(step, note=note, unknown=True, confidence=H)
 
     def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
         t, conf = word.target, op(word.op).confidence

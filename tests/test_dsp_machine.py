@@ -1,14 +1,19 @@
 """The datapath executor on synthetic words: lags, the lane memory, the mask chain, the reduction
-register and a counted loop under the stepper's control flow."""
+register and a counted loop under the stepper's control flow; lenient stepping, also of the stock
+programs."""
 
 import random
+import struct
+from functools import cache
 
 import pytest
+from conftest import stock_image
 
-from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Job, NoHalt, Stop
+from fenykl.dsp import commands
+from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
-from fenykl.dsp.program import Program
+from fenykl.dsp.program import Program, stock_programs
 from fenykl.dsp.semantics import (
     LANE_RULES,
     X_RULES,
@@ -19,6 +24,7 @@ from fenykl.dsp.semantics import (
     x_result,
 )
 from fenykl.dsp.state import Bytes
+from fenykl.dsp.stream import Engine
 from fenykl.dsp.word import IDLE, Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -507,6 +513,41 @@ def test_a_run_reads_what_the_run_before_on_its_boot_left():
     assert boot.run(program).machine.g[16] == Sv(7)
 
 
+HALT = Word.from_fields({"f313_319": 7}, base=IDLE)
+
+
+def test_a_lenient_machine_forgets_what_a_store_at_an_unknown_address_may_write():
+    store = op_word(0x13, 5, 9, f120_122=2)  # r5 unknown
+    program = Program((store, inc(16), control(2, 7, ra=16), *[IDLE] * 4, HALT))
+    regs = {"G": {30: 1, 16: 0, 9: 1}}
+    with pytest.raises(UnknownSemantics, match="a local store at an unknown address"):
+        Boot().run(program, regs=regs)
+    boot = Boot()
+    boot.local.write(LOCAL_BASE + 0x40, Bytes.of(b"\x11", boot.source("test")))
+    run = boot.run(program, regs=regs, strict=False)
+    lapsed, _, branch = run.flow.steps[:3]
+    assert lapsed.unknown and lapsed.confidence is H
+    assert lapsed.note == "op13: a local store at an unknown address"
+    assert run.machine.lapses == [lapsed.note]
+    assert boot.local.read(LOCAL_BASE + 0x40, 1).known == bytearray([0])
+    # All the job leaves and decides after a lapse is a hypothesis.
+    assert run.machine.g[16] == Sv(1, H) and branch.confidence is H
+    assert boot.carry is None
+
+
+def test_a_lenient_transfer_without_a_stream_forgets_every_memory():
+    boot = Boot()
+    boot.put(0x10000000, b"\x22", "dram")
+    boot.local.write(LOCAL_BASE, Bytes.of(b"\x11", boot.source("test")))
+    m = Machine(boot)
+    m.strict = False
+    m.execute(0, w(f308_312=0x1C, f115_119=3), 0)
+    assert m.lapses == ["x1 0x1c: a transfer to the stream engine: no stream"]
+    assert m.lanes_lost and m.cap is H
+    assert not any(boot.local.read(LOCAL_BASE, 1).known)
+    assert not any(boot.read(0x10000000, 1).known)
+
+
 def test_a_run_that_does_not_halt_raises_and_leaves_no_carry():
     boot = Boot()
     boot.run(Program((Word.from_fields({"f313_319": 7}, base=IDLE),)))
@@ -597,11 +638,15 @@ def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
     m.g[30], m.g[16] = Sv(1), Sv(0)
     Executor(boot, datapath=m).step(Job(Program((halt, *[inc(16)] * 4)), ()))
     assert m.g[16] == Sv(3)
+    job = Job(Program((halt, control(2, 0, ra=1))), ())
     with pytest.raises(UnknownSemantics, match="a control op behind a halt"):
         boot = Boot()
-        Executor(boot, datapath=Machine(boot)).step(
-            Job(Program((halt, control(2, 0, ra=1))), ())
-        )
+        Executor(boot, datapath=Machine(boot)).step(job)
+    boot = Boot()
+    flow = Executor(boot, strict=False, datapath=Machine(boot)).step(job)
+    (step,) = flow.steps  # lenient: the job ends at the halt
+    assert flow.stop is Stop.HALT and step.unknown and step.confidence is H
+    assert step.note == "br: a control op behind a halt"
 
 
 def test_the_machine_refuses_a_control_word_with_f120_122_low_bits():
@@ -1162,3 +1207,51 @@ def test_an_alone_s0_zero_head_leaves_m_and_the_latch_unknown(m, at):
     run(m, [*words, IDLE, *latch])
     assert m.r[0].value is None
     assert m.lanes["L3"][9].lanes == (None,) * 32
+
+
+@cache
+def stock(item: int) -> Program:
+    return stock_programs(stock_image("em10ii"))[item]
+
+
+def lenient(boot: Boot, job: Job, decisions: dict) -> tuple[Flow, Machine]:
+    m = Machine(boot, None, Engine())
+    flow = Executor(boot, strict=False, datapath=m, branching=Given(decisions)).step(
+        job
+    )
+    return flow, m
+
+
+def test_program_15_without_a_request_reaches_its_halt_on_a_lenient_machine():
+    job = Job(stock(15), ())
+    with pytest.raises(UnknownSemantics, match="word 68: .*a lane store at an unknown"):
+        boot = Boot()
+        Executor(boot, datapath=Machine(boot, None, Engine())).step(job)
+    given = dict.fromkeys((109, 212, 280, 315, 379, 456, 562, 625), False)
+    flow, m = lenient(Boot(), job, given)
+    assert flow.stop is Stop.HALT and flow.order()[-4:] == [5, 6, 7, 8]
+    assert flow.steps[[s.index for s in flow.steps].index(68)].unknown
+    assert sum(s.unknown for s in flow.steps) == len(m.lapses) > 0
+
+
+def test_program_13_reaches_its_halt_on_a_lenient_machine_past_unmeasured_commands():
+    src, table, lines = 0x10000000, 0x10200000, 16
+    job = commands.resample(stock(13), src, 0x10100000, table, 64, 64, lines)
+
+    def boot() -> Boot:
+        b = Boot()
+        b.put(src, bytes(3 * 64 * lines), "src")
+        identity = b"".join(struct.pack("<iI", i << 16, 0x10000) for i in range(lines))
+        b.put(table, identity, "table")
+        return b
+
+    with pytest.raises(
+        UnknownSemantics, match="word 192: .*kind 0x4 outside the shapes"
+    ):
+        b = boot()
+        Executor(b, datapath=Machine(b, None, Engine())).step(job)
+    given = {372: False, 494: False, 551: False, 562: False, 573: False}
+    flow, m = lenient(boot(), job, given)
+    assert flow.stop is Stop.HALT and flow.order()[-4:] == [5, 6, 7, 8]
+    assert any("kind 0x4 outside the shapes" in why for why in m.lapses)
+    assert any("never ends" in why for why in m.lapses)

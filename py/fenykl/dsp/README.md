@@ -246,7 +246,9 @@ raw: each X head reads it zero- or sign-extended.
 
 ```python
 word = S1.xor_imm(L1[4], imm=0x20, a=L1[4], r=F1[4]).word()  # S1 0x04: b ^ 0x20
-HEAD_VIEWS["s1"].decode(word.value)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
+HEAD_VIEWS["s1"].decode(
+    word.value
+)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
 ```
 
 A view is per unit, not per head value: no table gives which of s, t, r, u, idx, val or the
@@ -1046,7 +1048,11 @@ from fenykl.dsp.emu import Boot
 boot = Boot()
 boot.put(SRC, data, "src")
 r = boot.run(program, regs={"B": {3: SRC, 2: DST}})  # registers by file, over the carry
-r.machine.g[16], r.flow.runs(), r.estimate  # registers at the halt, the words run, the time
+(
+    r.machine.g[16],
+    r.flow.runs(),
+    r.estimate,
+)  # registers at the halt, the words run, the time
 boot.read(DST, n)  # what the program stored, known or not, with its tier
 boot.run(program2)  # starts with the registers and lane memory the run before left
 ```
