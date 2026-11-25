@@ -38,24 +38,22 @@ JOB = Cost(
     "about 2 us high for straight runs",
 )
 REPEAT = Cost(
-    0.00537,
+    0.0052,
     V,
-    "a word executed again, in a loop: 5.37 ns, measured on idle words; scalar local loads, "
-    "X1's divide, X0 lane-memory loads and taken branches with their delay slots cost the same "
-    "within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); "
-    "idle words at 5.2 to 5.3 ns in passes of 64 to 1024 words, and in passes that jump 1088 "
-    "words away and back by op 2 or op 3 (verified on the camera, pre-registered: no loop "
-    "buffer and no cache smaller than 1024 words; passes of exactly 2000 words 5.24 ns from "
-    "four totals, pre-registered); passes of 1536 and 1800 words (4.9 and 5.7 ns) and a "
-    "900-word straight run repeated after 900 other words (at the repeat rate within the "
-    "jitter) were measured outside their registered windows, so those distances repeat at "
-    "`REPEAT_I`; in passes of 107 to 1024 words and of 2000 only idle words were timed, so "
-    "other words there repeat at `REPEAT_I`; "
-    "S3 reductions likewise (fitted); on a later boot idle passes of 9, 16, 18, 36, 106, 256 and "
-    "1024 words repeated at 5.10 to 5.24 ns with no per-pass cost (the pass time 5.16 ns per word "
-    "+ 0.6 ns per pass), and 18-word passes of S-head, X0 and mixed words at 5.15 to 5.22 ns, all "
-    "below 5.37 by more than 0.1 ns; a registered 5.22 +- 0.1 ns held at six of the seven lengths "
-    "(the 18-word idle pass 5.10) and in every class, so the figure is unchanged",
+    "a word executed again, in a loop: 5.2 ns, registered at 5.2 +- 0.1 ns and held on the "
+    "camera in idle passes of 9, 16, 18, 36, 106, 256 and 1024 words (5.15 to 5.25 ns, the pass "
+    "time 5.19 ns per word + 1.3 ns per pass) and in 18-word passes of S-head, X0, mixed and idle "
+    "words (5.15 to 5.26 ns); a boot before gave 5.10 to 5.24 ns at the same lengths and classes, "
+    "and the first figure, 5.37 ns from 16-word idle passes on one boot, lies inside the 4.9 to "
+    "5.6 ns first registered; scalar local loads, X1's divide, X0 lane-memory loads and taken "
+    "branches with their delay slots cost the same within 1.5 ns (verified on the camera, in loop "
+    "passes of 9 to 106 words closed by ops 0..2); idle words in passes that jump 1088 words "
+    "away and back by op 2 or op 3 likewise (no loop buffer and no cache smaller than 1024 words; "
+    "passes of exactly 2000 words 5.24 ns from four totals, pre-registered); passes of 1536 and "
+    "1800 words (4.9 and 5.7 ns) and a 900-word straight run repeated after 900 other words (at "
+    "the repeat rate within the jitter) were measured outside their registered windows, so those "
+    "distances repeat at `REPEAT_I`; in passes of 107 to 1024 words and of 2000 only idle words "
+    "were timed, so other words there repeat at `REPEAT_I`; S3 reductions likewise (fitted)",
 )
 REPEAT_I = Cost(
     REPEAT.us,
