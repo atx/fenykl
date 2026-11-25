@@ -165,7 +165,9 @@ def test_a_counted_loop_stores_through_r():
     halt = Word.from_fields({"op": 7}, base=IDLE)
     words = [li, zero, add, end, IDLE, IDLE, IDLE, IDLE, to_r, store, halt]
     boot = Boot()
-    boot.run(Program(tuple(words)), regs={"G": {31: 0}})
+    m = Machine(boot)
+    m.g[31] = Sv(0)
+    Executor(boot, datapath=m).step(Job(Program(tuple(words)), ()))
     got = boot.local.read(LOCAL_BASE + 0x40, 4)
     assert all(got.known)
     assert int.from_bytes(got.data, "little") == 4 * 5
@@ -438,9 +440,15 @@ def inc(reg: int) -> Word:
 
 
 def stepped(words: list[Word], **regs: int) -> Machine:
-    g = {30: 1} | {int(name[1:]): value for name, value in regs.items()}
-    program = Program((*words, Word.from_fields({"f313_319": 7}, base=IDLE)))
-    return Boot().run(program, regs={"G": g}).machine
+    boot = Boot()
+    m = Machine(boot)
+    m.g[30] = Sv(1)
+    for name, value in regs.items():
+        m.g[int(name[1:])] = Sv(value)
+    Executor(boot, datapath=m).step(
+        Job(Program((*words, Word.from_fields({"f313_319": 7}, base=IDLE))), ())
+    )
+    return m
 
 
 def test_op_4_jumps_to_the_word_its_register_names():
@@ -565,7 +573,10 @@ def test_m_replaces_an_active_x0_heads_result(m):
 
 def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
-    m = Boot().run(Program((halt, *[inc(16)] * 4)), regs={"G": {30: 1, 16: 0}}).machine
+    boot = Boot()
+    m = Machine(boot)
+    m.g[30], m.g[16] = Sv(1), Sv(0)
+    Executor(boot, datapath=m).step(Job(Program((halt, *[inc(16)] * 4)), ()))
     assert m.g[16] == Sv(3)
     with pytest.raises(UnknownSemantics, match="a control op behind a halt"):
         boot = Boot()
@@ -778,8 +789,10 @@ def test_a_halt_in_an_unmeasured_jump_shape_raises(before, behind, match):
 
 def control_tiers(words: list[Word]) -> dict[int, Confidence | None]:
     """The tier of each control word's step, by index."""
+    boot = Boot()
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
-    flow = Boot().run(Program((*words, halt, *[IDLE] * 3))).flow
+    program = Program((*words, halt, *[IDLE] * 3))
+    flow = Executor(boot, datapath=Machine(boot)).step(Job(program, ()))
     return {s.index: s.confidence for s in flow.steps if s.taken is not None}
 
 
