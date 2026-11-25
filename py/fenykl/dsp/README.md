@@ -1116,9 +1116,7 @@ no transfer: its signed quotient a / b is on X1's result bus four words after th
 ```python
 from fenykl.dsp.timing import estimate
 
-flow = Executor(boot, datapath=m).step(
-    job
-)  # m = Machine(boot, stream=Engine()), per job
+flow = Executor(boot, datapath=m).step(job)  # m = Machine(boot, stream=Engine()), per job
 m.between_jobs()
 e = estimate(job, flow, m.stream)
 e.us, e.tier, e.parts  # None when not known; e.unknown says why

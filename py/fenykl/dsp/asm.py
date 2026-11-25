@@ -25,6 +25,7 @@ from .fields import (
     LANE_FUNCTIONS,
     LANE_LOAD,
     LANE_SOURCES,
+    M_UNITS,
     OP_FIELD,
     OPS,
     PB_FILES,
@@ -37,24 +38,31 @@ from .fields import (
     S0_RESULT,
     S1_RESULT,
     S2_HIGH,
+    S2_HIGH_HALVES,
     S2_LOW,
     S2_RESULT,
     S3_RESULT,
     S_RESULTS,
-    STORE_SOURCES,
     TAG,
     TARGET,
     TARGET_OPS,
+    U_NOTHING,
+    U_SAVED,
+    U_TAKES,
+    VECTOR_PORTS,
     X0_LANE_MEMORY,
     X_FUNCTIONS,
+    Bits,
+    Composite,
     Confidence,
     Field,
+    HeadView,
     Operands,
     lane_file,
     lookup,
     op,
 )
-from .semantics import OP_SEMANTICS
+from .semantics import OP_SEMANTICS, OpValue
 from .units import UNITS
 from .word import Word
 
@@ -98,10 +106,9 @@ A, B, R, G = (_file(n, f"{n.lower()}dst") for n in "ABRG")
 FILES = {f.name: f for f in (L0, L1, L2, L3, F0, F1, F2, F3, U, O, A, B, R, G)}
 
 X0_RESULT, X1_RESULT = "X0's result", "X1's result"
-U_TAKES = "lanes 0..3 the S3 head beside it saves (`LANE_THIRD_FILE`)"
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class Source:
     """A port's source by name; `texts` are the table entries it stands for."""
 
@@ -126,11 +133,7 @@ class PortSpec:
 
 
 def _port_specs() -> list[PortSpec]:
-    rows: dict[str, tuple[str, Mapping[int, tuple[str, Confidence]]]] = {
-        e: (lane_file(e), rows) for e, rows in LANE_SOURCES.items()
-    }
-    rows["f252_254"] = ("O", STORE_SOURCES)
-    rows["f232_233"] = ("U", {1: (U_TAKES, V)})
+    rows = {e: (lane_file(e), rows) for e, rows in LANE_SOURCES.items()} | VECTOR_PORTS
     for files, sources in ((PB_FILES, PB_SOURCES), (PR_FILES, PR_SOURCES)):
         for e, by_value in sources.items():
             rows[e] = (
@@ -171,15 +174,16 @@ def _text(value: Value) -> str:
     return repr(value)
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class Instr(Part):
-    """An instruction of one unit: its code, the operands as given, its fields and tier."""
+    """An instruction of one unit: its code, the operands as given, its fields and tier; equal
+    when unit, code, fields and label are."""
 
     unit: "Unit"
     code: int
-    args: tuple[tuple[str, Value], ...]
+    args: tuple[tuple[str, Value], ...] = field(compare=False)
     fields: Mapping[str, int] = field(repr=False)
-    tier: Confidence
+    tier: Confidence = field(compare=False)
     label: str | None = None
 
     @property
@@ -196,14 +200,11 @@ class Instr(Part):
             args.append(_text(v) if positional else f"{k}={_text(v)}")
         return f"{self.unit.key}.{self.name}({', '.join(args)})"
 
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Instr) and repr(other) == repr(self)
-
     def __hash__(self) -> int:
-        return hash(repr(self))
+        return hash((self.unit.key, self.code, tuple(self.fields.items()), self.label))
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class Port(Part):
     """`to(dst, src)`: the one port of dst's file that writes src."""
 
@@ -226,11 +227,8 @@ class Port(Part):
     def __repr__(self) -> str:
         return f"to({self.dst!r}, {self.src!r})"
 
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Port) and repr(other) == repr(self)
-
     def __hash__(self) -> int:
-        return hash(repr(self))
+        return hash((self.dst, self.src.name))
 
 
 def _sources(spec: PortSpec, src: Source) -> list[int]:
@@ -333,32 +331,45 @@ def bundle(statement: "Part | Bundle") -> Bundle:
 
 # Units ------------------------------------------------------------------------------------
 
+_EXTRA_OPERANDS = {
+    "s2": {"sel": Composite("s2sel", (Bits(lookup("s2t"), 1, 1),), V, "0x7's choice")},
+    "s3": {
+        "lane": Composite(
+            "s3lane",
+            (lookup("s3idx"), Bits(lookup("s3u"), 2, 2)),
+            V,
+            "the lane f92_95 + 16 x (f31_34 bit 2) of 0xe, 0xf and 0x10",
+        )
+    },
+}
+"""Operands some heads read that no head view names: S2 0x7's choice, bit 1 of f88_91, and
+S3's lane number of 0xe, 0xf and 0x10, which spans two operands of the view."""
+VIEWS = {
+    u: HeadView(u, {**v.operands, **_EXTRA_OPERANDS.get(u, {})})
+    for u, v in HEAD_VIEWS.items()
+}
 _OPERAND_FILES: dict[str, dict[str, RegFile | None]] = {
     "s0": {"a": L0, "b": L0, "s": F0, "r": F0, "imm": None},
     "s1": {"a": L1, "b": L1, "t": F1, "r": F1, "imm": None},
-    "s2": {"a": L2, "b": L2, "t": F2, "imm": None},
-    "s3": {"a": L3, "b": L3, "u": U, "idx": F3, "val": F3, "imm": None},
+    "s2": {"a": L2, "b": L2, "t": F2, "imm": None, "sel": None},
+    "s3": {"a": L3, "b": L3, "u": U, "idx": None, "val": F3, "imm": None, "lane": None},
     "x0": {"a": A, "b": A, "o": O, "k": None},
     "x1": {"a": B, "b": B, "k": None},
     "op": {"ra": G, "rb": G, "rr": R, "imm": None, "to": None, "ctl_n": None},
 }
-"""Each operand's register file; None an integer. S3's idx is a register of F3 or an integer
-(a lane or a shift count)."""
-_INT_OR_REG = {("s3", "idx")}
+"""Each operand's register file, None an integer; a mnemonic may type one per code (S3's idx,
+a lane or shift count but a register of F3 for 0x15..0x17)."""
 
 
 class Unit(Source):
     """A unit's instructions: `S1(0x04, b=L1[4], imm=0x20)` by code, `S1.xor_imm(L1[4],
     imm=0x20)` by name; as a port's source, the unit's result."""
 
-    def __init__(self, key: str, texts: Iterable[str], table: str) -> None:
-        super().__init__(key.upper(), frozenset(texts))
-        object.__setattr__(self, "key", key.upper())
-        object.__setattr__(self, "unit", key)
-        names, reads = _parse(table)
-        object.__setattr__(self, "names", names)
-        object.__setattr__(self, "codes", {n: c for c, n in names.items()})
-        object.__setattr__(self, "reads", reads)
+    def __init__(self, unit: str, texts: Iterable[str], table: str) -> None:
+        super().__init__(unit.upper(), frozenset(texts))
+        self.key, self.unit = unit.upper(), unit
+        self.names, self.reads, self.files = _parse(table)
+        self.codes = {n: c for c, n in self.names.items()}
 
     def __getattr__(self, name: str):
         if name.startswith("_") or name not in self.__dict__.get("codes", {}):
@@ -383,11 +394,9 @@ class Unit(Source):
     def __call__(self, code: int, **operands: Value) -> Instr:
         return _instr(self, code, operands)
 
-    def __hash__(self) -> int:
-        return hash(self.key)
-
-    def __eq__(self, other: object) -> bool:
-        return other is self
+    def file(self, code: int, name: str) -> RegFile | None:
+        """Operand `name`'s register file at `code`, None an integer."""
+        return self.files.get((code, name), _OPERAND_FILES[self.unit][name])
 
     def __repr__(self) -> str:
         return self.key
@@ -401,34 +410,34 @@ def _codes(text: str) -> list[int]:
     return out
 
 
-def _parse(table: str) -> tuple[dict[int, str], dict[int, tuple[str, ...]]]:
-    """Rows "codes name operands": the first code takes the name, the others name_<code>."""
+def _parse(
+    table: str,
+) -> tuple[dict[int, str], dict[int, tuple[str, ...]], dict[tuple[int, str], RegFile]]:
+    """Rows "codes name operands": the first code takes the name, the others name_<code>; an
+    operand "idx:F3" is a register of F3 at these codes."""
     names: dict[int, str] = {}
     reads: dict[int, tuple[str, ...]] = {}
+    files: dict[tuple[int, str], RegFile] = {}
     for line in filter(None, (s.strip() for s in table.splitlines())):
         codes, name, *operands = line.split()
+        typed = [o.partition(":") for o in operands]
         for i, code in enumerate(_codes(codes)):
             if code in names:
                 raise ValueError(f"{code:#x} named twice")
             names[code] = name if i == 0 else f"{name}_{code:02x}"
-            reads[code] = tuple(operands)
-    return names, reads
+            reads[code] = tuple(o for o, _, _ in typed)
+            files |= {(code, o): FILES[f] for o, _, f in typed if f}
+    return names, reads, files
 
 
-def _number(unit: Unit, name: str, value: Value) -> int:
-    """The field value of operand `name`, checked against its type."""
-    files = _OPERAND_FILES[unit.unit]
-    if name not in files:
+def _number(unit: Unit, code: int, name: str, value: Value) -> int:
+    """The field value of operand `name`, checked against its type at `code`."""
+    if name not in _OPERAND_FILES[unit.unit]:
         raise TypeError(f"{unit.key} has no operand {name!r}")
-    want = files[name]
-    if isinstance(value, Reg) and want is not None:
-        if value.file is not want:
-            raise TypeError(
-                f"{unit.key} {name}= takes a register of {want.name}, not {value!r}"
-            )
+    want = unit.file(code, name)
+    if want is not None and isinstance(value, Reg) and value.file is want:
         return value.index
-    is_int = isinstance(value, int) and not isinstance(value, bool)
-    if is_int and (want is None or (unit.unit, name) in _INT_OR_REG):
+    if want is None and isinstance(value, int) and not isinstance(value, bool):
         return value
     kind = "an integer" if want is None else f"a register of {want.name}"
     raise TypeError(f"{unit.key} {name}= takes {kind}, not {value!r}")
@@ -451,11 +460,11 @@ def _function_tier(unit: str, code: int) -> Confidence:
 
 
 def _instr(unit: Unit, code: int, operands: Mapping[str, Value]) -> Instr:
-    numbers = {k: _number(unit, k, v) for k, v in operands.items() if k != "to"}
+    numbers = {k: _number(unit, code, k, v) for k, v in operands.items() if k != "to"}
     if unit.unit == "op":
         value, span, label = _op_encode(code, numbers, operands.get("to"))
     else:
-        view = HEAD_VIEWS[unit.unit]
+        view = VIEWS[unit.unit]
         value = view.encode(IDLE_VALUE, {"op": code, **numbers})
         span = 0
         for k in ("op", *numbers):
@@ -491,6 +500,8 @@ def _op_encode(
         value, span = TARGET.put(value, to), span | TARGET.span
     fmt = FORMATS.get(code)
     if fmt is not None:
+        if fmt.imm is not None and "imm" not in numbers:
+            raise ValueError(f"op {code:#x} takes an immediate imm")
         args = Operands(
             numbers.pop("ra", RA.idle),
             numbers.pop("rb", RB.idle) if fmt.family.rb else None,
@@ -505,9 +516,6 @@ def _op_encode(
             raise ValueError(f"op {code:#x}: {name} is part of its format or target")
         value, span = f.put(value, v), span | f.span
     return value, span, label
-
-
-M_UNITS = ("s0", "s1", "s2", "s3")
 
 
 @dataclass(frozen=True)
@@ -534,9 +542,10 @@ def M(unit: Unit) -> MPart:
     return MPart(unit)
 
 
-# Mnemonics: "codes name operands"; of codes with one formula, the one the stock programs use
-# most (the lowest on a tie) takes the name, the others name_<code>. Operands are those the
-# formula reads, in the order they are given positionally.
+# Mnemonics: "codes name operands". Codes whose table rows differ only in their code share a
+# name: the one the stock programs use most (the lowest on a tie) takes it, the others
+# name_<code>. Operands are those the formula reads, in positional order; "idx:F3" types an
+# operand as a register of F3 for that code.
 
 S0 = Unit(
     "s0",
@@ -544,18 +553,18 @@ S0 = Unit(
     """
     00 abd_next_ss a b
     01 abd_bnext_ss a b
-    02 sub_next_ss a b
-    03 sub_bnext_ss a b
+    02 sub_next_ss b a
+    03 sub_bnext_ss b a
     04 add_next_ss a b
     21,05 abd_ss a b
-    28,06 sub_ss a b
+    28,06 sub_ss b a
     29,07 add_ss a b
     08 clamp0_imm b imm
     09 clamp0_s b s
-    0a clamp0 a b
+    0a clamp0 b a
     0b clamp_imm b imm
     0c clamp_s b s
-    0d clamp a b
+    0d clamp b a
     0e max_imm b imm
     0f min_imm b imm
     10 sub_imm_ss b imm
@@ -570,10 +579,12 @@ S0 = Unit(
     19 cmpeq_s b s
     1a sub_s_ss b s
     1b add_s_ss b s
-    1c hsub a b
+    1c hsub b a
     1d hadd a b
-    1e,2a addc_ss a b r
-    1f,2b addc a b r
+    1e addc_ss a b r
+    2a addc_ss_m a b r
+    2b addc a b r
+    1f addc_m a b r
     20 add a b
     22 max a b
     23 min a b
@@ -581,7 +592,8 @@ S0 = Unit(
     25 cmpeq a b
     26 abs_ss a
     27 neg a
-    2c,2d addc_us a b r
+    2d addc_us a b r
+    2c addc_us_m a b r
     2e cmpgt_imm_u b imm
     2f cmple_imm_u b imm
     30 cmpgt_s_u b s
@@ -598,14 +610,14 @@ S0 = Unit(
     3b add_imm_us b imm
     3c sub_s_us b s
     3d add_s_us b s
-    3e sub_us a b
+    3e sub_us b a
     3f add_us a b
     4d,41 mov b
     42 mov_imm imm
     43 mov_r r
     44 sel_imm b s imm
     45 sel_r b s r
-    46 sel a b s
+    46 sel b a s
     4b bits_s s
     52 get_r r
     60-7e latch
@@ -632,7 +644,8 @@ S1 = Unit(
     0e rnd_imm b imm
     0f fsh_imm_ss a b imm
     10 frnd_imm_ss a b imm
-    11,12 shl_imm_us b imm
+    11 shl_imm_us b imm
+    12 shl_imm_us_m b imm
     14,15 frnd_imm a b imm
     16-19 fshc_imm a b r imm
     1a,1c shl_t_us b t
@@ -653,8 +666,10 @@ S1 = Unit(
     2f min a b
     30 sub_imm_ss b imm
     31 add_imm_ss b imm
-    32,3d addc_ss a b r
-    33,3e addc a b r
+    32 addc_ss a b r
+    3d addc_ss_m a b r
+    3e addc a b r
+    33 addc_m a b r
     34 add a b
     35 hadd_t b t
     36 sub_t_ss b t
@@ -662,9 +677,10 @@ S1 = Unit(
     38 hadd a b
     39 abs_ss a
     3a neg a
-    3b sub_ss a b
+    3b sub_ss b a
     3c add_ss a b
-    3f,40 addc_us a b r
+    40 addc_us a b r
+    3f addc_us_m a b r
     41 cmpgt_imm_u b imm
     42 cmple_imm_u b imm
     43 cmpgt_t_u b t
@@ -681,7 +697,7 @@ S1 = Unit(
     4e add_imm_us b imm
     4f sub_t_us b t
     50 add_t_us b t
-    51 sub_us a b
+    51 sub_us b a
     52 add_us a b
     53 mov b
     54 get_t t
@@ -693,10 +709,14 @@ S2 = Unit(
     "s2",
     {S2_LOW, S2_RESULT},
     """
-    01,00 mul_imm b imm
-    06,02,04 mul a b
-    05,03 mul_t b t
-    07 pick a b t
+    01 mul_imm b imm
+    00 mul_imm_u b imm
+    06 mul a b
+    04 mul_u a b
+    02 mul_ua a b
+    05 mul_t b t
+    03 mul_t_u b t
+    07 pick b a sel
     0d,08 mov b
     09 ltz b
     0a lane
@@ -707,7 +727,7 @@ S2 = Unit(
 )
 S3 = Unit(
     "s3",
-    {S3_RESULT, U_TAKES},
+    {S3_RESULT, U_SAVED},
     """
     00 rmax_u b
     01 rmin_u b
@@ -723,21 +743,28 @@ S3 = Unit(
     0b zip_hi a b
     0c unzip_odd a b
     0d unzip_even a b
-    0e ext_u b idx u
-    0f ext b idx u
-    10 ins b val idx u
+    0e ext_u b lane
+    0f ext b lane
+    10 ins b val lane
     11 mov_imm imm
     12 ltz b
     13 gez b
     14 lane
-    15 ins_reg b idx val
-    16 ext_reg_u b idx
-    17 ext_reg b idx
+    15 ins_reg b idx:F3 val
+    16 ext_reg_u b idx:F3
+    17 ext_reg b idx:F3
     18 bcast val
-    19,20,21,23 mov b
-    22,1b,1c shift b u idx
+    19,23 mov b
+    20 mov_save_hi b
+    21 mov_save_lo b
+    22 shift b u idx
+    1b shift_save_hi b u idx
+    1c shift_save_lo b u idx
     24 get_val val
-    1a,1d-1f,25-3e none
+    1e save_hi b
+    1f save_lo b
+    1a,1d save_unk
+    25-3e none
     """,
 )
 X0 = Unit(
@@ -800,7 +827,7 @@ X1 = Unit(
     13 mov_imm_u k
     14 mov_imm k
     15 mov b
-    16 andn a b
+    16 andn b a
     17 nor a b
     18 xor a b
     19 or_ a b
@@ -816,9 +843,9 @@ OP = Unit(
     {ALU_BUS},
     """
     00 loop ra to
-    01 brf ra to
-    02 br ra to
-    03 call to
+    01 bz ra to
+    02 bnz ra to
+    03 jump to
     04 ret rb
     07 halt
     09,08 mov rb
@@ -940,21 +967,14 @@ SOURCES = {t: s for s in (LOAD, S2_HI, *UNITS_BY_KEY.values()) for t in s.texts}
 
 # Decoding ---------------------------------------------------------------------------------
 
-_IDX_REGS = {c for c, row in LANE_FUNCTIONS["s3"].items() if "F3[f92_95]" in row[0]} | {
-    c for c, row in S_RESULTS["s3"].items() if "F3[f92_95]" in row.text
-}
-"""S3 heads that read idx as a register of F3."""
-
 
 def _typed(unit: Unit, code: int, name: str, value: int) -> Value:
-    file = _OPERAND_FILES[unit.unit][name]
-    if file is None or (unit.unit == "s3" and name == "idx" and code not in _IDX_REGS):
-        return value
-    return file[value]
+    file = unit.file(code, name)
+    return value if file is None else file[value]
 
 
 def _head(unit: Unit, value: int) -> Instr | None:
-    view = HEAD_VIEWS[unit.unit]
+    view = VIEWS[unit.unit]
     code = view.operands["op"].get(value)
     if code == view.operands["op"].idle:
         return None
@@ -991,7 +1011,6 @@ def _op(value: int, labels: Mapping[int, str]) -> Instr | None:
             given["imm"] = args.imm
         for f in fmt.fields:
             claimed |= f.span
-    reads = OP.reads.get(code, ())
     for name, f in _OP_EXTRAS.items():
         if name in given or f.span & claimed:
             continue
@@ -1044,19 +1063,25 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
 
 # The review list --------------------------------------------------------------------------
 
+_TRANSFERS = {
+    0x1C: "hands B[b] to the stream engine, read before the word's ports write (`stream`)",
+    0x1D: "hands nothing and waits for one command of the stream engine (`stream`)",
+}
+"""X1's transfers as `stream` describes them."""
+_EVIDENCE = (" (verified", " (measured", " (inferred", " (fitted", " (a data op")
 
-def _short(text: str) -> str:
-    """A scalar result's rule without its evidence."""
-    cut = min(
-        (
-            i
-            for m in (", a 32-bit mask", ", on M's bus", " (verified", " (measured")
-            if (i := text.find(m)) >= 0
-        ),
-        default=len(text),
-    )
-    mask = " mask" if text[cut:].startswith(", a 32-bit mask") else ""
-    return f"M{mask}: {text[:cut]}"
+
+def _rule(text: str) -> str:
+    """A table text without its evidence: up to its first evidence tag."""
+    cuts = [i for m in _EVIDENCE if (i := text.find(m)) >= 0]
+    return text[: min(cuts, default=len(text))]
+
+
+def _u(code: int) -> str:
+    if code in U_TAKES:
+        lanes = U_TAKES[code]
+        return f"; U's port: b's lanes {lanes[0]}..{lanes[-1]} into U's lanes 0..3"
+    return "; U's port beside it writes nothing" if code in U_NOTHING else ""
 
 
 def formula(unit: str, code: int) -> str:
@@ -1064,29 +1089,21 @@ def formula(unit: str, code: int) -> str:
     if unit in LANE_FUNCTIONS:
         parts = [LANE_FUNCTIONS[unit][code][0]] if code in LANE_FUNCTIONS[unit] else []
         if code in S_RESULTS[unit]:
-            parts.append(_short(S_RESULTS[unit][code].text))
-        return "; ".join(parts)
+            parts.append(f"M: {_rule(S_RESULTS[unit][code].text)}")
+        if unit == "s2" and code in S2_HIGH_HALVES:
+            parts.append(f"high half: {S2_HIGH_HALVES[code][0]}")
+        return "; ".join(parts) + (_u(code) if unit == "s3" else "")
+    if unit == "x1" and code in _TRANSFERS:
+        return _TRANSFERS[code]
     if unit in X_FUNCTIONS:
         text = X_FUNCTIONS[unit][code][0]
         if unit == "x0" and code in X0_LANE_MEMORY:
             return f"{X0_LANE_MEMORY[code][0]}; scalar: {text}"
         return text
-    fact = OP_SEMANTICS[code].fact if code in OP_SEMANTICS else op(code).fact
-    cut = min(
-        (
-            i
-            for m in (
-                " (verified",
-                " (a data op",
-                " (fitted",
-                " (inferred",
-                " (measured",
-            )
-            if (i := fact.find(m)) >= 0
-        ),
-        default=len(fact),
-    )
-    return fact[:cut]
+    sem = OP_SEMANTICS.get(code)
+    if sem is not None and isinstance(sem.run, OpValue):
+        return sem.run.text
+    return _rule(op(code).fact if sem is None else sem.fact)
 
 
 def mnemonics_markdown() -> str:
@@ -1099,12 +1116,15 @@ def mnemonics_markdown() -> str:
         "Scheme: the operation, then the operand it takes besides the lane operands (`_imm`,",
         "`_s` / `_t` / `_r` a scalar register, `_reg` a register in place of an immediate,",
         "`_next` / `_bnext` a's / b's next lane), then the arithmetic (`_ss` / `_us` saturated",
-        "signed / unsigned, `_u` unsigned compare or extension; none: wrapping or signed).",
-        "Codes with one formula share a name: the one the stock programs use most (the lowest",
-        "on a tie) takes it, the others add their code (`abd_ss_05`). `and_`, `or_`, `not_` avoid",
-        "Python keywords. Operands are those the formula reads, in positional order; every",
-        "other operand of the unit's view is a keyword. The tier is the table's for the",
-        "function; an instruction also carries its fields' (`Instr.tier`).",
+        "signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart",
+        "from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`",
+        "the lanes U's port takes, `_u` / `_ua` an S2 product's unsigned operands). Codes whose",
+        "rows differ in nothing else share a name: the one the stock programs use most (the",
+        "lowest on a tie) takes it, the others add their code (`abd_ss_05`). `sub` and its",
+        "kin compute the first operand minus the second, `andn` the first and not the second.",
+        "`and_`, `or_`, `not_` avoid Python keywords. Operands are those the formula reads, in",
+        "positional order; every other operand of the unit's view is a keyword. The tier is",
+        "the table's for the function; an instruction also carries its fields' (`Instr.tier`).",
     ]
     for key, unit in UNITS_BY_KEY.items():
         lines += [
@@ -1112,8 +1132,8 @@ def mnemonics_markdown() -> str:
             f"## {unit.key}",
             "",
             "| code | name | operands | formula | tier |",
+            "|---|---|---|---|---|",
         ]
-        lines.append("|---|---|---|---|---|")
         for code in sorted(unit.names):
             text = formula(key, code).replace("|", "\\|")
             reads = ", ".join(unit.reads[code])

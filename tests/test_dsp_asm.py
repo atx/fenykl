@@ -94,8 +94,13 @@ def test_names_and_codes_build_the_same_instruction():
     named = S1.xor_imm(L1[4], imm=0x20)
     assert named.word() == S1(0x04, b=L1[4], imm=0x20).word()
     assert set(named.fields) == {"f0", "f49_52", "f80_83", "f84_87", "f285_291"}
-    assert S3.ins_reg(L3[1], F3[2], F3[3]).word()["s3idx"] == 2
-    assert S3.ins(L3[1], F3[3], 5).word()["s3idx"] == 5
+    reg = S3.ins_reg(L3[1], F3[2], F3[3])
+    assert reg.word()["s3idx"] == 2 and Bundle.of(reg.word()).parts == (reg,)
+    # The lane number spans idx and bit 2 of u: lane 21 is 5 + 16, lane 5 leaves the bit clear.
+    for lane in (5, 21):
+        word = S3.ins(L3[1], F3[3], lane).word()
+        assert (word["s3idx"], word["s3u"] >> 2 & 1) == (lane & 15, lane >> 4)
+        assert Bundle.of(word).parts == (S3.ins(L3[1], F3[3], lane),)
 
 
 @pytest.mark.parametrize(
@@ -109,7 +114,10 @@ def test_names_and_codes_build_the_same_instruction():
         (lambda: S1.xor(L1[1], L1[2], L1[3]), "2 positional"),
         (lambda: S1(0x04, s=F1[1]), "no operand 's'"),
         (lambda: OP.li(5, rr=asm.R[1]), "part of its format"),
-        (lambda: OP.call(), "target None"),
+        (lambda: OP.jump(), "target None"),
+        (lambda: OP.li(), "takes an immediate"),
+        (lambda: S3.ins_reg(L3[1], 2, F3[3]), "a register of F3"),
+        (lambda: S3.ins(L3[1], F3[3], idx=F3[2]), "an integer"),
     ],
 )
 def test_operands_are_typed_and_checked(build, error):
@@ -125,7 +133,7 @@ def test_operands_are_typed_and_checked(build, error):
         (S1.mov(L1[1]), S1.mov(L1[1])),
         (raw(xreg=3), X1.hand(B[3])),
         (to(L1[1], LOAD), to(L1[2], LOAD)),
-        (OP.call("routine"), raw(imm=0)),
+        (OP.jump("routine"), raw(imm=0)),
     ],
 )
 def test_a_field_set_by_two_parts_raises_even_with_equal_values(parts):
@@ -155,11 +163,11 @@ def test_an_instruction_carries_its_weakest_tier():
 
 def test_a_bundle_names_its_target_by_label():
     program = assemble(
-        [OP.call("r") | X1.hand(B[3]), *[IDLE] * 4, Label("r"), OP.halt()]
+        [OP.jump("r") | X1.hand(B[3]), *[IDLE] * 4, Label("r"), OP.halt()]
     )
     assert program.words[0].target == 5 and program.words[0]["xreg"] == 3
     with pytest.raises(AssemblyError, match="'nowhere' is not defined"):
-        assemble([OP.br(G[1], "nowhere")])
+        assemble([OP.bnz(G[1], "nowhere")])
 
 
 def test_the_mnemonics_file_is_current():
@@ -286,7 +294,7 @@ def build(stmts: list, origin: int = 0) -> Program:
 
 def test_word_ctl_holds_its_target_in_imm_and_f128_132():
     base = Word.from_fields({"f1": 1})
-    assert Word.ctl(3, 0x5A3, base) == (OP.call(0x5A3) | raw(f1=1)).word()
+    assert Word.ctl(3, 0x5A3, base) == (OP.jump(0x5A3) | raw(f1=1)).word()
     assert Word.ctl(4) == OP.ret().word()
     for bad in ((4, 10), (3, None), (7, None)):
         with pytest.raises(ValueError):
@@ -324,7 +332,7 @@ def test_a_target_over_13_bits_raises():
 def test_labelled_source_reassembles_the_program():
     program = build(labelled(), 32)
     text = source(program, "P", labels(labelled(), 32), 32)
-    assert "    OP.call('routine'),  # 32 call -> 38\n    IDLE,  # 33\n" in text
+    assert "    OP.jump('routine'),  # 32 call -> 38\n    IDLE,  # 33\n" in text
     assert "    Label('routine'),\n    raw(xreg=3),  # 38\n" in text
     assert "    OP.loop(G[31], 'routine') | raw(x0k_lo=0x1),  # 39 loop -> 38\n" in text
     assert text.endswith("  # 48\n    Label('end'),\n]\n")
