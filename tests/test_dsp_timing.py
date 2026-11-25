@@ -274,6 +274,17 @@ def test_packed_and_local_transfers_are_timed_at_their_measured_sizes(
     assert part(e, "stream waits").us == pytest.approx(want)
 
 
+def test_byte_lane_loads_are_verified_over_1_to_16_kib_only():
+    assert LANE_LOAD.tier == V
+    for r6, kib in ((0x40, 1), (0x400, 16)):
+        e = run([*lanes(0, r6), *load(0), WAIT])
+        want = LANE_LOAD.per_command + LANE_LOAD.per_kib * kib - FIRST.us
+        assert part(e, "stream waits").us == pytest.approx(want)
+    for r6 in (0x20, 0x410):
+        e = run([*lanes(0, r6), *load(0), WAIT])
+        assert e.us is None and "KiB" in e.unknown
+
+
 def test_an_engine_off_script_has_no_time():
     e = run([0x7FFF, WAIT])
     assert e.us is None and "off script" in e.unknown
