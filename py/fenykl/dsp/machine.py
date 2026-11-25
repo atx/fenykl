@@ -79,6 +79,7 @@ from .fields import (
     X0_LANE_MEMORY,
     X_IMMEDIATES,
     Confidence,
+    lane_file,
     lookup,
     op,
 )
@@ -224,14 +225,7 @@ LATCH_MEASURED = {
 }
 """Heads whose read was latched on the camera; other heads latch at inferred. S1 0x39, which
 reads a only, kept S1's latch (measured)."""
-LANE_PORT_FILE = {
-    enable: next(
-        f
-        for f, (_, *nibs) in LANE_FILES.items()
-        if _id(int(PORTS[enable][1:4]) - 110, int(PORTS[enable][1:4]) - 107) in nibs
-    )
-    for enable in LANE_SOURCES
-}
+LANE_PORT_FILE = {enable: lane_file(enable) for enable in LANE_SOURCES}
 """The lane file each lane port writes: its register nibble lies 110 bits above the file's nibble."""
 S_OPERANDS = {
     "s0": ("L0", "f37_40", "f41_44"),
