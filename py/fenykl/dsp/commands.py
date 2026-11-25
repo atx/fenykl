@@ -2,8 +2,10 @@
 
 cmd 0xF (the copy, program 16): the setup copies the request's src, dst and length (caller block
 +8, +0xC, +0x10) to local memory 0x9D000000, 0x9D000004 and 0x9D000008 and points the program
-register 0x9D200010 at the program. Callers pass uncached addresses; the command's wrapper copies
-the bytes outside the 16-byte-aligned middle on the CPU, so the job sees aligned src, dst and len.
+register 0x9D200010 at the program. Callers pass uncached addresses. The setup passes src, dst and
+len unchanged; after posting the job, the command's wrapper copies the (-dst) & 0xF head bytes and
+the (dst + len) & 0xF tail bytes of dst on the CPU [verified listing], so the DSP job writes only
+the 16-byte-aligned middle of dst [inferred]. `copy` is the DSP job alone, without those bytes.
 
 cmd 0xC (the resampler, program 13): the setup copies the 32 tap words from DRAM 0xA324BC00, the
 program item's constant block, to local words 0x00..0x1F on every job, then the request's src,

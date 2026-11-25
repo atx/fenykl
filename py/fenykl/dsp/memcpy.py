@@ -22,6 +22,10 @@ them to the boot (`apply`):
     load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
     store:  dst[i] = format(buffer)[i + o76] for i in [0, n73); dst[n73, len) not written
 
+The store is the whole command's: dst's 16-byte-aligned middle from the DSP job and the head
+and tail bytes outside it from the command's CPU wrapper (`commands`), as the camera runs, which
+went through the wrapper, read dst back. A job alone (`machine.Machine`) stores only the middle.
+
 A job that does not complete stores nothing, unless its outcome says that dst is written first
 (`Outcome.STORE_TIMEOUT`). A placement out of range, a register of unknown value or a load that
 may or may not have run makes its bytes UNKNOWN.
@@ -1453,7 +1457,8 @@ SEEN_LENGTHS = range(0x200, 0x4001, 0x10)
 """The lengths within the range and alignment of the copies run on the camera: 0.5..16 KiB in
 whole 16-byte lines."""
 ODD_LENGTHS = (0x40F,)
-"""Odd lengths whose copies ran on the camera, with the halt test at 50 (`copy_branches`)."""
+"""Odd lengths whose copies ran on the camera, with the halt test at 50 (`copy_branches`): at
+dst + 1 only, where the CPU wrapper copies a 15-byte head and the DSP job the aligned 0x400."""
 
 
 def copy_branches(length: int) -> Given:
