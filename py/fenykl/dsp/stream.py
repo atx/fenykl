@@ -126,14 +126,21 @@ PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
 """Two vectors of byte elements (four lines)."""
 TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
 """Three vectors of byte elements (six lines)."""
-LOCAL_FILL_SHAPES = tuple((2, 0, r2, None, 0, 0x10, None, 1) for r2 in (4, 2, 1))
-"""Kind 8 under r0 2 at r2 4 / 2 / 1 (byte, 16-bit, 32-bit elements): one row, r5 0x10, r3
-and r6 as `LOCAL_FILLS` bounds them."""
-LOCAL_FILLS = range(0x400, 0x701)
-"""The local offsets "to" a kind 8 under r0 2 ran at (word-aligned), with r3 up to
-`LOCAL_FILL_WORDS`, r6 up to `LOCAL_FILL_LINES` and r3 at most r5 r6 / r2; other offsets and
-counts were not measured and raise `UnknownSemantics`."""
-LOCAL_FILL_WORDS, LOCAL_FILL_LINES = 8, 5
+LOCAL_FILLS: dict[tuple[int, int, int], tuple[int, Confidence]] = {
+    (4, 3, 2): (0x400, V),
+    (4, 5, 2): (0x500, V),
+    (4, 8, 2): (0x400, I),
+    (2, 4, 4): (0x700, V),
+    (2, 8, 2): (0x600, I),
+    (1, 6, 3): (0x600, V),
+    (1, 3, 5): (0x700, V),
+}
+"""Kind 8 under r0 2 on channel 0 (r1 0, r4 0, r5 0x10, r7 1) by the (r2, r3, r6) that ran: the
+"to" it ran at and its tier (verified pre-registered, inferred measured once). Another word-aligned
+"to" in `LOCAL_FILL_TO` is capped at inferred; other registers, channels and offsets, and a "from"
+whose element has its top bit set (every value that ran was below 0x8000), raise
+`UnknownSemantics`."""
+LOCAL_FILL_TO = range(0x400, 0x701)
 WRAPPED, DIRECT = "wrapped", "direct"
 """How a kind's memory-side offset was handed where it ran: a DRAM address counted modulo
 `fields.LANE_VECTORS` vectors (the job's dst or src), or an offset inside the memory."""
@@ -160,7 +167,10 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         BASE_SHAPE: (V, WRAPPED),
         HALF_SHAPE: (V, WRAPPED),
         QUAD_SHAPE: (V, WRAPPED),
-        **{shape: (V, DIRECT) for shape in LOCAL_FILL_SHAPES},
+        **{
+            (2, 0, r2, r3, 0, 0x10, r6, 1): (tier, DIRECT)
+            for (r2, r3, r6), (_, tier) in LOCAL_FILLS.items()
+        },
     },
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
@@ -556,28 +566,27 @@ class Engine:
         """Kind 8 under r0 2: r3 local words from "to", each copies of "from"'s low element of
         r2's width (32 / r2 bits)."""
         r = cmd.regs
-        r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
+        r2, r3, r6 = (r[i].value for i in (2, 3, 6))  # the shape matched: known
         to, frm = cmd.to.value, _known(cmd.frm, "the fill value")
 
         def unmeasured(why: str) -> UnknownSemantics:
             return UnknownSemantics(cmd.index, "stream", [], f"{cmd.where}: {why}")
 
-        if not (
-            1 <= r3 <= LOCAL_FILL_WORDS
-            and r6 <= LOCAL_FILL_LINES
-            and r3 * r2 <= r5 * r6
-        ):
-            raise unmeasured(f"a local fill of {r3} words at r6 {r6}: not measured")
-        if to % 4 or to not in LOCAL_FILLS:
+        ran_to, tier = LOCAL_FILLS[(r2, r3, r6)]
+        if cmd.channel != 0:
+            raise unmeasured(f"a local fill on channel {cmd.channel}: not measured")
+        if to % 4 or to not in LOCAL_FILL_TO:
             raise unmeasured(f"a local fill to {to:#x}: not measured")
         width = LOCAL_WIDTHS[r2]
-        if width == 32 and frm > 0xFFFF:
-            # Only 15-bit values ran: a 32-bit element was not told from a 16-bit one.
-            raise unmeasured(f"a 32-bit local fill of {frm:#x}: not measured")
         element = frm & (1 << width) - 1
+        if element >> (width - 1) or (width == 32 and frm >> 15):
+            # Every "from" that ran was below 0x8000, its element's top bit clear.
+            raise unmeasured(f"a {width}-bit local fill of {frm:#x}: not measured")
         word = sum(element << k for k in range(0, 32, width))
         size = 4 * r3
-        tier = min([self.cap, cmd.tier, *(x.tier for x in r)])
+        tier = min([tier, self.cap, cmd.tier, *(x.tier for x in r)])
+        if to != ran_to:
+            tier = min(tier, I)
         src = m.boot.source("stream fill in flight", cmd.where)
         m.boot.local.write(LOCAL_BASE + to, Bytes.unknown(size, src))
         filled = m.boot.source(
