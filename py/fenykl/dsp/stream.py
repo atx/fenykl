@@ -14,9 +14,10 @@ Grammar (verified): the values form groups, each starting with a key v.
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
   offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
   (inferred: what follows it is capped at inferred). Kinds 2 and 4 load and store as 0 and 6,
-  kinds 3 and 5 move nothing as 1, kind 8 fills (r3 lane-memory vectors from the one "to" names,
-  every lane "from"'s low 16 bits; no DRAM read or written), each only in the shapes it ran in
-  (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
+  kinds 3 and 5 move nothing as 1, kind 8 fills (under r0 1 r3 lane-memory vectors from the one
+  "to" names, every lane "from"'s low 16 bits; under r0 2 r3 local words from "to", each filled
+  with copies of "from"'s low r2-wide element: `LOCAL_FILLS`; no DRAM read or written), each only
+  in the shapes it ran in (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
   `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
@@ -93,7 +94,8 @@ CHANNELS, REGISTERS = 4, 8
 LOAD, NOTHING_MOVES, STORE = 0, 1, 6
 """The command kinds measured."""
 FILL = 8
-"""Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits (no DRAM side)."""
+"""Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits, or under r0 2 the
+local words at "to" with copies of "from"'s low r2-wide element (no DRAM side)."""
 KIND_AS = {
     2: LOAD,
     3: NOTHING_MOVES,
@@ -124,6 +126,14 @@ PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
 """Two vectors of byte elements (four lines)."""
 TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
 """Three vectors of byte elements (six lines)."""
+LOCAL_FILL_SHAPES = tuple((2, 0, r2, None, 0, 0x10, None, 1) for r2 in (4, 2, 1))
+"""Kind 8 under r0 2 at r2 4 / 2 / 1 (byte, 16-bit, 32-bit elements): one row, r5 0x10, r3
+and r6 as `LOCAL_FILLS` bounds them."""
+LOCAL_FILLS = range(0x400, 0x701)
+"""The local offsets "to" a kind 8 under r0 2 ran at (word-aligned), with r3 up to
+`LOCAL_FILL_WORDS`, r6 up to `LOCAL_FILL_LINES` and r3 at most r5 r6 / r2; other offsets and
+counts were not measured and raise `UnknownSemantics`."""
+LOCAL_FILL_WORDS, LOCAL_FILL_LINES = 8, 5
 WRAPPED, DIRECT = "wrapped", "direct"
 """How a kind's memory-side offset was handed where it ran: a DRAM address counted modulo
 `fields.LANE_VECTORS` vectors (the job's dst or src), or an offset inside the memory."""
@@ -150,10 +160,11 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         BASE_SHAPE: (V, WRAPPED),
         HALF_SHAPE: (V, WRAPPED),
         QUAD_SHAPE: (V, WRAPPED),
+        **{shape: (V, DIRECT) for shape in LOCAL_FILL_SHAPES},
     },
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
-for kinds that move nothing; a fill's "to" also vector-aligned, as every fill ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
+for kinds that move nothing; a lane fill's "to" also vector-aligned, as every one ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
 a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 (loads) and
 kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
@@ -459,7 +470,7 @@ class Engine:
                         f"{cmd.where}: command kind {cmd.kind:#x} with a memory offset "
                         f"not {form} as where it ran",
                     )
-            if kind == FILL and cmd.to.value % VECTOR_BYTES:
+            if kind == FILL and form == WRAPPED and cmd.to.value % VECTOR_BYTES:
                 raise UnknownSemantics(
                     cmd.index,
                     "stream",
@@ -508,6 +519,8 @@ class Engine:
 
     def _fill(self, m: Machine, cmd: _Command) -> Callable[[Machine, Confidence], None]:
         """Kind 8: r3 vectors from the one "to" names, every lane "from"'s low 16 bits."""
+        if cmd.regs[0].value == LOCAL_MEMORY:
+            return self._local_fill(m, cmd)
         value = _known(cmd.frm, "the fill value") & 0xFFFF
         base = _known(cmd.to, "a memory offset") // VECTOR_BYTES
         r3 = _known(cmd.regs[3], "r3")
@@ -530,6 +543,50 @@ class Engine:
                     if racing
                     else Vec((value,) * LANE_COUNT, min(tier, cap, wrap))
                 )
+
+        return complete
+
+    def _local_fill(
+        self, m: Machine, cmd: _Command
+    ) -> Callable[[Machine, Confidence], None]:
+        """Kind 8 under r0 2: r3 local words from "to", each copies of "from"'s low element of
+        r2's width (32 / r2 bits)."""
+        r = cmd.regs
+        r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
+        to, frm = cmd.to.value, _known(cmd.frm, "the fill value")
+
+        def unmeasured(why: str) -> UnknownSemantics:
+            return UnknownSemantics(cmd.index, "stream", [], f"{cmd.where}: {why}")
+
+        if not (
+            1 <= r3 <= LOCAL_FILL_WORDS
+            and r6 <= LOCAL_FILL_LINES
+            and r3 * r2 <= r5 * r6
+        ):
+            raise unmeasured(f"a local fill of {r3} words at r6 {r6}: not measured")
+        if to % 4 or to not in LOCAL_FILLS:
+            raise unmeasured(f"a local fill to {to:#x}: not measured")
+        width = LOCAL_WIDTHS[r2]
+        if width == 32 and frm > 0xFFFF:
+            # Only 15-bit values ran: a 32-bit element was not told from a 16-bit one.
+            raise unmeasured(f"a 32-bit local fill of {frm:#x}: not measured")
+        element = frm & (1 << width) - 1
+        word = sum(element << k for k in range(0, 32, width))
+        size = 4 * r3
+        tier = min([self.cap, cmd.tier, *(x.tier for x in r)])
+        src = m.boot.source("stream fill in flight", cmd.where)
+        m.boot.local.write(LOCAL_BASE + to, Bytes.unknown(size, src))
+        filled = m.boot.source(
+            "stream fill", "the stream engine's fill of local memory"
+        )
+
+        def complete(m: Machine, cap: Confidence) -> None:
+            out = Bytes.of(word.to_bytes(4, "little") * r3, filled, min(tier, cap))
+            now = m.boot.local.read(LOCAL_BASE + to, size)
+            for i in range(size):
+                if now.src[i] != src:  # written while the fill ran: raced
+                    out.known[i] = 0
+            m.boot.local.write(LOCAL_BASE + to, out)
 
         return complete
 

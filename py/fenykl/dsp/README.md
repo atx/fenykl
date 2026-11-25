@@ -920,7 +920,9 @@ channel registers do not survive a job; a job with transfers and no stream raise
 sees only the values X1 0x1c hands [verified]: a key 0x21 | channel << 6 | register << 11 and one
 value, a block key 0x20 | channel << 6 and eight values (registers 0..7), or a command channel
 << 6 | kind (0 load, 6 store, 1 nothing; that a 0x1d counts kind 1 is inferred; 2 / 4 as 0 / 6,
-3 / 5 / 7 as 1 and 8 a fill of the lane memory at "to" with "from"'s low 16 bits, each only in the
+3 / 5 / 7 as 1 and 8 a fill: under r0 1 of the lane memory at "to" with "from"'s low 16 bits,
+under r0 2 of r3 local words from "to" with copies of "from"'s low r2-wide element [verified at
+r2 4 / 2 / 1; "to", r3 and r6 only in the ranges run, `stream.LOCAL_FILLS`], each only in the
 shapes it ran in, `stream.KIND_SHAPES`; other kinds raise) and (from, to). Per channel r0 names the memory (1 the
 lane memory, 2 the local memory), r2 its elements per unit and r3 the units per row, r5 the
 elements per 16-byte DRAM line (the element width 128 / r5 bits), r6 the lines per row, r7 the

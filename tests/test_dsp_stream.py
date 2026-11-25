@@ -374,6 +374,55 @@ def test_kind_8_fills_r3_vectors_with_the_low_16_bits_of_from(r3, r5, r6):
     assert bytes(m.boot.read(DST, 32).data) == bytes(32)
 
 
+def local_fill(r2: int, r3: int, r6: int) -> list[int]:
+    """Channel 0 on the local memory as kind 8 ran there."""
+    return block(0, 2, 0, r2, r3, 0, 0x10, r6, 1)
+
+
+@pytest.mark.parametrize(
+    ("r2", "frm", "word"),
+    [(4, 0x2A91, 0x91919191), (2, 0x2A91, 0x2A912A91), (1, 0x2A91, 0x00002A91)],
+)
+def test_kind_8_on_local_memory_fills_r3_words_with_copies_of_the_low_element(
+    r2, frm, word
+):
+    m, e = machine(), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + 0x500, Bytes.of(bytes(range(64)), 0))
+    drive(m, e, [*local_fill(r2, 5, 3), 0x08, frm, 0x500])
+    assert not any(m.boot.local.read(LOCAL_BASE + 0x500, 20).known)  # in flight
+    drive(m, e, [WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x500, 64)
+    assert bytes(got.data[:20]) == word.to_bytes(4, "little") * 5
+    assert all(got.known) and got[:20].weakest() == V
+    assert bytes(got.data[20:]) == bytes(range(20, 64))
+    assert not m.memory and not e.off
+
+
+@pytest.mark.parametrize(
+    ("regs", "frm", "to", "why"),
+    [
+        ((2, 9, 4), 0x11, 0x400, "9 words"),  # more words than ran
+        ((4, 8, 1), 0x11, 0x400, "8 words"),  # more than r5 r6 / r2
+        ((2, 4, 2), 0x11, 0x200, "fill to 0x200"),
+        ((2, 4, 2), 0x11, 0x402, "fill to 0x402"),
+        ((1, 4, 2), 0x12345, 0x400, "32-bit local fill"),
+    ],
+)
+def test_an_unmeasured_local_fill_raises(regs, frm, to, why):
+    m = machine()
+    with pytest.raises(UnknownSemantics, match=why):
+        drive(m, stream.Engine(), [*local_fill(*regs), 0x08, frm, to])
+
+
+def test_a_local_fill_raced_by_a_write_leaves_those_bytes_unknown():
+    m, e = machine(), stream.Engine()
+    drive(m, e, [*local_fill(2, 4, 2), 0x08, 0x1111, 0x600])
+    m.boot.local.write(LOCAL_BASE + 0x604, Bytes.of(bytes(4), 0))
+    drive(m, e, [WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x600, 16)
+    assert list(got.known) == [1] * 4 + [0] * 4 + [1] * 8
+
+
 def test_more_commands_outstanding_than_the_depth_raise():
     m = machine(bytes(64))
     loads = [v for k in range(stream.DEPTH) for v in load(0, SRC, 64 * k)]
