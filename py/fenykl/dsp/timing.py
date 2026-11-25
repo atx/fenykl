@@ -32,7 +32,10 @@ JOB = Cost(
     "the job's fixed cost, the interrupt and callback path: the 101 us intercept of loops of "
     "512 to 2048 passes against their pass counts (verified on the camera, in a pre-registered "
     "range of 95 to 115 us) less the first runs of those jobs' 42 words (2.7 us at `FIRST`) and "
-    "their unrun line words (0.4 us at `UNRUN`), fitted",
+    "their unrun line words (0.4 us at `UNRUN`), fitted; all-idle straight runs of 152 to 1900 "
+    "words on five later boots put the intercept at 94.6 to 97.0 us (a fit of two boots held, "
+    "registered, on a third), within the 3 to 5 us scatter of a boot's minima: one constant, "
+    "about 2 us high for straight runs",
 )
 REPEAT = Cost(
     0.00537,
@@ -68,7 +71,8 @@ FIRST = Cost(
     I,
     "a word's first execution: 64 ns, the slope over straight-line jobs of 200 to 1000 idle "
     "words (fitted; earlier runs of 0 to 1900 words gave 62 to 70 ns, all within a "
-    "pre-registered 50 to 75 ns); words of ALU ops cost the same as idle words (verified on "
+    "pre-registered 50 to 75 ns; runs of 152 to 1900 words on five later boots 58 to 62 ns, "
+    "a fit of two of them held, registered, on a third); words of ALU ops cost the same as idle words (verified on "
     "the camera); paid when the word runs, not for the image's length: a word branched over "
     "costs nothing unless it shares a fetch line with a word that runs (`LINE`)",
 )
