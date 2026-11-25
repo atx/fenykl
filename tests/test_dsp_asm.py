@@ -14,6 +14,7 @@ from fenykl.dsp.asm import (
     L2,
     L3,
     LOAD,
+    NOP,
     OP,
     S1,
     S2,
@@ -24,6 +25,7 @@ from fenykl.dsp.asm import (
     B,
     Bundle,
     G,
+    Label,
     O,
     Raw,
     U,
@@ -34,9 +36,7 @@ from fenykl.dsp.disasm import listing, source
 from fenykl.dsp.fields import FIELDS, Confidence, Operands
 from fenykl.dsp.program import (
     AssemblyError,
-    Ctl,
     HypothesisFieldWarning,
-    Label,
     Program,
     assemble,
     call_return_errors,
@@ -163,11 +163,51 @@ def test_an_instruction_carries_its_weakest_tier():
 
 def test_a_bundle_names_its_target_by_label():
     program = assemble(
-        [OP.jump("r") | X1.hand(B[3]), *[IDLE] * 4, Label("r"), OP.halt()]
+        [OP.jump("r") | X1.hand(B[3]), *[NOP] * 4, Label("r") | OP.halt()]
     )
     assert program.words[0].target == 5 and program.words[0]["xreg"] == 3
+    assert program.words[5] == OP.halt().word()
     with pytest.raises(AssemblyError, match="'nowhere' is not defined"):
         assemble([OP.bnz(G[1], "nowhere")])
+
+
+def test_a_label_alone_is_an_idle_word():
+    program = assemble([NOP, Label("top"), OP.jump("top")])
+    assert program.words[:2] == (IDLE, IDLE) and program.words[2].target == 1
+    with pytest.raises(ValueError, match="two labels on one word"):
+        Label("a") | OP.halt() | Label("b")
+
+
+def test_two_ports_on_one_register_raise():
+    # L1 has two ports, one taking the load, one S1's result.
+    with pytest.raises(ValueError, match=r"two ports write L1\[4\]"):
+        to(L1[4], LOAD) | to(L1[4], S1)
+    to(L1[4], LOAD) | to(L1[5], S1)
+    # Such a word still decodes exactly, its second port raw.
+    word = (to(L1[4], LOAD) | raw(f242_243=2, f159_162=4)).word()
+    parts = Bundle.of(word).parts
+    assert parts[0] == to(L1[4], LOAD) and isinstance(parts[1], Raw)
+    assert Bundle.of(word).word() == word
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: IDLE | X0.load(asm.A[1], k=0),
+        lambda: X0.load(asm.A[1], k=0) | IDLE,
+        lambda: NOP | IDLE,
+        lambda: assemble([IDLE]),
+    ],
+)
+def test_a_raw_word_is_no_part(build):
+    with pytest.raises(TypeError, match=r"raw\(word\).*NOP"):
+        build()
+
+
+def test_raw_takes_a_word():
+    word = Word.from_fields({"xreg": 3, "ra": 2})
+    assert raw(word) == raw(xreg=3, ra=2)
+    assert (raw(IDLE) | X1.hand(B[3])).word() == X1.hand(B[3]).word()
 
 
 def test_the_mnemonics_file_is_current():
@@ -178,22 +218,17 @@ def test_the_mnemonics_file_is_current():
 def test_assemble_warns_only_about_hypothesis_fields():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assemble([X1.hand(B[3]), IDLE])
+        assemble([X1.hand(B[3]), NOP])
     with pytest.warns(
         HypothesisFieldWarning, match=r"2 hypothesis fields: f35_36, f234_235$"
     ):
-        assemble(
-            [
-                Word.from_fields({"xreg": 3, "f234_235": 1}),
-                Word.from_fields({"f35_36": 0}),
-            ]
-        )
+        assemble([raw(xreg=3, f234_235=1), raw(f35_36=0)])
 
 
 @pytest.mark.parametrize("const", ["f133_140", "f230_231", "f277"])
 def test_assemble_rejects_a_cleared_constant(const):
     with pytest.raises(ValueError, match=const):
-        assemble([Word.from_fields({const: 0})])
+        assemble([raw(**{const: 0})])
 
 
 @pytest.mark.parametrize("field", ["f35_36", "f145_146", "f232_233", "f234_235"])
@@ -242,10 +277,15 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
     ]
 
 
-def test_dsl_source_rebuilds_every_stock_program():
+@pytest.mark.parametrize("labelled", [False, True])
+def test_dsl_source_rebuilds_every_stock_program(labelled):
     for item, program in stock_programs(stock_image("em10ii")).items():
+        targets = {w.target for w in program.words if w.target is not None}
+        names = {f"w{t}": t for t in targets if t < len(program)} if labelled else None
+        text = source(program, "P", names)
+        assert ("Label('w" in text) is labelled
         namespace: dict = {}
-        exec(source(program, "P"), namespace)  # noqa: S102 (our own generated source)
+        exec(text, namespace)  # noqa: S102 (our own generated source)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", HypothesisFieldWarning)
             assert assemble(namespace["P"]).words == program.words, item
@@ -273,15 +313,14 @@ def test_listing_shows_data_ops_in_their_format():
 def labelled() -> list:
     """Call 0 -> routine, halt at 5; the routine loops back to its top and returns."""
     return [
-        Ctl(3, "routine"),
-        *[IDLE] * 4,
+        OP.jump("routine"),
+        *[NOP] * 4,
         OP.halt(),
-        Label("routine"),
-        raw(xreg=3),
+        Label("routine") | raw(xreg=3),
         OP.loop(G[31], "routine") | raw(f1=1),
-        *[IDLE] * 4,
-        Word.ctl(4),
-        *[IDLE] * 4,
+        *[NOP] * 4,
+        OP.ret(),
+        *[NOP] * 4,
         Label("end"),
     ]
 
@@ -318,7 +357,7 @@ def test_relocation_moves_every_label_target_and_nothing_else():
 
 def test_undefined_and_duplicate_labels_raise():
     with pytest.raises(AssemblyError, match="'nowhere' is not defined"):
-        build([Ctl(1, "nowhere"), IDLE])
+        build([OP.jump("nowhere"), NOP])
     with pytest.raises(AssemblyError, match="'end' defined twice"):
         build([*labelled(), Label("end")])
 
@@ -332,10 +371,14 @@ def test_a_target_over_13_bits_raises():
 def test_labelled_source_reassembles_the_program():
     program = build(labelled(), 32)
     text = source(program, "P", labels(labelled(), 32), 32)
-    assert "    OP.jump('routine'),  # 32 call -> 38\n    IDLE,  # 33\n" in text
-    assert "    Label('routine'),\n    raw(xreg=3),  # 38\n" in text
+    assert "    OP.jump('routine'),  # 32 call -> 38\n    NOP,  # 33\n" in text
+    assert "    Label('routine') | raw(xreg=3),  # 38\n" in text
     assert "    OP.loop(G[31], 'routine') | raw(x0k_lo=0x1),  # 39 loop -> 38\n" in text
-    assert text.endswith("  # 48\n    Label('end'),\n]\n")
+    assert text.endswith("  # 48\n    Label('end'),  # 49\n]\n")
+    with pytest.raises(ValueError, match="outside the program"):
+        source(program, "P", {"after": 50}, 32)
+    with pytest.raises(ValueError, match="on one word"):
+        source(program, "P", {"a": 33, "b": 33}, 32)
     namespace: dict = {}
     exec(text, namespace)  # noqa: S102 (our own generated source)
     assert build(namespace["P"], 32) == program

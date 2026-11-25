@@ -10,19 +10,38 @@ minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 t
 
 The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine. Each
 word is a bundle of unit instructions and ports (`fenykl.dsp.asm`): `X0.load(A[1], k=i)` loads
-vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later.
+vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later. `Label("top")` names
+the word it is bundled with, `NOP` is the idle word.
 """
 
 import pytest
 
-from fenykl.dsp.asm import F1, L1, LOAD, OP, S1, X0, X1, A, B, G, O, R, Reg, to
+from fenykl.dsp.asm import (
+    F1,
+    L1,
+    LOAD,
+    NOP,
+    OP,
+    S1,
+    X0,
+    X1,
+    A,
+    B,
+    Bundle,
+    G,
+    Label,
+    O,
+    Part,
+    R,
+    Reg,
+    to,
+)
 from fenykl.dsp.emu import Boot, Executor, Job, Stop
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Machine, Sv
-from fenykl.dsp.program import Label, Program, Statement, assemble
+from fenykl.dsp.program import Program, assemble
 from fenykl.dsp.stream import Engine
 from fenykl.dsp.timing import estimate
-from fenykl.dsp.word import IDLE
 
 SRC, DST = 0xA0000000, 0xA1000000
 B_SRC, B_DST, B_LOAD, B_STORE = 3, 2, 13, 12
@@ -40,7 +59,7 @@ def b_add(r: int, src: int, k: int):
     return X1.add_imm(B[src], k) | to(B[r], X1)
 
 
-def hand(*items: int | tuple[str, int]) -> list[Statement]:
+def hand(*items: int | tuple[str, int]) -> list[Bundle | Part]:
     """Values to the stream engine through X1 0x1c: an int through B14 / B15, ("b", r) from
     B[r], ("wait",) a 0x1d."""
     out, scratch = [], 14
@@ -60,7 +79,7 @@ def block(channel: int, nbytes: int) -> list[int]:
     return [0x20 | channel << 6, 1, 0, 0x20, nbytes // 32, 0, 0x10, nbytes // 16, 1]
 
 
-def chunk(bank: int, top: str) -> list[Statement]:
+def chunk(bank: int, top: str) -> list[Bundle | Part]:
     """y = x ^ 0x20 over the bank's 128 vectors, four per pass; G8 counts, G9 / A[1] walk."""
     # S1 0x04, b ^ imm7, into O[j - 3] in the head's word; imm7 holds only bits 3..2 of r,
     # r = F1[4] sets all four.
@@ -73,10 +92,10 @@ def chunk(bank: int, top: str) -> list[Statement]:
         li(G[9], bank),
         li(A[1], bank),
         li(G[8], 128 // 4 - 1),
-        IDLE,
-        IDLE,
-        Label(top),
-        *[X0.load(A[1], k=i) for i in range(4)],
+        NOP,
+        NOP,
+        Label(top) | X0.load(A[1], k=0),
+        *[X0.load(A[1], k=i) for i in range(1, 4)],
         to(L1[4], LOAD),
         to(L1[5], LOAD),
         to(L1[6], LOAD) | xor[0],
@@ -84,10 +103,10 @@ def chunk(bank: int, top: str) -> list[Statement]:
         xor[2] | store[1],
         xor[3] | store[2],
         store[3] | OP.add_imm(G[9], 4) | to(G[9], OP) | to(A[1], OP),
-        IDLE,
-        IDLE,
+        NOP,
+        NOP,
         OP.loop(G[8], top, rr=R[0]) | to(G[8], OP),
-        *[IDLE] * 4,
+        *[NOP] * 4,
     ]
 
 
@@ -116,7 +135,7 @@ def xor_kernel(nbytes: int) -> Program:
         words += chunk(BANKS[c % 2], f"top{c}")
     words += hand(0x46, BANKS[(n - 1) % 2] * 64, ("b", B_STORE))
     words += hand(*[("wait",)] * (len(out) + 1))
-    return assemble([*words, OP.halt(), *[IDLE] * 4])
+    return assemble([*words, OP.halt(), *[NOP] * 4])
 
 
 def run(nbytes: int, data: bytes):

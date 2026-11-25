@@ -10,17 +10,11 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp import commands
+from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.memcpy import Copy16Model
-from fenykl.dsp.program import (
-    Ctl,
-    HypothesisFieldWarning,
-    Label,
-    Program,
-    Statement,
-    assemble,
-)
+from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
 from fenykl.dsp.semantics import OP_SEMANTICS, Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
 from fenykl.dsp.word import IDLE, Word
@@ -693,36 +687,25 @@ def test_sources_stay_bounded_over_jobs():
     assert len(boot.sources) == n
 
 
-def statements(program: Program) -> list[Statement]:
-    """`program` as DSL statements: a label at each target, each control word a `Ctl`."""
+def statements(program: Program) -> list[Bundle]:
+    """`program` as bundles: a label at each target, each control op naming it."""
     words = program.words
-    targets = {w.target for w in words if w.target is not None}
-    out: list[Statement] = []
-    for i, w in enumerate(words):
-        if i in targets:
-            out.append(Label(f"w{i}"))
-        out.append(w if w.target is None else Ctl(w.op, f"w{w.target}", w))
-    return out
+    names = {w.target: f"w{w.target}" for w in words if w.target is not None}
+    return [Bundle.of(w, names, i) for i, w in enumerate(words)]
 
 
 def inserted(
     k: int, word: Word, after_label: bool = False, base: Program | None = None
 ) -> Program:
     """`base` (default the stock copy) assembled with `word` inserted before stock word k,
-    before its label (or after it, so that a control word targeting k targets the inserted
-    word)."""
+    which keeps its label (or hands it to the inserted word, so that a control word targeting
+    k targets the inserted word)."""
     stmts = statements(base or stock())
-    at = next(
-        (
-            n
-            for n in range(len(stmts))
-            if sum(not isinstance(x, Label) for x in stmts[:n]) == k
-        ),
-        len(stmts),
-    )
-    if after_label and isinstance(stmts[at], Label):
-        at += 1
-    stmts.insert(at, word)
+    new = raw(word)
+    if after_label and k < len(stmts) and stmts[k].label is not None:
+        new = Label(stmts[k].label) | new
+        stmts[k] = Bundle(tuple(p for p in stmts[k].parts if not isinstance(p, Label)))
+    stmts.insert(k, new)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", HypothesisFieldWarning)
         return assemble(stmts)
