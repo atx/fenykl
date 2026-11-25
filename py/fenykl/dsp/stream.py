@@ -183,8 +183,9 @@ kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
 DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
-(measured); 48 wedged the job twice, also with only 44 0x1d after them, so the depth is 44..47
-and handing past it kills the job (inferred). More than `DEPTH` raises `UnknownSemantics`."""
+(measured, 44 again beside the wedges below); 45 and 46 wedged the job on two boots and 48
+twice, also with only 44 0x1d after them, so the depth is 44 and handing past it kills the job
+(measured). More than `DEPTH` raises `UnknownSemantics`."""
 LANE_MEMORY, LOCAL_MEMORY = 1, 2
 """r0's values: the DSP-side memory."""
 VECTOR_BYTES = 64
