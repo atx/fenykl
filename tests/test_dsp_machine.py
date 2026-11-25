@@ -530,7 +530,8 @@ def test_a_lenient_machine_forgets_what_a_store_at_an_unknown_address_may_write(
     lapsed, _, branch = run.flow.steps[:3]
     assert lapsed.unknown and lapsed.confidence is H
     assert lapsed.note == "op13: a local store at an unknown address"
-    assert run.machine.lapses == [lapsed.note]
+    assert run.machine.lapses == [lapsed.note] and run.lapses == (lapsed.note,)
+    assert run.estimate.us is None  # a lapsed run's time is not known
     assert boot.local.read(LOCAL_BASE + 0x40, 1).known == bytearray([0])
     # All the job leaves and decides after a lapse is a hypothesis.
     assert run.machine.g[16] == Sv(1, H) and branch.confidence is H
@@ -645,10 +646,15 @@ def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
         boot = Boot()
         Executor(boot, datapath=Machine(boot)).step(job)
     boot = Boot()
-    flow = Executor(boot, strict=False, datapath=Machine(boot)).step(job)
+    boot.local.write(LOCAL_BASE, Bytes.of(b"\x11", boot.source("test")))
+    m = Machine(boot)
+    m.g[16] = Sv(0)
+    flow = Executor(boot, strict=False, datapath=m).step(job)
     (step,) = flow.steps  # lenient: the job ends at the halt
     assert flow.stop is Stop.HALT and step.unknown and step.confidence is H
     assert step.note == "br: a control op behind a halt"
+    # What the rest of the tail may write is forgotten.
+    assert not any(boot.local.read(LOCAL_BASE, 1).known) and m.g[16] == Sv(0, H)
 
 
 def test_the_machine_refuses_a_control_word_with_f120_122_low_bits():
@@ -1231,7 +1237,7 @@ def test_program_15_without_a_request_reaches_its_halt_on_a_lenient_machine():
     assert sum(s.unknown for s in flow.steps) == len(m.lapses) > 0
 
 
-def test_program_13_reaches_its_halt_on_a_lenient_machine_past_unmeasured_commands():
+def test_program_13_goes_past_an_unmeasured_command_on_a_lenient_machine():
     src, table, lines = 0x10000000, 0x10200000, 16
     job = commands.resample(stock(13), src, 0x10100000, table, 64, 64, lines)
 
@@ -1247,11 +1253,17 @@ def test_program_13_reaches_its_halt_on_a_lenient_machine_past_unmeasured_comman
     ):
         b = boot()
         Executor(b, datapath=Machine(b, None, Engine())).step(job)
-    given = {372: False, 494: False, 551: False, 562: False, 573: False}
-    flow, m = lenient(boot(), job, given)
-    assert flow.stop is Stop.HALT and flow.order()[-4:] == [5, 6, 7, 8]
-    assert any("kind 0x4 outside the shapes" in why for why in m.lapses)
-    assert any("never ends" in why for why in m.lapses)
+    b = boot()
+    flow, m = lenient(b, job, {})
+    # The command's reach is not known: every memory is forgotten, so 205 is undecided.
+    assert (
+        flow.stop is Stop.UNDECIDED and flow.why == "word 205: r3 undecided: r3 unknown"
+    )
+    assert m.lapses == [
+        "stream: transfer 92 (word 192): command kind 0x4 outside the shapes it ran in"
+    ]
+    request = b.local.read(LOCAL_BASE + commands.RESAMPLE_REQUEST, 24)
+    assert m.lanes_lost and not any(request.known)
 
 
 SRC, DST, LENGTH = 0xA0FCA800, 0xA1113600, 0x400
@@ -1368,8 +1380,12 @@ def test_an_unaligned_local_access_is_not_covered(code, base):
     with pytest.raises(UnknownSemantics, match="an unaligned local access"):
         run(m, [op_word(code, 4, imm=0)])
     m.strict = False
-    run(m, [op_word(code, 4, imm=0)])
+    run(m, [op_word(code, 4, imm=0), IDLE, IDLE, TAKE])
     assert m.lapses == [f"op{code:02x}: an unaligned local access at {base:#x}"]
+    if code == 0x18:  # a store: local memory is forgotten
+        assert not any(m.boot.local.read(LOCAL_BASE, 12).known)
+    else:  # a load: its datum is unknown
+        assert m.g[12].value is None
 
 
 @pytest.mark.parametrize(
@@ -1441,10 +1457,12 @@ def test_ops_chain_through_g_until_an_op_without_semantics():
     )
     job = Job(Program(words), ())
     boot = Boot()
+    boot.local.write(LOCAL_BASE, Bytes.of(b"\x11", boot.source("test")))
     m = Machine(boot)
     m.g[2] = Sv(0x40F)
     flow = Executor(boot, strict=False, datapath=m).step(job)
     assert m.g[7] == Sv(0x100)
+    assert not any(boot.local.read(LOCAL_BASE, 1).known)  # the op slot may store there
     assert flow.steps[2].unknown and flow.steps[2].note == "op4a: no semantics"
     assert m.g[2] == Sv(None, H) and m.g[8] == Sv(None, H)
     with pytest.raises(

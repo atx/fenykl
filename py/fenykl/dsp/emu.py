@@ -124,6 +124,10 @@ class Run:
     machine: Machine
     """The job's machine: its registers and lane memory at the halt, its stream engine."""
     estimate: Estimate
+    """Not known for a run that lapsed."""
+    lapses: tuple[str, ...] = ()
+    """Why the run lapsed (`Machine.lapse`, lenient), in order; empty for a run its facts
+    cover."""
 
 
 class Boot:
@@ -214,7 +218,8 @@ class Boot:
             raise NoHalt(flow)
         carry = machine.between_jobs()
         self.carry = None if machine.lapses else carry
-        return Run(job, flow, machine, estimate(job, flow, machine.stream))
+        timed = estimate(job, flow, machine.stream)
+        return Run(job, flow, machine, timed, tuple(machine.lapses))
 
 
 def start_copy(boot: Boot) -> JobView:
@@ -267,6 +272,10 @@ class Datapath(Protocol):
 
     def limit(self, tier: Confidence) -> None:
         """Cap all the job leaves and decides from here on at `tier`."""
+        ...
+
+    def forget_job(self, why: str) -> None:
+        """Forget all the job's memories and registers may hold (words run but not stepped)."""
         ...
 
     def decide(
@@ -489,7 +498,8 @@ class Executor:
         taken; the tail's tier follows the jump's shape (`TAIL_SHAPES`), other pending jumps
         lapse (`Datapath.lapse`). Control words and halts in the tail are passive where measured
         (`PASSIVE_BEHIND_HALT`) and lapse elsewhere; words past the program's end are not run.
-        A lapse in the tail ends the job there and marks the halt's step."""
+        A lapse in the tail ends the job there, marks the halt's step and forgets what the rest
+        of the tail may write (`Datapath.forget_job`)."""
         if self.datapath is None:
             return
         halt, lapses = len(steps) - 1, len(self.datapath.lapses)
@@ -498,7 +508,9 @@ class Executor:
             (left, _, code), *others = jumps
             shape = TAIL_SHAPES.get((code, DELAY_SLOTS + 1 - left))
             if others or shape is None:
-                self.datapath.lapse(at - 1, "halt", "a jump pending behind a halt")
+                why = "a jump pending behind a halt"
+                self.datapath.lapse(at - 1, "halt", why)
+                self.datapath.forget_job(why)
                 steps[halt] = self._lapsed(steps[halt], lapses)
                 return
             ceiling = shape
@@ -527,7 +539,9 @@ class Executor:
             passive = PASSIVE_BEHIND_HALT.get((word.op, n))
             # Measured with no jump pending, but for the third word's halt (on a target).
             if passive is None or (jumps and n != HALT_TAIL - 1):
-                self.datapath.lapse(i, op(word.op).name, "a control op behind a halt")
+                why = "a control op behind a halt"
+                self.datapath.lapse(i, op(word.op).name, why)
+                self.datapath.forget_job(why)  # the rest of the tail runs unstepped
                 steps[halt] = self._lapsed(steps[halt], lapses)
                 return
             if word.op != HALT_OP:

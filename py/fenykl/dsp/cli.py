@@ -54,10 +54,7 @@ def cmd_flow(args: argparse.Namespace) -> None:
 
     args.item = ITEM
     job = commands.copy(_program(args), args.src, args.dst, args.len)
-    given: dict[int, bool] = {}
-    for text in args.branch or ():
-        index, _, taken = text.partition("=")
-        given[int(index, 0)] = taken == "1"
+    given = dict(args.branch or ())
     branching = Given(given, fact="given on the command line") if given else None
     boot = Boot()
     machine = Machine(boot, None, Engine())
@@ -71,6 +68,13 @@ def cmd_flow(args: argparse.Namespace) -> None:
         f"{len(flow.steps)} steps, {unknown} not covered; stop: "
         f"{flow.stop.value}{': ' + flow.why if flow.why else ''}"
     )
+
+
+def _branch(text: str) -> tuple[int, bool]:
+    index, _, taken = text.partition("=")
+    if taken not in ("0", "1"):
+        raise argparse.ArgumentTypeError(f"{text!r} is not INDEX=0 or INDEX=1")
+    return int(index, 0), taken == "1"
 
 
 def cmd_fields(args: argparse.Namespace) -> None:
@@ -155,6 +159,7 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
     flow.add_argument(
         "--branch",
         action="append",
+        type=_branch,
         metavar="INDEX=0|1",
         help="decide the conditional control op at INDEX (every visit) in place of the "
         "datapath; repeatable",

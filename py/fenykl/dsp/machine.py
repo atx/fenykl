@@ -423,6 +423,14 @@ class Machine:
         for page in self.boot.dram.pages.values():
             page.forget(src)
 
+    def forget_job(self, why: str) -> None:
+        """Words that ran but are not stepped (lenient): every memory is forgotten and every
+        register is a hypothesis."""
+        self.lose_memories(why)
+        for name in ("G", "A", "B", "R", *self.f, *self.lanes, "U", "O"):
+            regs = self._file(name)
+            regs[:] = [_cap(v, H) for v in regs]
+
     def limit(self, tier: Confidence) -> None:
         """Cap all the job leaves and decides from here on at `tier`: the stepping follows a
         path the caller gave (`emu.Executor`'s branching)."""
@@ -533,6 +541,7 @@ class Machine:
         sem = OP_SEMANTICS.get(code)
         if sem is None:
             self.lapse(index, op(code).name, "no semantics", [(OP_FIELD, code)])
+            self.boot.local.forget(self.store_src)  # the op slot stores there
             return UNKNOWN
         args = word.operands
         assert args is not None
@@ -704,10 +713,7 @@ class Machine:
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
         if head not in X_RULES[unit]:
-            self.lapse(index, f"{unit} {head:#x}", "no rule")
-            if unit == "x0":
-                self.lose_lanes()  # X0's heads reach the lane memory
-            return UNKNOWN
+            raise UnknownSemantics(index, f"{unit} {head:#x}", [], "no rule")
         rule = X_RULES[unit][head]
         if rule.value is None:
             return None
@@ -1145,9 +1151,7 @@ class Machine:
             if v == lookup(enable).idle:
                 continue
             if v not in PR_SOURCES[enable]:
-                self.lapse(index, enable, f"enable {v}")
-                put(PR_FILES[enable], word[reg_id], _unknown(PR_FILES[enable]), enable)
-                continue
+                raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PR_SOURCES[enable][v]
             if src is not None:
                 put(PR_FILES[enable], word[reg_id], scalar[src], src)
@@ -1156,9 +1160,7 @@ class Machine:
             if v == lookup(enable).idle:
                 continue
             if v not in PB_SOURCES[enable]:
-                self.lapse(index, enable, f"enable {v}")
-                put(file, word[PORTS[enable]], _unknown(file), enable)
-                continue
+                raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PB_SOURCES[enable][v]
             if src is not None:
                 put(file, word[PORTS[enable]], scalar[src], src)
@@ -1176,21 +1178,16 @@ class Machine:
             kept[("O", word["f179_181"])] = V
         elif v != lookup("f252_254").idle:
             if v not in STORE_SOURCES:
-                self.lapse(index, "f252_254", f"O's source {v}")
-                put("O", word["f179_181"], UNKNOWN_VEC, "f252_254")
-            else:
-                text, tier = STORE_SOURCES[v]
-                value = _cap(self._lane_source(text, t), tier)
-                put("O", word["f179_181"], value, text)
+                raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
+            text, tier = STORE_SOURCES[v]
+            put("O", word["f179_181"], _cap(self._lane_source(text, t), tier), text)
         u = word["f232_233"]
         if u == 1:
             # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
             if self._u_write is not None:
                 put("U", *self._u_write, "S3's U port")
         elif u != lookup("f232_233").idle and u not in (0, 2):
-            self.lapse(index, "f232_233", f"enable {u}")
-            for reg in range(len(self.u)):
-                put("U", reg, UNKNOWN_VEC, "f232_233")
+            raise UnknownSemantics(index, "f232_233", [], f"enable {u}")
         self._u_write = None
         for (file, reg), tier in kept.items():
             if (file, reg) not in writes:

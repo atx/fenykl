@@ -246,9 +246,7 @@ raw: each X head reads it zero- or sign-extended.
 
 ```python
 word = S1.xor_imm(L1[4], imm=0x20, a=L1[4], r=F1[4]).word()  # S1 0x04: b ^ 0x20
-HEAD_VIEWS["s1"].decode(
-    word.value
-)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
+HEAD_VIEWS["s1"].decode(word.value)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
 ```
 
 A view is per unit, not per head value: no table gives which of s, t, r, u, idx, val or the
@@ -1047,11 +1045,7 @@ from fenykl.dsp.emu import Boot
 boot = Boot()
 boot.put(SRC, data, "src")
 r = boot.run(program, regs={"B": {3: SRC, 2: DST}})  # registers by file, over the carry
-(
-    r.machine.g[16],
-    r.flow.runs(),
-    r.estimate,
-)  # registers at the halt, the words run, the time
+r.machine.g[16], r.flow.runs(), r.estimate  # registers at the halt, the words run, the time
 boot.read(DST, n)  # what the program stored, known or not, with its tier
 boot.run(program2)  # starts with the registers and lane memory the run before left
 ```
@@ -1068,15 +1062,17 @@ With a `branching` beside the machine (`Executor(boot, branching=Given({...}), d
 given decisions come first and the machine decides the rest; from a given decision on, all the job
 leaves and decides is capped at that decision's tier (`Machine.limit`). `strict=False` makes the
 machine lenient: a case its facts do not cover lapses (`Machine.lapse`) instead of raising. What
-the case may write is forgotten: local memory after a store at an unknown or unaligned address,
-the lane memory after a lane store at an unknown address or an X0 head without a rule, the
-register two ports write or an unmeasured enable names, and every memory after a transfer with no
-stream engine or a stream command whose reach cannot be bounded. A stream command in a shape not
-run, or one that never ends, takes the engine off script; a 0x1d that never returns, or more than
+the case may write is forgotten: local memory after a store at an unknown or unaligned address or
+an op without semantics, the lane memory after a lane store at an unknown address, the register
+two ports write or M beside several own-word results, and every memory after a transfer with no
+stream engine, a command of a kind or shape not run, or a command whose reach cannot be bounded.
+A command that never ends takes the engine off script; a 0x1d that never returns, or more than
 `stream.DEPTH` commands outstanding, goes on as if it had not. The word's step is `unknown`, all
-the job leaves and decides after it is a hypothesis, and a run that lapsed leaves no carry. An
-unmeasured shape behind a halt ends the job at the halt. A control word that leaves its program
-and a step past the program's end raise in either mode.
+the job leaves and decides after it is a hypothesis, a run that lapsed leaves no carry
+(`Run.lapses` says why) and its time is not estimated. An unmeasured shape behind a halt ends the
+job at the halt: every memory is forgotten and every register is a hypothesis. A control word that
+leaves its program and a step past the program's end raise in either mode, as do the cases that
+no word can reach (an enable or head value the field tables leave out).
 
 `fenykl dsp flow [--len N] [--branch I=0|1]` steps the stock copy on a `Machine` with a stream
 engine, lenient, and prints its flow: `--branch` decisions first, the machine's own for the rest.

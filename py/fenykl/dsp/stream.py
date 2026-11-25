@@ -77,9 +77,9 @@ What was not measured takes the engine off script: the lane memory is unknown fo
 job and what later commands write is unknown (`off` says why). A command whose destination cannot
 be bounded, a value handed after the grammar is lost and a 0x1d among a command's values raise
 `UnknownSemantics`, as do kinds and shapes not run and a job that never ends or wedges; on a
-lenient machine they lapse instead (`Machine.lapse`): a shape not run or a command that never
-ends goes off script, what cannot be bounded forgets every memory, and a 0x1d that never returns
-or a queue past `DEPTH` goes on as if it had not.
+lenient machine they lapse instead (`Machine.lapse`): a command that never ends goes off script,
+a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d that never
+returns or a queue past `DEPTH` goes on as if it had not.
 """
 
 from collections.abc import Callable
@@ -826,19 +826,15 @@ class Engine:
     # ------------------------------------------------------------------ off script
 
     def _unmeasured(self, m: Machine, cmd: _Command, why: str) -> None:
-        """A command in a shape not measured (`Machine.lapse`): lenient, it counts as a command,
-        the engine goes off script and the command's destination is unknown, all memories where
-        its kind is not known."""
+        """A command of a kind or shape not run (`Machine.lapse`): lenient, it counts as a
+        command, the engine goes off script, and since what such a command reaches is not known,
+        every memory is forgotten."""
         m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
         self.commands += 1
         self.outstanding.append(_nothing)
         self.spans.append(None)
         self._go_off(m, f"{cmd.where} {why}")
-        kind = KIND_AS.get(cmd.kind, cmd.kind)
-        if kind in (LOAD, NOTHING_MOVES, STORE, FILL):
-            self._spoil(m, replace(cmd, kind=kind))
-        else:
-            m.lose_memories(f"{cmd.where} {why}")
+        m.lose_memories(f"{cmd.where} {why}")
 
     def _spoil(self, m: Machine, cmd: _Command) -> None:
         """What a command the engine cannot run writes is not known: its destination becomes
