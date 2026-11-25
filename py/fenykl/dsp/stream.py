@@ -367,14 +367,19 @@ class Engine:
             per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
         else:
             per = r[3].value
-        raw = [off // VECTOR_BYTES + v for _, off in rows for v in range(per)]
-        vectors = frozenset(x % LANE_VECTORS for x in raw)
+        starts = [off // VECTOR_BYTES for _, off in rows]
+        vectors = frozenset(
+            (s + v) % LANE_VECTORS
+            for s in starts
+            for v in range(min(per, LANE_VECTORS))
+        )
+        last = max((s + per - 1 for s in starts if per), default=0)
         byte_row = (
             plain
             and r[7].value == 1
             and r[2].value == 0x20
             and r[5].value == 0x10
-            and max(raw, default=0) < LANE_VECTORS  # a wrap is only inferred
+            and last < LANE_VECTORS  # a wrap is only inferred
         )
         return vectors, V if byte_row else I
 
@@ -692,37 +697,65 @@ class Engine:
         return self._local_load(m, cmd, rows, bits, r6, width, r2, r3, tier)
 
     def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier):
-        held: dict[int, Vec] = {}
-        for _, off in rows:
-            for v in range(r3):
+        # Each vector's only (row, v), None for one the load writes twice: the second write
+        # sees the first as a race, so it ends unknown and needs no DRAM bytes.
+        once: dict[int, tuple[int, int] | None] = {}
+        for k, (_, off) in enumerate(rows):
+            for v in range(min(r3, LANE_VECTORS)):
                 at = (off // VECTOR_BYTES + v) % LANE_VECTORS
-                held[at] = Vec(UNKNOWN_VEC.lanes)
+                twice = at in once or v + LANE_VECTORS < r3
+                once[at] = None if twice else (k, v)
+        held = {at: Vec(UNKNOWN_VEC.lanes) for at in once}
         if not m.lanes_lost:
             m.memory.update(held)
         # The queue runs in order: a store handed later writes DRAM after this load read it.
+        wanted: list[list[int]] = [[] for _ in rows]
+        for kv in once.values():
+            if kv is not None:
+                wanted[kv[0]].append(kv[1])
         sources = [
-            _unpack(m.boot.read(dram, 16 * lines), bits, lines) for dram, _ in rows
+            self._lane_elements(m, dram, bits, lines, vectors)
+            for (dram, _), vectors in zip(rows, wanted, strict=True)
         ]
 
         def complete(m: Machine, cap: Confidence) -> None:
             if m.lanes_lost:
                 return
-            for (_, off), elements in zip(rows, sources, strict=True):
-                base = off // VECTOR_BYTES
-                for v in range(r3):
-                    at = (base + v) % LANE_VECTORS
-                    wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
-                    chunk = elements[v * LANE_COUNT : (v + 1) * LANE_COUNT]
-                    chunk += [(0, V)] * (LANE_COUNT - len(chunk))
-                    if r2 != 0x20:
-                        chunk = [(0, V)] * LANE_COUNT  # zeros (verified)
-                    lanes = tuple(None if x is None else x & 0xFFFF for x, _ in chunk)
-                    t = min([tier, cap, wrap, *(t for x, t in chunk if x is not None)])
-                    # A vector written while the load ran raced it: not known.
-                    racing = m.memory.get(at) is not held[at]
-                    m.memory[at] = UNKNOWN_VEC if racing else Vec(lanes, t)
+            for at, kv in once.items():
+                if kv is None:
+                    m.memory[at] = UNKNOWN_VEC
+                    continue
+                k, v = kv
+                base = rows[k][1] // VECTOR_BYTES
+                wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
+                first, elements = sources[k]
+                e = v * LANE_COUNT - first
+                chunk = elements[e : e + LANE_COUNT]
+                chunk += [(0, V)] * (LANE_COUNT - len(chunk))
+                if r2 != 0x20:
+                    chunk = [(0, V)] * LANE_COUNT  # zeros (verified)
+                lanes = tuple(None if x is None else x & 0xFFFF for x, _ in chunk)
+                t = min([tier, cap, wrap, *(t for x, t in chunk if x is not None)])
+                # A vector written while the load ran raced it: not known.
+                racing = m.memory.get(at) is not held[at]
+                m.memory[at] = UNKNOWN_VEC if racing else Vec(lanes, t)
 
         return complete
+
+    @staticmethod
+    def _lane_elements(
+        m: Machine, dram: int, bits: int, lines: int, vectors: list[int]
+    ) -> tuple[int, list[tuple[int | None, Confidence]]]:
+        """The row's elements from DRAM `dram` that `vectors` take, in whole lines of the row's
+        `lines`: (index of the first, the elements)."""
+        if not vectors:
+            return 0, []
+        per = 128 // bits
+        first = min(vectors) * LANE_COUNT // per
+        end = min(lines, -(-(max(vectors) + 1) * LANE_COUNT // per))
+        n = max(end - first, 0)
+        data = m.boot.dram.read(dram_alias(dram) + 16 * first, 16 * n)
+        return first * per, _unpack(data, bits, n)
 
     def _local_load(self, m, cmd, rows, bits, lines, width, r2, r3, tier):
         size = 4 * r3
@@ -734,8 +767,9 @@ class Engine:
         loaded = m.boot.source(
             "stream load", "the stream engine's load to local memory"
         )
+        used = min(lines, -(-r2 * r3 // (128 // bits)))  # the lines its r2 * r3 take
         sources = [
-            _unpack(m.boot.read(dram, 16 * lines), bits, lines) for dram, _ in rows
+            _unpack(m.boot.read(dram, 16 * used), bits, used) for dram, _ in rows
         ]
 
         def complete(m: Machine, cap: Confidence) -> None:
