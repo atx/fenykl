@@ -8,62 +8,50 @@ four vectors are loaded (X0 0x1d), moved into S1's lane file through its first p
 (X0 0x1b). A kernel of this shape ran on the camera at 4 and 16 KiB, its dst exact and its
 minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 to 16 passes).
 
-The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine. The
-words are written by field name (`fields.NAMES`), data op (`Word.data`) and head view
-(`Word.head`), whose immediates compose from their split fields.
+The registers the job's setup would provide (B3 = src, B2 = dst) are preset on the machine. Each
+word is a bundle of unit instructions and ports (`fenykl.dsp.asm`): `X0.load(A[1], k=i)` loads
+vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later.
 """
 
 import pytest
 
+from fenykl.dsp.asm import F1, L1, LOAD, OP, S1, X0, X1, A, B, G, O, R, Reg, to
 from fenykl.dsp.emu import Boot, Executor, Job, Stop
-from fenykl.dsp.fields import Confidence, Operands
+from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Machine, Sv
-from fenykl.dsp.program import Program
+from fenykl.dsp.program import Label, Program, Statement, assemble
 from fenykl.dsp.stream import Engine
 from fenykl.dsp.timing import estimate
-from fenykl.dsp.word import IDLE, Word
+from fenykl.dsp.word import IDLE
 
 SRC, DST = 0xA0000000, 0xA1000000
 B_SRC, B_DST, B_LOAD, B_STORE = 3, 2, 13, 12
 CHUNK = 0x1000
 BANKS = (0x000, 0x080)
-HALT = Word.from_fields({"op": 7})
 
 
-def w(**fields: int) -> Word:
-    return Word.from_fields(fields)
+def li(dst: Reg, v: int):
+    """Op 0x0b: the 16-bit immediate v (sign-extended) through the ALU bus to dst."""
+    return OP.li(v) | to(dst, OP)
 
 
-def li(v: int, **port: int) -> Word:
-    """Op 0x0b: the 16-bit immediate v (sign-extended) to the ports given."""
-    return Word.data(0x0B, Operands(ra=31, imm=v), base=w(**port))
+def b_add(r: int, src: int, k: int):
+    """X1 0x03: B[r] := B[src] + k (13-bit k)."""
+    return X1.add_imm(B[src], k) | to(B[r], X1)
 
 
-def to_b(v: int, r: int) -> Word:
-    return li(v, bsrc=1, bdst=r)
-
-
-def to_g(v: int, r: int) -> Word:
-    return li(v, gsrc=1, gdst=r)
-
-
-def b_add(r: int, src: int, k: int) -> Word:
-    """X1 0x03: B[r] := B[src] + k (13-bit k) through bsrc = 0."""
-    return Word.head("x1", w(bsrc=0, bdst=r), op=0x03, a=src, k=k)
-
-
-def hand(*items: int | tuple[str, int]) -> list[Word]:
+def hand(*items: int | tuple[str, int]) -> list[Statement]:
     """Values to the stream engine through X1 0x1c: an int through B14 / B15, ("b", r) from
     B[r], ("wait",) a 0x1d."""
     out, scratch = [], 14
     for it in items:
         if isinstance(it, int):
-            out += [to_b(it, scratch), Word.head("x1", op=0x1C, b=scratch)]
+            out += [li(B[scratch], it), X1.hand(B[scratch])]
             scratch ^= 1
         elif it[0] == "b":
-            out.append(Word.head("x1", op=0x1C, b=it[1]))
+            out.append(X1.hand(B[it[1]]))
         else:
-            out.append(Word.head("x1", op=0x1D, b=1))
+            out.append(X1.wait(b=B[1]))
     return out
 
 
@@ -72,32 +60,33 @@ def block(channel: int, nbytes: int) -> list[int]:
     return [0x20 | channel << 6, 1, 0, 0x20, nbytes // 32, 0, 0x10, nbytes // 16, 1]
 
 
-def chunk(bank: int, start: int) -> list[Word]:
+def chunk(bank: int, top: str) -> list[Statement]:
     """y = x ^ 0x20 over the bank's 128 vectors, four per pass; G8 counts, G9 / A[1] walk."""
-    body = [Word.head("x0", op=0x1D, a=1, b=0, k=i) for i in range(4)]
-    body += [w(l1src=0, l1dst=4 + i) for i in range(4)] + [IDLE] * 5
-    for i in range(4):
-        # S1 0x04, b ^ imm7, into O[1 + i] in the head's word; imm7 holds only bits 3..2 of
-        # s1r, r = 4 sets all four.
-        into_o = Word.from_fields({"osrc": 3, "odst": 1 + i}, base=body[6 + i])
-        body[6 + i] = Word.head("s1", into_o, op=0x04, a=4 + i, b=4 + i, r=4, imm=0x20)
-        body[7 + i] = Word.head("x0", body[7 + i], op=0x1B, a=1, b=0, k=i, o=1 + i)
-    ports = Word.from_fields(
-        {"gsrc": 1, "gdst": 9, "asrc": 2, "adst": 1}, base=body[10]
-    )
-    body[10] = Word.data(0x1F, Operands(ra=9, imm=4), base=ports)
-    top = start + 5
-    loop = Word.from_fields(
-        {"ra": 8, "rr": 0, "gsrc": 1, "gdst": 8}, base=Word.ctl(0, top, IDLE)
-    )
+    # S1 0x04, b ^ imm7, into O[j - 3] in the head's word; imm7 holds only bits 3..2 of r,
+    # r = F1[4] sets all four.
+    xor = [
+        S1.xor_imm(L1[j], imm=0x20, a=L1[j], r=F1[4]) | to(O[j - 3], S1)
+        for j in range(4, 8)
+    ]
+    store = [X0.store(A[1], k=i, o=O[1 + i]) for i in range(4)]
     return [
-        to_g(bank, 9),
-        li(bank, asrc=2, adst=1),
-        to_g(128 // 4 - 1, 8),
+        li(G[9], bank),
+        li(A[1], bank),
+        li(G[8], 128 // 4 - 1),
         IDLE,
         IDLE,
-        *body,
-        loop,
+        Label(top),
+        *[X0.load(A[1], k=i) for i in range(4)],
+        to(L1[4], LOAD),
+        to(L1[5], LOAD),
+        to(L1[6], LOAD) | xor[0],
+        to(L1[7], LOAD) | xor[1] | store[0],
+        xor[2] | store[1],
+        xor[3] | store[2],
+        store[3] | OP.add_imm(G[9], 4) | to(G[9], OP) | to(A[1], OP),
+        IDLE,
+        IDLE,
+        OP.loop(G[8], top, rr=R[0]) | to(G[8], OP),
         *[IDLE] * 4,
     ]
 
@@ -124,10 +113,10 @@ def xor_kernel(nbytes: int) -> Program:
             words.append(b_add(B_LOAD, B_LOAD, CHUNK))
             words += hand(0, ("b", B_LOAD), BANKS[(c + 1) % 2] * 64)
             out.append(f"L{c + 1}")
-        words += chunk(BANKS[c % 2], len(words))
+        words += chunk(BANKS[c % 2], f"top{c}")
     words += hand(0x46, BANKS[(n - 1) % 2] * 64, ("b", B_STORE))
     words += hand(*[("wait",)] * (len(out) + 1))
-    return Program((*words, HALT, *[IDLE] * 4))
+    return assemble([*words, OP.halt(), *[IDLE] * 4])
 
 
 def run(nbytes: int, data: bytes):

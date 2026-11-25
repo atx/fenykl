@@ -6,7 +6,8 @@ An item is a run of 64-byte slots, one word in the first 40 bytes of each (bytes
 zero up to an optional constant block, then zero to its end. The constants are read only by the
 CPU setup of the command, which copies them to DSP local memory 0x9D000000.
 
-`assemble` takes statements: words, `Label`s and `Ctl`s, control ops whose target is a label.
+`assemble` takes statements: words, bundles and parts of `asm` (whose control op may name a
+label), `Label`s and `Ctl`s, control ops whose target is a label.
 """
 
 import struct
@@ -15,6 +16,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..firmware import HEAD_TAIL_SIZE, identify, unpack_firmware
+from .asm import Bundle, Part, bundle
 from .fields import DELAY_SLOTS, FIELDS, WORD_BYTES, Confidence
 from .word import IDLE, Word
 
@@ -201,7 +203,7 @@ class Ctl:
     base: Word = IDLE
 
 
-Statement = Word | Label | Ctl
+Statement = Word | Bundle | Part | Label | Ctl
 
 
 def labels(stmts: Iterable[Statement], origin: int = 0) -> dict[str, int]:
@@ -222,8 +224,8 @@ def assemble(
     stmts: Iterable[Statement], constants: bytes = b"", *, origin: int = 0
 ) -> Program:
     """A program from DSL statements placed at word index `origin`, in two passes: the labels'
-    indices, then the words, each `Ctl` targeting its label's index (a target over 13 bits raises
-    ValueError). A word's own target stays as it is, absolute. Checks every word and warns once
+    indices, then the words, each `Ctl` and bundle with a label targeting its label's index (a
+    target over 13 bits raises ValueError). A word's own target stays as it is, absolute. Checks every word and warns once
     about hypothesis fields."""
     stmts = tuple(stmts)
     names = labels(stmts, origin)
@@ -235,6 +237,11 @@ def assemble(
             if s.to not in names:
                 raise AssemblyError(f"label {s.to!r} is not defined")
             s = Word.ctl(s.op, names[s.to], s.base)
+        elif isinstance(s, (Bundle, Part)):
+            s = bundle(s)
+            if s.label is not None and s.label not in names:
+                raise AssemblyError(f"label {s.label!r} is not defined")
+            s = s.word(names)
         words.append(s)
     weak = set()
     for word in words:
