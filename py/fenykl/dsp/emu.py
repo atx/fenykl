@@ -252,6 +252,10 @@ class Datapath(Protocol):
         """The word an op 4 jumps to, G[f128_132], with its tier (None: not known)."""
         ...
 
+    def limit(self, tier: Confidence) -> None:
+        """Cap all the job leaves and decides from here on at `tier`."""
+        ...
+
     def decide(
         self,
         index: int,
@@ -331,10 +335,12 @@ class Executor:
     inferred), brf / br / a loop end go to T when `branching` takes them;
     every control op has four delay slots that run before its transfer takes effect, and op 7
     halts at any word and call depth, the return stack unchecked; on a `datapath` the next three
-    words fetched behind a halt still run (`HALT_TAIL`, `TAIL_SHAPES`). `branching` decides ops 0..2; the default `Given()`
-    decides none of them. A control op in another's delay slots jumps after its own four, and
-    so does a loop end whose T lies in its own slots (verified on the camera for a br in a br's
-    first slot and a loop end into its third slot; other such shapes are stepped the same way,
+    words fetched behind a halt still run (`HALT_TAIL`, `TAIL_SHAPES`). `branching` decides ops
+    0..2; the default `Given()` decides none of them. On a `datapath` the datapath decides what
+    `branching` leaves undecided, and a decision `branching` gives caps the datapath at its tier
+    from there on. A control op in another's delay slots jumps after its own four, and so does
+    a loop end whose T lies in its own slots (verified on the camera for a br in a br's first
+    slot and a loop end into its third slot; other such shapes are stepped the same way,
     their steps inferred at most). On the camera
     op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
     the stock convention: a call's delay slots hold 0x0b #(i + 5) on r1 (verified on the
@@ -577,6 +583,12 @@ class Executor:
                 i, word.op, taken=True, note=f"to {back}", confidence=conf
             ), back
         b = self.branching.decide(i, visit, word, self.boot.slot, self.boot.regs)
+        if self.datapath is not None and self.branching is not self.datapath:
+            if b.taken is None:
+                b = self.datapath.decide(i, visit, word, self.boot.slot, self.boot.regs)
+            else:
+                # The path is the caller's from here: what the datapath computes on it too.
+                self.datapath.limit(b.confidence)
         ra = f"r{word['ra']}"
         if b.taken is None:
             return Step(i, word.op, target=t, note=f"{ra} undecided: {b.why}"), None

@@ -271,6 +271,9 @@ def _own_word(unit: str, head: int) -> bool:
 class Stream(Protocol):
     """The stream engine's side of X1's transfer heads (`stream.Engine`)."""
 
+    cap: Confidence
+    """The tier cap of what the engine writes from here on (`Machine.limit` lowers it)."""
+
     def transfer(self, m: "Machine", index: int, head: int, value: Sv, t: int) -> None:
         """Transfer `head` of word `index`, executed word `t` of the job, hands `value`
         (B[f115_119]) to the engine."""
@@ -364,8 +367,12 @@ class Machine:
         """Each unit's last such run: its word, head, lag, whether it is the run whose zeros
         were read and whether its word had the port of `ALONE_PORTS`."""
         self._u_write: tuple[int, Vec] | None = None
+        self.cap = V
+        """The tier cap of all the job leaves and decides from here on (`limit`)."""
         self.ceiling = V
-        """The tier cap of what the word being run leaves (`execute`)."""
+        """The tier cap of what the word being run leaves (`execute`), `cap` at most."""
+        self.fitted = False
+        """Whether the word being run runs at all by a fitted rule (`execute`'s ceiling)."""
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
@@ -384,6 +391,13 @@ class Machine:
         self.lanes_lost = True
         self.memory.clear()
 
+    def limit(self, tier: Confidence) -> None:
+        """Cap all the job leaves and decides from here on at `tier`: the stepping follows a
+        path the caller gave (`emu.Executor`'s branching)."""
+        self.cap = min(self.cap, tier)
+        if self.stream is not None:
+            self.stream.cap = min(self.stream.cap, tier)
+
     def preset(self, regs: Mapping[str, Mapping[int, Preset]]) -> None:
         """Set registers by file and index, e.g. {"B": {3: 0xA0000000}}: an int or `Sv` in G, A,
         B, R and F0..F3, a `Vec` or its 32 lanes in L0..L3, U and O."""
@@ -396,7 +410,7 @@ class Machine:
     def link(self, word: Word) -> tuple[int | None, Confidence]:
         """Op 4's target: the word G[f128_132] names (verified on the camera at r1 and r21)."""
         v = self.g[word["f128_132"]]
-        return v.value, v.tier
+        return v.value, min(v.tier, self.cap)
 
     def decide(
         self,
@@ -413,7 +427,7 @@ class Machine:
             return Branch(None, f"r{word['ra']} unknown", V)
         v = ra.value
         taken = {1: v == 0, 2: v != 0, 0: _s32(v) > 0}[word.op]
-        return Branch(taken, f"r{word['ra']} = {v:#x}", ra.tier)
+        return Branch(taken, f"r{word['ra']} = {v:#x}", min(ra.tier, self.cap))
 
     # ------------------------------------------------------------------ reads
 
@@ -428,7 +442,7 @@ class Machine:
         """Run word `word` (program index `index`) as executed word number `t`; returns a note.
         What it writes (registers, lane and local memory) is capped at `ceiling`: words whose
         running at all was fitted."""
-        self.ceiling = ceiling
+        self.ceiling, self.fitted = min(ceiling, self.cap), ceiling < V
         if word.control and word.op < 4 and word["f120_122"] & 3:
             # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
             raise UnknownSemantics(
@@ -459,7 +473,7 @@ class Machine:
             x1bus = UNKNOWN if x1 is None else x1
         writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
-            self._commit(key, _cap(value, ceiling), t)
+            self._commit(key, _cap(value, self.ceiling), t)
         for due in (
             self.bus_due,
             self.x1_due,
@@ -631,7 +645,7 @@ class Machine:
         a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
         k = X_IMMEDIATES[unit].get(word.value)
         if unit == "x1" and head in TRANSFER_HEADS:
-            if self.ceiling < V:
+            if self.fitted:
                 raise UnknownSemantics(
                     index,
                     f"x1 {head:#x}",

@@ -12,6 +12,7 @@ from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import (
     LANE_RULES,
     X_RULES,
+    Given,
     UnknownSemantics,
     lane_result,
     s_result,
@@ -20,7 +21,7 @@ from fenykl.dsp.semantics import (
 from fenykl.dsp.state import Bytes
 from fenykl.dsp.word import IDLE, Word
 
-V, I = Confidence.VERIFIED, Confidence.INFERRED
+H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 SCALAR_KEYS = (
     "s",
     "r",
@@ -478,6 +479,24 @@ def test_a_loop_end_into_its_own_slots_runs_them_again():
     words = [loop, inc(16), inc(17), inc(18), inc(19), inc(20)]
     m = stepped(words, r8=3, r16=0, r17=0, r18=0, r19=0, r20=0)
     assert [m.g[r].value for r in (8, 16, 17, 18, 19, 20)] == [2, 1, 1, 2, 2, 1]
+
+
+def test_a_given_decision_comes_first_and_caps_the_path_the_machine_decides_on():
+    # 0 brf -> 7 (r11 = 5: not taken by the machine, taken as given), 7 br -> 12 (r12 = 1).
+    halt = Word.from_fields({"f313_319": 7}, base=IDLE)
+    words = [control(1, 7, ra=11), *[inc(16)] * 4, inc(17), inc(17)]
+    words += [control(2, 12, ra=12), *[inc(18)] * 4, halt]
+    boot = Boot()
+    m = Machine(boot)
+    m.preset({"G": {30: 1, 11: 5, 12: 1, 16: 0, 17: 0, 18: 0}})
+    flow = Executor(boot, datapath=m, branching=Given({0: True})).step(
+        Job(Program(tuple(words)), ())
+    )
+    assert flow.order() == [0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12]
+    given, decided = flow.steps[0], flow.steps[5]
+    assert given.note.endswith("given by the caller") and given.confidence is H
+    assert decided.note.endswith("r12 = 0x1") and decided.confidence is H
+    assert (m.g[16], m.g[17], m.g[18]) == (Sv(4, H), Sv(0), Sv(4, H))
 
 
 def test_a_run_reads_what_the_run_before_on_its_boot_left():
