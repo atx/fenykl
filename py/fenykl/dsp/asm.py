@@ -218,7 +218,10 @@ class Port(Part):
 
     @property
     def tier(self) -> Confidence:
-        return min(self.spec.sources[self.value][1], self.spec.enable.confidence)
+        spec = self.spec
+        return min(
+            spec.sources[self.value][1], spec.enable.confidence, spec.dst.confidence
+        )
 
     def __repr__(self) -> str:
         return f"to({self.dst!r}, {self.src!r})"
@@ -908,6 +911,7 @@ def _check_units() -> None:
                 not name.isidentifier()
                 or keyword.iskeyword(name)
                 or hasattr(Unit, name)
+                or name in vars(unit)
             ):
                 raise ValueError(f"{key}: {name!r} is no usable name")
             bad = set(unit.reads[code]) - set(_OPERAND_FILES[key])
@@ -970,16 +974,15 @@ def _op(value: int, labels: Mapping[int, str]) -> Instr | None:
         return None
     given: dict[str, Value] = {}
     claimed = OP_FIELD.span
-    for name in OP.reads.get(code, ()):
-        if name == "to":
-            target = TARGET.get(value)
-            given["to"], claimed = labels.get(target, target), claimed | TARGET.span
+    reads = OP.reads.get(code, ())
+    if "to" in reads:
+        target = TARGET.get(value)
+        given["to"], claimed = labels.get(target, target), claimed | TARGET.span
     fmt = FORMATS.get(code)
     if fmt is not None and fmt.imm is not None and fmt.imm.get(value) >> fmt.imm_bits:
         return None  # an immediate wider than the op's: the slot stays raw
     if fmt is not None:
         args = fmt.decode(value)
-        reads = OP.reads.get(code, ())
         if "ra" in reads or args.ra != RA.idle:
             given["ra"] = G[args.ra]
         if args.rb is not None and ("rb" in reads or args.rb != RB.idle):
@@ -988,15 +991,11 @@ def _op(value: int, labels: Mapping[int, str]) -> Instr | None:
             given["imm"] = args.imm
         for f in fmt.fields:
             claimed |= f.span
-    for name in OP.reads.get(code, ()):
-        if name in _OP_EXTRAS and name not in given:
-            f = _OP_EXTRAS[name]
-            given[name], claimed = (
-                _typed(OP, code, name, f.get(value)),
-                claimed | f.span,
-            )
+    reads = OP.reads.get(code, ())
     for name, f in _OP_EXTRAS.items():
-        if not f.span & claimed and f.get(value) != f.idle:
+        if name in given or f.span & claimed:
+            continue
+        if name in reads or f.get(value) != f.idle:
             given[name], claimed = (
                 _typed(OP, code, name, f.get(value)),
                 claimed | f.span,
