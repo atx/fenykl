@@ -355,16 +355,6 @@ def test_kind_2_loads_three_rows_at_their_pitches():
     assert e.lane_tier() == V
 
 
-def test_kind_4_rows_raise():
-    m = machine(bytes(64))
-    with pytest.raises(UnknownSemantics, match="outside the shapes"):
-        drive(
-            m,
-            stream.Engine(),
-            [*lanes(0, 1, r6=2, r7=2, r1=0x40, r4=0x100), 0x04, 0, DST, WAIT],
-        )
-
-
 @pytest.mark.parametrize("kind", [3, 5, 7])
 def test_kinds_3_5_and_7_move_nothing_at_inferred(kind):
     m, e = machine(bytes(range(64))), stream.Engine()
@@ -587,3 +577,78 @@ def test_a_fill_not_vector_aligned_raises():
     m = machine()
     with pytest.raises(UnknownSemantics, match="not vector-aligned"):
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), 0x08, 0x1234, DST + 0x20, WAIT])
+
+
+def test_lane_vectors_outside_every_outstanding_command_keep_their_tier():
+    """A load of vectors 0..1 outstanding: vectors 0 and 1 are a hypothesis, vector 2 is not;
+    a command on local memory leaves every vector a hypothesis."""
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0)])
+    assert e.lane_tier(0) == H and e.lane_tier(1) == H and e.lane_tier(2) == V
+    e.finish(m)
+    assert e.lane_tier(0) == V
+
+
+def test_a_half_unit_load_holds_r3_vectors_per_row():
+    """r2 0x10 (half units), r3 2: the load holds and zeroes two vectors, so both are a
+    hypothesis beside it; outside them words keep at most inferred (not a byte row)."""
+    m, e = machine(bytes(range(256))), stream.Engine()
+    drive(m, e, [*block(0, 1, 0, 0x10, 2, 0, 4, 8, 1), *load(0, SRC, 0x10 * 64)])
+    assert e.lane_tier(0x10) == H and e.lane_tier(0x11) == H
+    assert e.lane_tier(0x12) == I
+
+
+def test_words_beside_other_shapes_keep_at_most_inferred():
+    """Two rows of a load and a 16-bit load: outside their vectors inferred, not verified."""
+    for values in (
+        [*lanes(0, 1, r6=2, r7=2, r1=64, r4=64), *load(0, SRC, 0)],
+        [*lanes(0, 1, r5=8, r6=4), *load(0, SRC, 0)],
+    ):
+        m, e = machine(bytes(range(256))), stream.Engine()
+        drive(m, e, values)
+        assert e.lane_tier(0x40) == I
+
+
+def test_kind_4_rows_on_channel_1_store_as_run():
+    """Kind 4 stores two rows at DRAM pitch 0x100 and three at 0x200 as kind 6, each shape run in
+    one job: inferred."""
+    for r7, r4 in ((2, 0x100), (3, 0x200)):
+        m, e = machine(), stream.Engine()
+        for v in range(r7):
+            m.memory[v] = Vec(tuple(range(32 * v, 32 * v + 32)))
+        drive(
+            m, e, [*lanes(1, 1, r6=2, r7=r7, r1=0x40, r4=r4), 1 << 6 | 4, 0, DST, WAIT]
+        )
+        for v in range(r7):
+            got = m.boot.read(DST + r4 * v, 32)
+            assert bytes(got.data) == bytes(range(32 * v, 32 * v + 32))
+            assert got.weakest() == I
+
+
+def test_kind_4_rows_in_another_pitch_raise():
+    m, e = machine(), stream.Engine()
+    m.memory[0] = m.memory[1] = Vec(tuple(range(32)))
+    with pytest.raises(UnknownSemantics):
+        drive(m, e, [*lanes(1, 1, r6=2, r7=2, r1=0x40, r4=0x200), 1 << 6 | 4, 0, DST])
+
+
+def test_three_store_rows_are_inferred_whatever_their_pitch():
+    """Kind 6 rows past two, also at the pitches kind 4 ran (r1 0x40, r4 0x200) and with
+    overlapping 64-byte rows (r3 2, r6 4): inferred."""
+    for r3, r6 in ((1, 2), (2, 4)):
+        m, e = machine(), stream.Engine()
+        for v in range(4):
+            m.memory[v] = Vec(tuple(range(32)))
+        drive(
+            m,
+            e,
+            [*lanes(1, r3, r6=r6, r7=3, r1=0x40, r4=0x200), *store(1, 0, DST), WAIT],
+        )
+        assert m.boot.read(DST, 32).weakest() == I
+
+
+def test_a_plain_load_that_wraps_keeps_at_most_inferred_beside_it():
+    """A byte load of two vectors from vector 0x3ff wraps to vector 0: outside it inferred."""
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, (LANE_VECTORS - 1) * 64)])
+    assert e.lane_tier(0) == H and e.lane_tier(0x10) == I

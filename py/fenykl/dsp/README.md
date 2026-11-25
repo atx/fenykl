@@ -913,7 +913,10 @@ memory and the DRAM side; DRAM addresses are floored to 16 bytes, lane offsets t
 completes at the job's end (`finish`, called by `Machine.between_jobs`) [verified for a store,
 inferred for a load]. A load's destination is unknown until then and its DRAM source is read
 when handed; a store takes its source when handed [inferred where the source is rewritten
-before the store completes]; lane reads beside an outstanding command are a hypothesis; a
+before the store completes]; lane reads beside an outstanding command are a hypothesis, unless
+they touch no vector of any outstanding lane-memory command: then verified beside one-row byte
+loads and stores of kinds 0 / 6 (lane loads and stores on one bank while a load into the other
+and a store from it were outstanding), inferred beside any other lane-memory shape; a
 command with a register not handed moves nothing [inferred]. What was not measured takes the
 engine off script (`Engine.off`: the lane memory unknown, later destinations unknown); a
 destination that cannot be bounded, and any value after the grammar is lost, raise. X1 0x1e is
@@ -965,6 +968,14 @@ as the job's completion time against loop pass counts, minimum over repeats:
 The word parts and the waits are capped at the tier of the weakest control step of the flow
 (a branch on an inferred register, a jump in another's delay slots): it decides which words
 run.
+
+Three kernels that stream 4 to 16 KiB from DRAM in 4 KiB chunks with the next load handed
+before the current compute (an elementwise op DRAM to DRAM, a byte sum, a dense layer of 64
+inputs; 1 to 16 passes over the data; 112 to 446 us) ran on the camera within -10 to +10 us of
+the estimate, minimum over three repeats, every one in its pre-registered window of 15 us + 5 %;
+with their compute words idled or their transfers idled they stayed within it too, so words with
+S1, S2 and S3 heads and their ports cost as idle words there [verified]. The elementwise kernel is
+the worked example in `tests/test_dsp_kernel_example.py`.
 
 A case that was not timed makes the estimate unknown: a command of another kind, memory, r2 or
 r5, of more than one row, with r3 other than the units its r6 lines fill or outside the sizes
