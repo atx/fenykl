@@ -13,10 +13,10 @@ Grammar (verified): the values form groups, each starting with a key v.
 - v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
   load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
   offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
-  (inferred: what follows it is capped at inferred), 2 a load as kind 0 (measured once: 32
-  bytes from a DRAM address into the lane-memory vector its "to" names, eight lanes read back;
-  what follows it is capped at inferred), 4 a store as kind 6 (measured once: vector "from"'s
-  low bytes to the DRAM address "to", 32 bytes). Other kinds were not measured and raise
+  (inferred: what follows it is capped at inferred). Kinds 2 and 4 load and store as 0 and 6,
+  kinds 3 and 5 move nothing as 1, kind 8 fills (r3 lane-memory vectors from the one "to" names,
+  every lane "from"'s low 16 bits; no DRAM read or written), each only in the shapes it ran in
+  (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
   `UnknownSemantics`.
 
 A key with bits set outside these fields was not measured.
@@ -90,12 +90,64 @@ H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 CHANNELS, REGISTERS = 4, 8
 LOAD, NOTHING_MOVES, STORE = 0, 1, 6
 """The command kinds measured."""
-KIND_AS = {2: LOAD, 4: STORE}
-"""Kinds measured once each to move data as another kind: 2 as a load, 4 as a store, each in
-one job of the `KIND_AS_SHAPE` (what follows them is capped at inferred)."""
-KIND_AS_SHAPE = (1, None, 0x20, 1, None, 0x10, 2, 1)
-"""Registers 0..7 of the one shape kinds 2 and 4 ran in (None: any): the lane memory, byte
-elements, one vector, two 16-byte lines, one row. Another shape raises `UnknownSemantics`."""
+FILL = 8
+"""Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits (no DRAM side)."""
+KIND_AS = {
+    2: LOAD,
+    3: NOTHING_MOVES,
+    4: STORE,
+    5: NOTHING_MOVES,
+    7: NOTHING_MOVES,
+    FILL: FILL,
+}
+"""Kinds that ran as another kind, only in the shapes of `KIND_SHAPES`: 2 a load, 4 a store
+(both as kinds 0 / 6), 3, 5 and 7 move nothing (as kind 1; counted by a 0x1d, inferred), 8 a
+fill."""
+BASE_SHAPE = (1, None, 0x20, 1, None, 0x10, 2, 1)
+"""Registers 0..7 (None: any): the lane memory, byte elements, one vector, two 16-byte lines,
+one row."""
+HALF_SHAPE = (1, None, 0x20, 1, None, 0x08, 4, 1)
+"""One vector of 32 16-bit elements (four lines)."""
+ROWS_SHAPE = (1, 0x80, 0x20, 1, 0x100, 0x10, 2, 3)
+"""Three rows of one vector, memory pitch two vectors, DRAM pitch 0x100."""
+LOCAL_SHAPE = (2, None, 4, 8, None, 0x10, 2, 1)
+"""32 bytes as bytes in local memory (eight words)."""
+QUAD_SHAPE = (1, None, 0x20, 4, None, 0x10, 8, 1)
+"""Four vectors of byte elements (eight lines)."""
+PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
+"""Two vectors of byte elements (four lines)."""
+TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
+"""Three vectors of byte elements (six lines)."""
+WRAPPED, DIRECT = "wrapped", "direct"
+"""How a kind's memory-side offset was handed where it ran: a DRAM address counted modulo
+`fields.LANE_VECTORS` vectors (the job's dst or src), or an offset inside the memory."""
+KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None]]] = {
+    2: {
+        BASE_SHAPE: (I, WRAPPED),
+        HALF_SHAPE: (V, WRAPPED),
+        ROWS_SHAPE: (V, WRAPPED),
+        LOCAL_SHAPE: (V, DIRECT),
+    },
+    3: {BASE_SHAPE: (I, WRAPPED)},
+    4: {
+        BASE_SHAPE: (I, WRAPPED),
+        HALF_SHAPE: (V, DIRECT),
+        LOCAL_SHAPE: (V, DIRECT),
+        PAIR_SHAPE: (I, DIRECT),
+        TRIPLE_SHAPE: (I, DIRECT),
+    },
+    5: {BASE_SHAPE: (I, WRAPPED)},
+    7: {BASE_SHAPE: (I, WRAPPED)},
+    FILL: {
+        BASE_SHAPE: (V, WRAPPED),
+        HALF_SHAPE: (V, WRAPPED),
+        QUAD_SHAPE: (V, WRAPPED),
+    },
+}
+"""The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
+for kinds that move nothing; a fill's "to" also vector-aligned, as every fill ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job;
+a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 only.
+Another shape, or the other offset form, raises `UnknownSemantics`."""
 DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
 (measured); 48 wedged the job twice, also with only 44 0x1d after them, so the depth is 44..47
@@ -177,6 +229,9 @@ class _Command:
     tier: Confidence
     where: str
     index: int
+    wrap_tier: Confidence = I
+    """The tier of a lane-memory offset counted modulo `fields.LANE_VECTORS` (inferred, unless
+    the kind ran so)."""
 
 
 def _known(v: Sv | None, what: str) -> int:
@@ -315,16 +370,53 @@ class Engine:
     def _command(self, m: Machine, cmd: _Command) -> None:
         if cmd.kind in KIND_AS:
             shape = tuple(None if r is None else r.value for r in cmd.regs)
-            if any(w is not None and v != w for v, w in zip(shape, KIND_AS_SHAPE)):
+            run = next(
+                (
+                    t
+                    for want, t in KIND_SHAPES[cmd.kind].items()
+                    if all(
+                        w is None or v == w for v, w in zip(shape, want, strict=True)
+                    )
+                ),
+                None,
+            )
+            if run is None:
                 raise UnknownSemantics(
                     cmd.index,
                     "stream",
                     [],
-                    f"{cmd.where}: command kind {cmd.kind:#x} outside the one shape it ran in",
+                    f"{cmd.where}: command kind {cmd.kind:#x} outside the shapes it ran in",
                 )
-            self.cap = min(self.cap, I)
+            tier, form = run
+            kind = KIND_AS[cmd.kind]
+            offs = {STORE: (cmd.frm,), NOTHING_MOVES: (cmd.frm, cmd.to)}.get(
+                kind, (cmd.to,)
+            )
+            for off in offs:
+                wrapped = (
+                    off.value is not None and off.value >= LANE_VECTORS * VECTOR_BYTES
+                )
+                if off.value is None or (form == WRAPPED) != wrapped:
+                    raise UnknownSemantics(
+                        cmd.index,
+                        "stream",
+                        [],
+                        f"{cmd.where}: command kind {cmd.kind:#x} with a memory offset "
+                        f"not {form} as where it ran",
+                    )
+            if kind == FILL and cmd.to.value % VECTOR_BYTES:
+                raise UnknownSemantics(
+                    cmd.index,
+                    "stream",
+                    [],
+                    f"{cmd.where}: a fill to {cmd.to.value:#x}, not vector-aligned as "
+                    "every fill ran",
+                )
+            if form == WRAPPED:
+                cmd = replace(cmd, wrap_tier=tier)
+            self.cap = min(self.cap, tier)
             cmd = replace(cmd, kind=KIND_AS[cmd.kind])
-        if cmd.kind not in (LOAD, NOTHING_MOVES, STORE):
+        if cmd.kind not in (LOAD, NOTHING_MOVES, STORE, FILL):
             raise UnknownSemantics(
                 cmd.index, "stream", [], f"{cmd.where}: command kind {cmd.kind:#x}"
             )
@@ -347,13 +439,42 @@ class Engine:
             self._spoil(m, cmd)
             return
         try:
-            if cmd.kind == LOAD:
+            if cmd.kind == FILL:
+                self.outstanding[-1] = self._fill(m, cmd)
+            elif cmd.kind == LOAD:
                 self.outstanding[-1] = self._load(m, cmd)
             else:
                 self.outstanding[-1] = self._store(m, cmd)
         except _Off as e:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)
+
+    def _fill(self, m: Machine, cmd: _Command) -> Callable[[Machine, Confidence], None]:
+        """Kind 8: r3 vectors from the one "to" names, every lane "from"'s low 16 bits."""
+        value = _known(cmd.frm, "the fill value") & 0xFFFF
+        base = _known(cmd.to, "a memory offset") // VECTOR_BYTES
+        r3 = _known(cmd.regs[3], "r3")
+        tier = min([self.cap, cmd.tier, *(r.tier for r in cmd.regs if r is not None)])
+        held: dict[int, Vec] = {}
+        for v in range(r3):
+            held[(base + v) % LANE_VECTORS] = Vec(UNKNOWN_VEC.lanes)
+        if not m.lanes_lost:
+            m.memory.update(held)
+
+        def complete(m: Machine, cap: Confidence) -> None:
+            if m.lanes_lost:
+                return
+            for v in range(r3):
+                at = (base + v) % LANE_VECTORS
+                wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
+                racing = m.memory.get(at) is not held[at]
+                m.memory[at] = (
+                    UNKNOWN_VEC
+                    if racing
+                    else Vec((value,) * LANE_COUNT, min(tier, cap, wrap))
+                )
+
+        return complete
 
     def _moves_nothing(self, m: Machine, cmd: _Command) -> None:
         """A register not handed: nothing moves (inferred). What the command could reach, which
@@ -460,7 +581,7 @@ class Engine:
                 base = off // VECTOR_BYTES
                 for v in range(r3):
                     at = (base + v) % LANE_VECTORS
-                    wrap = I if base + v >= LANE_VECTORS else V
+                    wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
                     chunk = elements[v * LANE_COUNT : (v + 1) * LANE_COUNT]
                     chunk += [(0, V)] * (LANE_COUNT - len(chunk))
                     if r2 != 0x20:

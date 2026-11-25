@@ -117,10 +117,9 @@ confidence and fact; `fields.op(value)` is total:
 5, 6, 74..126 and the data op values 0x22, 0x26, 0x27, 0x2d, 0x39, 0x3b and 0x45 never occur in the
 stock programs. The seven run on the camera as data ops (`fields.UNSEEN_FORMATS`, exact readout on eight operand
 sets each): 0x2d min(ra, rb) unsigned, 0x39 ra ^ rb and 0x45 the ring step with s = ra + 1 and L = rb
-(all bits of rb) [verified]; 0x27 min(ra, imm16) unsigned, imm16 zero-extended [inferred: ra was above
-imm16 in every set]; 0x22 ra <= imm16 unsigned and 0x26 max(ra, imm16) unsigned [inferred where ra >
-imm16, the only side run: every result was 0 or ra, so imm16 never showed; hypothesis elsewhere]; 0x3b
-ra & ~rb [inferred: fitted, one of the candidates named before the run].
+(all bits of rb), 0x22 ra <= imm16 unsigned, 0x26 / 0x27 max / min(ra, imm16) unsigned, imm16 zero-extended
+(ra below, equal to and above imm16, imm16 above 0x8000 against ra values that tell the extensions apart) and
+0x3b ra & ~rb (every bit pair in both orders) [verified].
 Ops 0..4 are the control ops (`CONTROL_OPS`, `word.control`), and
 f229 (`ctl_n`) is clear exactly in them. Ops 0..3 name a target T = bits 15..22 | bits 128..132 <<
 8, an absolute word index into the program (`word.target`, None for other words): T follows its
@@ -488,8 +487,11 @@ figures into a job's time ("Timing" below).
 
 - A word inside a loop costs about 5.3 ns, whatever it holds: idle words, scalar local loads, X1's
   divide, S3's reductions, X0 vector loads and taken branches over their slots all cost the same
-  within 1.5 ns [verified, pre-registered]. A straight-line word costs about 62 ns the first time
-  it runs; a word branched over costs nothing. A job adds about 100 us (the interrupt path), and
+  within 1.5 ns [verified, pre-registered]. A straight-line word costs about 64 ns the first time
+  it runs [verified range]; instructions are fetched in lines of 8 words aligned to multiples of 8,
+  so a word branched over inside a line that runs costs as if it ran, a whole line branched over
+  costs nothing [inferred]; a word run again later in the same job, even far from a loop, costs
+  about the repeat rate [measured, outside its registered window]. A job adds about 100 us (the interrupt path), and
   single jobs jitter by up to 1.5 ms, so timings take the minimum over repeats.
 - The stream engine moves about 2.2 KiB per us for byte loads and stores alike, with well under
   1 us per command besides the bytes, byte loads into local memory at about 0.7 KiB per us;
@@ -899,8 +901,9 @@ second among them are not taken [verified, with no jump pending], a halt third e
 channel registers do not survive a job; a job with transfers and no stream raises). The engine
 sees only the values X1 0x1c hands [verified]: a key 0x21 | channel << 6 | register << 11 and one
 value, a block key 0x20 | channel << 6 and eight values (registers 0..7), or a command channel
-<< 6 | kind (0 load, 6 store, 1 nothing; that a 0x1d counts kind 1 is inferred, other kinds
-raise) and (from, to). Per channel r0 names the memory (1 the
+<< 6 | kind (0 load, 6 store, 1 nothing; that a 0x1d counts kind 1 is inferred; 2 / 4 as 0 / 6,
+3 / 5 / 7 as 1 and 8 a fill of the lane memory at "to" with "from"'s low 16 bits, each only in the
+shapes it ran in, `stream.KIND_SHAPES`; other kinds raise) and (from, to). Per channel r0 names the memory (1 the
 lane memory, 2 the local memory), r2 its elements per unit and r3 the units per row, r5 the
 elements per 16-byte DRAM line (the element width 128 / r5 bits), r6 the lines per row, r7 the
 rows (verified up to 4 rows on a load, 2 on a store), r1 and r4 the row pitches in bytes on the
@@ -934,16 +937,20 @@ as the job's completion time against loop pass counts, minimum over repeats:
 
 - **job**: 98.4 us per job, the interrupt and callback path [inferred: the loops' verified
   intercept of 101 us less the first runs of their 42 words];
-- **first runs**: 62 ns for each word index the first time it runs [inferred: the straight-line
-  slope fitted; later straight runs gave 65 to 73 ns, so it may be low by up to 15 %; words of ALU ops cost
-  as idle words, so a straight-line run is fetch-bound whatever it computes; a word branched
-  over costs nothing];
+- **first runs**: 64 ns for each word index the first time it runs [inferred: the straight-line
+  slope fitted, 62 to 70 ns over several runs, all in a pre-registered 50 to 75 ns; words of ALU ops cost
+  as idle words, so a straight-line run is fetch-bound whatever it computes];
+- **unrun line words**: 64 ns for each word never executed in an 8-word fetch line (aligned to
+  multiples of 8) that some executed word belongs to [inferred: blocks at offsets 4 / 12 of a
+  16-word stride cost about 0.8 of a line more than at 0 / 8; strides of 24 and 64 words cost
+  2 to 5 words per jump more than the lines predict, unexplained];
 - **repeats**: 5.37 ns for each later execution 9 to 106 executed words after the word's last
-  (an idle word: 9 to 1024), with no op 4 between [verified in loops of 9 to 106 words for idle
+  (an idle word: 9 to 1024 or exactly 2000), with no op 4 between [verified in loops of 9 to 106 words for idle
   words, scalar local loads, X1's divide, X0 lane loads and taken branches with their slots,
   and for idle words in loops of 64 to 1024 words and in loops that jump 1088 words away and
-  back by op 2 or op 3: no loop buffer and no cache under 1024 words; 2000-word passes measured
-  at 4.6 ns]; other repeats, and repeated
+  back by op 2 or op 3, and in 2000-word passes (5.24 ns from four totals): no loop buffer;
+  1536- and 1800-word passes and a 900-word straight run repeated after 900 other words were
+  measured outside their registered windows]; other repeats, and repeated
   words with an S head, go in **inferred repeats** [S3 reductions fitted, the other S heads
   not timed];
 - **stream waits**: what the 0x1d words wait [inferred]. The engine records every command and

@@ -2,6 +2,8 @@
 words before their 0x1d, one engine for all channels, the tiers of the parts and the cases
 without a measured time."""
 
+import pytest
+
 from fenykl.dsp import stream
 from fenykl.dsp.emu import Boot, Executor, Job
 from fenykl.dsp.fields import Confidence
@@ -119,11 +121,18 @@ def test_a_loops_words_are_counted_and_tiered():
     assert e.tier == I
 
 
-def test_passes_up_to_1024_words_repeat_at_the_verified_rate_for_idle_words_only():
-    """A 906-word pass: its 905 idle words repeat verified, its loop word inferred."""
-    parts = {p.name: p.us for p in loop(900).parts}
+@pytest.mark.parametrize("n", [900, 1994])
+def test_idle_passes_of_up_to_1024_words_and_of_2000_repeat_verified(n):
+    """A pass of n + 6 words: its idle words repeat verified, its loop word inferred."""
+    parts = {p.name: p.us for p in loop(n).parts}
     idle, other = parts["repeats"] / REPEAT.us, parts["inferred repeats"] / REPEAT_I.us
-    assert round(idle) == 905 * round(other) and round(other) > 0
+    assert round(idle) == (n + 5) * round(other) and round(other) > 0
+
+
+@pytest.mark.parametrize("n", [1100, 1530, 1799, 2010])
+def test_idle_passes_between_1024_and_2000_words_and_beyond_repeat_inferred(n):
+    parts = {p.name for p in loop(n).parts}
+    assert "repeats" not in parts and "inferred repeats" in parts
 
 
 def test_passes_shorter_than_the_measured_loops_are_inferred():
@@ -202,3 +211,25 @@ def test_4_kib_into_local_memory_is_timed():
 def test_an_engine_off_script_has_no_time():
     e = run([0x7FFF, WAIT])
     assert e.us is None and "off script" in e.unknown
+
+
+def test_words_branched_over_cost_only_inside_a_fetch_line_that_runs():
+    """A taken op 2 at word 0 (four slots) to word 8 or to word 16: words 5..7 share line 0
+    with words that run and cost as unrun; line 1 (8..15), skipped whole, costs nothing."""
+    from fenykl.dsp.timing import LINE, UNRUN
+
+    def over(target: int) -> Estimate:
+        br = Word.from_fields(
+            {"ra": 2, "f120_122": 0}, base=Word.ctl(2, target, base=IDLE)
+        )
+        body = [br, *[IDLE] * (target - 1), *[IDLE] * 8]
+        return run([], body=body, g={2: Sv(1)})
+
+    assert LINE == 8
+    near, far = over(8), over(16)
+    assert (
+        part(near, "unrun line words").us
+        == part(far, "unrun line words").us
+        == 3 * UNRUN.us
+    )
+    assert part(near, "first runs").us == part(far, "first runs").us
