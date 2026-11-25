@@ -42,6 +42,8 @@ from typing import Protocol
 
 from .emu import LOCAL_BASE, Boot
 from .fields import (
+    ALONE_PORTS,
+    ALONE_SELECTS,
     ALONE_ZERO_LANES,
     ALONE_ZEROS,
     ALU_BUS,
@@ -346,6 +348,11 @@ class Machine:
         """The (unit, head) pairs that ran in that word."""
         self.heads_run: dict[tuple[str, int], int] = {}
         """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
+        self.alone_runs: dict[tuple[str, int], int] = {}
+        """Likewise the runs of `ALONE_ZEROS` heads in the form run on the camera."""
+        self.alone: dict[str, tuple[int, int, int, bool, bool]] = {}
+        """Each unit's last such run: its word, head, lag, whether it is the run whose zeros
+        were read and whether its word had the port of `ALONE_PORTS`."""
         self._u_write: tuple[int, Vec] | None = None
         self.ceiling = V
         """The tier cap of what the word being run leaves (`execute`)."""
@@ -855,26 +862,49 @@ class Machine:
             self._u_port(index, head, b, word)
 
     def _alone_zeros(self, unit: str, head: int, word: Word, t: int) -> bool:
-        """Schedules the zeros of an `ALONE_ZEROS` head alone in its word, in a job whose S0..S2
-        heads so far are only one run of it or none; False for any other head or job."""
+        """Records a run of an `ALONE_ZEROS` head in the form run on the camera, whose ports
+        `_alone_read` serves; False for any other head, run or job."""
         heads, lag, read = ALONE_ZEROS.get(unit, ((), 0, 0))
-        if head not in heads or set(self.heads_run) - {(unit, head)}:
-            return False
-        if any(
-            word[HEAD_IDS[u]] != lookup(HEAD_IDS[u]).idle
-            for u in S_OPERANDS
-            if u != unit
+        key = (unit, head)
+        runs = self.heads_run.get(key, 0)
+        if (
+            head not in heads
+            or set(self.heads_run) - {key}
+            or runs > 1
+            or self.alone_runs.get(key, 0) != runs
+            or any(word[f] != v for f, v in ALONE_SELECTS[unit].items())
+            or any(
+                word[HEAD_IDS[u]] != lookup(HEAD_IDS[u]).idle
+                for u in S_OPERANDS
+                if u != unit
+            )
         ):
             return False
-        runs = self.heads_run.get((unit, head), 0)
-        if runs > 1:
-            return False
-        lanes = tuple(0 if k in ALONE_ZERO_LANES else None for k in range(LANE_COUNT))
-        self.lane_due.setdefault(t + lag, {}).setdefault(unit, []).append(
-            (Vec(lanes, V if runs == read else I), None)
-        )
-        self._why(t + lag, unit, f"{unit} {head:#x}: lanes 16..31 not read")
+        self.alone_runs[key] = runs + 1
+        enable, v = ALONE_PORTS[unit]
+        self.alone[unit] = (t, head, lag, runs == read, word[enable] == v)
         return True
+
+    def _alone_read(self, unit: str, t: int, port: tuple[str, int] | None):
+        """What `port` (None for another reader) takes of `unit`'s result in word t when it
+        follows a run of `_alone_zeros`: the zeros at its lag, nothing at the other, each
+        verified on the run it was read and inferred on the other, unknown in a form not run;
+        None in any other word."""
+        if unit not in self.alone or not 0 <= t - self.alone[unit][0] <= 1:
+            return None
+        start, head, lag, zeros_read, port_first = self.alone[unit]
+        if (
+            self.lane_due.get(t, {}).get(unit)
+            or port != ALONE_PORTS[unit]
+            or (t > start and port_first)
+        ):
+            self._why(t, unit, f"{unit} {head:#x}: read in a form not run")
+            return Vec(UNKNOWN_VEC.lanes, H)
+        if t - start != lag:
+            return Kept(I if zeros_read else V)
+        self._why(t, unit, f"{unit} {head:#x}: lanes 16..31 not read")
+        lanes = tuple(0 if k in ALONE_ZERO_LANES else None for k in range(LANE_COUNT))
+        return Vec(lanes, V if zeros_read else I)
 
     def _unknown_operands(
         self, unit: str, head: int, word: Word, a: Vec, b: Vec, reads: str
@@ -1070,7 +1100,7 @@ class Machine:
             src = LANE_SOURCES[enable].get(v)
             if src is None:
                 continue  # wrote nothing from any S head (measured on the camera)
-            value = _cap(self._lane_source(src[0], t), src[1])
+            value = _cap(self._lane_source(src[0], t, (enable, v)), src[1])
             put(file, word[PORTS[enable]], value, src[0])
         v = word["f252_254"]
         if v in STORE_NOTHING:
@@ -1093,7 +1123,7 @@ class Machine:
                 writes[(file, reg)] = _cap(self._file(file)[reg], tier)
         return writes
 
-    def _lane_source(self, text: str, t: int):
+    def _lane_source(self, text: str, t: int, port: tuple[str, int] | None = None):
         if text == LANE_LOAD:
             due = self.load_due.get(t, [])
             if len(due) > 1:
@@ -1102,6 +1132,9 @@ class Machine:
         unit = LANE_UNIT.get(text, "s2" if text == S2_HIGH else None)
         if unit is None:
             raise ValueError(text)
+        alone = self._alone_read(unit, t, port)
+        if alone is not None:
+            return alone
         due = self.lane_due.get(t, {}).get(unit, [])
         if not due:
             return NOTHING

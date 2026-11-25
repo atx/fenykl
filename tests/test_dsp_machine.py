@@ -945,9 +945,15 @@ def alone_port(unit: str, reg: int) -> dict[str, int]:
     return {"f248_249": 1, "f171_174": reg} if unit == "s0" else l3_port(reg, 2)
 
 
+CAMERA_SELECTS = {
+    "s0": {"f37_40": 1, "f41_44": 2, "f72_75": 4, "f76_79": 5, "f23_30": 0x5A},
+    "s1": {"f45_48": 1, "f49_52": 2, "f80_83": 4, "f84_87": 5},
+}
+"""The selects the parked heads ran with on the camera: a, b, s / t and S0's immediate byte."""
+
+
 def alone_head(unit: str, head: int) -> dict[str, int]:
-    nibs = ("f37_40", "f41_44") if unit == "s0" else ("f45_48", "f49_52")
-    return {ALONE_HEAD[unit]: head, nibs[0]: 1, nibs[1]: 2}
+    return {ALONE_HEAD[unit]: head, **CAMERA_SELECTS[unit]}
 
 
 def alone_operands(m: Machine) -> None:
@@ -1031,6 +1037,67 @@ def test_a_parked_heads_zeros_on_a_run_not_read_are_inferred_then_unknown(
         assert got.lanes == (None,) * 32
     else:
         assert got == Vec(ZEROS_0_15.lanes, tier)
+
+
+def test_a_parked_head_after_its_own_run_beside_another_head_is_not_known(m):
+    alone_operands(m)
+    h = alone_head("s0", 0x54)
+    beside = w(**h, f296_301=0x19, f65_68=1)
+    run(m, [beside, IDLE, IDLE, w(**h), w(**alone_port("s0", 8))])
+    assert m.lanes["L3"][8].lanes == (None,) * 32
+
+
+@pytest.mark.parametrize(
+    ("unit", "head", "other"),
+    [
+        ("s0", 0x54, {"f37_40": 3}),
+        ("s0", 0x54, {"f76_79": 6}),
+        ("s1", 0x57, {"f49_52": 5}),
+        ("s1", 0x57, {"f84_87": 3}),
+    ],
+)
+def test_a_parked_head_on_other_selects_is_not_known(m, unit, head, other):
+    alone_operands(m)
+    h = {**alone_head(unit, head), **other}
+    port = alone_port(unit, 8)
+    run(m, [w(**h, **port)] if unit == "s1" else [w(**h), w(**port)])
+    assert m.lanes["L3"][8].lanes == (None,) * 32
+
+
+@pytest.mark.parametrize(("unit", "head"), [("s0", 0x54), ("s1", 0x57)])
+def test_a_parked_heads_port_in_both_words_is_not_known(m, unit, head):
+    alone_operands(m)
+    port = alone_port(unit, 8)
+    run(m, [w(**alone_head(unit, head), **port), w(**port)])
+    assert m.lanes["L3"][8].lanes == (None,) * 32
+
+
+@pytest.mark.parametrize(
+    ("unit", "head", "lag", "port"),
+    [
+        ("s0", 0x54, 1, {"f236_237": 2, "f147_150": 8}),  # into L0
+        ("s1", 0x57, 0, {"f238_239": 2, "f151_154": 8}),  # into L0
+    ],
+)
+def test_a_parked_heads_result_through_another_port_is_not_known(
+    m, unit, head, lag, port
+):
+    alone_operands(m)
+    m.lanes["L0"][8] = SENT
+    h = alone_head(unit, head)
+    run(m, [w(**h, **port)] if lag == 0 else [w(**h), w(**port)])
+    assert m.lanes["L0"][8].lanes == (None,) * 32
+
+
+def test_a_parked_head_after_an_s3_setup_gives_zeros_and_traces_the_lanes_not_read():
+    m = Machine(Boot(), trace=True)
+    alone_operands(m)
+    m.f["F3"][15] = Sv(0x0A5A)
+    sentinel = w(f296_301=0x18, f96_99=15, **l3_port(8, 0))  # S3 broadcasts F3[15]
+    h = alone_head("s1", 0x57)
+    run(m, [sentinel, IDLE, w(**h, **alone_port("s1", 8)), IDLE])
+    assert m.lanes["L3"][8] == ZEROS_0_15
+    assert m.trace["L3[8]"].reason == "s1 0x57: lanes 16..31 not read"
 
 
 @pytest.mark.parametrize("at", [0, 1])
