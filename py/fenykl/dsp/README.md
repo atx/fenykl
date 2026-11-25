@@ -10,7 +10,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 |---|---|
 | `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the op meanings `OPS`, the target `TARGET`, the delay slots `DELAY_SLOTS` |
 | `units.py` | the units (a strobe and the fields that change under it) and their slot classes, derived from the table |
-| `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`) and as a control word (`control`, `end`, `target`); `IDLE` |
+| `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`), by unit (`slots()`), by a head's operands (`head`, `head_operands`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` with labels, `call_return_errors()` |
 | `disasm.py` | listings and DSL source of a program |
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
@@ -82,9 +82,148 @@ f69_71 are inert there (X0's head at 439 is no store head).
 
 ## Fields
 
-Each field has a permanent positional id from its bits (`f115_119`, `f229`)
-and optionally a semantic name (`xreg`). Ids never change for the same bits; names are renamed
-freely, without aliases. Slots, `Word[...]` and `Word.from_fields` accept either.
+Each field has a permanent positional id from its bits (`f115_119`, `f229`) and, where its role
+is measured, a semantic name (`xreg`). Ids never change for the same bits. Slots, `Word[...]`,
+`Word.from_fields` and `fields.lookup` accept either; a name that would read as an id (`f` and a
+digit), equal another key, be a Python keyword or shadow a slot attribute fails the import.
+
+Names are short, lowercase and prefixed with what they belong to:
+
+- `s0`..`s3`, `x0`, `x1`: a head's unit, then the operand: `s1a`, `s1b` (the lane operands a and
+  b, registers of L1), `s1t`, `s1c` (scalar and carry-in registers of F1), `s1op` (the head),
+  `x0o` (X0's store register of O); `x0a`, `x0b`, `x1a`, `xreg`, `x0op`, `x1op` are older names
+  of the same kind (`xreg` is X1's b).
+- a file, then `dst` (the register a port writes) or `src` (the port's enable, its value the
+  source), `2` for a file's second port: `l0`..`l3` the lane files, `o` the store file O, `u` U,
+  `sf0`..`sf3` the scalar files F0..F3, and the older `a`, `b`, `r`, `g` of the PR ports.
+- immediate pieces by the immediate they belong to: `s0imm_lo`, `s1imm_lo`, `x0k_lo`, `x0k_mid`,
+  `x1k_lo`, `x1k_mid` (the other bits lie in register fields, see the head views below).
+- `msel` and `m_n` for M (`_n`: active low, as `ctl_n`); `ra`, `rb`, `rr`, `imm`, `op` in the op
+  slot.
+
+Each named field's fact starts with its role and tier (`fields.ROLES`), then the boundary and
+other evidence. Fields whose role is open keep their id only: f35_36 and f145_146 (Q), f234_235
+(a hypothesis) and the constants f133_140, f230_231, f277.
+
+| id | name | unit | role |
+|---|---|---|---|
+| f0 | s1imm_lo | s1 | bit 0 of S1's lane immediate (`LANE_IMMEDIATES`, verified) |
+| f1 | x0k_lo | x0 | bit 0 of X0's immediate K (`X_IMMEDIATES`, verified) |
+| f2_6 | x0k_mid | x0 | bits 5..1 of X0's immediate K (`X_IMMEDIATES`, verified) |
+| f7_8 | x1k_lo | x1 | bits 1..0 of X1's immediate K (`X_IMMEDIATES`, verified) |
+| f9_14 | x1k_mid | x1 | bits 7..2 of X1's immediate K (`X_IMMEDIATES`, verified) |
+| f15_22 | imm | op_slot | the op slot's 8-bit immediate: the low byte of a data op's immediate and of a control op's target (`FAMILIES`, `TARGET`, verified) |
+| f23_30 | s0imm_lo | s0 | bits 7..0 of S0's lane immediate (`LANE_IMMEDIATES`, verified) |
+| f31_34 | s3u | s3 | the register of U whose lanes 0..3 S3's lane shifts move in (`LANE_THIRD_FILE`); bit 2 bit 4 of the lane of 0xe, 0xf and 0x10, bits 3..2 bits 5..4 of S3's lane immediate (verified) |
+| f35_36 | - | q | open: a section mode, never set on the E-M10 II |
+| f37_40 | s0a | s0 | S0's lane operand a: the register of L0 its lane heads read as a; bits 11..8 of S0's lane immediate (`LANE_FILES`, verified) |
+| f41_44 | s0b | s0 | S0's lane operand b: the register of L0 its lane heads read as b (`LANE_FILES`, verified) |
+| f45_48 | s1a | s1 | S1's lane operand a: the register of L1 its lane heads read as a (`LANE_FILES`, verified) |
+| f49_52 | s1b | s1 | S1's lane operand b: the register of L1 its lane heads read as b (`LANE_FILES`, verified) |
+| f53_56 | s2a | s2 | S2's lane operand a: the register of L2 its lane heads read as a; bits 6..3 of S2's lane immediate (`LANE_FILES`, verified) |
+| f57_60 | s2b | s2 | S2's lane operand b: the register of L2 its lane heads read as b (`LANE_FILES`, verified) |
+| f61_64 | s3a | s3 | S3's lane operand a: the register of L3 its lane heads read as a (`LANE_FILES`, verified) |
+| f65_68 | s3b | s3 | S3's lane operand b: the register of L3 its lane heads read as b; bits 9..6 of S3's lane immediate (`LANE_FILES`, verified) |
+| f69_71 | x0o | x0 | the register of O that X0's store heads store (`STORE_FILE`, verified) |
+| f72_75 | s0s | s0 | S0's scalar s: the register of F0 read as the bound of its clamps and as its select heads' lane mask (`LANE_OPERANDS`, `LANE_MASKS`, verified) |
+| f76_79 | s0c | s0 | S0's carry-in c: the register of F0 whose bit k is lane k's carry-in, and head 0x52's result; bits 15..12 of S0's lane immediate (`LANE_OPERANDS`, `SCALAR_READS`, verified) |
+| f80_83 | s1c | s1 | S1's carry-in c: the register of F1 whose bit k is lane k's carry-in; its bits 3..2 bits 6..5 of S1's lane immediate (`LANE_OPERANDS`, verified) |
+| f84_87 | s1t | s1 | S1's scalar t: the register of F1 its lane heads read, and head 0x54's result; bits 4..1 of S1's lane immediate (`LANE_OPERANDS`, `SCALAR_READS`, verified) |
+| f88_91 | s2t | s2 | S2's scalar t: the register of F2 the multiplies 0x3 / 0x5 read, and head 0xe's result; bits 3..1 bits 2..0 of S2's lane immediate, bit 1 head 0x7's choice (`LANE_OPERANDS`, `SCALAR_READS`, verified) |
+| f92_95 | s3idx | s3 | S3's lane select and shift count, and the register of F3 read as the lane index; bits 3..0 of S3's lane immediate (verified) |
+| f96_99 | s3val | s3 | S3's value: the register of F3 head 0x24 returns; bits 13..10 of S3's lane immediate (`SCALAR_READS`, verified) |
+| f100_104 | x0a | x0 | X0's register a, A[x0a] (`X_FUNCTIONS`, verified) |
+| f105_109 | x0b | x0 | X0's register b, A[x0b]; bits 10..6 of X0's immediate K (`X_IMMEDIATES`, verified) |
+| f110_114 | x1a | x1 | X1's register a, B[x1a] (`X_FUNCTIONS`, verified) |
+| f115_119 | xreg | x1 | X1's register b, B[xreg], also the register X1 0x1c hands to the stream engine; bits 12..8 of X1's immediate K (`X_IMMEDIATES`, verified) |
+| f120_122 | rr | op_slot | the op slot's R register: a family A or A' store's datum and the third operand of 0x46 / 0x47; bits 15..13 of a family B or D immediate (`FAMILIES`, verified) |
+| f123_127 | ra | op_slot | the op slot's register ra, G[ra], in every data op (`FAMILIES`, verified) |
+| f128_132 | rb | op_slot | the op slot's register rb in families A' and E; bits 12..8 of an immediate and of a control op's target (`FAMILIES`, `TARGET`, verified) |
+| f133_140 | - | const | constant: all-ones in every word |
+| f141_144 | udst | pb | the register of U its port writes under usrc (`LANE_THIRD_FILE`, verified) |
+| f145_146 | - | q | open: a section mode, never set on the E-M10 II |
+| f147_150 | l0dst | pb | the register of L0 its port writes under l0src (verified) |
+| f151_154 | l0dst2 | pb | the register of L0 its port writes under l0src2 (verified) |
+| f155_158 | l1dst | pb | the register of L1 its port writes under l1src (verified) |
+| f159_162 | l1dst2 | pb | the register of L1 its port writes under l1src2 (verified) |
+| f163_166 | l2dst | pb | the register of L2 its port writes under l2src (verified) |
+| f167_170 | l2dst2 | pb | the register of L2 its port writes under l2src2 (verified) |
+| f171_174 | l3dst | pb | the register of L3 its port writes under l3src (verified) |
+| f175_178 | l3dst2 | pb | the register of L3 its port writes under l3src2 (verified) |
+| f179_181 | odst | pb | the register of O its port writes under osrc (`STORE_FILE`, verified) |
+| f182_185 | sf0dst | pb | the register of F0 its port writes under sf0src (verified) |
+| f186_189 | sf0dst2 | pb | the register of F0 its port writes under sf0src2 (verified) |
+| f190_193 | sf1dst | pb | the register of F1 its port writes under sf1src (verified) |
+| f194_197 | sf1dst2 | pb | the register of F1 its port writes under sf1src2 (verified) |
+| f198_201 | sf2dst | pb | the register of F2 its port writes under sf2src (verified) |
+| f202_205 | sf3dst | pb | the register of F3 its port writes under sf3src (verified) |
+| f206_210 | adst | pr | the register of A its port writes under asrc (verified) |
+| f211_215 | bdst | pr | the register of B its port writes under bsrc (verified) |
+| f216_220 | bdst2 | pr | the register of B its port writes under bsrc2 (verified) |
+| f221_223 | rdst | pr | the register of R its port writes under rsrc (verified) |
+| f224_228 | gdst | pr | the register of G its port writes under gsrc (verified) |
+| f229 | ctl_n | op_slot | clear in exactly the words whose op is a control op (verified) |
+| f230_231 | - | const | constant: all-ones in every word |
+| f232_233 | usrc | pb | the enable of U's port: 1 writes beside an S3 head, 0 and 2 write nothing (`LANE_THIRD_FILE`, verified) |
+| f234_235 | - | pb | open: the enable paired with f145_146 (hypothesis) |
+| f236_237 | l0src | pb | the enable of a port of L0, its value the source it writes to L0[l0dst] (`LANE_SOURCES`, verified) |
+| f238_239 | l0src2 | pb | the enable of a port of L0, its value the source it writes to L0[l0dst2] (`LANE_SOURCES`, verified) |
+| f240_241 | l1src | pb | the enable of a port of L1, its value the source it writes to L1[l1dst] (`LANE_SOURCES`, verified) |
+| f242_243 | l1src2 | pb | the enable of a port of L1, its value the source it writes to L1[l1dst2] (`LANE_SOURCES`, verified) |
+| f244_245 | l2src | pb | the enable of a port of L2, its value the source it writes to L2[l2dst] (`LANE_SOURCES`, verified) |
+| f246_247 | l2src2 | pb | the enable of a port of L2, its value the source it writes to L2[l2dst2] (`LANE_SOURCES`, verified) |
+| f248_249 | l3src | pb | the enable of a port of L3, its value the source it writes to L3[l3dst] (`LANE_SOURCES`, verified) |
+| f250_251 | l3src2 | pb | the enable of a port of L3, its value the source it writes to L3[l3dst2] (`LANE_SOURCES`, verified) |
+| f252_254 | osrc | pb | the enable of O's port, its value the source it writes to O[odst] (`STORE_SOURCES`, verified) |
+| f255 | sf0src | pb | the enable of a port of F0, its value the source it writes to F0[sf0dst] (`PB_SOURCES`, verified) |
+| f256_257 | sf0src2 | pb | the enable of a port of F0, its value the source it writes to F0[sf0dst2] (`PB_SOURCES`, verified) |
+| f258 | sf1src | pb | the enable of a port of F1, its value the source it writes to F1[sf1dst] (`PB_SOURCES`, verified) |
+| f259_260 | sf1src2 | pb | the enable of a port of F1, its value the source it writes to F1[sf1dst2] (`PB_SOURCES`, verified) |
+| f261_262 | sf2src | pb | the enable of a port of F2, its value the source it writes to F2[sf2dst] (`PB_SOURCES`, verified) |
+| f263_264 | sf3src | pb | the enable of a port of F3, its value the source it writes to F3[sf3dst] (`PB_SOURCES`, verified) |
+| f265_266 | asrc | pr | the enable of a port of A, its value the source it writes to A[adst] (`PR_SOURCES`, verified) |
+| f267_268 | bsrc | pr | the enable of a port of B, its value the source it writes to B[bdst] (`PR_SOURCES`, verified) |
+| f269 | bsrc2 | pr | the enable of a port of B, its value the source it writes to B[bdst2] (`PR_SOURCES`, verified) |
+| f270_271 | rsrc | pr | the enable of a port of R, its value the source it writes to R[rdst] (`PR_SOURCES`, verified) |
+| f272_273 | gsrc | pr | the enable of a port of G, its value the source it writes to G[gdst] (`PR_SOURCES`, verified) |
+| f274_275 | msel | m | the S unit whose scalar result M puts out, 0..3 for S0..S3 (verified) |
+| f276 | m_n | m | the active-low strobe M: under 0 an S head's scalar result goes on X0's result bus (`S_RESULTS`, verified) |
+| f277 | - | const | constant: all-ones in every word |
+| f278_284 | s0op | s0 | the head of S0: its value names the lane function and the scalar result (`LANE_FUNCTIONS`, `S_RESULTS`; inferred: not every value has a verified row and lag) |
+| f285_291 | s1op | s1 | the head of S1: its value names the lane function and the scalar result (`LANE_FUNCTIONS`, `S_RESULTS`; inferred: not every value has a verified row and lag) |
+| f292_295 | s2op | s2 | the head of S2: its value names the lane function and the scalar result (`LANE_FUNCTIONS`, `S_RESULTS`; verified: every value has a verified row and lag) |
+| f296_301 | s3op | s3 | the head of S3: its value names the lane function and the scalar result (`LANE_FUNCTIONS`, `S_RESULTS`; verified: every value has a verified row and lag) |
+| f302_307 | x0op | x0 | the head of X0: its value names the function, a lane memory load or store among them (`X_FUNCTIONS`, `X0_LANE_MEMORY`, verified) |
+| f308_312 | x1op | x1 | the head of X1: its value names the function or a register transfer (`X_FUNCTIONS`, verified) |
+| f313_319 | op | op_slot | the op: control ops 0..4, data ops 8..73 in their families, idle 0x7f (`OPS`, `FAMILIES`, verified) |
+
+### Head views
+
+The units of the heads S0..S3, X0 and X1 read and build by named operands (`fields.HEAD_VIEWS`),
+as the op slot does by its format (`Word.data`): `op` the head, the registers, and the
+immediate composed from its pieces as the machine reads it (one layout per immediate,
+`fields.S_IMMEDIATES` and `X_IMMEDIATES`, which `machine` and `semantics` use too):
+
+| unit | operands | immediate |
+|---|---|---|
+| s0 | op, a, b, s, c | imm16 = s0imm_lo \| s0a << 8 \| s0c << 12, unsigned |
+| s1 | op, a, b, t, c | imm7 = s1imm_lo \| s1t << 1 \| (s1c bits 3..2) << 5, signed |
+| s2 | op, a, b, t | imm7 = (s2t bits 3..1) \| s2a << 3, signed |
+| s3 | op, a, b, u, idx, val | imm14 = s3idx \| (s3u bits 3..2) << 4 \| s3b << 6 \| s3val << 10, signed |
+| x0 | op, a, b, o | k = x0k_lo \| x0k_mid << 1 \| x0b << 6, raw (11 bits) |
+| x1 | op, a, b | k = x1k_lo \| x1k_mid << 2 \| xreg << 8, raw (13 bits) |
+
+An immediate shares bits with register operands: an operand left out keeps the base word's bits,
+two given operands that disagree on a shared bit raise, as does a value out of range. X's K stays
+raw: each X head reads it zero- or sign-extended.
+
+```python
+word = Word.head("s1", op=0x04, a=4, b=4, c=4, imm=0x20)  # S1 0x04: b ^ 0x20
+word.head_operands("s1")  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'c': 4, 'imm': 32}
+```
+
+Listings show these units by their operands where they differ (`s1: op=4! a=4! ... imm=0x20!`);
+DSL source names fields and gives the active heads' composed immediates in its comments.
 
 To add or refine a field, edit `FIELDS`: split or merge entries so that the bits stay covered
 exactly once (the import raises otherwise), and give the new entries their idle value, kind,
