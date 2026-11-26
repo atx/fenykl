@@ -3244,8 +3244,9 @@ FAMILIES = (
         False,
         13,
         "ra and a 13-bit immediate whose f128_132 is 4 or 8 (0x404, 0x408, 0x40c, 0x460) in the "
-        f"stock words: {RING_STEP}; R = 1 in 0x44 and R[f120_122] in 0x46, L the low 8 bits of "
-        "imm13",
+        f"stock words: {RING_STEP}; R = 1 in 0x44 and R[f120_122] in 0x46, L the low 9 bits of "
+        "imm13 (bits 0..7 verified, bit 8 inferred; bits 10 and 11 ignored, verified; bits 9 "
+        "and 12 not measured)",
     ),
 )
 IMM_BITS = {0x37: 15}

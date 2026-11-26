@@ -21,6 +21,7 @@ from ..semantics import (
     OpValue,
     Value,
     local_offset,
+    ring_length,
     ring_step,
 )
 from ..state import Space
@@ -267,17 +268,20 @@ def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
 
 
 def _ring_one(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-    """0x44: the ring pointer step with R = 1 and L the low 8 bits of imm13."""
+    """0x44: the ring pointer step with R = 1 and L from imm13 (`semantics.ring_length`)."""
     args = word.operands
     assert args is not None and args.imm is not None
-    length = args.imm & 0xFF
+    length, tier = ring_length(args.imm)
+    if length is None:
+        text = f"ring step r{args.ra} + 1, imm13 {args.imm:#x} (op {word.op:#x})"
+        return Effect(True, None, f"{text}: L not measured")
     text = f"ring step r{args.ra} + 1, L {length:#x}"
     return _result(
         word,
         text,
         (slot[args.ra],),
         lambda a: ring_step((a & 0xFFFFFFFF) + 1, length),
-        V,
+        tier,
     )
 
 

@@ -1554,6 +1554,30 @@ def test_measured_op_rules(m, code, operands, a, b, value):
     assert m.g[9] == Sv(value & M32)
 
 
+@pytest.mark.parametrize(
+    ("imm", "value", "tier"),
+    [(0xC80, 0x382, V), (0x100, 0x302, I), (0x1F0, 0x212, I)],
+)
+def test_the_ring_length_takes_bit_8(m, imm, value, tier):
+    m.g[2] = Sv(0x401)
+    run(m, [op_word(0x44, 2, None, imm, f272_273=1, f224_228=9)])
+    assert m.g[9] == Sv(value, tier)
+
+
+@pytest.mark.parametrize("imm", [0x2F0, 0x10F0])
+def test_a_ring_length_with_bit_9_or_12_lapses(imm):
+    word = op_word(0x44, 2, None, imm, f272_273=1, f224_228=9)
+    strict = Machine(Boot())
+    strict.g[2] = Sv(0x401)
+    with pytest.raises(UnknownSemantics, match="ring length"):
+        run(strict, [word])
+    lenient = Machine(Boot())
+    lenient.strict = False
+    lenient.g[2] = Sv(0x401)
+    run(lenient, [word])
+    assert lenient.g[9].value is None and lenient.lapses
+
+
 def test_ops_chain_through_g_until_an_op_without_semantics():
     """A mask into r2, a shift of it in the next word; an op without semantics into r2 lapses
     (lenient), and the shift of r2 after it is unknown."""

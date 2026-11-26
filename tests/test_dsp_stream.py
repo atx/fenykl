@@ -227,6 +227,17 @@ def test_a_store_of_no_units_ends_and_writes_nothing():
     assert e.cap == I and not e.off
 
 
+@pytest.mark.parametrize(("r3", "footprint"), [(0, 0), (0x20, 0x400), (0x80, 0x1000)])
+def test_a_store_of_no_lines_that_ran_writes_nothing(r3, footprint):
+    m, e = machine(), stream.Engine()
+    m.boot.put(DST, bytes([0xA5]) * 0x2000, "prefill")
+    drive(m, e, [*lanes(0, r3, r6=0), *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 0x2000)
+    assert bytes(got.data) == bytes([0xA5]) * 0x2000
+    assert set(got.taint[:footprint]) <= {I} and set(got.taint[footprint:]) == {V}
+    assert e.cap == I and not e.off
+
+
 @pytest.mark.parametrize(
     ("values", "why"),
     [
@@ -249,7 +260,8 @@ def test_a_store_of_no_units_ends_and_writes_nothing():
         ([*lanes(0, 0, r6=4), *load(0, SRC, 0)], "lane-memory load at r3 0, r6 4"),
         ([*lanes(0, 0, r6=0), *load(0, SRC, 0)], "lane-memory load at r3 0, r6 0"),
         ([*lanes(0, 2, r6=0), *store(0, 0, DST)], "lane-memory store at r3 2, r6 0"),
-        ([*lanes(0, 0, r6=0), *store(0, 0, DST)], "lane-memory store at r3 0, r6 0"),
+        ([*lanes(0, 0, r5=0x08, r6=0), *store(0, 0, DST)], "lane-memory store at r3 0, r6 0"),
+        ([*lanes(0, 0x40, r6=0), *store(0, 0, DST)], "lane-memory store at r3 64, r6 0"),
     ],
 )
 def test_zero_counts_not_measured_go_off_script(values, why):

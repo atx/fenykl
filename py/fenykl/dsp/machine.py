@@ -138,6 +138,8 @@ from .semantics import (
     lane_result,
     lane_tier,
     product_high,
+    ring_length,
+    ring_step,
     s_result,
     x_result,
 )
@@ -604,13 +606,13 @@ class Machine:
         if code == 0x38:
             return Sv(ra.value & c & M32, tier)
         if code in (0x44, 0x46, 0x47):
-            return self._ring(word, code, ra, rb, c, tier)
+            return self._ring(index, word, code, ra, rb, c, tier)
         raise UnknownSemantics(
             index, op(code).name, [(OP_FIELD, code)], "no exact rule"
         )
 
     def _ring(
-        self, word: Word, code: int, ra: Sv, rb: Sv | None, c: int, tier: Confidence
+        self, index: int, word: Word, code: int, ra: Sv, rb: Sv | None, c: int, tier: Confidence
     ) -> Sv:
         """The ring pointer step (`semantics.OP_SEMANTICS` 0x44 / 0x46 / 0x47)."""
         if code == 0x44:
@@ -618,12 +620,13 @@ class Machine:
         else:
             step = self._rd("R", word["f120_122"])
             step = Sv(None if step.value is None else _s32(step.value), step.tier)
-        length = rb.value if code == 0x47 else c & 0xFF
+        length, ltier = (rb.value, V) if code == 0x47 else ring_length(c)
+        if length is None and code != 0x47:
+            self.lapse(index, op(code).name, f"ring length of imm13 {c:#x}: not measured")
         if step.value is None or length is None:
             return Sv(None, tier)
-        s = ra.value + step.value
-        s = s + length if s < 0 else s - length if s >= length else s
-        return Sv(s & M32, min(tier, step.tier))
+        s = ring_step(ra.value + step.value, length)
+        return Sv(s & M32, min(tier, step.tier, ltier))
 
     def _local(
         self,
