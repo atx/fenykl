@@ -1125,7 +1125,7 @@ class Copy16Model:
             if flow.stop is not Stop.UNDECIDED or at not in fallback or at in given:
                 break
             given[at] = fallback[at]
-        if flow.stop is not Stop.HALT:
+        if flow.stop not in (Stop.HALT, Stop.OPEN_END):  # `_halt` refuses the latter
             raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
         return flow, machine
 

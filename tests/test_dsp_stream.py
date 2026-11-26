@@ -189,12 +189,43 @@ def test_a_store_of_more_elements_than_the_memory_offers_never_ends():
 
 
 def test_a_wait_with_nothing_outstanding():
-    """After a command it never ends; in a job that handed none it returns."""
+    """After a command it never ends; in a job that handed none it was not measured."""
     m, e = machine(bytes(64)), stream.Engine()
-    drive(m, e, [WAIT])
     drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT])
     with pytest.raises(UnknownSemantics, match="never ends"):
         drive(m, e, [WAIT])
+    with pytest.raises(UnknownSemantics, match="handed no command: not measured"):
+        drive(machine(), stream.Engine(), [WAIT])
+
+
+def test_a_load_of_no_elements_ends_with_its_vectors_unknown():
+    m, e = machine(bytes(64)), stream.Engine()
+    m.memory[1] = Vec((7,) * 32, V)
+    drive(m, e, [*lanes(0, 2, r6=0), *load(0, SRC, 0), WAIT])
+    assert m.memory[0].lanes == (None,) * 32 and m.memory[1].lanes == (None,) * 32
+    assert e.cap == I and not e.off
+
+
+def test_a_store_of_no_units_ends_and_writes_nothing():
+    m, e = machine(), stream.Engine()
+    m.boot.put(DST, bytes([0xA5]) * 64, "prefill")
+    drive(m, e, [*lanes(0, 0, r6=4), *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 64)
+    assert bytes(got.data) == bytes([0xA5]) * 64 and min(got.taint) == V
+    assert e.cap == I and not e.off
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [*block(0, 2, 0, 4, 4, 0, 0x10, 0, 1), *load(0, SRC, 0)],
+        [*block(0, 2, 0, 4, 0, 0, 0x10, 4, 1), *store(0, 0, DST)],
+    ],
+)
+def test_zero_counts_on_local_memory_go_off_script(values):
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, values)
+    assert "not measured" in e.off
 
 
 @pytest.mark.parametrize(
@@ -206,13 +237,6 @@ def test_zeros_under_16_units_per_vector_are_verified_where_measured(r5, r6, r3,
     regs = block(0, 1, 0, 0x10, r3, 0, r5, r6, 1)
     drive(m, e, [*regs, *load(0, SRC, 0), WAIT])
     assert m.memory[1].lanes == (0,) * 32 and m.memory[1].tier == tier
-
-
-def test_a_lone_wait_returns_at_inferred():
-    m, e = machine(bytes(range(64))), stream.Engine()
-    drive(m, e, [WAIT, *lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT])
-    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == I
-    assert e.lane_tier() == I
 
 
 def test_a_command_that_moves_nothing_counts_at_inferred():

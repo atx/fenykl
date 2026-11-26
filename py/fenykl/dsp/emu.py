@@ -62,7 +62,7 @@ class Run:
     machine: Machine
     """The job's machine: its registers and lane memory at the halt, its stream engine."""
     estimate: Estimate
-    """Not known for a run that lapsed."""
+    """Not known for a run that lapsed or whose stream engine went off script."""
     lapses: tuple[str, ...] = ()
     """Why the run lapsed (`Machine.lapse`, lenient), in order; empty for a run its facts
     cover."""
@@ -79,7 +79,8 @@ class Boot:
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
         self.carry: Carry | None = None
         """What the last job `run` left for the next (`machine.Carry`); None before the first
-        run and after a run that did not halt, raised or lapsed (`Machine.lapse`)."""
+        run and after a run that did not halt, may not have ended (`Stop.OPEN_END`), raised or
+        lapsed (`Machine.lapse`)."""
 
     def source(self, name: str, fact: str = "") -> int:
         """The id of source (name, fact). Equal sources share one id, so the list stays bounded
@@ -127,16 +128,17 @@ class Boot:
         """Step `program` on a `Machine` with a fresh stream `Engine`, its registers and lane
         memory those the last run left (`carry`), then `regs` by file and index
         (`Machine.preset`); keep what it leaves for the next run. Raises `NoHalt` for a run
-        that stops short of its halt."""
+        that stops short of its halt; a run whose end is not known (`Stop.OPEN_END`: check
+        `run.flow.stop`) returns, its bytes as far as they are known, and leaves no carry."""
         machine = Machine(self, self.carry, stream=Engine())
         machine.preset(regs or {})
         job = Job(program, request)
         self.carry = None
         flow = Executor(self, machine, strict=strict, limit=limit).step(job)
-        if flow.stop is not Stop.HALT:
+        if flow.stop not in (Stop.HALT, Stop.OPEN_END):
             raise NoHalt(flow)
         carry = machine.between_jobs()
-        self.carry = None if machine.lapses else carry
+        self.carry = None if machine.lapses or flow.stop is Stop.OPEN_END else carry
         timed = estimate(job, flow, machine.stream)
         return Run(job, flow, machine, timed, tuple(machine.lapses))
 
@@ -176,6 +178,10 @@ class Datapath(Protocol):
         ...
 
     def decide(self, index: int, visit: int, word: Word) -> Branch: ...
+
+    def open_end(self) -> str:
+        """Why whether the job ends at its halt is not known; empty when it does."""
+        ...
 
 
 HALT_TAIL = 3
@@ -236,7 +242,10 @@ class Executor:
     T lies in its own slots (verified on the camera for a br in a br's first slot and a loop
     end into its third slot; other such shapes are stepped the same way, their steps inferred
     at most). Op 7 halts at any word and call depth, and the next three words fetched behind it
-    still run (`HALT_TAIL`, `TAIL_SHAPES`). A step past the program end raises
+    still run (`HALT_TAIL`, `TAIL_SHAPES`). The flow stops at `Stop.OPEN_END` in place of
+    `Stop.HALT` where the datapath cannot tell whether the job ends there
+    (`Datapath.open_end`: the stream engine off script), the halt's step a hypothesis. A step
+    past the program end raises
     `UnknownSemantics`: what it does is open. Strict mode raises at an undecided control op;
     lenient mode stops there.
 
@@ -279,9 +288,15 @@ class Executor:
             slots = max(slots - 1, 0)
             if word.op == HALT_OP:
                 halt = Step(pc, word.op, slot, confidence=op(HALT_OP).confidence)
+                at = len(steps)
                 steps.append(self._capped(halt))
                 self._behind_halt(words, pc + 1, steps, jumps)
-                return Flow(steps, Stop.HALT)
+                why = self.datapath.open_end()
+                if not why:
+                    return Flow(steps, Stop.HALT)
+                note = "; ".join(x for x in (steps[at].note, why) if x)
+                steps[at] = replace(steps[at], note=note, confidence=H)
+                return Flow(steps, Stop.OPEN_END, why)
             target = None
             if not word.control:
                 lapses = len(self.datapath.lapses)
