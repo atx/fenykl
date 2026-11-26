@@ -812,6 +812,18 @@ def test_a_lenient_engine_forgets_every_memory_where_a_reach_is_not_known(values
     assert forgotten(m)
 
 
+def test_an_off_script_local_load_past_the_end_forgets_every_memory():
+    """Its third row at 0x2000 leaves local memory: a reach not measured, though a pitch of half
+    of it would bring a wrapped row back."""
+    m, e = lenient_machine()
+    loads = block(1, 2, 0x1000, 4, 0x40, 0, 0x10, 0x10, 3)
+    drive(
+        m, e, [*lanes(0, 1, r6=2), 0x09, SRC, SRC, WAIT, *loads, *load(1, SRC, 0), WAIT]
+    )
+    assert any("0x2000..0x2100: not measured" in x for x in m.lapses)
+    assert forgotten(m)
+
+
 def test_a_lenient_command_that_never_ends_goes_off_script():
     m, e = lenient_machine()
     drive(m, e, [*lanes(0, 1, r6=4), *store(0, 0, DST), WAIT])

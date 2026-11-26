@@ -910,8 +910,10 @@ class Engine:
         size = 4 * _known(r[3], "r3")
         pitch = _known(r[1], "r1") if rows > 1 else 0
         at = _known(cmd.to, "a memory offset")
-        # Rows past the pitch's period modulo local memory repeat earlier ones.
-        for k in range(min(rows, LOCAL_BYTES // gcd(pitch % LOCAL_BYTES, LOCAL_BYTES))):
+        # Offsets do not wrap: a last row past the end is not measured, and at pitch 0 the rows
+        # repeat the first.
+        self._local_offset(at + (rows - 1) * pitch, size)
+        for k in range(rows if pitch else 1):
             off = self._local_offset(at + k * pitch, size)
             m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, lost))
 
