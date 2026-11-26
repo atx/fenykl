@@ -8,6 +8,15 @@ CPU setup of the command, which copies them to DSP local memory 0x9D000000.
 
 `assemble` takes bundles and parts of `asm`, one per word; a bundle's `Label` names its word, a
 control op's target may name a label.
+
+Own programs ran on the camera in program 16's frame: its words 0..9 (word 0 calls word 10, its
+delay slots set the stack and link registers, word 5 halts), the body from word 10, then a halt
+and four idles, of which only three run (a halt's tail). The smallest such image accepted for a
+run is 15 words with no body, and it ran (verified on the camera, pre-registered); whether any
+of words 0..9 can go is not measured. Program 16's words 10..12 are not needed: the body may
+start at 10 or replace them, and sets its own registers (verified on the camera,
+pre-registered). Images that change words 0..9 were not run; idling word 0 of the stock copy
+ends the job at word 5 without running the routine (verified on the camera).
 """
 
 import struct

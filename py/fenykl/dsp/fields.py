@@ -151,6 +151,10 @@ def _const(lo: int, hi: int) -> Field:
 
 IDLE_OP = 0x7F
 SEGMENTED = "boundary from a value-entropy segmentation of the stock programs"
+"""Where the segmentation alone does not decide a cut: the boundaries between the enables
+f252_254 and f255, f256_257 and f258 (PB) and f265_266 and f267_268 (PR) lie where the two bits
+across the boundary share little information and each side owns another field (between 241 and
+242 mainly the ownership); the one between f274_275 and f276 by their values."""
 
 
 def _ctl(
@@ -938,9 +942,9 @@ or 5, or with no head, the port writes nothing (verified on the camera, pre-regi
 sentinels); one load reaches all four first ports in the same word (verified on the camera,
 pre-registered, 16 lanes each). In the five stock programs every word with an X0 load head has
 such a port write (or O's, `STORE_SOURCES`) four words later and no such write lacks one
-(verified in the bytes), so idling f244_245 = 0 in program 13 drops a load (inferred). Enable 2
-of f244_245 / f248_249 wrote nothing from any S head. A port takes a head's result at the lag
-`LANE_LAG` gives for the heads timed."""
+(verified in the bytes, 379 words), so idling f244_245 = 0 in program 13 drops a load
+(inferred). Enable 2 of f244_245 / f248_249 wrote nothing from any S head. A port takes a head's
+result at the lag `LANE_LAG` gives for the heads timed."""
 
 
 def _lags(
@@ -1667,7 +1671,9 @@ S_RESULTS: dict[str, dict[int, ScalarRow]] = {
 the camera on every head value but S0's 0x40..0x5f, of which only 0x52 was read, in the head's
 own word, and one word after it on S0's 0..0x3f and S1's 0..0x5f; the rules' tiers in the text). A
 reduction's register and an extract's lane in the same word reach the bus OR-ed (measured on the
-camera)."""
+camera). M takes a unit's result of the previous word while that unit has a new head in the M
+word (verified on the camera: S0 0x20 in consecutive words of a packed loop). None of S0's select
+heads (`LANE_MASKS`) hangs the engine (verified on the camera)."""
 
 
 S_OWN_OPEN = {"s0": frozenset(range(0x40, 0x60)) - {0x52}}
@@ -2587,7 +2593,12 @@ UNIT_FACTS = {
     "the job's first 32-lane block, where tap 0 reads outside the source (verified on the "
     "camera on a flat source; predicted from that and met on an x-varying one, one run each)",
 }
-"""Camera facts of single fields on the units (`units.py`): ownership predicts use."""
+"""Camera facts of single fields on the units (`units.py`): ownership predicts use, in one
+direction. At program 13 words 433 and 439, idling the nibbles whose owner is active in the word
+gives the effect of idling the whole grid, byte for byte, and idling the held nibbles of idle
+owners has none (32 nibbles in three sets, at their idle values). An active owner is not
+sufficient: port f202_205 and X0's f69_71 are inert there. f57_60 = 5 at words 441 and 442
+reads plane 1's line a + 1 (verified on the camera)."""
 CAMERA_TIERS = {"f244_245": V}
 """Fields whose tier the camera raised above the bytes': an idled enable equal to idling its
 port or its word (verified)."""
@@ -2670,7 +2681,8 @@ NAMES = {
     "f292_295": "s2op",
     "f296_301": "s3op",
 }
-"""The semantic names of the fields named after their measured role, by id (README, Fields)."""
+"""The semantic names of the fields named after their measured role, by id (`fenykl dsp
+fields` prints them)."""
 _IMM_BITS = {
     "f37_40": "; bits 11..8 of S0's lane immediate",
     "f53_56": "; bits 6..3 of S2's lane immediate",

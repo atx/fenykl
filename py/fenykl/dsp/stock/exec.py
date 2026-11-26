@@ -111,7 +111,14 @@ LOADS: dict[int, tuple[int, str]] = {
     0x0E: (1, "b"),
 }
 """The family A loads: width and the format of the datum as a coefficient register takes it (a
-word's low 16 bits: 0x1a in place of a halfword tap read gave the low half of the word)."""
+word's low 16 bits: 0x1a in place of a halfword tap read gave the low half of the word).
+
+Measured on the camera in place of the resampler's tap-1 read (a 0x16 with imm 1), ra kept, one
+run each: 0x16 and 0x14 read c0 at imm 0 and c1 at imm 1 (halfwords, imm in halfwords); 0x10
+read c0's byte 0 and byte 1, zero-extended, and 0x0e the same sign-extended (two tap sets; bytes,
+imm in bytes); 0x1a at imm 1 read c2, the low 16 bits of the word (imm in words). So the
+coefficient port keeps between 9 and 16 bits of what reaches it: a zero-extended 0xff arrives as
+255, a word as its low half."""
 S2_HEAD = "f292_295"
 S2_TERM = 5
 """The S2 head value whose word adds C[f88_91] x R[f57_60] to its accumulator (the window

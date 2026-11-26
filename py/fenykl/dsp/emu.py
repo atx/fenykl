@@ -6,11 +6,8 @@ branches and loop ends with their delay slots, the halt) and has the datapath ex
 `Boot.run` steps a program on a `Machine` in one call. The stock programs also run by their
 models (`stock.model.run_model`).
 
-The emulator does not model time. On the camera a word costs about 62 ns the first time it runs
-(straight-line words; a branch over 1200 idle words cost nothing, running them about 62 ns
-each, and the call times of 58 straight-line jobs fit the same per word) and about 5 ns when it
-repeats in a loop (0.185 us per 36-word pass, idle and compute words alike; per word 2..7 ns
-over three loop sizes, a per-pass cost not excluded) (measured on the camera; inferred).
+`Boot.run` estimates each run's minimum time on the camera from its flow (`timing.estimate`,
+from the costs `timing.JOB`, `FIRST`, `REPEAT`, `UNRUN` and the stream rates `timing.RATES`).
 """
 
 from collections.abc import Mapping

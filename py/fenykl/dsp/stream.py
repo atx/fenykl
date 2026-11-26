@@ -62,9 +62,8 @@ run 8 us later (measured). So a 0x1d counts the commands handed, run or held (in
 command of kind 2 counted for a 0x1d in one job (measured: a load joined, then kind 2, then a
 0x1d that returned) and in another loaded 32 bytes from its "from" into the vector its "to"
 names, as kind 0 does (measured; the vector its "from" names kept its content). The emulator
-queues the held commands as the engine does, up to `DEPTH` = 44 outstanding (40 and 44
-completed, measured); 48 outstanding wedged the job twice, also with only 44 0x1d after them, so
-the depth is 44..47 and an overflow kills the job (inferred): more than 44 raises. The 19
+queues the held commands as the engine does, up to `DEPTH` outstanding; handing past it
+wedges the job, so more raises. The 19
 running at once change only when a held load lands, not what it writes. The emulator never predicts a racing read: a load's destination is unknown from its
 hand until its 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a
 store handed after it runs after it), a store takes its source as of the hand and writes DRAM at

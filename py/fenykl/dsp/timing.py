@@ -6,6 +6,22 @@ job's interrupt) against loop pass counts, each the minimum over repeats: single
 up to 1.5 ms, so the estimate is the job's minimum time, not a typical one. Every figure carries
 its tier; fitted figures are inferred. A case none of them covers makes the estimate unknown
 (`Estimate.unknown` says why): the estimate is never guessed.
+
+Earlier runs agree with these figures: a branch over 1200 idle words cost nothing and running
+them cost the first-run rate each, the call times of 58 straight-line jobs fit one cost per word,
+and 36-word loop passes took 0.185 us, idle and compute words alike (measured on the camera;
+inferred).
+
+Three kernels that stream 4 to 16 KiB from DRAM in 4 KiB chunks, the next load handed before the
+current compute (an elementwise op DRAM to DRAM, a byte sum, a dense layer of 64 inputs; 1 to 16
+passes over the data; 112 to 446 us), ran on the camera within -10 to +10 us of the estimate,
+minimum over three repeats, each in its pre-registered window of 15 us + 5 %; with their compute
+words or their transfers idled they stayed within it too, so words with S1, S2 and S3 heads and
+their ports cost as idle words there (verified on the camera). The elementwise kernel is the
+worked example in `tests/test_dsp_kernel_example.py`.
+
+Own jobs of 0.4 to 7.0 ms all ended normally (`LONGEST_JOB_US`); in them a looped word cost
+5.21 ns at 64-word passes, plus about 105 us per job (fitted).
 """
 
 from collections import deque
@@ -17,6 +33,11 @@ from .machine import HEAD_IDS
 from .stream import LANE_MEMORY, LOAD, LOCAL_MEMORY, STORE, Engine, Event
 
 I, V = Confidence.INFERRED, Confidence.VERIFIED
+
+LONGEST_JOB_US = 7000.0
+"""The longest own jobs run: jobs of 0.4 to 7.0 ms all ended normally (verified on the camera,
+pre-registered); nothing between 7.0 and 7.5 ms was run. The firmware gives this job type 8 ticks
+of 1 ms before it aborts the job, so keep a job below this."""
 
 
 @dataclass(frozen=True)
@@ -199,8 +220,8 @@ handed and joined by a 0x1d, with r3 the units its r5 r6 elements fill. Other sh
 time."""
 QUEUE = 16
 """Commands handed and not yet waited for whose times are known: 16 ran with no 0x1d (verified);
-past 19 the engine holds commands until a 0x1d frees room, and its depth is 44..47 (44
-completed, 48 wedged the job: `stream.DEPTH`); how long held commands take was not timed."""
+past 19 the engine holds commands until a 0x1d frees room, up to its depth (`stream.DEPTH`);
+how long held commands take was not timed."""
 OVERLAP = (
     "the stream engine: one for all channels, its commands run one after another from their "
     "hand-off (two 8 KiB loads on two channels took about as long as one 16 KiB load: fitted); "

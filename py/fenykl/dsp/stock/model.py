@@ -20,6 +20,31 @@ state.
 
 Whatever a model cannot tell becomes UNKNOWN, with a source that says why; a later job that
 reads it gets UNKNOWN bytes, never guessed ones.
+
+The confidence rule. Every semantic carries a confidence: each word class
+(`WordClass.confidence`), each part's outcomes (`Part.seen`), each role's table and use
+(`Role.confidence`, `seen`, `beyond`), each register fact. What was seen on the camera exactly
+is verified; what a model extends from it is weaker:
+
+- positions: a semantic at its stock position is at most inferred, at any other position a
+  hypothesis (an undecoded stock word is a row at its stock index only); a transfer whose role
+  the sequencer assigns away from the role's stock word is a hypothesis; the idle word is
+  verified anywhere; stock words that inserted words move keep their rows at hypothesis, and
+  an inserted data op has its op semantics' confidence;
+- outcome tables: what a role's table, a part's swept register or an idled part gives is
+  verified at the job lengths it ran at (`seen`) and inferred at others;
+- uses: a role's use of its register's value (address, offset, count, format) is inferred, at
+  its stock register too, and never stronger than the register's fact;
+- combinations: a job that differs from the stock program in two or more words is at most
+  inferred, but for the field values of program 13's loop-head window that ran together
+  (`resample_window.COMPOSED`);
+- lenient mode: an ignored field, or a route nibble off the stock transfers' values, makes the
+  job a hypothesis, its loaded, stored and zero-filled bytes alike.
+
+Per output byte a model takes the minimum: the loaded bytes get the weakest of the semantics
+that ran, the parts' outcomes, the caps above and the load's roles; the stored bytes the weakest
+of the buffer bytes they come from and the same with the store's roles. No word of program 16 is
+decoded, so every byte it copies is at most inferred.
 """
 
 from collections import Counter

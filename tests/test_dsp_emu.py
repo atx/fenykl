@@ -94,8 +94,8 @@ SEGMENT_KEYS = {
 CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
 # Per job: the weakest taint of the known checked dst bytes ("-" none known or no dst checked,
-# "." job not checked), then the result's taint, by the README's rule: a copy is at most
-# inferred; r6, r11, r14 and r21's format are hypotheses, and so is what they placed or
+# "." job not checked), then the result's taint, by stock.model's confidence rule: a copy is at
+# most inferred; r6, r11, r14 and r21's format are hypotheses, and so is what they placed or
 # formatted, also when a later job stores it again; regs_b off the stock values and an unset
 # slot (idled 66) are hypotheses; an idled word or a role's register that alone stops the store
 # at 1 KiB is verified (dst keeps the verified prefill), at most inferred at other lengths or
