@@ -850,11 +850,11 @@ class Machine:
             self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
 
     def _loads_in_flight(self, t: int, head: int) -> Confidence:
-        """A lane load in word t beside loads in flight (issued less than `LANE_LOAD_LAG` words
-        before): verified while all of them form one run of `fields.LOAD_RUN`; otherwise each of
-        them still due, and this one, lands at inferred."""
+        """A lane load in word t beside loads in flight (due in word t or later, a load landing in
+        the word of the next load's head included): verified while all of them form one run of
+        `fields.LOAD_RUN`; otherwise each of them still due, and this one, lands at inferred."""
         run_head, run_max = LOAD_RUN
-        flight = [when for when in self.load_due if when > t]
+        flight = [when for when in self.load_due if when >= t]
         if not flight:
             self.load_run = (t, t, head == run_head)
             return V

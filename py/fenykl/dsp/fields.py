@@ -1146,8 +1146,8 @@ value in consecutive words, each vector at its first lane port `LOAD_LAG` words 
 (verified on the camera, pre-registered: three in consecutive words into V and W in a 250-pass
 convolution loop, exact over six jobs; four in consecutive words into W and V, then L1 twice, 32
 lanes each; four into L0 in a max-pool loop, 29 vectors exact). Other loads in flight together
-(two or three words apart, longer runs, the other load heads, loads between stores) were not
-measured: inferred."""
+(two to four words apart, a load head in the word an earlier load lands, longer runs, the other
+load heads, loads between stores) were not measured: inferred."""
 X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 """The lane memory heads that add A[b], not sK, to A[a]."""
 

@@ -70,7 +70,8 @@ def test_a_lane_load_lands_four_words_after_its_head(m, lag):
         ((0x1D,) * 4, (0, 1, 2, 3), V),
         ((0x1D,) * 5, (0, 1, 2, 3, 4), I),
         ((0x1D, 0x1D), (0, 3), I),
-        ((0x1D, 0x1D), (0, 4), V),
+        ((0x1D, 0x1D), (0, 4), I),
+        ((0x1D, 0x1D), (0, 5), V),
         ((0x1C, 0x1D), (0, 1), I),
     ],
 )
