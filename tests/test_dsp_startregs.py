@@ -1,11 +1,13 @@
 from functools import cache
 
+import pytest
 from conftest import stock_image
 
 from fenykl.dsp.emu import Boot, back_firmware
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Carry, Sv
 from fenykl.dsp.program import Program, stock_programs
+from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.registers import (
     R14_BELOW,
@@ -81,3 +83,12 @@ def test_word_67_at_r21_loads_the_firmware_text_at_a_hypothesis():
     assert all(dst.known)
     assert bytes(dst.data) == bytes(boot.read(0x606CC000, LEN).data)
     assert dst.weakest() is Confidence.HYPOTHESIS
+
+
+def test_word_77_at_r21_refused_and_now_stores_away_from_dst():
+    program = with_reg(77, 21)
+    with pytest.raises(UnknownSemantics, match="a DRAM address unknown"):
+        run(program, None)
+    _, r, dst = run(program, EXACT)
+    assert not any(dst.known)
+    assert r.machine.stream.stored == [(0x606CC000, LEN)]
