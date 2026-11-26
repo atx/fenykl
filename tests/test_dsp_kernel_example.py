@@ -128,11 +128,8 @@ def test_the_xor_kernel_streams_dram_to_dram(nbytes):
     got, e = run(nbytes, data)
     assert all(got.known)
     assert bytes(got.data) == bytes(b ^ 0x20 for b in data)
-    # A store's source counts as rewritten once a later load is handed into its bank, though the
-    # engine runs the two in order: with more than two chunks those are inferred.
-    assert got.weakest() is (
-        Confidence.VERIFIED if nbytes <= 2 * CHUNK else Confidence.INFERRED
-    )
+    # The pass's four loads in consecutive words are in flight together: inferred.
+    assert got.weakest() is Confidence.INFERRED
     assert e.us is not None and e.tier is Confidence.INFERRED
     assert any(p.name == "stream waits" for p in e.parts)
 

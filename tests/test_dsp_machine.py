@@ -63,6 +63,20 @@ def test_a_lane_load_lands_four_words_after_its_head(m, lag):
     assert m.lanes["L3"][5].lanes == (A if lag == 4 else B)
 
 
+@pytest.mark.parametrize(("gap", "tier"), [(1, I), (3, I), (4, V)])
+def test_lane_loads_in_flight_together_land_at_inferred(m, gap, tier):
+    m.a[1] = Sv(0x40)
+    m.memory[0x40] = Vec(A)
+    m.memory[0x41] = Vec(B)
+    first = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=0, f1=0)
+    second = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=0, f1=1)
+    words = [IDLE] * (gap + 5)
+    words[0], words[gap] = first, second
+    words[gap + 4] = w(f248_249=0, f171_174=5)
+    run(m, words)
+    assert m.lanes["L3"][5] == Vec(B, tier)
+
+
 @pytest.mark.parametrize(
     ("head", "lag"), [(0x18, 0), (0xA, 1)]
 )  # a broadcast and a shuffle
