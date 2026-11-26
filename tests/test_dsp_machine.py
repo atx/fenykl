@@ -1212,8 +1212,8 @@ def test_s1_0x60_gives_the_b_its_unit_last_read_latched(m):
     assert m.lanes["L3"][9] == Vec(tuple(A))
 
 
-@pytest.mark.parametrize("gap", [1, 4, 5])
-def test_two_divides_in_flight_are_inferred(m, gap):
+@pytest.mark.parametrize("gap", [1, 2, 4, 5])
+def test_two_divides_in_flight_land_as_alone(m, gap):
     """Two X1 0x1e heads `gap` words apart; G[5] and G[6] take the two quotients."""
     m.b[1], m.b[2], m.b[3] = Sv(1000), Sv(7), Sv(10)
     first = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
@@ -1223,8 +1223,32 @@ def test_two_divides_in_flight_are_inferred(m, gap):
     words[4] = w(f272_273=0, f224_228=5, **(second if gap == 4 else {}))
     words[gap + 4] = w(f272_273=0, f224_228=6)
     run(m, words)
-    tier = V if gap > 4 else I
-    assert m.g[5] == Sv(142, tier) and m.g[6] == Sv(100, tier)
+    assert m.g[5] == Sv(142, V) and m.g[6] == Sv(100, V)
+
+
+@pytest.mark.parametrize(("gaps", "tier"), [((1, 1, 1), V), ((2, 1), I)])
+def test_several_divides_in_flight_are_verified_back_to_back_only(m, gaps, tier):
+    m.b[1], m.b[2] = Sv(1000), Sv(7)
+    head = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
+    at = [0]
+    for g in gaps:
+        at.append(at[-1] + g)
+    words = [IDLE] * (at[-1] + 6)
+    for k in at:
+        words[k] = w(**head)
+    words[at[-1] + 4] = w(f272_273=0, f224_228=5)
+    run(m, words)
+    assert m.g[5] == Sv(142, tier)
+
+
+def test_a_quotient_beside_x1_0x13s_result_is_the_or(m):
+    m.b[1], m.b[2] = Sv(1000), Sv(7)
+    k = 0x2A5
+    x1k = {"f308_312": 0x13, "f115_119": k >> 8, "f9_14": k >> 2 & 63, "f7_8": k & 3}
+    words = [w(f308_312=0x1E, f110_114=1, f115_119=2)] + [IDLE] * 3
+    words.append(w(f272_273=0, f224_228=5, **x1k))
+    run(m, words)
+    assert m.g[5] == Sv(142 | k, V)
 
 
 @pytest.mark.parametrize(

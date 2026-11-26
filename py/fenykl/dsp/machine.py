@@ -78,6 +78,7 @@ from .fields import (
     LANE_LOAD,
     LANE_SOURCES,
     M_OTHER_OPEN,
+    M_TOGETHER,
     M_UNITS,
     OP_FIELD,
     PB_FILES,
@@ -206,6 +207,13 @@ def _cap(x, tier: Confidence):
     if isinstance(x, Kept):
         return Kept(tier)
     return Sv(x.value, tier) if isinstance(x, Sv) else Vec(x.lanes, tier)
+
+
+def _or_bus(quotient: Sv, x1: Sv, head: int) -> Sv:
+    """A quotient and an X1 head's own result on X1's bus in one word: OR-ed."""
+    if quotient.value is None or x1.value is None:
+        return Sv(None, min(quotient.tier, x1.tier))
+    return Sv(quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I))
 
 
 def _unknown(file: str) -> Sv | Vec:
@@ -558,8 +566,9 @@ class Machine:
             x0bus = UNKNOWN if x0 is None else x0
         quotient = self.x1_due.get(t)
         if quotient is not None:
-            # A divide's quotient beside an X1 head with a result of its own: not measured.
-            x1bus = quotient if x1 is None else Sv(None, min(quotient.tier, x1.tier))
+            # A quotient beside an X1 head's own result: the OR (measured on the camera beside X1
+            # 0x13 with an immediate, two words; other heads inferred).
+            x1bus = quotient if x1 is None else _or_bus(quotient, x1, word[HEAD_IDS["x1"]])
         elif x1 is None and word[HEAD_IDS["x1"]] == DIVIDE_HEAD:
             x1bus = NOTHING  # a divide drives nothing in its own word (verified)
         else:
@@ -786,8 +795,10 @@ class Machine:
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
             quotient = _divide(a, b)
-            if self.x1_due:
-                # Another divide in flight: only lone ones were measured.
+            issued = sorted(k - DIVIDE_LAG for k in self.x1_due) + [t]
+            # Measured on the camera (pre-registered): a second divide 1..4 words after the first,
+            # and four in consecutive words, each quotient as alone; other mixes inferred.
+            if len(issued) > 2 and any(b - a != 1 for a, b in zip(issued, issued[1:])):
                 self.x1_due = {k: _cap(q, I) for k, q in self.x1_due.items()}
                 quotient = _cap(quotient, I)
             self.x1_due[t + DIVIDE_LAG] = quotient
@@ -1166,12 +1177,18 @@ class Machine:
         if fresh is not None:
             held["s3"] = fresh
         # A reduction is on M under 3 beside another unit's held result (verified).
-        others = any(u != sel for u in held if u != "s3")
+        # S0 0x32 and S1 0x45 held together: each on M under its own unit alone (measured).
+        others = any(u != sel for u in held if u != "s3") and set(held) != {"s0", "s1"}
         tier = I if others and not (sel == "s3" and fresh is not None) else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
         before = self.open_next.get(t, {}).get(sel)
-        if before is not None and not (
+        # S2 0xc's extract and S2 0x1's product are not on M one word later; there M holds
+        # nothing, or the next S2 0xc's own extract alone (measured on the camera).
+        s2_next = sel == "s2" and before in (0x1, 0xC) and (
+            not own or set(own) == {"s2"} and ("s2", 0xC) in self.head_values
+        )
+        if before is not None and not s2_next and not (
             sel == "s3" and sel in own and _own_word("s3", before)
         ):
             # One word after a head whose result there is open (S3's extracts in consecutive
@@ -1184,12 +1201,13 @@ class Machine:
                 return _cap(h, tier)
             # Another unit's held result is not on M here (verified one word after its head).
             return Kept(V if self._quiet(sel, t) else I)
-        if len(own) > 1 and sel not in own:
+        if len(own) > 1 and sel not in own and not self._quiet(sel, t):
             self.lapse(index, "m", f"own-word results of {sorted(own)}, M under {sel}")
             return UNKNOWN
         if sel not in own:
-            # A lone own-word result under another unit's f274_275 is not on M (verified).
-            return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
+            # Another unit's own-word result is not on M (verified): nothing, or the sel unit's
+            # held result alone (measured beside S2 0xe / S3 0x24 own-word results).
+            return Kept(V if self._quiet(sel, t) else I) if h is None else _cap(h, tier)
         v = own[sel]
         if sel == "s3":
             if fresh is None:
@@ -1218,7 +1236,7 @@ class Machine:
         if t - self.last_head >= 2:
             return True
         if len({u for u, _ in self.head_values}) > 1:
-            return False
+            return self.head_values in M_TOGETHER
         return not any(
             u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in self.head_values
         )
@@ -1230,6 +1248,7 @@ class Machine:
     ) -> dict[tuple[str, int], object]:
         writes: dict[tuple[str, int], object] = {}
         kept: dict[tuple[str, int], Confidence] = {}
+        sources: dict[tuple[str, int], str] = {}
 
         def put(file: str, reg: int, value, source: str) -> None:
             if self.trace is not None:
@@ -1242,9 +1261,17 @@ class Machine:
                 kept[(file, reg)] = value.tier
                 return
             if (file, reg) in writes:
-                self.lapse(index, "ports", f"two ports write {file}[{reg}]")
-                value = _unknown(file)
+                # Both ports of a lane file on one register: the first port's value (measured on
+                # the camera in L0, L1, W and V, lanes 0..3, first port S0 0x41's b, second S3
+                # 0x19's copy; other sources inferred).
+                if file not in LANE_FILES:
+                    self.lapse(index, "ports", f"two ports write {file}[{reg}]")
+                    writes[(file, reg)] = _unknown(file)
+                elif (sources[(file, reg)], source) != (S0_RESULT, S3_RESULT):
+                    writes[(file, reg)] = _cap(writes[(file, reg)], I)
+                return
             writes[(file, reg)] = value
+            sources[(file, reg)] = source
 
         scalar = {"X0's result": x0bus, "X1's result": x1, ALU_BUS: bus}
         for enable, reg_id in PR_ENABLES.items():

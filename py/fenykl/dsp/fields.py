@@ -44,6 +44,7 @@ import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
+from itertools import combinations
 
 WORD_BITS = 320
 WORD_BYTES = WORD_BITS // 8
@@ -1751,6 +1752,20 @@ M_OTHER_OPEN = {
 """S heads beside which M under another unit's f274_275, in the head's word and the next, was
 not read; beside every other head it was, and nothing was on M there (verified on the camera,
 pre-registered)."""
+_LANE_ONLY = (("s0", 0x0), ("s1", 0x0), ("s2", 0x8), ("s3", 0x19))
+_OWN_WORD = (("s1", 0x54), ("s2", 0xE), ("s3", 0x24))
+M_TOGETHER: frozenset[frozenset[tuple[str, int]]] = frozenset(
+    [frozenset(p) for p in combinations(_LANE_ONLY, 2)]
+    + [frozenset(_LANE_ONLY)]
+    + [frozenset({o, q}) for o in _OWN_WORD for q in _LANE_ONLY if q[0] != o[0]]
+    + [frozenset({("s2", 0xE), ("s3", 0x24)}), frozenset({("s1", 0x54), ("s3", 0x24)})]
+    + [frozenset({("s0", 0x32), ("s1", 0x45)})]
+)
+"""Several S units' heads in one word whose M reads were measured on the camera (pre-registered, a
+fresh sentinel per read), in the head's word and the next, under every unit: under a unit with
+no result there nothing is on M; under a unit with an own-word or held result, that result alone.
+Lane-only heads (S0 0x0 lag 1, S1 0x0, S2 0x8, S3 0x19) in pairs and all four; an own-word head
+beside another unit's lane-only head; two own-word heads; S0 0x32 and S1 0x45 (both held)."""
 S_NEXT_VALUES = {
     "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
 }
