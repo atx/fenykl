@@ -108,7 +108,6 @@ from .semantics import (
     S_RULES,
     X_RULES,
     Branch,
-    OpValue,
     UnknownInput,
     UnknownSemantics,
     lane_address,
@@ -561,8 +560,8 @@ class Machine:
                 (Sv(value, tier), "product")
             )
             return None
-        if isinstance(sem.run, OpValue):
-            rule = sem.run
+        if sem.rule is not None:
+            rule = sem.rule
             ins = [ra] if rule.reads_ra else []
             ins += [rb] if rule.form == "rb" else []
             tier = min([sem.confidence, *(v.tier for v in ins)])

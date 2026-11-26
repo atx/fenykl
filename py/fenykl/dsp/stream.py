@@ -75,20 +75,21 @@ of kinds 0 / 6, inferred beside other lane-memory shapes (`Engine.lane_tier`).
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
 job and what later commands write is unknown (`off` says why). A command whose destination cannot
-be bounded, a value handed after the grammar is lost and a 0x1d among a command's values raise
-`UnknownSemantics`, as do kinds and shapes not run and a job that never ends or wedges; on a
-lenient machine they lapse instead (`Machine.lapse`): a command that never ends goes off script,
-a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d that never
-returns or a queue past `DEPTH` goes on as if it had not.
-"""
+be bounded (among them a store whose rows write more than the DRAM alias space), a value handed
+after the grammar is lost and a 0x1d among a command's values raise `UnknownSemantics`, as do
+kinds and shapes not run and a job that never ends or wedges; on a lenient machine they lapse
+instead (`Machine.lapse`): a command that never ends goes off script, a kind or shape not run and
+what cannot be bounded forget every memory, and a 0x1d that never returns or a queue past
+`DEPTH` goes on as if it had not."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from math import gcd
 
 from .fields import LANE_VECTORS, Confidence
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
 from .semantics import LANE_COUNT, LOCAL_BYTES
-from .state import LOCAL_BASE, Bytes, dram_alias
+from .state import DRAM_BYTES, LOCAL_BASE, Bytes, dram_alias
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -364,7 +365,12 @@ class Engine:
         if cmd.kind == FILL:
             base = cmd.to.value // VECTOR_BYTES
             return frozenset((base + v) % LANE_VECTORS for v in range(r[3].value)), I
-        rows, _ = self._rows(cmd, LANE_MEMORY)
+        ks = None
+        if cmd.kind == STORE:
+            ks = _store_reach(r)[1]
+            if len(ks) < r[7].value:
+                return None  # the rows not written last read vectors too
+        rows, _ = self._rows(cmd, LANE_MEMORY, ks)
         if cmd.kind == STORE:
             bits, _ = STORE_FORMATS[r[5].value]
             per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
@@ -618,10 +624,10 @@ class Engine:
             m.boot.local.write(LOCAL_BASE, local.capped(I))
 
     def _rows(
-        self, cmd: _Command, memory: int
+        self, cmd: _Command, memory: int, ks: range | None = None
     ) -> tuple[list[tuple[int, int]], Confidence]:
         """Each row's (DRAM address, memory offset), the DRAM address floored to 16 bytes, and
-        the rows' tier."""
+        the rows' tier; of the rows `ks` only (default all)."""
         r = cmd.regs
         rows = _known(r[7], "r7")
         if rows < 1:
@@ -640,7 +646,8 @@ class Engine:
             if dpitch % 16 and rows > 2:
                 # Two rows cannot tell a floored pitch from floored row addresses.
                 tier = min(tier, I)
-        out = [((dram + k * dpitch) & 0xFFFFFFF0, mem + k * pitch) for k in range(rows)]
+        ks = range(rows) if ks is None else ks
+        out = [((dram + k * dpitch) & 0xFFFFFFF0, mem + k * pitch) for k in ks]
         return out, tier
 
     def _local_offset(self, off: int, n: int) -> int:
@@ -793,7 +800,8 @@ class Engine:
             raise _Off(f"store format {r5:#x}: not measured")
         bits, ftier = STORE_FORMATS[r5]
         n = (128 // bits if bits else 0) * r6
-        rows, tier = self._rows(cmd, memory)
+        _, ks = _store_reach(r)
+        rows, tier = self._rows(cmd, memory, ks)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
         if memory == LANE_MEMORY:
             if r2 != 0x20:
@@ -831,7 +839,7 @@ class Engine:
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
             out = pack(src, bits, 16 * r6, element, tier, width)
-            m.boot.dram.write(dram_alias(dram), out)
+            _write_dram(m, dram, out)
             self.stored.append((dram, 16 * r6))
 
         def complete(m: Machine, cap: Confidence) -> None:
@@ -849,11 +857,11 @@ class Engine:
                 return
             # The source was rewritten while the store was queued: a race not measured.
             for dram, _ in rows:
-                got = m.boot.read(dram, 16 * r6)
+                got = _read_dram(m, dram, 16 * r6)
                 for i, owner in enumerate(got.src):
                     if owner == src:
                         got.taint[i] = min(got.taint[i], I)
-                m.boot.dram.write(dram_alias(dram), got)
+                _write_dram(m, dram, got)
 
         return complete
 
@@ -887,12 +895,12 @@ class Engine:
         if rows < 1:
             raise _Off("no rows")
         if cmd.kind == STORE:
-            lines = _known(r[6], "r6")
+            lines, ks = _store_reach(r)
             pitch = _known(r[4], "r4") if rows > 1 else 0
             at = _known(cmd.to, "a DRAM address")
-            for k in range(rows):
+            for k in ks:
                 dram = (at + k * pitch) & ~0xF
-                m.boot.dram.write(dram_alias(dram), Bytes.unknown(16 * lines, lost))
+                _write_dram(m, dram, Bytes.unknown(16 * lines, lost))
             return
         memory = _known(r[0], "r0")
         if memory == LANE_MEMORY:
@@ -902,14 +910,48 @@ class Engine:
         size = 4 * _known(r[3], "r3")
         pitch = _known(r[1], "r1") if rows > 1 else 0
         at = _known(cmd.to, "a memory offset")
-        for k in range(rows):
+        # Offsets do not wrap: a last row past the end is not measured, and at pitch 0 the rows
+        # repeat the first.
+        self._local_offset(at + (rows - 1) * pitch, size)
+        for k in range(rows if pitch else 1):
             off = self._local_offset(at + k * pitch, size)
             m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, lost))
 
     def _spoil_stores(self, m: Machine) -> None:
         lost = m.boot.source("stream off script", self.off)
         for dram, n in self.stored:
-            m.boot.dram.write(dram_alias(dram), Bytes.unknown(n, lost))
+            _write_dram(m, dram, Bytes.unknown(n, lost))
+
+
+def _store_reach(r: list[Sv | None]) -> tuple[int, range]:
+    """A store's r6, its 16-byte lines per row, and the rows that write DRAM last: a row the
+    pitch r4 brings back to an earlier row's address (modulo the DRAM alias space) rewrites it.
+    Rows that write more than the DRAM alias space are not bounded."""
+    lines, rows = _known(r[6], "r6"), _known(r[7], "r7")
+    pitch = _known(r[4], "r4") % DRAM_BYTES if rows > 1 else 0
+    distinct = min(rows, DRAM_BYTES // gcd(pitch, DRAM_BYTES))
+    if 16 * lines * distinct > DRAM_BYTES:
+        raise _Off(f"{distinct} rows of {16 * lines:#x} bytes: more than all of DRAM")
+    return lines, range(rows - distinct, rows)
+
+
+def _write_dram(m: Machine, dram: int, data: Bytes) -> None:
+    """Write a store row at `dram`, wrapping at the top of the DRAM alias space."""
+    at = dram_alias(dram)
+    head = DRAM_BYTES - at
+    if len(data) <= head:
+        m.boot.dram.write(at, data)
+        return
+    m.boot.dram.write(at, data[:head])
+    m.boot.dram.write(0, data[head:])
+
+
+def _read_dram(m: Machine, dram: int, n: int) -> Bytes:
+    at = dram_alias(dram)
+    head = DRAM_BYTES - at
+    if n <= head:
+        return m.boot.dram.read(at, n)
+    return m.boot.dram.read(at, head) + m.boot.dram.read(0, n - head)
 
 
 def _nothing(m: Machine, cap: Confidence) -> None:

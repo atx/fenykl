@@ -7,7 +7,7 @@ from fenykl.dsp.emu import LOCAL_BASE, Boot
 from fenykl.dsp.fields import LANE_VECTORS, Confidence
 from fenykl.dsp.machine import Machine, Sv, Vec
 from fenykl.dsp.semantics import UnknownSemantics
-from fenykl.dsp.state import Bytes
+from fenykl.dsp.state import DRAM_BYTES, Bytes
 from fenykl.dsp.word import IDLE, Word
 
 V, I, H = Confidence.VERIFIED, Confidence.INFERRED, Confidence.HYPOTHESIS
@@ -480,6 +480,36 @@ def test_a_store_to_an_unknown_address_raises():
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN)])
 
 
+def test_store_rows_at_one_address_write_it_once_the_last_row():
+    """At DRAM pitch 0 every row rewrites the first: of more rows than DRAM holds, each from the
+    next vector, the last one's vector lands."""
+    data = bytes(range(64))
+    m, e = machine(data), stream.Engine()
+    rows = DRAM_BYTES // 32 + 2  # row 2^25 + 1 reads vector 1
+    store_rows = lanes(0, 1, r6=2, r7=rows, r1=0x40)
+    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT, *store_rows])
+    drive(m, e, [*store(0, 0, DST), WAIT])
+    assert bytes(m.boot.read(DST, 32).data) == data[32:]
+    m, e = machine(), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=0, r7=0xFFFFFFFF), *store(0, 0, DST), WAIT])
+    assert not e.off
+
+
+def test_a_store_row_wraps_at_the_top_of_dram():
+    m, e = machine(bytes(range(32))), stream.Engine()
+    top = 0x80000000 + DRAM_BYTES - 16
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *store(0, 0, top), WAIT])
+    assert bytes(m.boot.read(top, 16).data) == bytes(range(16))
+    assert bytes(m.boot.read(0x80000000, 16).data) == bytes(range(16, 32))
+
+
+def test_a_store_whose_rows_exceed_dram_raises():
+    """2^22 rows 0x100 apart, each 0x200 bytes: they write twice the DRAM alias space."""
+    values = lanes(0, 1, r6=0x20, r7=DRAM_BYTES // 0x100, r4=0x100)
+    with pytest.raises(UnknownSemantics, match="more than all of DRAM"):
+        drive(machine(), stream.Engine(), [*values, *store(0, 0, DST)])
+
+
 def test_a_load_into_an_unknown_memory_raises():
     m = machine(bytes(64))
     regs = block(0, UNKNOWN, 0, 4, 0x10, 0, 0x10, 4, 1)
@@ -769,12 +799,28 @@ def forgotten(m: Machine) -> bool:
         ([*lanes(0, 1, r6=2), 0x09, SRC, DST, WAIT], "kind 0x9"),
         ([*lanes(0, 5, r6=10), 4, SRC, DST, WAIT], "outside the shapes it ran in"),
         ([*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN), WAIT], "DRAM address unknown"),
+        (
+            [*lanes(0, 0x7FFFFE20, r6=0xFFFFFC40), *store(0, 0, DST), WAIT],
+            "more than all of DRAM",
+        ),
     ],
 )
 def test_a_lenient_engine_forgets_every_memory_where_a_reach_is_not_known(values, why):
     m, e = lenient_machine()
     drive(m, e, values)
     assert why in m.lapses[0] and m.cap is H and e.off
+    assert forgotten(m)
+
+
+def test_an_off_script_local_load_past_the_end_forgets_every_memory():
+    """Its third row at 0x2000 leaves local memory: a reach not measured, though a pitch of half
+    of it would bring a wrapped row back."""
+    m, e = lenient_machine()
+    loads = block(1, 2, 0x1000, 4, 0x40, 0, 0x10, 0x10, 3)
+    drive(
+        m, e, [*lanes(0, 1, r6=2), 0x09, SRC, SRC, WAIT, *loads, *load(1, SRC, 0), WAIT]
+    )
+    assert any("0x2000..0x2100: not measured" in x for x in m.lapses)
     assert forgotten(m)
 
 

@@ -68,23 +68,24 @@ from .fields import (
     OP_FIELD,
     STAIRCASE,
     TARGET,
-    TARGET_OPS,
     Confidence,
     Kind,
     lookup,
     op,
 )
+from .intervals import RESULT_PORTS, Effect, RegSet, destinations, op_effect
+from .job import Flow
+from .machine import Machine
 from .program import Program, stock_programs
 from .semantics import (
     KIB,
-    RESULT_PORTS,
+    OP_SEMANTICS,
     Channel,
-    Effect,
     Given,
     OpaqueClass,
+    OpSemantics,
     Outcome,
     Part,
-    RegSet,
     Role,
     Sequencer,
     Trace,
@@ -92,9 +93,9 @@ from .semantics import (
     UnknownSemantics,
     Use,
     WordClass,
-    destinations,
 )
 from .state import Bytes, JobView, Reg, RegisterFile
+from .stream import Engine
 from .units import UNITS
 from .word import IDLE, Word
 
@@ -788,10 +789,13 @@ class Operands16:
 
 class Copy16Model:
     """The model of program 16, built from the stock program (`from_image` reads it from a
-    stock E-M10 II `.BIN`)."""
+    stock E-M10 II `.BIN`). `ops` gives the inserted words' op semantics."""
 
-    def __init__(self, program: Program) -> None:
+    def __init__(
+        self, program: Program, ops: dict[int, OpSemantics] = OP_SEMANTICS
+    ) -> None:
         self.program = program
+        self.ops = ops
         words = program.words
         self.transfer = _transfer_semantic(words)
         self.opaque = _opaque_classes(words, self.transfer)
@@ -901,7 +905,7 @@ class Copy16Model:
         operands: "Operands16 | None",
     ) -> None:
         """An inserted word by its content: the idle word, or a data op with only its op slot's
-        and PR ports' fields off idle that its op semantics (`emu.ops`) covers, at the
+        and PR ports' fields off idle that its op semantics (`ops`, `op_effect`) covers, at the
         semantics' confidence. A load is recorded only (where its datum goes is open). A
         result goes through the word's PR ports (`destinations`): at the engine site
         (`ENGINE_AFTER`, `operands` given) to the operand set, which later inserts read after
@@ -912,7 +916,7 @@ class Copy16Model:
             return
         changed = word.changed(IDLE)
         fields = [(f, v) for f, v in changed if f.unit not in ("op_slot", "pr")]
-        sem = emu.ops.get(word.op)
+        sem = self.ops.get(word.op)
         name = op(word.op).name
         effect = None
         if self.transfer.matches(word):
@@ -924,7 +928,7 @@ class Copy16Model:
         else:
             fields = [(OP_FIELD, word.op)]
             regs = RegisterFile() if operands is None else operands.at(j)
-            effect = sem.run(word, regs, emu.boot.local)
+            effect = op_effect(sem, word, regs, emu.boot.local)
             why = self._insert_effect(word, name, effect, operands, trace, j)
             if effect is None:
                 fields = [(f, word[f.id]) for f in UNITS["op_slot"].fields]
@@ -1042,43 +1046,87 @@ class Copy16Model:
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
         """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
         dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
-        weaker through the branches before it); None when no such halt runs."""
+        weaker through the path to it); None when no such halt runs. The job is stepped on a
+        `Machine`, lenient (`_halt_flow`): the halt is its first op 7 and the three words behind
+        it still run. A halt at or after a stream word, or in a job whose stream engine stored
+        (the tail included) or went off script, raises: whether the stream drains first is open
+        (at 58 the machine has no command handed, but a halt in place of a word shifts the values
+        its tail hands, a state not measured). So does a halt after a loop word (the loop's words
+        were measured with the loop skipped only), and a path that leaves the stock path the rows
+        were measured on (`copy_branches`) without reaching the off-stock op 7."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
             return None
         length = view.length
         assert length is not None
-        flow = Executor(Boot(), branching=copy_branches(length), strict=False).step(
-            job, start_copy
-        )
-        if flow.stop is not Stop.HALT:
-            raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
-        at = flow.steps[-1].index
+        flow, machine = self._halt_flow(job, view)
+        h = next(k for k, s in enumerate(flow.steps) if s.op == HALT_OP)
+        at = flow.steps[h].index
         if at in stock:
-            return None
-        if any(s.index in STREAM for s in flow.steps):
-            raise UnknownSemantics(
-                at,
-                "halt",
-                [],
-                "a halt after the stream started: whether the stream drains first is open",
+            path = copy_branches(length).decisions
+            left = [
+                s.index
+                for s in flow.steps
+                if s.index in path and s.taken is not None and s.taken != path[s.index]
+            ]
+            if not left:
+                return None
+            why = (
+                f"the path leaves the stock path at word {left[0]} and does not reach the op 7 "
+                "off the stock halt: the rows hold on the stock path"
             )
-        # Words after the halt do not run; edited words before it are not modelled.
+            raise UnknownSemantics(left[0], "halt", [], why)
+        engine = machine.stream
+        if any(s.index in STREAM for s in flow.steps[: h + 1]) or engine.stored:
+            why = "a halt after the stream started: whether the stream drains first is open"
+            raise UnknownSemantics(at, "halt", [], why)
+        if engine.off:
+            why = f"the stream off script before the halt ({engine.off}): what it stores is open"
+            raise UnknownSemantics(at, "halt", [], why)
+        if any(s.index in LOOP for s in flow.steps[:h]):
+            why = "a halt after a loop word: the loop's words were measured with the loop skipped"
+            raise UnknownSemantics(at, "halt", [], why)
+        # Edited words that run, the tail's included, and inserted words (`cover_job` strips
+        # them, so the machine steps without them) are not modelled.
         stock_words = self.program.words
-        edited = any(
+        edited = bool(trace.inserted) or any(
             s.index >= len(stock_words) or words[s.index] != stock_words[s.index]
-            for s in flow.steps[:-1]
+            for k, s in enumerate(flow.steps)
+            if k != h
         )
         seen = at in HALTS_SEEN and length == KIB and words[at] == self.halt
-        conf = H if trace.ignored or edited else V if seen else I
-        for s in flow.steps:
-            if s.op in TARGET_OPS[:3] and s.confidence is not None:
-                conf = min(conf, s.confidence)
+        conf = H if trace.ignored or edited or machine.lapses else V if seen else I
+        # The halt's own tier is `seen`'s; the other steps carry the path's and the tail's.
+        tiers = [s.confidence for k, s in enumerate(flow.steps) if k != h]
+        conf = min([conf, engine.cap, *(t for t in tiers if t is not None)])
         why = f"op 7 at word {at} halts the job before the stream: {Outcome.NO_STORE.value}"
         result = JobResult(Status.OK, [why], ignored=trace.ignored, notes=trace.notes)
         result.taint = conf
         return result
+
+    @staticmethod
+    def _halt_flow(job: Job, view: JobView) -> tuple[Flow, Machine]:
+        """The job stepped on a lenient `Machine`, which decides the branches; where it cannot,
+        `copy_branches` decides, a hypothesis from there on. Raises where neither does."""
+        given: dict[int, bool] = {}
+        fallback = copy_branches(view.length).decisions
+        while True:
+            boot = Boot(view.boot)
+            machine = Machine(boot, None, Engine())
+            branching = (
+                Given(given, H, "as in the copies run on the camera") if given else None
+            )
+            flow = Executor(
+                boot, strict=False, branching=branching, datapath=machine
+            ).step(job)
+            at = flow.steps[-1].index
+            if flow.stop is not Stop.UNDECIDED or at not in fallback or at in given:
+                break
+            given[at] = fallback[at]
+        if flow.stop is not Stop.HALT:
+            raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
+        return flow, machine
 
     def resolve(
         self,

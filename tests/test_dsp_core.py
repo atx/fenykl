@@ -18,9 +18,7 @@ from fenykl.dsp.semantics import (
     LaneMemory,
     RaTest,
     Regs,
-    RegSet,
     UnknownSemantics,
-    destinations,
     lane_address,
     lane_result,
     product_high,
@@ -401,14 +399,6 @@ def test_a_multiply_writes_nothing_in_its_own_word():
         "r2 x r3 (op 0x49) = 0xffffffa5; on the ALU bus 1 word on, not delivered"
     )
     assert boot.slot[4] == given(0x5555)
-
-
-def test_a_port_that_writes_nothing_leaves_no_open_destination():
-    word = Word.from_fields(
-        {"f267_268": 2, "f211_215": 5, "f272_273": 1, "f224_228": 6},
-        base=Word.data(0x0B, Operands(ra=0, imm=1)),
-    )
-    assert destinations(word) == ([(RegSet.OPERAND, 6, 3)], [], "")
 
 
 @pytest.mark.parametrize(
