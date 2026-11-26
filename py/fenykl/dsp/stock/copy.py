@@ -50,20 +50,8 @@ Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the jo
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 
-from .emu import (
-    BUFFER_HI,
-    HALT_OP,
-    Boot,
-    Executor,
-    Job,
-    JobResult,
-    ModelRun,
-    Status,
-    Stop,
-    dram_alias,
-    start_copy,
-)
-from .fields import (
+from ..emu import HALT_OP, Boot, Executor, Job, Stop, dram_alias
+from ..fields import (
     DELAY_SLOTS,
     FIELDS,
     OP_FIELD,
@@ -74,31 +62,34 @@ from .fields import (
     lookup,
     op,
 )
+from ..job import Flow
+from ..machine import Machine
+from ..program import Program, stock_programs
+from ..semantics import OP_SEMANTICS, Given, OpSemantics, UnknownSemantics
+from ..state import Bytes
+from ..stream import Engine
+from ..units import UNITS
+from ..word import IDLE, Word
 from .intervals import RESULT_PORTS, Effect, RegSet, destinations, op_effect
-from .job import Flow
-from .machine import Machine
-from .program import Program, stock_programs
-from .semantics import (
+from .model import (
+    BUFFER_HI,
     KIB,
-    OP_SEMANTICS,
     Channel,
-    Given,
+    JobResult,
+    ModelRun,
     OpaqueClass,
-    OpSemantics,
     Outcome,
     Part,
     Role,
     Sequencer,
+    Status,
+    StockBoot,
     Trace,
     Transfer,
-    UnknownSemantics,
     Use,
     WordClass,
 )
-from .state import Bytes, JobView, Reg, RegisterFile
-from .stream import Engine
-from .units import UNITS
-from .word import IDLE, Word
+from .registers import JobView, Reg, RegisterFile
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -741,6 +732,16 @@ class Plan:
         return min(self.cap, *deciding)
 
 
+def start_copy(boot: StockBoot) -> JobView:
+    """Set the transfer registers that the copy's register facts give for the request in local
+    memory (src, dst and len at words 0..2); returns that view of the job."""
+    view = JobView(boot.u32(0), boot.u32(4), boot.u32(8), boot.params)
+    if view.dst is None or view.length is None:
+        raise ValueError("local memory holds no dst and len (no command setup ran)")
+    boot.regs.start_job(view)
+    return view
+
+
 def _readout(value: Reg | None) -> Reg | None:
     """An op's result as the copy's transfers use it (`READOUT`)."""
     if value is None:
@@ -1112,7 +1113,7 @@ class Copy16Model:
         given: dict[int, bool] = {}
         fallback = _STOCK_PATH
         while True:
-            boot = Boot(view.boot)
+            boot = Boot()
             machine = Machine(boot, None, Engine())
             branching = (
                 Given(given, H, "as in the copies run on the camera") if given else None
@@ -1365,7 +1366,9 @@ class Copy16Model:
                 f"r{t.reg} holds {what}, written by an inserted word",
             )
 
-    def _apply(self, boot: Boot, plan: Plan, trace: Trace, view: JobView) -> JobResult:
+    def _apply(
+        self, boot: StockBoot, plan: Plan, trace: Trace, view: JobView
+    ) -> JobResult:
         if plan.has(Outcome.HAZARD):
             status = Status.HAZARD
         elif plan.has(Outcome.TIMEOUT) or plan.has(Outcome.STORE_TIMEOUT):
@@ -1417,7 +1420,7 @@ class Copy16Model:
         result.stored = (dst, dst + n)
         return result
 
-    def _load(self, boot: Boot, plan: Plan, view: JobView, certain: bool) -> None:
+    def _load(self, boot: StockBoot, plan: Plan, view: JobView, certain: bool) -> None:
         """The load into the buffer; UNKNOWN where it may or may not have run, or with unknown data."""
         length = view.length
         assert length is not None
@@ -1449,7 +1452,7 @@ class Copy16Model:
                 data = boot.read(address, length)
         boot.buffer.write(o, data.capped(plan.load_taint))
 
-    def _format(self, boot: Boot, fmt: str, o76: int, n: int) -> Bytes:
+    def _format(self, boot: StockBoot, fmt: str, o76: int, n: int) -> Bytes:
         """n store bytes from the buffer at index o76, in format `fmt`."""
         if fmt == "bytes":
             return self._buffer(boot, o76, n)
@@ -1468,14 +1471,14 @@ class Copy16Model:
             return self._pack10(boot, o76, n, zero)
         raise ValueError(f"no store format {fmt!r}")
 
-    def _buffer(self, boot: Boot, o: int, n: int) -> Bytes:
+    def _buffer(self, boot: StockBoot, o: int, n: int) -> Bytes:
         if not boot.buffer.contains(o, n):
             return Bytes.unknown(
                 n, boot.source("store not modelled", "outside the modelled buffer")
             )
         return boot.buffer.read(o, n)
 
-    def _pack10(self, boot: Boot, o76: int, n: int, zero: int) -> Bytes:
+    def _pack10(self, boot: StockBoot, o76: int, n: int, zero: int) -> Bytes:
         """16 output bytes per 12 buffer bytes: each zero-extended to 10 bits, LSB first, top
         8 bits 0. An output byte is known when every input byte it draws on is known."""
         lines = n // 16

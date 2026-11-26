@@ -28,11 +28,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .fields import GRID_A, GRID_B, PORTS, Confidence, Field, lookup
+from ..fields import GRID_A, GRID_B, PORTS, Confidence, Field, lookup
+from ..semantics import UnknownSemantics, local_offset
+from ..units import UNITS
+from ..word import Word
 from .resample_edits import Probe
-from .semantics import UnknownSemantics, local_offset
-from .units import UNITS
-from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 LAW = I

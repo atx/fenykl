@@ -9,7 +9,6 @@ from functools import cache
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp import commands
 from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
@@ -24,6 +23,7 @@ from fenykl.dsp.semantics import (
     x_result,
 )
 from fenykl.dsp.state import Bytes
+from fenykl.dsp.stock import commands
 from fenykl.dsp.stream import Engine
 from fenykl.dsp.word import IDLE, Word
 

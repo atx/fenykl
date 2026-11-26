@@ -8,12 +8,13 @@ import pytest
 from conftest import stock_image
 from test_dsp_exec import rne
 
-from fenykl.dsp import commands, resample_edits
-from fenykl.dsp.emu import Boot, Status, run_model
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import STOCK, Program, stock_items
-from fenykl.dsp.resample import Resample13Model, footprint, predict
-from fenykl.dsp.resample_edits import (
+from fenykl.dsp.semantics import UnknownSemantics
+from fenykl.dsp.stock import commands, resample_edits
+from fenykl.dsp.stock.model import Status, StockBoot, run_model
+from fenykl.dsp.stock.resample import Resample13Model, footprint, predict
+from fenykl.dsp.stock.resample_edits import (
     C2_ONLY,
     GRID_A_ONLY,
     GRID_B_ONLY,
@@ -26,8 +27,7 @@ from fenykl.dsp.resample_edits import (
     bit,
     set_fields,
 )
-from fenykl.dsp.semantics import UnknownSemantics
-from fenykl.dsp.taps import Taps
+from fenykl.dsp.stock.taps import Taps
 from fenykl.dsp.word import IDLE
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp" / "resample"
@@ -72,7 +72,7 @@ def edit_of(entry: dict) -> Idle:
     return kinds.get(name) or bit(int(name.split()[1]))
 
 
-def run_job(boot: Boot, job: dict, k: int):
+def run_job(boot: StockBoot, job: dict, k: int):
     ctx = bytes([job["src"]["ctx"]]) * CTX
     boot.put(
         SRC - CTX, ctx + base64.b64decode(job["src"]["data"]) + ctx, f"job {k} src"
@@ -92,7 +92,7 @@ def run_job(boot: Boot, job: dict, k: int):
 
 def run_vector(vector: dict) -> list[str]:
     bad = []
-    boot = Boot()
+    boot = StockBoot()
     taints = TAINTS[vector["name"]].split()
     if len(taints) != len(vector["jobs"]):
         bad.append(f"{len(taints)} taints for {len(vector['jobs'])} jobs")
@@ -180,7 +180,7 @@ def test_an_edited_program_has_no_semantics():
     words = list(model().program.words)
     words[439] = IDLE
     program = Program(tuple(words), model().program.constants)
-    boot = Boot()
+    boot = StockBoot()
     job = commands.resample(program, SRC, DST, TABLE, 64, 64, 16)
     with pytest.raises(UnknownSemantics, match="word 439"):
         run_model(boot, model(), job)
@@ -189,7 +189,7 @@ def test_an_edited_program_has_no_semantics():
 
 
 def test_a_partial_block_on_a_fresh_boot_is_unknown():
-    boot = Boot()
+    boot = StockBoot()
     run_job(boot, identity_job(w=48), 0)
     line = boot.read(DST, 64)
     assert all(line.known[:32]) and not any(line.known[32:48])
@@ -199,7 +199,7 @@ def test_a_partial_block_on_a_fresh_boot_is_unknown():
 
 def test_a_partial_block_of_a_job_that_is_no_identity_is_unknown():
     # The held lines are known after the first job; the second reads source lines 2i.
-    boot = Boot()
+    boot = StockBoot()
     run_job(boot, identity_job(), 0)
     job = identity_job(w=48)
     job["table"] = [[min(2 * i, 15) << 16, 0x10000] for i in range(16)]
@@ -210,7 +210,7 @@ def test_a_partial_block_of_a_job_that_is_no_identity_is_unknown():
 
 
 def test_an_odd_height_above_1_is_unknown():
-    boot = Boot()
+    boot = StockBoot()
     result, _ = run_job(boot, identity_job(h=3), 0)
     assert result.status is Status.OK and result.stored == (DST, DST + footprint(3))
     assert not any(boot.read(DST, footprint(3)).known)
@@ -351,7 +351,7 @@ def names(p, a: int, z: int) -> set[str]:
     return {p.sources[s].name for s in p.dst.src[a:z]}
 
 
-def run_on(boot: Boot, taps: Taps, edits=()) -> bytes:
+def run_on(boot: StockBoot, taps: Taps, edits=()) -> bytes:
     """One flat job of TABLE13 on `boot`; its dst footprint with 0x100 for unknown bytes."""
     boot.put(SRC, FLAT, "src")
     boot.put(TABLE, b"".join(struct.pack("<iI", a, b) for a, b in TABLE13), "table")
@@ -374,9 +374,9 @@ def plane0(dst: bytes) -> bytes | None:
 
 def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
     taps = Taps.of(PHASES)
-    drop = run_on(Boot(), Taps.of([(0, *p[1:]) for p in PHASES]))
-    stock = run_on(Boot(), taps)
-    boot = Boot()
+    drop = run_on(StockBoot(), Taps.of([(0, *p[1:]) for p in PHASES]))
+    stock = run_on(StockBoot(), taps)
+    boot = StockBoot()
     # Not known on a fresh boot; 433's grid B idle sets it to 0, which drops tap 0's product.
     assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
     run_on(boot, taps, [(433, GRID_B_ONLY)])
@@ -390,14 +390,14 @@ def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
     assert plane0(run_on(boot, taps, [(439, GRID_C2)])) == plane0(drop)
     # Another edit, measured or not, makes it unknown, and the mover does not bring it back.
     for edits in ([(433, GRID_C2)], [(433, OP_IDLE)]):
-        boot = Boot()
+        boot = StockBoot()
         run_on(boot, taps, [(433, GRID_B_ONLY)])
         run_on(boot, taps, edits)
         assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
         run_on(boot, taps, [(433, GRID_B_ONLY)])
         assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
     # The mover acts on its class only: on a source varying along x it makes it unknown.
-    boot = Boot()
+    boot = StockBoot()
     boot.put(SRC, bytes(range(64)) * 48, "src")
     run_model(
         boot, model(), model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
@@ -409,17 +409,19 @@ def test_words_440_and_441s_grid_a_idle_drop_their_tap_where_the_substitute_is_0
     # Phase 0 (line 15) has no tap 2: it would read below the source.
     phases = [(0, 256, 0, 0)] + [(-8, 200, 64, 0)] * 15
     taps = Taps.of(phases)
-    stock = run_on(Boot(), taps)
+    stock = run_on(StockBoot(), taps)
     for tap in (1, 2):
-        drop = run_on(Boot(), Taps.of([(*p[:tap], 0, *p[tap + 1 :]) for p in phases]))
-        boot = Boot()
+        drop = run_on(
+            StockBoot(), Taps.of([(*p[:tap], 0, *p[tap + 1 :]) for p in phases])
+        )
+        boot = StockBoot()
         assert plane0(run_on(boot, taps, [(439 + tap, GRID_A_ONLY)])) is None
         run_on(boot, taps, [(433, GRID_B_ONLY)])
         got = run_on(boot, taps, [(439 + tap, GRID_A_ONLY)])
         assert plane0(got) == plane0(drop) != plane0(stock)
     # 442's is no drop; it keeps the substitute, as do the coefficient selects at 440..442.
-    drop0 = run_on(Boot(), Taps.of([(0, *p[1:]) for p in phases]))
-    boot = Boot()
+    drop0 = run_on(StockBoot(), Taps.of([(0, *p[1:]) for p in phases]))
+    boot = StockBoot()
     run_on(boot, taps, [(433, GRID_B_ONLY)])
     assert plane0(run_on(boot, taps, [(442, GRID_A_ONLY)])) is None
     for at, v in ((440, 3), (441, 2), (442, 4)):

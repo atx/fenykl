@@ -5,7 +5,9 @@ from functools import cache
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp.exec import (
+from fenykl.dsp.fields import FIELDS, Confidence
+from fenykl.dsp.semantics import UnknownSemantics
+from fenykl.dsp.stock.exec import (
     Coverage,
     Row,
     TapBytes,
@@ -20,9 +22,8 @@ from fenykl.dsp.exec import (
     run_window,
     weight,
 )
-from fenykl.dsp.fields import FIELDS, Confidence
-from fenykl.dsp.resample import Resample13Model, predict
-from fenykl.dsp.resample_edits import (
+from fenykl.dsp.stock.resample import Resample13Model, predict
+from fenykl.dsp.stock.resample_edits import (
     FLAT,
     GRID_A_ONLY,
     HELD_433,
@@ -33,9 +34,8 @@ from fenykl.dsp.resample_edits import (
     FieldValue,
     set_fields,
 )
-from fenykl.dsp.resample_window import WINDOW
-from fenykl.dsp.semantics import UnknownSemantics
-from fenykl.dsp.taps import Taps
+from fenykl.dsp.stock.resample_window import WINDOW
+from fenykl.dsp.stock.taps import Taps
 
 I, V = Confidence.INFERRED, Confidence.VERIFIED
 

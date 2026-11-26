@@ -9,15 +9,16 @@ from pathlib import Path
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp import commands
 from fenykl.dsp.asm import Bundle, Label, raw
-from fenykl.dsp.emu import MAIN_CODE, Boot, Status, back_firmware, dram_alias, run_model
+from fenykl.dsp.emu import MAIN_CODE, Boot, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.intervals import RegSet, destinations
-from fenykl.dsp.memcpy import Copy16Model
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
-from fenykl.dsp.semantics import OP_SEMANTICS, Mode, Sequencer, UnknownSemantics
-from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
+from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics
+from fenykl.dsp.stock import commands
+from fenykl.dsp.stock.copy import Copy16Model
+from fenykl.dsp.stock.intervals import RegSet, destinations
+from fenykl.dsp.stock.model import Mode, Sequencer, Status, StockBoot, run_model
+from fenykl.dsp.stock.registers import R14_BELOW, R14_EXACT, BootParams
 from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
@@ -65,9 +66,11 @@ def edited(edits: list[dict]) -> Program:
     return Program(tuple(words))
 
 
-def boot_of(spec: dict) -> Boot:
+def boot_of(spec: dict) -> StockBoot:
     r14 = {"exact": R14_EXACT, "below": R14_BELOW, None: BootParams().r14}[spec["r14"]]
-    return Boot(BootParams(r14=r14, r29=spec["r29"], r21_format=spec["r21_format"]))
+    return StockBoot(
+        BootParams(r14=r14, r29=spec["r29"], r21_format=spec["r21_format"])
+    )
 
 
 def needs_firmware(vector: dict) -> bool:
@@ -245,7 +248,7 @@ def test_every_vector_has_its_taints():
 SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 
 
-def copy(boot: Boot, program: Program, data: bytes, strict: bool = True):
+def copy(boot: StockBoot, program: Program, data: bytes, strict: bool = True):
     boot.put(SRC, data, "src")
     boot.put(DST, b"\xa5" * LEN, "prefill")
     result = run_model(
@@ -286,7 +289,7 @@ def test_strict_mode_raises_on_a_field_without_semantics():
         UnknownSemantics,
         match=r"word 3: no semantics for f0=0x1 \(nearest class: idle\)",
     ):
-        copy(Boot(), program, bytes(range(256)) * 4)
+        copy(StockBoot(), program, bytes(range(256)) * 4)
 
 
 def test_strict_mode_raises_on_a_transfer_with_an_opcode_field_set():
@@ -296,21 +299,21 @@ def test_strict_mode_raises_on_a_transfer_with_an_opcode_field_set():
         UnknownSemantics,
         match=r"word 73: no semantics for f265_266=0x0 \(nearest class: transfer\)",
     ):
-        copy(Boot(), program, bytes(LEN))
+        copy(StockBoot(), program, bytes(LEN))
 
 
 def test_lenient_mode_ignores_it_and_taints():
     synthetic = Word.from_fields({"f0": 1})
     program = Program((*stock().words[:3], synthetic, *stock().words[4:]))
     data = bytes(range(256)) * 4
-    result, dst = copy(Boot(), program, data, strict=False)
+    result, dst = copy(StockBoot(), program, data, strict=False)
     assert result.ignored == [(3, ["f0"])]
     assert bytes(dst.data) == data
     assert dst.weakest() is Confidence.HYPOTHESIS
 
 
 def test_taint_marks_hypothesis_derived_bytes():
-    boot = Boot(BootParams(r14=R14_EXACT))
+    boot = StockBoot(BootParams(r14=R14_EXACT))
     data = bytes(range(256)) * 4
     # No word of the copy is decoded: its bytes are at most inferred, the stock copy's too.
     _, dst = copy(boot, stock(), data)
@@ -327,7 +330,7 @@ def test_taint_marks_hypothesis_derived_bytes():
 
 
 def test_bytes_no_job_wrote_are_unknown_and_say_so():
-    boot = Boot(BootParams(r14=R14_EXACT))
+    boot = StockBoot(BootParams(r14=R14_EXACT))
     _, dst = copy(boot, with_reg(76, 14), bytes(range(256)) * 4)
     assert dst.ranges(known=False) == [(0, 0xE0)]
     assert boot.sources[dst.src[0]].name == "unwritten"
@@ -336,7 +339,7 @@ def test_bytes_no_job_wrote_are_unknown_and_say_so():
 def test_an_unset_slot_times_out_and_stores_nothing():
     for word in (66, 67, 68, 73, 76, 43, 47):
         program = edited([{"at": word, "idle": True}])
-        result, dst = copy(Boot(), program, bytes(range(256)) * 4)
+        result, dst = copy(StockBoot(), program, bytes(range(256)) * 4)
         assert result.status is Status.TIMEOUT, word
         assert bytes(dst.data) == b"\xa5" * LEN
 
@@ -344,7 +347,7 @@ def test_an_unset_slot_times_out_and_stores_nothing():
 def test_the_spare_channel_is_not_needed():
     for word in (54, 55):
         result, dst = copy(
-            Boot(), edited([{"at": word, "idle": True}]), bytes(range(256)) * 4
+            StockBoot(), edited([{"at": word, "idle": True}]), bytes(range(256)) * 4
         )
         assert result.status is Status.OK, word
         assert bytes(dst.data) == bytes(range(256)) * 4
@@ -364,23 +367,23 @@ def moved(at: dict[int, int]) -> Program:
     ids=["count-later", "two-earlier", "three-earlier"],
 )
 def test_roles_follow_moved_counted_transfers(at: dict[int, int]):
-    result, dst = copy(Boot(), moved(at), bytes(range(256)) * 4)
+    result, dst = copy(StockBoot(), moved(at), bytes(range(256)) * 4)
     assert result.status is Status.OK and bytes(dst.data) == bytes(range(256)) * 4
     assert result.taint is Confidence.HYPOTHESIS  # off their stock indices
 
 
 def test_a_counted_transfer_before_the_return_stalls_the_job():
-    result, dst = copy(Boot(), moved({77: 78, 78: 77}), bytes(range(256)) * 4)
+    result, dst = copy(StockBoot(), moved({77: 78, 78: 77}), bytes(range(256)) * 4)
     assert result.status is Status.TIMEOUT and bytes(dst.data) == b"\xa5" * LEN
     assert any("counted transfer at word 78" in why for why in result.why)
     # A holding word at 77 without the counted one leaves 77's slot unset instead.
-    result, _ = copy(Boot(), moved({77: 78}), bytes(range(256)) * 4)
+    result, _ = copy(StockBoot(), moved({77: 78}), bytes(range(256)) * 4)
     assert result.status is Status.TIMEOUT
     assert any("unset stream slot" in why for why in result.why)
 
 
 def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
-    boot = boot or Boot()
+    boot = boot or StockBoot()
     boot.put(SRC, bytes(range(256)) * (length // 256), "src")
     boot.put(DST, b"\xa5" * length, "prefill")
     job = commands.copy(program, SRC, DST, length)
@@ -517,14 +520,14 @@ TIMEOUTS = {
 @pytest.mark.parametrize("name", TIMEOUTS)
 def test_timeouts_with_and_without_the_store(name: str):
     program, stores = TIMEOUTS[name]
-    result, dst = copy(Boot(), program(), RAMP)
+    result, dst = copy(StockBoot(), program(), RAMP)
     assert result.status is Status.TIMEOUT
     assert bytes(dst.data) == (RAMP if stores else b"\xa5" * LEN)
     assert (result.stored is not None) is stores
 
 
 def test_the_loop_words_need_the_guard_unless_both_are_idle():
-    result, dst = copy(Boot(), idled(45, 53), RAMP)
+    result, dst = copy(StockBoot(), idled(45, 53), RAMP)
     assert result.status is Status.OK and result.stored is None
     assert bytes(dst.data) == b"\xa5" * LEN
     assert result.taint is Confidence.INFERRED  # two edits
@@ -535,20 +538,20 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
         idled(28, 51),
     ):
         with pytest.raises(UnknownSemantics, match="measured with the loop skipped"):
-            copy(Boot(), program, RAMP)
+            copy(StockBoot(), program, RAMP)
     # With the guard stock they still have no effect.
-    result, dst = copy(Boot(), idled(51, 53), RAMP)
+    result, dst = copy(StockBoot(), idled(51, 53), RAMP)
     assert result.status is Status.OK and bytes(dst.data) == RAMP
 
 
 def test_operand_edits_are_measured_one_field_at_a_time():
     # 27's target moved from 79 to its own fall-through.
-    result, dst = copy(Boot(), flipped(27, "imm", 79 ^ 32), RAMP)
+    result, dst = copy(StockBoot(), flipped(27, "imm", 79 ^ 32), RAMP)
     assert result.status is Status.OK and bytes(dst.data) == RAMP
     with pytest.raises(UnknownSemantics, match="word 45: no semantics for f15_22"):
-        copy(Boot(), flipped(45, "imm", 0x10), RAMP)
+        copy(StockBoot(), flipped(45, "imm", 0x10), RAMP)
     with pytest.raises(UnknownSemantics, match="two fields of one word"):
-        copy(Boot(), flipped(45, "xreg", 1, flipped(45, "imm", TARGET_50)), RAMP)
+        copy(StockBoot(), flipped(45, "xreg", 1, flipped(45, "imm", TARGET_50)), RAMP)
 
 
 @pytest.mark.parametrize(
@@ -562,13 +565,13 @@ def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
     words = list(without(stock(), *range(51, 58)).words)
     words[50] = stock().words[5]
     marker = Program(tuple(words))
-    boot = Boot()
+    boot = StockBoot()
     data = bytes(i & 0xFF for i in range(length))
     boot.put(src, data, "src")
     boot.put(dst, b"\xa5" * length, "prefill")
     result = run_model(boot, model(), commands.copy(marker, src, dst, length))
     assert result.status is Status.OK and bytes(boot.read(dst, length).data) == data
-    result, dst = copy(Boot(), flipped(45, "imm", TARGET_50, marker), RAMP)
+    result, dst = copy(StockBoot(), flipped(45, "imm", TARGET_50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None
     assert bytes(dst.data) == b"\xa5" * LEN
 
@@ -715,7 +718,7 @@ def test_only_the_stand_ins_that_overfill_a_channel_yield(at: tuple[int, int]):
 
 
 def test_registers_persist_but_a_fact_without_a_value_forgets():
-    boot = Boot()
+    boot = StockBoot()
     run(stock(), boot=boot)
     reg = boot.regs[11]
     assert reg is not None and reg.lo == 0x400
@@ -736,7 +739,7 @@ def test_backing_fills_pages_made_before_it_below_written_bytes():
 
 
 def test_sources_stay_bounded_over_jobs():
-    boot = Boot()
+    boot = StockBoot()
     run(stock(), boot=boot)
     n = len(boot.sources)
     for _ in range(3):
@@ -813,7 +816,7 @@ def test_an_inserted_op_takes_its_semantics_tier():
     result, boot = run(inserted(end, LOAD))
     assert result.taint is stock_result.taint
     weak = replace(OP_SEMANTICS[0x1A], confidence=Confidence.HYPOTHESIS)
-    boot = Boot()
+    boot = StockBoot()
     boot.put(SRC, bytes(range(256)) * (LEN // 256), "src")
     weakened = Copy16Model(stock(), ops={**OP_SEMANTICS, 0x1A: weak})
     result = run_model(

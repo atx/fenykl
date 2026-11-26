@@ -78,18 +78,14 @@ from dataclasses import dataclass
 from fractions import Fraction
 from math import floor
 
+from ..emu import LOCAL_BASE, Boot, Job, dram_alias
+from ..fields import Confidence
+from ..program import Program, stock_programs
+from ..semantics import UnknownSemantics
+from ..state import Bytes, Source
+from ..word import Word
 from . import commands
 from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
-from .emu import (
-    LOCAL_BASE,
-    Boot,
-    Job,
-    JobResult,
-    ModelRun,
-    Status,
-    dram_alias,
-    run_model,
-)
 from .exec import (
     Term,
     Uncovered,
@@ -102,8 +98,7 @@ from .exec import (
     run_window,
     weight,
 )
-from .fields import Confidence
-from .program import Program, stock_programs
+from .model import JobResult, ModelRun, Status, StockBoot, Trace, run_model
 from .resample_edits import (
     FACTS,
     FLAT,
@@ -125,13 +120,7 @@ from .resample_edits import (
 )
 from .resample_window import anchors as window_anchors
 from .resample_window import composition_cap, uncovered
-from .semantics import (
-    Trace,
-    UnknownSemantics,
-)
-from .state import Bytes, Source
 from .taps import Taps
-from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -526,7 +515,7 @@ class Resample13Model:
         return ((Changed(why),) * PLANES if run.strict else None), None
 
     def _move_substitute(
-        self, boot: Boot, job: Job, edited: list[int], probe: Probe | None
+        self, boot: StockBoot, job: Job, edited: list[int], probe: Probe | None
     ) -> None:
         """A stock job keeps the tap-0 substitute; on a flat source at W 64 the mover sets it
         to 0 from its boot value or 0 and a keeper keeps it; any other edited job makes it
@@ -683,7 +672,7 @@ class Resample13Model:
 
     def _hold(
         self,
-        boot: Boot,
+        boot: StockBoot,
         req: Request,
         entries: list[tuple[int, int] | None],
         taps: tuple[tuple[int, ...], ...] | None,
@@ -717,7 +706,7 @@ class Resample13Model:
 STOCK_PLANES: Planes = (STOCK, STOCK, STOCK)
 
 
-def _substituted(boot: Boot, effect: Effect) -> Effect:
+def _substituted(boot: StockBoot, effect: Effect) -> Effect:
     """`effect` with the boot's tap-0 substitute resolved: the drop of the tap's product where
     it is 0, unknown bytes where it is not known."""
     if not isinstance(effect, Substitute):
@@ -876,7 +865,7 @@ def predict(
         raise ValueError(
             f"{len(src)} src bytes for H {h}: expected {PLANES * STRIDE * h}"
         )
-    boot = Boot()
+    boot = StockBoot()
     boot.put(_SRC, src, "src")
     boot.put(_TABLE, b"".join(struct.pack("<iI", a, b) for a, b in table), "table")
     n = footprint(h)

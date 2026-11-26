@@ -1,18 +1,8 @@
-"""Semantics: word classes, parts, roles and the hidden sequencer, independent of one program.
+"""Semantics: the datapath rules, independent of one program, and `UnknownSemantics`.
 
-A word class is matched by field values (`match`) and names the
-fields it reads or ignores (`operands`); every field a class neither matches nor names as an
-operand must be idle. A program's model covers a job's word at its index: by a field semantic
-(program 16's register transfers), by the row of the stock word there (`OpaqueClass`), or by its
-window's coverage rule (program 13). A word nothing covers raises `UnknownSemantics`, naming the
-fields that differ from what covers the stock word there (strict mode); in the lenient mode the
-differing fields are ignored and the job is tainted "hypothesis".
-
-"Undecoded" means "no registered semantics", not "below verified": semantics registered at
-hypothesis confidence run and taint what they touch.
-
-The classes and tables of one program are held by its model (`memcpy.Copy16Model` for program
-16, `resample.Resample13Model` for program 13), which `emu.run_model` takes.
+A word the rules do not cover raises `UnknownSemantics`, naming its fields. "Undecoded" means
+"no registered semantics", not "below verified": semantics registered at hypothesis confidence
+run and taint what they touch.
 
 `OP_SEMANTICS` is the op slot's table: what a data op does, each with its confidence.
 Stepping (`emu.Executor.step`) can take `Given` decisions for the conditions of ops 0..2 over
@@ -22,10 +12,8 @@ the datapath's own (`Branching`). `X_RULES` are the functions of the two X units
 """
 
 import re
-from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Protocol
 
 from .fields import (
@@ -42,9 +30,7 @@ from .fields import (
     X_IMMEDIATES,
     Confidence,
     Field,
-    lookup,
 )
-from .state import Reg
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -60,278 +46,6 @@ class UnknownSemantics(Exception):
         names = ", ".join(f"{f.id}={v:#x}" for f, v in fields)
         text = f"word {index}: no semantics for {names} (nearest class: {nearest})"
         super().__init__(f"{text}; {why}" if why else text)
-
-
-class Outcome(Enum):
-    """What a word, a missing word or a role at a register does to the job."""
-
-    OK = "copies"
-    NO_STORE = "dst not written"
-    NO_LOAD = "no load: the store emits the held buffer"
-    TIMEOUT = "the job never completes (timeout-abort)"
-    STORE_TIMEOUT = "dst is written, then the job never completes (timeout-abort)"
-    HAZARD = "the job wedges or the camera loses its link"
-    ZERO_FILL = "the store writes 0x4000 zero bytes from dst"
-    DATA_UNKNOWN = "dst is written with data the model does not know"
-
-
-KIB = 0x400
-
-
-@dataclass(frozen=True)
-class Transfer:
-    """A register transfer as the sequencer sees it."""
-
-    index: int
-    reg: int
-    taint: Confidence
-    """Weaker than verified when the word moves fields the transfer is assumed to ignore."""
-
-
-@dataclass
-class Trace:
-    """What the words of one job leave for the resolution at its end."""
-
-    parts: Counter["OpaqueClass"] = field(default_factory=Counter)
-    """How often each opaque class ran."""
-    operands: dict["OpaqueClass", tuple[int, dict[str, int]]] = field(
-        default_factory=dict
-    )
-    """(index, {field id: value}) of the opaque classes with operand fields."""
-    channels: dict[str, list[Transfer]] = field(default_factory=dict)
-    standins: set[int] = field(default_factory=set)
-    """Indices where lenient mode ran the stock transfer for a word nothing covers."""
-    ignored: list[tuple[int, list[str]]] = field(default_factory=list)
-    classes: Confidence = V
-    """The weakest confidence of the classes that ran, at the positions they ran at."""
-    taint: Confidence = V
-    """Hypothesis when a field was ignored (lenient mode) or a word ran off its stock position."""
-    inserted: list[int] = field(default_factory=list)
-    """The job indices of the words inserted into the stock program (`memcpy.align`)."""
-    writes: dict[int, tuple[Reg | None, int]] = field(default_factory=dict)
-    """The xreg-set registers that inserted words wrote: (value, the writer's job index)
-    (`memcpy`'s engine site)."""
-    notes: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True, eq=False)
-class WordClass:
-    """A class of words; compared by identity.
-
-    `match` holds field values the word must have. `confidence` is that of the class's
-    semantics where it was seen.
-    """
-
-    name: str
-    fact: str
-    match: Mapping[str, int]
-    operands: frozenset[str]
-    confidence: Confidence = H
-    mask: int = field(init=False, repr=False)
-    bits: int = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        mask = bits = 0
-        for key, value in self.match.items():
-            f = lookup(key)
-            mask, bits = f.put(mask, f.mask), f.put(bits, value & f.mask)
-        object.__setattr__(self, "mask", mask)
-        object.__setattr__(self, "bits", bits)
-
-    def matches(self, word: Word) -> bool:
-        return word.value & self.mask == self.bits
-
-    def mismatches(self, word: Word) -> list[tuple[Field, int]]:
-        return [
-            (lookup(key), word[key])
-            for key, value in self.match.items()
-            if word[key] != value & lookup(key).mask
-        ]
-
-    def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
-        raise NotImplementedError
-
-
-@dataclass(frozen=True)
-class Part:
-    """An undecoded stock word as a part of the job: what the job does without it."""
-
-    token: str
-    """What the word is for, as far as known ("store path", "completion", ...)."""
-    missing: Outcome
-    fact: str
-    operand: Mapping[int, Outcome] | None = None
-    """Outcomes by the value of its field `operand_field`, where that field was swept."""
-    operand_field: str = "xreg"
-    flips: Mapping[str, Mapping[int, Outcome]] = field(default_factory=dict)
-    """Outcomes of edits of one field, by field and by the bits flipped against the stock
-    value (so that no stock value is part of the code)."""
-    seen: tuple[int, ...] = (KIB,)
-    """The job lengths at which `missing` and `operand` were seen on the camera [verified];
-    at other lengths they are inferred."""
-
-    def at(self, length: int) -> Confidence:
-        return V if length in self.seen else I
-
-
-@dataclass(frozen=True, eq=False)
-class OpaqueClass(WordClass):
-    """Undecoded stock words, the row of each of their stock indices: a job's word there that
-    matches it runs as its `part`."""
-
-    part: Part | None = None
-    positions: frozenset[int] = frozenset()
-    """The indices of the stock words of this class."""
-
-    def act(self, trace: Trace, word: Word, index: int, strict: bool) -> None:
-        trace.parts[self] += 1
-        if self.operands:
-            trace.operands[self] = (index, {k: word[k] for k in self.operands})
-
-
-# -- roles of the register transfers
-
-
-class Use(Enum):
-    """How a role uses the value of its register."""
-
-    NONE = "only the outcome table is known"
-    ADDRESS = "the load address"
-    LOAD_OFFSET = "the load's buffer index, value / 32 truncated"
-    COUNT = "the store's count in bytes"
-    STORE_OFFSET = "the store's buffer index, value / 32 rounded down"
-    FORMAT = "the store's element format"
-
-
-@dataclass(frozen=True)
-class Role:
-    name: str
-    word: int
-    """The stock word that holds the role."""
-    fact: str
-    table: Mapping[int, Outcome] = field(default_factory=dict)
-    """Outcome by register, seen on the camera at the `seen` lengths [verified], inferred at
-    the others; checked before `use`."""
-    use: Use = Use.NONE
-    load: bool = False
-    """A role of the load (its taint goes to the loaded bytes), else of the store."""
-    confidence: Confidence = I
-    """That of `use`: at the stock register, and at the others at the `seen` lengths."""
-    seen: tuple[int, ...] = (KIB,)
-    """The job lengths at which the table and the other registers ran on the camera."""
-    beyond: Confidence = I
-    """That of `use` at another register and length."""
-
-    def table_at(self, length: int) -> Confidence:
-        return V if length in self.seen else I
-
-    def use_at(self, stock: bool, length: int) -> Confidence:
-        if stock or length in self.seen:
-            return self.confidence
-        return min(self.confidence, self.beyond)
-
-
-@dataclass(frozen=True)
-class Channel:
-    """A group of transfers sharing a register context, and their roles in slot order."""
-
-    name: str
-    anchor: int
-    """A stock word whose register context names the channel."""
-    roles: tuple[Role, ...]
-    needed: bool = True
-    """False when idling its transfers has no effect: its unset slots do not stall the job."""
-    stalls: tuple[int, ...] = ()
-    """Word indices at which a counted transfer of the channel stalls the job (inferred)."""
-
-
-class Mode(Enum):
-    POINTER = "pointer"
-    POSITION = "position"
-
-
-class Sequencer:
-    """Hidden state that gives the register transfers their roles.
-
-    POINTER (the default): each channel has a slot pointer; a transfer with X1 head 0x1c takes
-    the slot at the pointer and advances it, so roles follow the order of the transfers
-    (inferred). Idling a transfer leaves its channel's last slot unset, and an unset slot stalls
-    the job; this reproduces the camera: every idled counted transfer of 42..49 and 66..77 times
-    out, while 74 and 78 (head 0x1d) have no effect. The pointers start at slot 0 with every
-    job. On the camera the roles followed the counted transfers when they moved: the count one
-    index later (exchanged with the holding word 74, also at another register), and 75..77 one
-    index earlier as a block, with a holding word after them (one run each, verified on the
-    camera). A counted transfer at a channel's `stalls` index stalls the job: program 16's word
-    78, the word before the return 79, where exchanging 77 with the holding word 78 times the job
-    out (verified on the camera, two boots). Why 78 fails is open: too late for the stream, a
-    restriction of that index alone, or a window per role that lets a role move one index early
-    and the count one late but not 77 one late (hypothesis, not separated by the runs so far). A
-    transfer off its stock index is still assigned at hypothesis taint.
-
-    POSITION (the comparison mode): the role is the stock word index's role; a transfer at
-    another index has none. Both give the same results on the field sweeps and idled words; the
-    moved transfers above refute it for the count and for 75..77.
-    """
-
-    def __init__(self, mode: Mode = Mode.POINTER) -> None:
-        self.mode = mode
-
-    def assign(
-        self, channels: Sequence[Channel], transfers: dict[str, list[Transfer]]
-    ) -> tuple[list[tuple[Role, Transfer, Confidence]], list[tuple[str, Confidence]]]:
-        """(role, transfer, assignment taint) per filled slot, and why the job stalls, with
-        the confidence: each unset slot (hypothesis) and each counted transfer at a stall index
-        (inferred).
-
-        A channel that stalls has its filled slots left out: what the shifted transfers would do
-        there is not modelled.
-        """
-        by_name = {c.name: c for c in channels}
-        by_channel: dict[str, list[tuple[Role, Transfer, Confidence]]] = {
-            c.name: [] for c in channels
-        }
-        if self.mode is Mode.POINTER:
-            for name, slots in transfers.items():
-                roles = by_name[name].roles
-                if len(slots) > len(roles):
-                    extra = ", ".join(str(t.index) for t in slots[len(roles) :])
-                    raise UnknownSemantics(
-                        slots[len(roles)].index,
-                        "transfer",
-                        [],
-                        f"{name}: no slot for words {extra}",
-                    )
-                for role, t in zip(roles, slots):
-                    by_channel[name].append((role, t, V if t.index == role.word else H))
-        else:
-            stock = {r.word: (c.name, r) for c in channels for r in c.roles}
-            for slots in transfers.values():
-                for t in slots:
-                    if t.index not in stock:
-                        raise UnknownSemantics(
-                            t.index, "transfer", [], "no role at this index"
-                        )
-                    name, role = stock[t.index]
-                    by_channel[name].append((role, t, V))
-        filled, stalls = [], []
-        for c in channels:
-            have = {role.word for role, _, _ in by_channel[c.name]}
-            why = [
-                (f"unset {c.name} slot {k} ({role.name}, stock word {role.word})", H)
-                for k, role in enumerate(c.roles)
-                if role.word not in have
-            ]
-            if not c.needed:
-                why = []
-            why += [
-                (f"{c.name}: a counted transfer at word {t.index}", I)
-                for t in transfers.get(c.name, [])
-                if t.index in c.stalls
-            ]
-            stalls += why
-            if not why:
-                filled += by_channel[c.name]
-        return filled, stalls
 
 
 # -- the op slot's semantics and the branch hypotheses
