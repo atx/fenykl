@@ -1348,8 +1348,8 @@ _X_IMMEDIATE_READS = {
 def _x_head_reads(unit: str, head: int) -> frozenset[str] | None:
     rule = X_RULES[unit][head]
     if unit == "x1" and head in TRANSFER_HEADS:
-        # 0x1c hands B[b] to the stream engine, 0x1d hands nothing.
-        return frozenset("b" if head == 0x1C else "")
+        # a selects what they meet (`fields.STREAM_SELECT`); 0x1c hands B[b], 0x1d hands nothing.
+        return frozenset("ab" if head == 0x1C else "a")
     if unit == "x1" and head == DIVIDE_HEAD:
         return frozenset("ab")
     if unit == "x0" and head in X0_LANE_MEMORY:

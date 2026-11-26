@@ -51,10 +51,12 @@ from .fields import (
     STREAM_CHANNELS,
     STREAM_LANE_MEMORY,
     STREAM_LOAD,
+    STREAM_SELECT,
     STREAM_STORE,
     TAG,
     TARGET,
     TARGET_OPS,
+    TRANSFER_HEADS,
     U_NOTHING,
     U_SAVED,
     U_TAKES,
@@ -463,6 +465,11 @@ _OPERAND_FILES: dict[str, dict[str, RegFile | None]] = {
 }
 """Each operand's register file, None an integer; a mnemonic may type one per code (S3's idx,
 a lane or shift count but a register of F3 for 0x15..0x17)."""
+_DEFAULTS: dict[tuple[str, int], dict[str, Value]] = {
+    ("x1", h): {"a": B[STREAM_SELECT]} for h in TRANSFER_HEADS
+}
+"""Operands an instruction takes when not given: X1's transfers meet the stream engine with
+register a 0 (`fields.STREAM_SELECT`), not the idle word's."""
 
 
 class Unit(Source):
@@ -496,6 +503,8 @@ class Unit(Source):
         return build
 
     def __call__(self, code: int, **operands: Value) -> Instr:
+        for k, v in _DEFAULTS.get((self.unit, code), {}).items():
+            operands.setdefault(k, v)
         return _instr(self, code, operands)
 
     def file(self, code: int, name: str) -> RegFile | None:
@@ -940,8 +949,8 @@ X1 = Unit(
     19 or_ a b
     1a and_ a b
     1b not_ b
-    1c hand b
-    1d wait
+    1c hand b a
+    1d wait a
     1e div a b
     """,
 )
@@ -1097,9 +1106,9 @@ SCRATCH = (B[14], B[15])
 
 
 def hand(*values: int | Reg) -> list[Bundle | Instr]:
-    """X1 0x1c per value, in order, to the stream engine (`stream`): a register of B as it is,
-    an integer (16 bits, sign-extended) by `li` into the `SCRATCH` registers in turn the word
-    before its hand, so a value takes one word or two."""
+    """X1 0x1c (a = B[0]) per value, in order, to the stream engine (`stream`): a register of B
+    as it is, an integer (16 bits, sign-extended) by `li` into the `SCRATCH` registers in turn
+    the word before its hand, so a value takes one word or two."""
     out: list[Bundle | Instr] = []
     scratch = 0
     for v in values:
@@ -1112,8 +1121,8 @@ def hand(*values: int | Reg) -> list[Bundle | Instr]:
 
 
 def wait() -> Instr:
-    """X1 0x1d: waits for the oldest outstanding stream command and hands nothing (`stream`).
-    Its register field names B[1], which keeps the words of the kernel example, whose shape
+    """X1 0x1d (a = B[0]): waits for the oldest outstanding stream command and hands nothing
+    (`stream`). Its b, not read, is B[1]: the word is the wait a kernel of the example's shape
     ran on the camera."""
     return X1.wait(b=B[1])
 
@@ -1297,8 +1306,10 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
 # The review list --------------------------------------------------------------------------
 
 _TRANSFERS = {
-    0x1C: "hands B[b] to the stream engine, read before the word's ports write (`stream`)",
-    0x1D: "hands nothing and waits for one command of the stream engine (`stream`)",
+    0x1C: "with a = B[0] hands B[b] to the stream engine, read before the word's ports write "
+    "(`stream`); another a not measured",
+    0x1D: "with a = B[0] hands nothing and waits for one command of the stream engine "
+    "(`stream`); with B[1], B[2] or B[8] hands nothing and returns; another a not measured",
 }
 """X1's transfers as `stream` describes them."""
 _EVIDENCE = (" (verified", " (measured", " (inferred", " (fitted", " (a data op")

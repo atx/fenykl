@@ -226,9 +226,11 @@ def _registers(rng: random.Random, unit: str, words: tuple[Word, ...]) -> dict:
 
 def _head_result(unit: str, regs: dict, word: Word) -> tuple:
     """What the machine's code for `unit`'s head does in `word` on `regs`: its result and what it
-    leaves (results due, the lane memory, the latch, U's port, the stream's transfers)."""
+    leaves (results due, the lane memory, the latch, U's port, the stream's transfers) and
+    its lapses on a lenient machine."""
     stream = _Transfers()
     m = Machine(Boot(), stream=stream)
+    m.strict = False
     for name, v in regs.items():
         nested = name in ("f", "lanes")
         setattr(m, name, {k: list(x) for k, x in v.items()} if nested else v.copy())
@@ -244,6 +246,8 @@ def _head_result(unit: str, regs: dict, word: Word) -> tuple:
         m.latched,
         m._u_write,
         stream.got,
+        m.lapses,
+        m.cap,
     )
 
 
@@ -614,13 +618,39 @@ def test_a_lenient_machine_forgets_what_a_store_at_an_unknown_address_may_write(
     assert boot.carry is None
 
 
+@pytest.mark.parametrize("a", [1, 2, 8])
+def test_a_wait_with_register_a_1_2_or_8_hands_nothing_inferred(a):
+    stream = _Transfers()
+    m = Machine(Boot(), stream=stream)
+    m.execute(0, w(f308_312=0x1D, f110_114=a, f115_119=3), 0)
+    assert stream.got == [] and not m.lapses and m.cap is I
+
+
+@pytest.mark.parametrize(("head", "a"), [(0x1D, 31), (0x1D, 3), (0x1C, 1), (0x1C, 31)])
+def test_a_transfer_with_a_register_a_not_measured_raises_or_forgets_every_memory(
+    head, a
+):
+    word = w(f308_312=head, f110_114=a, f115_119=3)
+    with pytest.raises(UnknownSemantics, match=f"f110_114={a:#x}"):
+        Machine(Boot(), stream=_Transfers()).execute(0, word, 0)
+    boot = Boot()
+    boot.put(0x10000000, b"\x22", "dram")
+    stream = _Transfers()
+    m = Machine(boot, stream=stream)
+    m.strict = False
+    m.execute(0, word, 0)
+    assert stream.got == [] and len(m.lapses) == 1
+    assert m.lanes_lost and m.cap is H
+    assert not any(boot.read(0x10000000, 1).known)
+
+
 def test_a_lenient_transfer_without_a_stream_forgets_every_memory():
     boot = Boot()
     boot.put(0x10000000, b"\x22", "dram")
     boot.local.write(LOCAL_BASE, Bytes.of(b"\x11", boot.source("test")))
     m = Machine(boot)
     m.strict = False
-    m.execute(0, w(f308_312=0x1C, f115_119=3), 0)
+    m.execute(0, w(f308_312=0x1C, f110_114=0, f115_119=3), 0)
     assert m.lapses == ["x1 0x1c: a transfer to the stream engine: no stream"]
     assert m.lanes_lost and m.cap is H
     assert not any(boot.local.read(LOCAL_BASE, 1).known)
@@ -1313,7 +1343,7 @@ def test_program_15_without_a_request_reaches_its_halt_on_a_lenient_machine():
     assert sum(s.unknown for s in flow.steps) == len(m.lapses) > 0
 
 
-def test_program_13_halts_on_a_lenient_machine_past_its_surplus_waits():
+def test_program_13_halts_strict_its_waits_with_register_a_nonzero_handing_nothing():
     src, table, lines = 0x10000000, 0x10200000, 16
     job = commands.resample(stock(13), src, 0x10100000, table, 64, 64, lines)
 
@@ -1324,14 +1354,12 @@ def test_program_13_halts_on_a_lenient_machine_past_its_surplus_waits():
         b.put(table, identity, "table")
         return b
 
-    # The kind 4 stores run; per line one 0x1d finds nothing outstanding, which is open.
-    surplus = "a 0x1d with no command outstanding never ends"
-    with pytest.raises(UnknownSemantics, match=f"word 231: .*{surplus}"):
-        b = boot()
-        Executor(b, datapath=Machine(b, None, Engine())).step(job)
-    flow, m = lenient(boot(), job, {})
-    assert flow.stop is Stop.HALT
-    assert len(m.lapses) == 15 and all(surplus in lapse for lapse in m.lapses)
+    # Its 0x1d in words 210 (a = 2) and 312 (a = 1) hand nothing: the others balance its commands.
+    b = boot()
+    m = Machine(b, None, Engine())
+    flow = Executor(b, datapath=m).step(job)
+    assert flow.stop is Stop.HALT and not m.lapses
+    assert m.cap is I
 
 
 SRC, DST, LENGTH = 0xA0FCA800, 0xA1113600, 0x400

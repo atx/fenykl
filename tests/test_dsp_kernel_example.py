@@ -147,6 +147,7 @@ def test_the_kernel_hides_its_loads():
 def test_the_kernel_keeps_its_words():
     """Pinned: a change to the DSL or its helpers that moves a bit of the kernel shows here."""
     words = b"".join(w.to_bytes() for w in xor_kernel(0x4000).words)
+    # Moved when hand and wait took register a 0 (the camera's form) for the idle word's 31.
     assert hashlib.sha256(words).hexdigest() == (
-        "a800ac458e385812e7bf9605ac88cd85d9f74a32c7ef7313500fa9273f192394"
+        "2a197161e169aae073dc49f1be92c80e70ca20c657ad5a13c9f288eda76892e2"
     )
