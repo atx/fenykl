@@ -52,9 +52,11 @@ row takes its n elements in the same order, truncated to the DRAM width (`LOCAL_
 fewer than n elements on the memory side (r2 r3 < n) it never ends (verified).
 
 Zero counts: a lane-memory load of r3 units with r6 0 ended (inferred, three jobs; what it writes
-was not seen, so its vectors are unknown), and a lane-memory store with r3 0 of n > 0 elements
-ended and wrote nothing (inferred, five jobs). Every other load or store with r3 or r6 0, on
-either memory, was not measured and goes off script.
+was not seen, so its vectors are unknown), a lane-memory load with r3 0 ended in the shapes of
+`ZERO_LOADS` (inferred; the vectors read back after it unchanged, the rest of its footprint
+unknown), and a lane-memory store with r3 0 of n > 0 elements ended and wrote nothing (inferred,
+five jobs). Every other load or store with r3 or r6 0, on either memory, was not measured and
+goes off script.
 
 Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
 a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
@@ -232,6 +234,17 @@ every lane (inferred, but see `ZERO_FORMATS`)."""
 ZERO_FORMATS = (0x04,)
 """r5 measured under r2 0x10 on a lane-memory load with zeros named before the run, at
 r3 = ceil(r5 r6 / 16): zeros (verified at that count; bytes gave zeros unforeseen, inferred)."""
+ZERO_LOADS: dict[tuple[int, int, int], int] = {
+    (0x20, 0x10, 0x40): 32,
+    (0x20, 0x10, 0x100): 32,
+}
+"""A lane-memory load with r3 0 (one row) by the (r2, r5, r6) that ran: the vectors from its "to"
+seen unchanged after it, of the ceil(r5 r6 / r2) a full count fills. Measured on the camera: the
+job ended, and a store from the same "to" emitted what those vectors held before the job, byte
+for byte (five jobs at r6 0x40, two of them at a src other than the one the held bytes came from:
+the whole footprint; two at r6 0x100: its first 32 vectors, the other 96 read back as bytes of
+no known origin, so they are unknown). Inferred: the jobs idled a whole program word, not the
+count alone."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -402,7 +415,8 @@ class Engine:
             bits, _ = STORE_FORMATS[r[5].value]
             per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
         else:
-            per = r[3].value
+            # A load at r3 0 that ran (`ZERO_LOADS`) spans the vectors a full count fills.
+            per = r[3].value or -(-r[5].value * r[6].value // r[2].value)
         starts = [off // VECTOR_BYTES for _, off in rows]
         vectors = frozenset(
             (s + v) % LANE_VECTORS
@@ -714,6 +728,10 @@ class Engine:
         if memory == LANE_MEMORY and r3 and not r6:
             self.cap = min(self.cap, I)  # it ended on the camera (inferred)
             return self._lane_load(m, cmd, rows, bits, 0, r2, r3, tier)
+        seen = ZERO_LOADS.get((r2, r5, r6))
+        if memory == LANE_MEMORY and not r3 and seen is not None and len(rows) == 1:
+            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+            return self._zero_load(m, rows[0][1], seen, needed)
         if not r3 or not r6:
             raise _Off(f"a {_side(memory)} load at r3 {r3}, r6 {r6}: not measured")
         if r3 > needed:
@@ -773,6 +791,26 @@ class Engine:
                 racing = m.memory.get(at) is not held[at]
                 m.memory[at] = UNKNOWN_VEC if racing else Vec(lanes, t)
 
+        return complete
+
+    @staticmethod
+    def _zero_load(m: Machine, off: int, seen: int, needed: int):
+        """A lane-memory load at r3 0 (`ZERO_LOADS`): the `seen` vectors from `off` keep their
+        content at most inferred, the rest of the `needed` its footprint takes are unknown from
+        its hand."""
+        base = off // VECTOR_BYTES
+        kept = [(base + v) % LANE_VECTORS for v in range(min(seen, needed))]
+        unseen = [(base + v) % LANE_VECTORS for v in range(seen, needed)]
+
+        def complete(m: Machine, cap: Confidence) -> None:
+            if m.lanes_lost:
+                return
+            for k in kept:
+                vec = m.memory.get(k, UNKNOWN_VEC)
+                m.memory[k] = replace(vec, tier=min(vec.tier, I))
+            m.memory.update(dict.fromkeys(unseen, UNKNOWN_VEC))
+
+        complete(m, I)
         return complete
 
     @staticmethod
