@@ -165,6 +165,11 @@ def ring_length(imm13: int) -> tuple[int | None, Confidence]:
     return imm13 & 0xFF, V
 
 
+SELECT_MEASURED = frozenset({0, 3, 5, 6, 7})
+"""The f120_122 values at which op 0x08's select on R[f120_122] was measured with R both 0 and
+not (verified on the camera by exact readout); at the others it is inferred."""
+
+
 def ring_step(s: int, length: int) -> int:
     """A ring pointer step from s = zext(ra) + sext(R) by the ring length L."""
     if s < 0:
@@ -299,10 +304,19 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         "the ring pointer step as 0x46's with L = rb "
         f"({EXACT}); the R file is not modelled, so the result is unknown",
     ),
-    **{
-        code: OpSemantics(V, f"rb ({_EXACT_RULE})", _e("rb", lambda a, b: b))
-        for code in (0x08, 0x09)
-    },
+    0x08: OpSemantics(
+        V,
+        "ra where R[f120_122] is 0, else rb (measured on the camera by exact readout, "
+        "pre-registered against rb, the complement, a test of R3 or of R[ra's index], of the low "
+        "16 bits, of bit 1 and of the sign: R 0 gave ra at f120_122 0, 3, 5, 6 and 7, R 1, 2, 4, "
+        "7, 9, 0x10000 and 0x80000000 gave rb; the same in program 13's word 107 and in copies "
+        "of its words 99..107); at f120_122 1, 2 and 4 inferred",
+    ),
+    0x09: OpSemantics(
+        V,
+        f"rb ({_EXACT_RULE}; R[f120_122] 0 or not gave rb, measured on the camera)",
+        _e("rb", lambda a, b: b),
+    ),
     0x32: OpSemantics(
         V,
         "abs(rb) (verified on the camera by exact readout, pre-registered)",

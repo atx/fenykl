@@ -497,6 +497,22 @@ def test_the_ring_step_takes_its_length_from_all_of_rb(m, ra, r, rb, want):
     assert m.g[12].value == want
 
 
+@pytest.mark.parametrize(
+    "rr, r, want, tier",
+    [
+        (3, 0, 0x1111, Confidence.VERIFIED),
+        (3, 0x80000000, 0x2222, Confidence.VERIFIED),
+        (5, 0x10000, 0x2222, Confidence.VERIFIED),
+        (1, 0, 0x1111, Confidence.INFERRED),
+        (3, None, None, Confidence.VERIFIED),
+    ],
+)
+def test_op_8_selects_ra_on_a_zero_r_register(m, rr, r, want, tier):
+    m.g[10], m.g[11], m.r[rr] = Sv(0x1111), Sv(0x2222), Sv(r)
+    run(m, [op_word(0x08, 10, 11, f120_122=rr, f272_273=1, f224_228=12)])
+    assert m.g[12] == Sv(want, tier)
+
+
 def test_a_unit_bus_ors_a_late_result_with_the_next_words_own(m):
     m.lanes["L1"][1] = Vec(A)
     m.lanes["L1"][2] = Vec(B)

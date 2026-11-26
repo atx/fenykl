@@ -130,6 +130,7 @@ from .semantics import (
     OP_SEMANTICS,
     PR_ENABLES,
     S_RULES,
+    SELECT_MEASURED,
     X_RULES,
     Branch,
     UnknownInput,
@@ -589,6 +590,9 @@ class Machine:
                 (Sv(value, tier), "product")
             )
             return None
+        if code == 0x08:
+            assert rb is not None
+            return self._select(word, ra, rb, sem.confidence)
         if sem.rule is not None:
             rule = sem.rule
             ins = [ra] if rule.reads_ra else []
@@ -610,6 +614,21 @@ class Machine:
         raise UnknownSemantics(
             index, op(code).name, [(OP_FIELD, code)], "no exact rule"
         )
+
+    def _select(self, word: Word, ra: Sv, rb: Sv, tier: Confidence) -> Sv:
+        """Op 0x08: ra where R[f120_122] is 0, else rb (measured on the camera by exact readout:
+        R 0 gave ra at f120_122 0, 3, 5, 6 and 7, every non-zero R tried gave rb, also in
+        program 13's word 107, which so sets the first block at b = 1). An unknown R gives an
+        unknown result unless ra and rb agree."""
+        r = word["f120_122"]
+        x = self._rd("R", r)
+        if r not in SELECT_MEASURED:
+            tier = min(tier, I)
+        if x.value is None:
+            same = ra.value is not None and ra.value == rb.value
+            return Sv(ra.value if same else None, min(tier, ra.tier, rb.tier, x.tier))
+        pick = ra if x.value == 0 else rb
+        return Sv(pick.value, min(tier, x.tier, pick.tier))
 
     def _ring(
         self, index: int, word: Word, code: int, ra: Sv, rb: Sv | None, c: int, tier: Confidence

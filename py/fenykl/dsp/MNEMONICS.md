@@ -460,7 +460,7 @@ an instruction also carries its fields' (`Instr.tier`).
 | 0x03 | `jump` | to | a jump to T after four delay slots that writes no link | verified |
 | 0x04 | `ret` | rb | a jump, after four delay slots, to the word G[f128_132] names | verified |
 | 0x07 | `halt` |  | ends the job: word 5 of every stock program and no other word, where the call at word 0 returns | inferred |
-| 0x08 | `mov_08` | rb | rb | verified |
+| 0x08 | `sel` | ra, rb, rr | ra where R[f120_122] is 0, else rb | verified |
 | 0x09 | `mov` | rb | rb | verified |
 | 0x0a | `orhi` | ra, imm | ra \| (c << 16) | verified |
 | 0x0b | `li` | imm | imm16 sign-extended; ra not read | verified |
