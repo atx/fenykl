@@ -118,9 +118,7 @@ def xor_kernel(nbytes: int) -> Program:
 def run(nbytes: int, data: bytes):
     boot = Boot()
     boot.put(SRC, data, "src")
-    r = boot.run(
-        xor_kernel(nbytes), regs={"B": {B_SRC.index: SRC, B_DST.index: DST, 1: 1}}
-    )
+    r = boot.run(xor_kernel(nbytes), regs={"B": {B_SRC.index: SRC, B_DST.index: DST}})
     return boot.read(DST, nbytes), r.estimate
 
 

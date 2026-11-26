@@ -1068,8 +1068,8 @@ def hand(*values: int | Reg) -> list[Bundle | Instr]:
 
 
 def wait() -> Instr:
-    """X1 0x1d: waits for the oldest outstanding stream command. It names B[1] in its register
-    field as the waits that ran on the camera did; it reads no register."""
+    """X1 0x1d: waits for the oldest outstanding stream command and hands nothing (`stream`).
+    Its register field names B[1], which keeps the kernel example's words."""
     return X1.wait(b=B[1])
 
 
@@ -1268,7 +1268,7 @@ def mnemonics_markdown() -> str:
         "signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart",
         "from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`",
         "the lanes U's port takes, `save_unk` a content U's port writes that is not",
-        "identified, `_save_open` what U's port takes not measured, `_u` / `_ua` an S2",
+        "identified, `_save_open` what U's port takes open, `_u` / `_ua` an S2",
         "product's unsigned operands). Codes whose rows differ in nothing else share a name:",
         "the one the stock programs use most (the lowest on a tie) takes it, the others add",
         "their code (`abd_ss_05`). `sub` and its kin compute the first operand minus the",

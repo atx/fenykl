@@ -8,7 +8,7 @@ Scheme: the operation, then the operand it takes besides the lane operands (`_im
 signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart
 from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`
 the lanes U's port takes, `save_unk` a content U's port writes that is not
-identified, `_save_open` what U's port takes not measured, `_u` / `_ua` an S2
+identified, `_save_open` what U's port takes open, `_u` / `_ua` an S2
 product's unsigned operands). Codes whose rows differ in nothing else share a name:
 the one the stock programs use most (the lowest on a tie) takes it, the others add
 their code (`abd_ss_05`). `sub` and its kin compute the first operand minus the

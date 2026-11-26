@@ -1077,8 +1077,8 @@ U_NOTHING = (0x18, 0x19, 0x22, 0x14)
 """S3 heads beside which U's port wrote nothing (measured on the camera)."""
 U_UNIDENTIFIED = (0x1A, 0x1D)
 """S3 heads beside which U's port wrote U's lanes 0..3 with a content not identified (inferred,
-one run on the camera); U's lanes 4..31 were not read. Beside every other S3 head what U's port
-writes was not measured."""
+one run on the camera); U's lanes 4..31 were not read. Beside these and every head in neither
+`U_TAKES` nor `U_NOTHING` what U's port writes is open."""
 U_SAVED = "lanes 0..3 the S3 head beside it saves (`U_TAKES`)"
 U_SOURCES: dict[int, tuple[str, Confidence]] = {1: (U_SAVED, V)}
 """What f232_233 writes to U[f141_144] by value: 1 what the S3 head beside it saves; 0 and 2
