@@ -76,7 +76,8 @@ at once change only when a held load lands, not what it writes. The emulator nev
 racing read: a load's destination is unknown from its hand until its 0x1d or the job's end
 (`finish`), a load takes its DRAM source as of the hand (a store handed after it runs after it),
 a store takes its source as of the hand and writes DRAM at once (inferred where the source is
-rewritten before the store completes: that race was not measured), and the lane memory read
+rewritten before the store completes: that race was not measured; so is the order of commands
+on one DRAM range while one of them is outstanding, inferred), and the lane memory read
 while any command is outstanding is a hypothesis, but outside every outstanding command's
 vectors: there verified beside one-row byte loads and stores of kinds 0 / 6, inferred beside
 other lane-memory shapes (`Engine.lane_tier`).
@@ -348,6 +349,8 @@ class Engine:
     spans: list[tuple[frozenset[int], Confidence] | None] = field(default_factory=list)
     """Per outstanding command the lane-memory vectors it reads or writes; None where not
     bounded (a local-memory command, one that moves nothing, the engine off script)."""
+    drams: list["_Dram"] = field(default_factory=list)
+    """Per outstanding command the DRAM it reads and writes (`_behind`)."""
     commands: int = 0
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); before the first it was not measured."""
@@ -401,7 +404,7 @@ class Engine:
 
     def _pop(self, m: Machine, cap: Confidence) -> None:
         self.spans.pop(0)
-        self.outstanding.pop(0)(m, cap)
+        self.outstanding.pop(0)(m, min(cap, self.drams.pop(0).cap))
 
     def _span(
         self, cmd: _Command, plain: bool
@@ -569,6 +572,7 @@ class Engine:
         self.commands += 1
         self.outstanding.append(_nothing)
         self.spans.append(None)
+        self.drams.append(_Dram())
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
@@ -705,6 +709,24 @@ class Engine:
         out = [((dram + k * dpitch) & 0xFFFFFFF0, mem + k * pitch) for k in ks]
         return out, tier
 
+    def _behind(self, rows: list[tuple[int, int]], n: int, store: bool) -> Confidence:
+        """The newest command's DRAM rows of `n` bytes each, recorded; inferred where they overlap
+        a store handed earlier and still outstanding, and a store's caps an outstanding load of
+        those bytes at inferred: the emulator runs them in order, as handed, which was not measured
+        for one DRAM range."""
+        mine = [(dram_alias(dram), n) for dram, _ in rows]
+        tier = V
+        for d in self.drams[:-1]:
+            if _overlap(d.writes, mine):
+                tier = I
+            if store and _overlap(d.reads, mine):
+                d.cap = I
+        if store:
+            self.drams[-1].writes = mine
+        else:
+            self.drams[-1].reads = mine
+        return tier
+
     def _local_offset(self, off: int, n: int) -> int:
         if off % 4:
             raise _Off(f"local offset {off:#x} within a word: not measured")
@@ -722,7 +744,8 @@ class Engine:
         bits = LOAD_FORMATS[r5]
         n = r5 * r6
         rows, tier = self._rows(cmd, memory)
-        tier = min([tier, self.cap, cmd.tier, *(x.tier for x in r)])
+        tier = min([tier, self.cap, cmd.tier, self._behind(rows, 16 * r6, False)])
+        tier = min([tier, *(x.tier for x in r)])
         if memory == LANE_MEMORY:
             if r2 not in LANE_UNITS:
                 raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
@@ -888,6 +911,9 @@ class Engine:
         _, ks = _store_reach(r)
         rows, tier = self._rows(cmd, memory, ks)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
+        if len(ks) < r[7].value:
+            tier = min(tier, I)  # rows that rewrite one address: not measured which lands
+        tier = min(tier, self._behind(rows, 16 * r6, True))
         if memory == LANE_MEMORY:
             if r2 != 0x20:
                 raise _Off(f"r2 {r2:#x} on a lane-memory store: not measured")
@@ -979,6 +1005,7 @@ class Engine:
         self.commands += 1
         self.outstanding.append(_nothing)
         self.spans.append(None)
+        self.drams.append(_Dram())
         self._go_off(m, f"{cmd.where} {why}")
         m.lose_memories(f"{cmd.where} {why}")
 
@@ -1025,6 +1052,20 @@ class Engine:
         lost = m.boot.source("stream off script", self.off)
         for dram, n in self.stored:
             _write_dram(m, dram, Bytes.unknown(n, lost))
+
+
+@dataclass
+class _Dram:
+    """The DRAM rows (alias address, length) an outstanding command reads and writes, and the cap
+    on what it lands (`Engine._behind`)."""
+
+    reads: list[tuple[int, int]] = field(default_factory=list)
+    writes: list[tuple[int, int]] = field(default_factory=list)
+    cap: Confidence = V
+
+
+def _overlap(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
+    return any(a < b + m and b < a + n for a, n in xs for b, m in ys)
 
 
 def _store_reach(r: list[Sv | None]) -> tuple[int, range]:
