@@ -117,7 +117,7 @@ from .semantics import (
     s_result,
     x_result,
 )
-from .state import LOCAL_BASE, Bytes, RegisterFile, Space, SparseSpace
+from .state import LOCAL_BASE, Bytes, Space, SparseSpace
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -451,14 +451,7 @@ class Machine:
         v = self.g[word["f128_132"]]
         return v.value, min(v.tier, self.cap)
 
-    def decide(
-        self,
-        index: int,
-        visit: int,
-        word: Word,
-        slot: RegisterFile,
-        transfer: RegisterFile,
-    ) -> Branch:
+    def decide(self, index: int, visit: int, word: Word) -> Branch:
         """ops 0..2 on G[ra] (verified on the camera by exact readout): brf iff ra == 0, br iff
         ra != 0, the loop end iff ra > 0 signed."""
         ra = self.g[word["ra"]]

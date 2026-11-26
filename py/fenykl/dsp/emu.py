@@ -1,18 +1,19 @@
 """The word-level emulator: a `Job` (a program and its request in local memory) run on a `Boot`.
 
-The words run in order; the model covers each at its index (the stock word's row, a field
-semantic such as X1's register transfer, or the coverage rule of a window), which records what it
-contributes to the job's `Trace`. At the end the model of the program
-(`memcpy.Copy16Model`, `resample.Resample13Model`) applies the trace: it reads the command's
-request from local memory, resolves the job and writes its result to the boot's state.
+`run_model` runs a job of a stock program by its model: the words run in order; the model
+covers each at its index (the stock word's row, a field semantic such as X1's register
+transfer, or the coverage rule of a window), which records what it contributes to the job's
+`Trace`. At the end the model of the program (`memcpy.Copy16Model`,
+`resample.Resample13Model`) applies the trace: it reads the command's request from local
+memory, resolves the job and writes its result to the boot's state.
 
 Whatever a model cannot tell becomes UNKNOWN, with a source that says why; a later job that
 reads it gets UNKNOWN bytes, never guessed ones.
 
-`Executor.step` steps a job instead: a program counter that follows the control ops (calls,
-returns, branches and loop ends with their delay slots, the halt) and runs the data ops by the
-op slot's semantics (`semantics.OP_SEMANTICS`); its `Flow` lists every executed word in order.
-`Boot.run` steps a program on the datapath executor (`machine.Machine`) in one call.
+`Executor.step` steps a job instead: a program counter that follows the control ops (jumps,
+branches and loop ends with their delay slots, the halt) and has the datapath executor
+(`machine.Machine`) run each word's units; its `Flow` lists every executed word in order.
+`Boot.run` steps a program on a `Machine` in one call.
 
 The emulator does not model time. On the camera a word costs about 62 ns the first time it runs
 (straight-line words; a branch over 1200 idle words cost nothing, running them about 62 ns
@@ -21,30 +22,20 @@ repeats in a loop (0.185 us per 36-word pass, idle and compute words alike; per 
 over three loop sizes, a per-pass cost not excluded) (measured on the camera; inferred).
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Protocol
 
 from ..firmware import unpack_firmware
-from .fields import (
-    DELAY_SLOTS,
-    OP_FIELD,
-    Confidence,
-    Kind,
-    lookup,
-    op,
-)
-from .intervals import OTHER_FILES, RegSet, destinations, op_effect
+from .fields import DELAY_SLOTS, Confidence, op
 from .job import Flow, Job, Step, Stop
 from .machine import Carry, Machine, Preset
 from .program import Program
 from .semantics import (
     LOCAL_BYTES,
-    OP_SEMANTICS,
     Branch,
     Branching,
-    Given,
     Sequencer,
     Trace,
     UnknownSemantics,
@@ -54,7 +45,6 @@ from .state import (
     BootParams,
     Bytes,
     JobView,
-    Reg,
     RegisterFile,
     Source,
     Space,
@@ -135,8 +125,7 @@ class Boot:
         self.sources: list[Source] = []
         self._source_ids: dict[Source, int] = {}
         self.regs = RegisterFile()
-        self.slot = RegisterFile()
-        """The op slot's registers, apart from the transfer registers `regs`."""
+        """The transfer registers as the copy model's register facts give them (`start_copy`)."""
         never = self.source("unwritten", "no job on this boot wrote it")
         self.local = Space("local", LOCAL_BASE, LOCAL_SIZE, never)
         self.buffer = Space("buffer", BUFFER_LO, BUFFER_HI - BUFFER_LO, never)
@@ -210,7 +199,7 @@ class Boot:
         machine.preset(regs or {})
         job = Job(program, request)
         self.carry = None
-        flow = Executor(self, strict=strict, limit=limit, datapath=machine).step(job)
+        flow = Executor(self, machine, strict=strict, limit=limit).step(job)
         if flow.stop is not Stop.HALT:
             raise NoHalt(flow)
         carry = machine.between_jobs()
@@ -229,6 +218,16 @@ def start_copy(boot: Boot) -> JobView:
     return view
 
 
+@dataclass(frozen=True)
+class ModelRun:
+    """What a model runs a job with (`run_model`)."""
+
+    boot: Boot
+    strict: bool
+    """False: fields without semantics are ignored, and taint."""
+    sequencer: Sequencer
+
+
 class Model(Protocol):
     """The model of one program: what covers each word of a job (`cover_job`, which records
     into the job's trace, or raises `UnknownSemantics` in strict mode, and returns the job as
@@ -236,9 +235,25 @@ class Model(Protocol):
 
     program: Program
 
-    def cover_job(self, emu: "Executor", job: Job, trace: Trace) -> Job: ...
+    def cover_job(self, run: ModelRun, job: Job, trace: Trace) -> Job: ...
 
-    def apply(self, emu: "Executor", job: Job, trace: Trace) -> JobResult: ...
+    def apply(self, run: ModelRun, job: Job, trace: Trace) -> JobResult: ...
+
+
+def run_model(
+    boot: Boot,
+    model: Model,
+    job: Job,
+    *,
+    strict: bool = True,
+    sequencer: Sequencer | None = None,
+) -> JobResult:
+    """Run `job` on `boot` by `model`: the job's setup, the model's cover of its words, then the
+    model applies the trace to the boot."""
+    boot.setup(job)
+    run = ModelRun(boot, strict, sequencer or Sequencer())
+    trace = Trace()
+    return model.apply(run, model.cover_job(run, job, trace), trace)
 
 
 class Datapath(Protocol):
@@ -275,14 +290,7 @@ class Datapath(Protocol):
         """Forget all the job's memories and registers may hold (words run but not stepped)."""
         ...
 
-    def decide(
-        self,
-        index: int,
-        visit: int,
-        word: Word,
-        slot: RegisterFile,
-        transfer: RegisterFile,
-    ) -> Branch: ...
+    def decide(self, index: int, visit: int, word: Word) -> Branch: ...
 
 
 HALT_TAIL = 3
@@ -310,17 +318,6 @@ first, an op 3 or op 4 second, not taken (verified on the camera, each with no j
 a halt third, a jump target's own (verified on the camera, pre-registered)."""
 
 
-class LinkError(UnknownSemantics):
-    """A return that pops no link of its own call: none at all, or one a local op 3 pushed."""
-
-
-@dataclass(frozen=True)
-class Link:
-    back: int
-    local: bool = False
-    """Pushed by a local op 3 (`Program.local_op3`), which has no return of its own."""
-
-
 def _nested(
     pc: int, word: Word, step: Step, target: int | None, jumps: list[list[int]]
 ) -> Step:
@@ -340,93 +337,52 @@ def _nested(
 
 
 class Executor:
-    """Runs jobs on `boot`.
+    """Steps a job's program on `boot` through its control flow from word 0, each word's units
+    run by `datapath` (`machine.Machine`).
 
-    `run` runs a job of `model`'s program and has the model apply its trace. `step` steps a
-    job's program through its control flow from word 0, with no model: a program counter that
-    follows the control ops (`fields.OPS`): a call at i goes to T and returns to
-    i + 5, a return goes back there (the plain stepper's reading of the stock convention,
-    inferred), brf / br / a loop end go to T when `branching` takes them;
-    every control op has four delay slots that run before its transfer takes effect, and op 7
-    halts at any word and call depth, the return stack unchecked; on a `datapath` the next three
-    words fetched behind a halt still run (`HALT_TAIL`, `TAIL_SHAPES`). `branching` decides ops
-    0..2; the default `Given()` decides none of them. On a `datapath` the datapath decides what
-    `branching` leaves undecided, and a decision `branching` gives caps the datapath at its tier
-    from there on. A control op in another's delay slots jumps after its own four, and so does
-    a loop end whose T lies in its own slots (verified on the camera for a br in a br's first
-    slot and a loop end into its third slot; other such shapes are stepped the same way,
-    their steps inferred at most). On the camera
-    op 3 is a jump that writes no link and op 4 jumps to the word G[f128_132] names, r1 by
-    the stock convention: a call's delay slots hold 0x0b #(i + 5) on r1 (verified on the
-    camera: op 4 through r1 and through r21, op 3 with and without a link word). With a
-    `datapath` the stepper takes op 4's target from it; without one, or while that register
-    is unknown, it keeps a return stack of its own: a local op 3 (`Program.local_op3`) runs
-    as a call, or with `local_op3_jump` as a jump to T after its delay slots, pushing no
-    link. A step past the
-    program end raises `UnknownSemantics`: what it does is open. A return without a link, or
-    one that pops a local op 3's link, raises `LinkError`: no return lies between that op 3 and
-    its T, so the return is not its own (stepped as calls, a stock loop re-ran its tail).
-    A data op runs as the op slot's semantics (`OP_SEMANTICS`) over register intervals, as the
-    copy model runs inserted words (`intervals.op_effect`), its operands read from the operand set
-    (`Boot.slot`); a result goes where the word's PR ports send it (`intervals.destinations`),
-    landing `latency` executed words later and unknown until then. A result whose destination
-    is open raises `UnknownSemantics` (strict) or makes the open ports' registers unknown in both
-    sets. An op without semantics raises (strict) or is recorded in its step, and then its ra
-    and its ports' registers are unknown, since the op may write them. Strict mode also raises
-    at an undecided control op; lenient mode stops there. Stepping does not model the register
-    transfers or any datapath unit.
+    A program counter follows the control ops (`fields.OPS`): op 3 jumps to T, writing no link,
+    and op 4 jumps to the word G[f128_132] names, r1 by the stock convention: a call's delay
+    slots hold 0x0b #(i + 5) on r1 (verified on the camera: op 4 through r1 and through r21,
+    op 3 with and without a link word); it is undecided while that register is unknown. brf,
+    br and a loop end go to T when `branching` takes them, else as the datapath decides
+    (`Machine.decide`); a decision `branching` gives caps the datapath at its tier from there
+    on. Every control op has four delay slots that run before its transfer takes effect; a
+    control op in another's delay slots jumps after its own four, and so does a loop end whose
+    T lies in its own slots (verified on the camera for a br in a br's first slot and a loop
+    end into its third slot; other such shapes are stepped the same way, their steps inferred
+    at most). Op 7 halts at any word and call depth, and the next three words fetched behind it
+    still run (`HALT_TAIL`, `TAIL_SHAPES`). A step past the program end raises
+    `UnknownSemantics`: what it does is open. Strict mode raises at an undecided control op;
+    lenient mode stops there.
 
-    strict=False ignores fields without semantics (and taints); on a `datapath` it makes the
-    datapath lenient (`Datapath.lapse`), each word that lapses an unknown step.
+    strict=False makes the datapath lenient (`Datapath.lapse`), each word that lapses an
+    unknown step.
     """
 
     def __init__(
         self,
         boot: Boot,
-        model: "Model | None" = None,
-        strict: bool = True,
-        sequencer: Sequencer | None = None,
+        datapath: Datapath,
         *,
+        strict: bool = True,
         branching: Branching | None = None,
         limit: int = STEP_LIMIT,
-        local_op3_jump: bool = False,
-        datapath: "Datapath | None" = None,
     ) -> None:
-        self.boot, self.model, self.strict, self.limit = boot, model, strict, limit
-        self.local_op3_jump = local_op3_jump
-        self.sequencer = sequencer or Sequencer()
-        self.datapath = datapath
-        if datapath is not None:
-            datapath.strict = strict
-        self.branching = branching or datapath or Given()
-        self._landing: list[tuple[int, RegisterFile, int, Reg | None]] = []
-        """Results in flight: (step count they land at, set, register, value)."""
+        self.boot, self.datapath = boot, datapath
+        self.strict, self.limit = strict, limit
+        datapath.strict = strict
+        self.branching = branching
 
-    def run(self, job: Job) -> JobResult:
-        if self.model is None:
-            raise ValueError("run needs a model; step runs a job without one")
+    def step(self, job: Job) -> Flow:
+        """Step `job` from word 0 after its setup."""
         self.boot.setup(job)
-        trace = Trace()
-        job = self.model.cover_job(self, job, trace)
-        return self.model.apply(self, job, trace)
-
-    def step(self, job: Job, start: Callable[[Boot], object] | None = None) -> Flow:
-        """Step `job` from word 0 after its setup and `start`, which sets the registers the
-        job starts with (`start_copy`)."""
-        self.boot.setup(job)
-        if start is not None:
-            start(self.boot)
         words = job.program.words
-        local = job.program.local_op3()
         steps: list[Step] = []
-        stack: list[Link] = []
         visits: dict[int, int] = {}
         pc, slots = 0, 0
         # [delay slots left, target, op] of each control op taken
         jumps: list[list[int]] = []
-        self._landing = []
         for _ in range(self.limit):
-            self._land(len(steps))
             if pc >= len(words):
                 # On the camera the stock copy with its return word idled ran on and the job
                 # timed out; the stepper does not model what runs past the end, so it raises.
@@ -443,24 +399,17 @@ class Executor:
                 return Flow(steps, Stop.HALT)
             target = None
             if not word.control:
-                if self.datapath is None:
-                    steps.append(self._data(pc, word, slot, len(steps)))
-                else:
-                    lapses = len(self.datapath.lapses)
-                    note = self.datapath.execute(pc, word, len(steps))
-                    step = Step(pc, word.op, slot, word.operands, note=note)
-                    steps.append(self._lapsed(step, lapses))
+                lapses = len(self.datapath.lapses)
+                note = self.datapath.execute(pc, word, len(steps))
+                step = Step(pc, word.op, slot, word.operands, note=note)
+                steps.append(self._lapsed(step, lapses))
             else:
                 visit = visits.get(pc, 0)
                 visits[pc] = visit + 1
-                if pc in local and self.datapath is None:
-                    step, target = self._local_op3(pc, word, stack)
-                else:
-                    step, target = self._control(pc, visit, word, stack)
-                if self.datapath is not None:
-                    lapses = len(self.datapath.lapses)
-                    self.datapath.execute(pc, word, len(steps))
-                    step = self._lapsed(self._capped(step), lapses)
+                step, target = self._control(pc, visit, word)
+                lapses = len(self.datapath.lapses)
+                self.datapath.execute(pc, word, len(steps))
+                step = self._lapsed(self._capped(step), lapses)
                 step = _nested(pc, word, step, target, jumps)
                 steps.append(step)
                 if step.taken is None:
@@ -488,16 +437,14 @@ class Executor:
         steps: list[Step],
         jumps: list[list[int]],
     ) -> None:
-        """The three words the sequencer fetches behind a halt still run (`HALT_TAIL`), on a
-        `datapath` only: plain stepping ends at the halt. The job ends after them. A taken jump
+        """The three words the sequencer fetches behind a halt still run (`HALT_TAIL`); the job
+        ends after them. A taken jump
         due among them redirects the fetch to its target's words, one due after them is not
         taken; the tail's tier follows the jump's shape (`TAIL_SHAPES`), other pending jumps
         lapse (`Datapath.lapse`). Control words and halts in the tail are passive where measured
         (`PASSIVE_BEHIND_HALT`) and lapse elsewhere; words past the program's end are not run.
         A lapse in the tail ends the job there, marks the halt's step and forgets what the rest
         of the tail may write (`Datapath.forget_job`)."""
-        if self.datapath is None:
-            return
         halt, lapses = len(steps) - 1, len(self.datapath.lapses)
         ceiling = V
         if jumps:
@@ -555,7 +502,7 @@ class Executor:
 
     def _capped(self, step: Step) -> Step:
         """`step` at the datapath's cap at most (`Datapath.limit`)."""
-        if self.datapath is None or step.confidence is None:
+        if step.confidence is None:
             return step
         return replace(step, confidence=min(step.confidence, self.datapath.cap))
 
@@ -568,28 +515,16 @@ class Executor:
         note = "; ".join([step.note, *new] if step.note else new)
         return replace(step, note=note, unknown=True, confidence=H)
 
-    def _local_op3(self, i: int, word: Word, stack: list[Link]) -> tuple[Step, int]:
-        t, conf = word.target, op(word.op).confidence
-        if self.local_op3_jump:
-            note = "local op 3 as a jump, no link"
-        else:
-            back = i + DELAY_SLOTS + 1
-            stack.append(Link(back, local=True))
-            note = f"local op 3 as a call, returns to {back}"
-        return Step(i, word.op, target=t, taken=True, note=note, confidence=conf), t
-
-    def _control(
-        self, i: int, visit: int, word: Word, stack: list[Link]
-    ) -> tuple[Step, int | None]:
+    def _control(self, i: int, visit: int, word: Word) -> tuple[Step, int | None]:
         """The step of control word i and where it transfers after its delay slots (None: it
         falls through or is undecided)."""
-        name, conf = op(word.op).name, op(word.op).confidence
+        conf = op(word.op).confidence
         t = word.target
-        if word.op == 3 and self.datapath is not None:
+        if word.op == 3:
             return Step(
                 i, word.op, target=t, taken=True, note="jump", confidence=conf
             ), t
-        if word.op == 4 and self.datapath is not None:
+        if word.op == 4:
             to, tier = self.datapath.link(word)
             reg = f"r{word['f128_132']}"
             if to is None:
@@ -599,40 +534,12 @@ class Executor:
             return Step(
                 i, word.op, taken=True, note=f"to {to}, {reg}", confidence=tier
             ), to
-        if self.datapath is None:
-            # Without a datapath the stepper infers the link from the stock convention; a
-            # datapath decides ops 0..2 on G[ra] at the register's tier (`Machine.decide`).
-            conf = min(conf, Confidence.INFERRED)
-        if word.op == 3:
-            back = i + DELAY_SLOTS + 1
-            stack.append(Link(back))
-            return Step(
-                i,
-                word.op,
-                target=t,
-                taken=True,
-                note=f"returns to {back}",
-                confidence=conf,
-            ), t
-        if word.op == 4:
-            if not stack:
-                raise LinkError(i, name, [], "a return without a call")
-            link = stack.pop()
-            if link.local:
-                raise LinkError(
-                    i, name, [], f"a return to {link.back}, a local op 3's link"
-                )
-            back = link.back
-            return Step(
-                i, word.op, taken=True, note=f"to {back}", confidence=conf
-            ), back
-        b = self.branching.decide(i, visit, word, self.boot.slot, self.boot.regs)
-        if self.datapath is not None and self.branching is not self.datapath:
-            if b.taken is None:
-                b = self.datapath.decide(i, visit, word, self.boot.slot, self.boot.regs)
-            else:
-                # The path is the caller's from here: what the datapath computes on it too.
-                self.datapath.limit(b.confidence)
+        b = None if self.branching is None else self.branching.decide(i, visit, word)
+        if b is None or b.taken is None:
+            b = self.datapath.decide(i, visit, word)
+        else:
+            # The path is the caller's from here: what the datapath computes on it too.
+            self.datapath.limit(b.confidence)
         ra = f"r{word['ra']}"
         if b.taken is None:
             return Step(i, word.op, target=t, note=f"{ra} undecided: {b.why}"), None
@@ -646,60 +553,6 @@ class Executor:
             confidence=min(conf, b.confidence),
         )
         return step, t if b.taken else None
-
-    def _land(self, now: int) -> None:
-        for due, regs, r, value in [x for x in self._landing if x[0] <= now]:
-            regs[r] = value
-        self._landing = [x for x in self._landing if x[0] > now]
-
-    def _route(self, i: int, word: Word, result: Reg | None, now: int) -> str:
-        """Send a data op's result through its word's PR ports; returns why a destination is
-        open ("" when none is)."""
-        dests, open_, why = destinations(word)
-        if why and self.strict:
-            raise UnknownSemantics(i, op(word.op).name, [], why)
-        sets = {RegSet.XREG: self.boot.regs, RegSet.OPERAND: self.boot.slot}
-        for to, r, latency in dests:
-            sets[to][r] = None
-            self._landing.append((now + latency, sets[to], r, result))
-        for fid in open_:
-            if lookup(fid).kind is Kind.REG and fid not in OTHER_FILES:
-                for regs in sets.values():
-                    regs[word[fid]] = None
-        return why
-
-    def _data(self, i: int, word: Word, slot: bool, now: int = 0) -> Step:
-        args = word.operands
-        sem = OP_SEMANTICS.get(word.op)
-        effect = (
-            None
-            if sem is None
-            else op_effect(sem, word, self.boot.slot, self.boot.local)
-        )
-        if effect is not None:
-            note = effect.note
-            if effect.computes:
-                why = self._route(i, word, effect.result, now)
-                note = f"{note}; {why}" if why else note
-            for addr, n in effect.stores:
-                src = self.boot.source(
-                    "local store", f"op {word.op:#x}: its datum is open"
-                )
-                if addr is None:
-                    self.boot.local.forget(src)
-                else:
-                    self.boot.local.write(addr, Bytes.unknown(n, src))
-            return Step(i, word.op, slot, args, note=note, confidence=sem.confidence)
-        why = "no semantics" if sem is None else "outside what its semantics covers"
-        if self.strict:
-            raise UnknownSemantics(i, op(word.op).name, [(OP_FIELD, word.op)], why)
-        self._route(i, word, None, now)
-        if args is None:
-            why += ", its ports' registers unknown after it"
-        else:
-            self.boot.slot[args.ra] = None
-            why += f", r{args.ra} and its ports' registers unknown after it"
-        return Step(i, word.op, slot, args, note=why, unknown=True)
 
 
 MAIN_CODE = 0x60021020

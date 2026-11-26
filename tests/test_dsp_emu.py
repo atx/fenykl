@@ -11,7 +11,7 @@ from conftest import stock_image
 
 from fenykl.dsp import commands
 from fenykl.dsp.asm import Bundle, Label, raw
-from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
+from fenykl.dsp.emu import MAIN_CODE, Boot, Status, back_firmware, dram_alias, run_model
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.intervals import RegSet, destinations
 from fenykl.dsp.memcpy import Copy16Model
@@ -154,7 +154,6 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
     firmware = (
         back_firmware(boot, stock_image("em10ii")) if needs_firmware(vector) else None
     )
-    emu = Executor(boot, model(), sequencer=Sequencer(mode))
     taints = TAINTS[vector["name"]].split()
     if len(taints) != len(vector["jobs"]):
         bad.append(f"{len(taints)} taints for {len(vector['jobs'])} jobs")
@@ -170,8 +169,11 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
         )
         fill = bytes([job["fill"]]) * job["fill_len"]
         prefill = boot.put(job["dst"], fill, f"job {k} prefill")
-        result = emu.run(
-            commands.copy(edited(job["edits"]), job["src"], job["dst"], job["len"])
+        result = run_model(
+            boot,
+            model(),
+            commands.copy(edited(job["edits"]), job["src"], job["dst"], job["len"]),
+            sequencer=Sequencer(mode),
         )
         status = result.status
         if CONF[taint[1]] is not result.taint:
@@ -246,8 +248,8 @@ SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 def copy(boot: Boot, program: Program, data: bytes, strict: bool = True):
     boot.put(SRC, data, "src")
     boot.put(DST, b"\xa5" * LEN, "prefill")
-    result = Executor(boot, model(), strict=strict).run(
-        commands.copy(program, SRC, DST, LEN)
+    result = run_model(
+        boot, model(), commands.copy(program, SRC, DST, LEN), strict=strict
     )
     return result, boot.read(DST, LEN)
 
@@ -381,8 +383,8 @@ def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
     boot = boot or Boot()
     boot.put(SRC, bytes(range(256)) * (length // 256), "src")
     boot.put(DST, b"\xa5" * length, "prefill")
-    emu = Executor(boot, model(), strict=strict)
-    result = emu.run(commands.copy(program, SRC, DST, length))
+    job = commands.copy(program, SRC, DST, length)
+    result = run_model(boot, model(), job, strict=strict)
     return result, boot
 
 
@@ -560,7 +562,7 @@ def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
     data = bytes(i & 0xFF for i in range(length))
     boot.put(src, data, "src")
     boot.put(dst, b"\xa5" * length, "prefill")
-    result = Executor(boot, model()).run(commands.copy(marker, src, dst, length))
+    result = run_model(boot, model(), commands.copy(marker, src, dst, length))
     assert result.status is Status.OK and bytes(boot.read(dst, length).data) == data
     result, dst = copy(Boot(), flipped(45, "imm", TARGET_50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None
@@ -792,17 +794,13 @@ def test_a_result_goes_to_its_port_registers_or_is_open():
     both = Word.from_fields(
         {"f267_268": 1, "f211_215": 5, "f272_273": 1, "f224_228": 6}, base=const
     )
-    assert destinations(both) == ([(RegSet.XREG, 5, 4), (RegSet.OPERAND, 6, 3)], [], "")
+    assert destinations(both) == ([(RegSet.XREG, 5, 4), (RegSet.OPERAND, 6, 3)], "")
     # A port that writes nothing (f267_268 = 2) is no destination, open or not.
     idle = Word.from_fields({"f267_268": 2, "f211_215": 5}, base=both)
-    assert destinations(idle) == ([(RegSet.OPERAND, 6, 3)], [], "")
-    assert destinations(const)[2] == "no PR port enabled: where the result goes is open"
+    assert destinations(idle) == ([(RegSet.OPERAND, 6, 3)], "")
+    assert destinations(const)[1] == "no PR port enabled: where the result goes is open"
     other = Word.from_fields({"f272_273": 2, "f224_228": 4}, base=const)
-    assert destinations(other) == (
-        [],
-        ["f224_228"],
-        "where the result goes under f272_273=2 is open",
-    )
+    assert destinations(other) == ([], "where the result goes under f272_273=2 is open")
 
 
 def test_an_inserted_op_takes_its_semantics_tier():
@@ -813,8 +811,10 @@ def test_an_inserted_op_takes_its_semantics_tier():
     weak = replace(OP_SEMANTICS[0x1A], confidence=Confidence.HYPOTHESIS)
     boot = Boot()
     boot.put(SRC, bytes(range(256)) * (LEN // 256), "src")
-    emu = Executor(boot, Copy16Model(stock(), ops={**OP_SEMANTICS, 0x1A: weak}))
-    result = emu.run(commands.copy(inserted(end, LOAD), SRC, DST, LEN))
+    weakened = Copy16Model(stock(), ops={**OP_SEMANTICS, 0x1A: weak})
+    result = run_model(
+        boot, weakened, commands.copy(inserted(end, LOAD), SRC, DST, LEN)
+    )
     dst = boot.read(DST, LEN)
     assert result.status is Status.OK and dst.data == base.read(DST, LEN).data
     assert result.taint is Confidence.HYPOTHESIS

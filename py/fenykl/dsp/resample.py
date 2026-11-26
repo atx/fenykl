@@ -80,7 +80,16 @@ from math import floor
 
 from . import commands
 from .commands import RESAMPLE_REQUEST, RESAMPLE_TAPS, TAP_WORDS
-from .emu import LOCAL_BASE, Boot, Executor, Job, JobResult, Status, dram_alias
+from .emu import (
+    LOCAL_BASE,
+    Boot,
+    Job,
+    JobResult,
+    ModelRun,
+    Status,
+    dram_alias,
+    run_model,
+)
 from .exec import (
     Term,
     Uncovered,
@@ -304,15 +313,15 @@ class Resample13Model:
         program = Program(tuple(words), taps.pack())
         return commands.resample(program, src, dst, table, STRIDE, width, height)
 
-    def apply(self, emu: Executor, job: Job, trace: Trace) -> JobResult:
-        boot = emu.boot
+    def apply(self, run: ModelRun, job: Job, trace: Trace) -> JobResult:
+        boot = run.boot
         req = Request.read(boot)
         req.check()
         h, w = req.height, req.width
         result = JobResult(Status.OK, ignored=trace.ignored, notes=trace.notes)
         n = footprint(h)
         result.stored = (req.dst, req.dst + n)
-        edited = self._edited(emu, job)
+        edited = self._edited(run, job)
         taps_b = boot.local.read(LOCAL_BASE + RESAMPLE_TAPS, 4 * TAP_WORDS)
         taps = Taps.unpack(bytes(taps_b.data)).phases if all(taps_b.known) else None
         taps_taint = min(taps_b.taint) if taps is not None else V
@@ -329,7 +338,7 @@ class Resample13Model:
         varying = job_class == VARY and _x_varying(px, entries)
         probe = job_class if edited else None
         effects, window = (
-            self._effects(emu, job, edited, probe, varying, result)
+            self._effects(run, job, edited, probe, varying, result)
             if edited
             else (STOCK_PLANES, self.stock)
         )
@@ -399,10 +408,10 @@ class Resample13Model:
             self._hold(boot, req, entries, taps, px, full)
         return result
 
-    def cover_job(self, emu: Executor, job: Job, trace: Trace) -> Job:
+    def cover_job(self, run: ModelRun, job: Job, trace: Trace) -> Job:
         """Cover each word of the job at its index (`cover`)."""
         for index, word in enumerate(job.program.words):
-            self.cover(trace, index, word, emu.strict)
+            self.cover(trace, index, word, run.strict)
         return job
 
     def cover(self, trace: Trace, index: int, word: Word, strict: bool) -> None:
@@ -439,12 +448,12 @@ class Resample13Model:
             "no word of program 13 is decoded and no measured edit gives this word",
         )
 
-    def _edited(self, emu: Executor, job: Job) -> list[int]:
+    def _edited(self, run: ModelRun, job: Job) -> list[int]:
         """The indices of the words that differ from the stock program. In strict mode a job
         shorter than the stock program raises UnknownSemantics at its first missing word."""
         stock, words = self.program.words, job.program.words
         both = min(len(stock), len(words))
-        if emu.strict and len(words) < len(stock):
+        if run.strict and len(words) < len(stock):
             raise self._unknown(len(words), None)
         return [
             i
@@ -454,7 +463,7 @@ class Resample13Model:
 
     def _effects(
         self,
-        emu: Executor,
+        run: ModelRun,
         job: Job,
         edited: list[int],
         probe: Probe | None,
@@ -485,7 +494,7 @@ class Resample13Model:
             result.edits.append(
                 (f"word {edited[0]}, {e.kind.name}, on {probe}: {e.fact}", V)
             )
-            p0, p1, p2 = (_substituted(emu.boot, p) for p in e.planes[probe])
+            p0, p1, p2 = (_substituted(run.boot, p) for p in e.planes[probe])
             return (p0, p1, p2), None
         w = None
         if len(words) == len(stock):
@@ -493,7 +502,7 @@ class Resample13Model:
                 w = run_window(self.anchors, stock, words, probe)
             except UnknownSemantics as exc:
                 # A write conflict: strict mode stops, lenient mode takes the stock law.
-                if emu.strict:
+                if run.strict:
                     raise
                 result.notes.append(str(exc))
         if isinstance(w, Uncovered):
@@ -514,7 +523,7 @@ class Resample13Model:
                 result.edits.append((text, min(c.confidence, cap)))
             return STOCK_PLANES, w.acc
         result.notes.append(why)
-        return ((Changed(why),) * PLANES if emu.strict else None), None
+        return ((Changed(why),) * PLANES if run.strict else None), None
 
     def _move_substitute(
         self, boot: Boot, job: Job, edited: list[int], probe: Probe | None
@@ -874,5 +883,5 @@ def predict(
     unwritten = boot.source("not written", "the job does not write it")
     boot.dram.write(dram_alias(_DST), Bytes.unknown(n, unwritten))
     job = model.job(taps, _SRC, _DST, _TABLE, width, h, edits)
-    result = Executor(boot, model, strict).run(job)
+    result = run_model(boot, model, job, strict=strict)
     return Prediction(boot.read(_DST, n), boot.sources, result)

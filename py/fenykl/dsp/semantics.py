@@ -12,14 +12,13 @@ differing fields are ignored and the job is tainted "hypothesis".
 hypothesis confidence run and taint what they touch.
 
 The classes and tables of one program are held by its model (`memcpy.Copy16Model` for program
-16, `resample.Resample13Model` for program 13), which the executor takes.
+16, `resample.Resample13Model` for program 13), which `emu.run_model` takes.
 
-Stepping (`emu.Executor.step`) takes the op semantics `OP_SEMANTICS` (what a data op does,
-each with its confidence) and a `Branching` hypothesis for the conditions of ops 0..2: `Given`
-decisions (the default, none: no condition is known) or `RaTest`. `X_RULES` are the functions
-of the two X units and `LANE_RULES` the lane functions of the four S units (`lane_result`);
-`LaneMemory` and `lane_address` model the lane memory X0 loads and stores. Stepping runs none of
-these.
+`OP_SEMANTICS` is the op slot's table: what a data op does, each with its confidence.
+Stepping (`emu.Executor.step`) can take `Given` decisions for the conditions of ops 0..2 over
+the datapath's own (`Branching`). `X_RULES` are the functions of the two X units and
+`LANE_RULES` the lane functions of the four S units (`lane_result`); `LaneMemory` and
+`lane_address` model the lane memory X0 loads and stores.
 """
 
 import re
@@ -45,7 +44,7 @@ from .fields import (
     Field,
     lookup,
 )
-from .state import Reg, RegisterFile
+from .state import Reg
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -1653,110 +1652,24 @@ class Branch:
 
 class Branching(Protocol):
     """Decides the conditional control ops 0..2 (loop end, brf, br) at their `visit`-th run
-    (from 0), from the op slot's registers `slot` or the transfer registers `transfer`."""
+    (from 0)."""
 
-    def decide(
-        self,
-        index: int,
-        visit: int,
-        word: Word,
-        slot: RegisterFile,
-        transfer: RegisterFile,
-    ) -> Branch: ...
+    def decide(self, index: int, visit: int, word: Word) -> Branch: ...
 
 
 @dataclass(frozen=True)
 class Given:
     """Decisions supplied by the caller, by word index: one for every visit, or one per visit;
-    every other decision is undecided. The default of stepping: no condition of ops 0..2 is
-    known."""
+    every other decision is undecided (and stepping leaves it to the datapath)."""
 
     decisions: Mapping[int, bool | Sequence[bool]] = field(default_factory=dict)
     confidence: Confidence = H
     fact: str = "given by the caller"
 
-    def decide(
-        self,
-        index: int,
-        visit: int,
-        word: Word,
-        slot: RegisterFile,
-        transfer: RegisterFile,
-    ) -> Branch:
+    def decide(self, index: int, visit: int, word: Word) -> Branch:
         d = self.decisions.get(index)
         if isinstance(d, Sequence):
             d = d[visit] if visit < len(d) else None
         if d is None:
             return Branch(None, f"no decision given for visit {visit}", self.confidence)
         return Branch(d, self.fact, self.confidence)
-
-
-class Test(Enum):
-    ZERO = "ra == 0"
-    NONZERO = "ra != 0"
-
-    def holds(self, reg: Reg | None) -> bool | None:
-        """Whether the test holds for `reg`; None when its interval does not decide it."""
-        if reg is None:
-            return None
-        if reg.lo == reg.hi == 0:
-            zero = True
-        elif reg.lo > 0 or reg.hi < 0:
-            zero = False
-        else:
-            return None
-        return zero if self is Test.ZERO else not zero
-
-
-class Regs(Enum):
-    SLOT = "the op slot's registers"
-    TRANSFER = "the transfer registers (xreg)"
-
-
-class Count(Enum):
-    TEST = "the loop end tests ra as it is"
-    DECREMENT = "the loop end decrements ra, then tests it"
-
-
-@dataclass(frozen=True)
-class RaTest:
-    """A condition on the register ra of the control word: brf taken when `brf` holds, br when
-    `br` holds, a loop end goes back to T when `loop` holds (after `count`).
-
-    The defaults of brf and br are the measured rules: op 1 branches iff ra == 0, op 2 iff ra
-    != 0 (verified on the camera by exact readout). The measured loop end branches iff ra > 0
-    signed and computes ra - 1, which an enabled PR port writes back; `loop` and `count` do not
-    express that write-back, so a loop end here stays a hypothesis. In program 16 stepping
-    leaves r7 unknown by 27: word 14 names it through a PR port whose destination is open."""
-
-    brf: Test = Test.ZERO
-    br: Test = Test.NONZERO
-    loop: Test = Test.NONZERO
-    count: Count = Count.TEST
-    reads: Regs = Regs.SLOT
-
-    def decide(
-        self,
-        index: int,
-        visit: int,
-        word: Word,
-        slot: RegisterFile,
-        transfer: RegisterFile,
-    ) -> Branch:
-        regs = slot if self.reads is Regs.SLOT else transfer
-        ra = word["ra"]
-        reg = regs[ra]
-        test = (self.loop, self.brf, self.br)[word.op]
-        if word.op == 0 and self.count is Count.DECREMENT and reg is not None:
-            reg = Reg(reg.lo - 1, reg.hi - 1, reg.taint, f"{reg.fact}, decremented")
-            regs[ra] = reg
-        taken = test.holds(reg)
-        value = "unknown" if reg is None else _interval(reg)
-        taint = H if reg is None else min(H, reg.taint)
-        return Branch(
-            taken, f"{test.value} in {self.reads.value}: r{ra} = {value}", taint
-        )
-
-
-def _interval(reg: Reg) -> str:
-    return f"{reg.lo:#x}" if reg.exact is not None else f"{reg.lo:#x}..{reg.hi:#x}"
