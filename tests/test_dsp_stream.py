@@ -297,7 +297,8 @@ def test_a_command_that_moves_nothing_counts_at_inferred():
 
 @pytest.mark.parametrize(("rows", "tier"), [(5, V), (6, I), (7, I), (8, V), (9, I)])
 def test_lane_load_rows_are_verified_at_the_counts_run(rows, tier):
-    """Measured on the camera: 5 and 8 rows, each at its DRAM pitch (also 1..4)."""
+    """Measured on the camera: 5 and 8 rows of one vector of bytes, each at its DRAM pitch (and
+    1..4 rows in any shape)."""
     data = bytes(range(256)) * 8
     m, e = machine(data), stream.Engine()
     values = lanes(0, 1, r6=2, r7=rows, r1=0x80, r4=0x80)
@@ -305,6 +306,13 @@ def test_lane_load_rows_are_verified_at_the_counts_run(rows, tier):
     last = rows - 1
     assert m.memory[2 * last].lanes == tuple(data[0x80 * last : 0x80 * last + 32])
     assert m.memory[2 * last].tier == tier and 1 not in m.memory
+
+
+@pytest.mark.parametrize(("r5", "r6"), [(0x10, 1), (0x08, 4)])
+def test_five_load_rows_of_another_shape_are_inferred(r5, r6):
+    m, e = machine(bytes(2048)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r5=r5, r6=r6, r7=5, r1=0x80, r4=0x80), *load(0, SRC, 0), WAIT])
+    assert m.memory[8].tier == I
 
 
 @pytest.mark.parametrize(("rows", "tier"), [(3, V), (4, V), (5, I)])
@@ -328,7 +336,7 @@ def test_a_store_pitch_of_0x108_steps_0x100_at_two_rows():
     assert bytes(got.data) == bytes(range(100, 132)) and set(got.taint) == {V}
 
 
-@pytest.mark.parametrize(("r4", "r7"), [(0x104, 2), (0x108, 3)])
+@pytest.mark.parametrize(("r4", "r7"), [(0x104, 2), (0x08, 2), (0x208, 2), (0x108, 3)])
 def test_other_store_pitches_off_16_bytes_go_off_script(r4, r7):
     m, e = machine(), stream.Engine()
     drive(m, e, [*lanes(0, 1, r6=2, r7=r7, r1=0x40, r4=r4), *store(0, 0, DST), WAIT])
@@ -345,9 +353,10 @@ def test_two_rows_at_half_a_vector_share_it_and_the_later_lands():
     assert m.memory[1].lanes == (7,) * 32
 
 
-def test_other_lane_pitches_off_whole_vectors_go_off_script():
+@pytest.mark.parametrize(("r7", "to"), [(3, 0), (2, 0x20)])
+def test_other_lane_pitches_off_whole_vectors_go_off_script(r7, to):
     m, e = machine(bytes(1024)), stream.Engine()
-    drive(m, e, [*lanes(0, 1, r6=2, r7=3, r1=0x20, r4=0x100), *load(0, SRC, 0), WAIT])
+    drive(m, e, [*lanes(0, 1, r6=2, r7=r7, r1=0x20, r4=0x100), *load(0, SRC, to), WAIT])
     assert "memory pitch" in e.off
 
 
@@ -917,19 +926,21 @@ def test_kind_4_rows_in_another_pitch_raise():
         drive(m, e, [*lanes(1, 1, r6=2, r7=2, r1=0x40, r4=0x200), 1 << 6 | 4, 0, DST])
 
 
-def test_five_store_rows_are_inferred_whatever_their_pitch():
-    """Kind 6 rows past four, also at the pitches kind 4 ran (r1 0x40, r4 0x200) and with
-    overlapping 64-byte rows (r3 2, r6 4): inferred."""
-    for r3, r6 in ((1, 2), (2, 4)):
-        m, e = machine(), stream.Engine()
-        for v in range(6):
-            m.memory[v] = Vec(tuple(range(32)))
-        drive(
-            m,
-            e,
-            [*lanes(1, r3, r6=r6, r7=5, r1=0x40, r4=0x200), *store(1, 0, DST), WAIT],
-        )
-        assert m.boot.read(DST, 32).weakest() == I
+@pytest.mark.parametrize(
+    ("r3", "r6", "r7", "tier"), [(1, 2, 3, V), (2, 4, 3, I), (1, 2, 5, I), (2, 4, 5, I)]
+)
+def test_store_rows_past_two_are_verified_only_as_run(r3, r6, r7, tier):
+    """Kind 6 rows at the pitches kind 4 ran (r1 0x40, r4 0x200): three rows of one vector ran;
+    overlapping 64-byte rows (r3 2, r6 4) and five rows did not."""
+    m, e = machine(), stream.Engine()
+    for v in range(6):
+        m.memory[v] = Vec(tuple(range(32)))
+    drive(
+        m,
+        e,
+        [*lanes(1, r3, r6=r6, r7=r7, r1=0x40, r4=0x200), *store(1, 0, DST), WAIT],
+    )
+    assert m.boot.read(DST, 32).weakest() == tier
 
 
 def test_a_load_that_wraps_onto_its_own_vectors_leaves_them_unknown():

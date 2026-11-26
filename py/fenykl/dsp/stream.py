@@ -261,17 +261,20 @@ store keep their content at most inferred."""
 LANE_LOAD_ROWS = frozenset((*range(1, 6), 8))
 """Rows of a lane-memory load measured on the camera (verified; pre-registered: five rows at DRAM
 pitch 0x100 of one vector each, eight at 0x200 at a lane pitch of two vectors, each row at its
-pitch). Other counts inferred."""
+pitch); 5 and 8 in `ROW_SHAPE` only. Other counts inferred."""
 LANE_STORE_ROWS = range(1, 5)
 """Rows of a lane-memory store measured on the camera (verified; pre-registered: three rows at DRAM
-pitch 0x200 and four at 0x100, one vector each, each row at its pitch). More rows inferred."""
-STORE_PITCH_OFF16 = 8
-"""The only low four bits of a store's DRAM pitch that ran at two rows (verified, pre-registered:
-0x108 put row 1 at +0x100, not +0x108 or +0x110); a store pitch with other low bits, or at more
-rows, was not measured."""
+pitch 0x200 and four at 0x100, one vector each, each row at its pitch); 3 and 4 in `ROW_SHAPE`
+only. More rows inferred."""
+STORE_PITCH_OFF16 = 0x108
+"""The only store DRAM pitch off 16 bytes that ran, at two rows (verified, pre-registered: row 1 at
++0x100, not +0x108 or +0x110); other such pitches, or more rows, were not measured."""
+ROW_SHAPE = (1, None, 0x20, 1, None, 0x10, 2, None)
+"""Rows of one vector of bytes each: the shape of `LANE_LOAD_ROWS` and `LANE_STORE_ROWS` past the
+counts measured before (loads 1..4, stores 1..2, any shape)."""
 HALF_VECTOR_ROWS = (1, 0x20, 0x20, 1, None, 0x10, 2, 2)
-"""A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes: row 1's offset
-floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
+"""A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes from a vector-aligned
+offset: row 1's offset floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
 pre-registered: one job, each row from its own DRAM line pair)."""
 NO_MEMORY = 0x40
 NO_MEMORY_STORE = (NO_MEMORY, None, 0x20, 1, None, 0x10, 2, 1)
@@ -726,21 +729,20 @@ class Engine:
             raise _Off("no rows: not measured")
         if 16 * rows * _known(r[6], "r6") > MOST_BYTES:
             raise _Off(f"{rows:#x} rows of {r[6].value:#x} lines: more than a job's time moves")
-        if memory == LANE_MEMORY:
-            ran = LANE_STORE_ROWS if cmd.kind == STORE else LANE_LOAD_ROWS
-        else:
-            ran = range(1, 3 if cmd.kind == STORE else 5)
-        tier = V if rows in ran else I
+        ran = LANE_STORE_ROWS if cmd.kind == STORE else LANE_LOAD_ROWS
+        before = rows in range(1, 3 if cmd.kind == STORE else 5)
+        now = memory == LANE_MEMORY and rows in ran and _fits(cmd, ROW_SHAPE)
+        tier = V if before or now else I
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0
         if rows > 1:
             pitch, dpitch = _known(r[1], "r1"), _known(r[4], "r4")
             unit = VECTOR_BYTES if memory == LANE_MEMORY else 4
-            if pitch % unit and not (cmd.kind == LOAD and _fits(cmd, HALF_VECTOR_ROWS)):
+            half = cmd.kind == LOAD and _fits(cmd, HALF_VECTOR_ROWS)
+            if pitch % unit and not (half and mem % VECTOR_BYTES == 0):
                 raise _Off(f"memory pitch {pitch:#x}: not measured")
-            off16 = dpitch % 16
-            if off16 and cmd.kind == STORE and (off16, rows) != (STORE_PITCH_OFF16, 2):
+            if dpitch % 16 and cmd.kind == STORE and (dpitch, rows) != (STORE_PITCH_OFF16, 2):
                 raise _Off(f"DRAM pitch {dpitch:#x} on a store: not measured")
             if dpitch % 16 and rows > 2:
                 # Two rows cannot tell a floored pitch from floored row addresses.
