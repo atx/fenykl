@@ -480,14 +480,34 @@ def test_a_store_to_an_unknown_address_raises():
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN)])
 
 
+def test_store_rows_at_one_address_write_it_once_the_last_row():
+    """At DRAM pitch 0 every row rewrites the first: of more rows than DRAM holds, each from the
+    next vector, the last one's vector lands."""
+    data = bytes(range(64))
+    m, e = machine(data), stream.Engine()
+    rows = DRAM_BYTES // 32 + 2  # row 2^25 + 1 reads vector 1
+    store_rows = lanes(0, 1, r6=2, r7=rows, r1=0x40)
+    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT, *store_rows])
+    drive(m, e, [*store(0, 0, DST), WAIT])
+    assert bytes(m.boot.read(DST, 32).data) == data[32:]
+    m, e = machine(), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=0, r7=0xFFFFFFFF), *store(0, 0, DST), WAIT])
+    assert not e.off
+
+
+def test_a_store_row_wraps_at_the_top_of_dram():
+    m, e = machine(bytes(range(32))), stream.Engine()
+    top = 0x80000000 + DRAM_BYTES - 16
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *store(0, 0, top), WAIT])
+    assert bytes(m.boot.read(top, 16).data) == bytes(range(16))
+    assert bytes(m.boot.read(0x80000000, 16).data) == bytes(range(16, 32))
+
+
 def test_a_store_whose_rows_exceed_dram_raises():
-    rows = DRAM_BYTES // 0x100 + 1
+    """2^22 rows 0x100 apart, each 0x200 bytes: they write twice the DRAM alias space."""
+    values = lanes(0, 1, r6=0x20, r7=DRAM_BYTES // 0x100, r4=0x100)
     with pytest.raises(UnknownSemantics, match="more than all of DRAM"):
-        drive(
-            machine(),
-            stream.Engine(),
-            [*lanes(0, 1, r6=16, r7=rows), *store(0, 0, DST)],
-        )
+        drive(machine(), stream.Engine(), [*values, *store(0, 0, DST)])
 
 
 def test_a_load_into_an_unknown_memory_raises():
