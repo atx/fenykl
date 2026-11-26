@@ -505,12 +505,11 @@ def test_a_store_to_an_unknown_address_raises():
 
 
 def test_store_rows_at_one_address_write_it_once_the_last_row():
-    """At DRAM pitch 0 every row rewrites the first: of more rows than DRAM holds, each from the
-    next vector, the last one's vector lands."""
+    """At DRAM pitch 0 every row rewrites the first: of two rows, each from the next vector, the
+    last one's vector lands."""
     data = bytes(range(64))
     m, e = machine(data), stream.Engine()
-    rows = DRAM_BYTES // 32 + 2  # row 2^25 + 1 reads vector 1
-    store_rows = lanes(0, 1, r6=2, r7=rows, r1=0x40)
+    store_rows = lanes(0, 1, r6=2, r7=2, r1=0x40)
     drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT, *store_rows])
     drive(m, e, [*store(0, 0, DST), WAIT])
     assert bytes(m.boot.read(DST, 32).data) == data[32:]
@@ -784,12 +783,27 @@ def test_a_load_that_wraps_onto_its_own_vectors_leaves_them_unknown():
     )
 
 
-def test_a_load_of_2_to_the_27_vectors_ends_fast_with_every_vector_unknown():
-    """As the stock copy's word 68 hands with the loop 50..57 run (its count gone negative)."""
+def test_a_load_of_2_to_the_27_vectors_goes_off_script():
+    """As the stock copy's word 68 hands with the loop 50..57 run (its count gone negative): 4 GiB
+    cannot move before the firmware aborts the job."""
     m, e = machine(), stream.Engine()
     drive(m, e, [*lanes(0, 1 << 27, r6=1 << 28), *load(0, SRC, 0), WAIT])
-    assert len(m.memory) == LANE_VECTORS
-    assert all(v.lanes == (None,) * 32 for v in m.memory.values())
+    assert "more than a job's time moves" in e.off
+    assert m.lanes_lost
+
+
+def test_store_rows_past_a_jobs_time_go_off_script():
+    """2^31 rows of one line at DRAM pitch 0 write one address, but 32 GiB take longer than the
+    firmware lets a job run: whether the job ends is not known."""
+    m, e = machine(bytes(32)), stream.Engine()
+    regs = lanes(0, 1, r6=1, r7=1 << 31)
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *regs, *store(0, 0, DST)])
+    assert "more than a job's time moves" in e.off
+    rows = stream.MOST_BYTES // 16
+    m, e = machine(bytes(32)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *lanes(0, 1, r6=1, r7=rows)])
+    drive(m, e, [*store(0, 0, DST), WAIT])
+    assert not e.off
 
 
 def test_a_plain_load_that_wraps_keeps_at_most_inferred_beside_it():

@@ -75,7 +75,8 @@ measured), and the lane memory read while any command is outstanding is a hypoth
 outside every outstanding command's vectors: there verified beside one-row byte loads and stores
 of kinds 0 / 6, inferred beside other lane-memory shapes (`Engine.lane_tier`).
 
-What was not measured takes the engine off script: the lane memory is unknown for the rest of the
+What was not measured takes the engine off script (so does a command that moves more DRAM bytes
+than a job's time allows, `MOST_BYTES`): the lane memory is unknown for the rest of the
 job, what later commands write is unknown (`off` says why), and so is whether the job ends: a
 command it holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at its
 halt (`Machine.open_end`). A command whose destination cannot
@@ -212,6 +213,11 @@ DEPTH = 44
 (measured, 44 again beside the wedges below); 45 and 46 wedged the job on two boots and 48
 twice, also with only 44 0x1d after them, so the depth is 44 and handing past it kills the job
 (measured). More than `DEPTH` raises `UnknownSemantics`."""
+MOST_BYTES = 32 << 20
+"""DRAM bytes a command may move and still be known to end: at the fastest rate timed (0.42 us per
+KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware aborts the job
+(`timing.LONGEST_JOB_US`). A command of more takes the engine off script: whether the job ends,
+and what it moved before the abort, are not known."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
 
@@ -652,6 +658,8 @@ class Engine:
         rows = _known(r[7], "r7")
         if rows < 1:
             raise _Off("no rows: not measured")
+        if 16 * rows * _known(r[6], "r6") > MOST_BYTES:
+            raise _Off(f"{rows:#x} rows of {r[6].value:#x} lines: more than a job's time moves")
         tier = I if rows > (2 if cmd.kind == STORE else 4) else V
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
