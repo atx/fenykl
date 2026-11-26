@@ -7,6 +7,11 @@ up to 1.5 ms, so the estimate is the job's minimum time, not a typical one. Ever
 its tier; fitted figures are inferred. A case none of them covers makes the estimate unknown
 (`Estimate.unknown` says why): the estimate is never guessed.
 
+Earlier runs agree with these figures: a branch over 1200 idle words cost nothing and running
+them cost the first-run rate each, the call times of 58 straight-line jobs fit one cost per word,
+and 36-word loop passes took 0.185 us, idle and compute words alike (measured on the camera;
+inferred).
+
 Three kernels that stream 4 to 16 KiB from DRAM in 4 KiB chunks, the next load handed before the
 current compute (an elementwise op DRAM to DRAM, a byte sum, a dense layer of 64 inputs; 1 to 16
 passes over the data; 112 to 446 us), ran on the camera within -10 to +10 us of the estimate,
