@@ -1039,11 +1039,11 @@ def test_s2s_high_half_by_a_negative_t_is_verified(head):
     assert s2_high_half(head, 0x8003, I).tier == I
 
 
+# Measured on the camera: a at t 0; b at 1, 0xfe85, 0x10000 and 0xffffffff (a zero low half is not enough).
 @pytest.mark.parametrize(
-    ("t", "want", "tier"),
-    [(0, A, I), (1, B, V), (0xFE85, B, V), (0x10000, A, I), (None, None, V)],
+    ("t", "want"), [(0, A), (1, B), (0xFE85, B), (0x10000, B), (0xFFFFFFFF, B), (None, None)]
 )
-def test_s2_0x8_moves_a_where_t_is_0_else_b(t, want, tier):
+def test_s2_0x8_moves_a_where_t_is_0_else_b(t, want):
     m = Machine(Boot())
     m.lanes["L2"][2], m.lanes["L2"][4] = Vec(A), Vec(B)
     m.f["F2"][4] = Sv(t)
@@ -1052,11 +1052,12 @@ def test_s2_0x8_moves_a_where_t_is_0_else_b(t, want, tier):
     if want is None:
         assert set(got.lanes) == {None}
         return
-    assert got == Vec(tuple(want), tier)
+    assert got == Vec(tuple(want), V)
 
 
-@pytest.mark.parametrize(("r", "want", "tier"), [(0, A, I), (9, B, V), (None, None, V)])
-def test_s0_0x41_moves_a_where_r_is_0_else_b(r, want, tier):
+# Measured on the camera: a at r 0; b at 9 and 0x10000.
+@pytest.mark.parametrize(("r", "want"), [(0, A), (9, B), (0x10000, B), (None, None)])
+def test_s0_0x41_moves_a_where_r_is_0_else_b(r, want):
     m = Machine(Boot())
     m.lanes["L0"][0], m.lanes["L0"][1] = Vec(A), Vec(B)
     m.f["F0"][5] = Sv(r)
@@ -1065,7 +1066,7 @@ def test_s0_0x41_moves_a_where_r_is_0_else_b(r, want, tier):
     if want is None:
         assert set(got.lanes) == {None}
         return
-    assert got == Vec(tuple(want), tier)
+    assert got == Vec(tuple(want), V)
 
 
 def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job():

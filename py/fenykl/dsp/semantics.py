@@ -942,7 +942,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         **dict.fromkeys((0x02, 0x04, 0x06), _signed(lambda x, y, c: x * y)),
         **dict.fromkeys((0x03, 0x05), _signed(lambda x, y, c: y * c["t"])),
         0x07: lambda a, b, c: list(b if c["f88_91"] & 2 else a),
-        0x08: lambda a, b, c: list(b if c["t"] & LANE_MASK else a),
+        0x08: lambda a, b, c: list(b if c["t"] else a),
         0x0D: _B,
         0x09: _NEGATIVE,
         0x0A: _lane_numbers,
@@ -1078,23 +1078,9 @@ def _ties_by_imm(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
     return I if any(y & (2 * half - 1) == half for y in b) else V
 
 
-def _move_by_t(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
-    # S2 0x8's a branch is inferred from program 13's bytes; b at t != 0 was measured.
-    return I if c["t"] & LANE_MASK == 0 and list(a) != list(b) else V
-
-
-def _move_by_r(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
-    # S0 0x41's a branch is inferred from program 13's bytes; b at r != 0 was measured.
-    return I if c["r"] == 0 and list(a) != list(b) else V
-
-
 LANE_CAPS: dict[
     tuple[str, int], Callable[[Sequence[int], Sequence[int], Scalars], Confidence]
-] = {
-    **{("s1", h): _ties_by_imm for h in (0x0E, 0x10, 0x14, 0x15)},
-    ("s2", 0x08): _move_by_t,
-    ("s0", 0x41): _move_by_r,
-}
+] = {("s1", h): _ties_by_imm for h in (0x0E, 0x10, 0x14, 0x15)}
 """Rows whose tier depends on their operands' values: the cap at given lanes and scalars."""
 
 

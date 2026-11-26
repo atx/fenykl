@@ -1292,14 +1292,21 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             "a where F0[f76_79] is 0, else b",
             V,
             (
-                "b measured on the camera under the masks 5 and 0xc3a5f00f in s, F0[f76_79] 9 "
-                "among the values; a at F0[f76_79] 0 inferred: program 13's entry block moves "
-                "the line of tap 3 with it at word 418 (a the fourth tap line, F0[f76_79] 0, s "
-                "not known), and only a there gives the camera's bytes at b 0.5 and 1 + 1/16 "
-                "with own taps; a test of s instead was not separated"
+                "measured on the camera, pre-registered, 32 lanes of a != b each: a at "
+                "F0[f76_79] 0 under s = F0[f72_75] 0 and 0xc3a5f00f, b at F0[f76_79] 9 and "
+                "0x10000 under both, so the test is on all 32 bits of F0[f76_79] and s plays no "
+                "part; the same a where program 13's entry block moves the line of tap 3 with "
+                "it (F0[f76_79] 0)"
             ),
         ),
-        0x4D: ("b", V, NO_SELECT),
+        0x4D: (
+            "b",
+            V,
+            (
+                "measured on the camera, pre-registered: b at F0[f76_79] 0, 9 and 0x10000, "
+                "each under s 0 and 0xc3a5f00f (32 lanes of a != b each)"
+            ),
+        ),
         0x42: ("imm", V, NO_SELECT),
         0x43: ("F0[f76_79]", V, NO_SELECT),
         0x44: ("b where bit k of s is set, else imm", V, ""),
@@ -1423,18 +1430,21 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
             ),
         ),
         0x08: (
-            "a where the low 16 bits of t are 0, else b",
+            "a where t is 0, else b",
             V,
             (
-                "b measured on the camera at t 7 and 0xfe85 (W[f57_60] with a != b); a at t 0 "
-                "inferred: program 13's loop head moves its outer tap lines with it (f53_56 2, "
-                "f57_60 4 and 1, f88_91 4 and 5), and only a where F2[f88_91] is 0, b where it is "
-                "1, gives the camera's bytes of the one-tap jobs, tap 0 on line a - 1 and tap 3 "
-                "on a + 2, the edge lines included; a t with a zero low half and a nonzero high "
-                "half never ran"
+                "measured on the camera, pre-registered, 32 lanes of a != b each: a at t = "
+                "F2[f88_91] 0 (twice, first and last in its job), b at t 1, 2, 0x8000, 0x10000 "
+                "and 0xffffffff (and earlier at 7 and 0xfe85), so the test is on all 32 bits of "
+                "t; program 13's loop head moves its outer tap lines with it (f53_56 2, f57_60 "
+                "4 and 1, f88_91 4 and 5: a where F2[f88_91] is 0)"
             ),
         ),
-        0x0D: ("b", V, ""),
+        0x0D: (
+            "b",
+            V,
+            "measured on the camera, pre-registered: b at t 0, 1, 2, 0x8000, 0x10000 and 0xffffffff",
+        ),
         0x09: ("0xffff where b < 0, else 0", V, ""),
         0x0A: ("the lane number 0..31", V, ""),
         0x0B: ("0xffff where b >= 0, else 0", V, ""),
