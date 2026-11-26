@@ -1288,7 +1288,18 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x3D: ("sat_u(b + s)", V, ""),
         0x3E: ("sat_u(b - a)", V, ""),
         0x3F: ("sat_u(a + b)", V, ""),
-        **_rows((0x41, 0x4D), "b", V, NO_SELECT),
+        0x41: (
+            "a where F0[f76_79] is 0, else b",
+            V,
+            (
+                "b measured on the camera under the masks 5 and 0xc3a5f00f in s, F0[f76_79] 9 "
+                "among the values; a at F0[f76_79] 0 inferred: program 13's entry block moves "
+                "the line of tap 3 with it at word 418 (a the fourth tap line, F0[f76_79] 0, s "
+                "not known), and only a there gives the camera's bytes at b 0.5 and 1 + 1/16 "
+                "with own taps; a test of s instead was not separated"
+            ),
+        ),
+        0x4D: ("b", V, NO_SELECT),
         0x42: ("imm", V, NO_SELECT),
         0x43: ("F0[f76_79]", V, NO_SELECT),
         0x44: ("b where bit k of s is set, else imm", V, ""),
@@ -1411,7 +1422,19 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
                 "four lanes), the port in the head's word"
             ),
         ),
-        **_rows((0x08, 0x0D), "b", V),
+        0x08: (
+            "a where the low 16 bits of t are 0, else b",
+            V,
+            (
+                "b measured on the camera at t 7 and 0xfe85 (W[f57_60] with a != b); a at t 0 "
+                "inferred: program 13's loop head moves its outer tap lines with it (f53_56 2, "
+                "f57_60 4 and 1, f88_91 4 and 5), and only a where F2[f88_91] is 0, b where it is "
+                "1, gives the camera's bytes of the one-tap jobs, tap 0 on line a - 1 and tap 3 "
+                "on a + 2, the edge lines included; a t with a zero low half and a nonzero high "
+                "half never ran"
+            ),
+        ),
+        0x0D: ("b", V, ""),
         0x09: ("0xffff where b < 0, else 0", V, ""),
         0x0A: ("the lane number 0..31", V, ""),
         0x0B: ("0xffff where b >= 0, else 0", V, ""),

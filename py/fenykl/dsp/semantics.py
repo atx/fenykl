@@ -859,7 +859,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x3D: _unsigned(lambda x, y, c: _sat_u(y + _u(c, "s"))),
         0x3E: _unsigned(lambda x, y, c: _sat_u(y - x)),
         0x3F: _unsigned(lambda x, y, c: _sat_u(x + y)),
-        0x41: _unsigned(lambda x, y, c: y),
+        0x41: lambda a, b, c: list(b if c["r"] else a),
         0x4D: _unsigned(lambda x, y, c: y),
         0x42: _unsigned(lambda x, y, c: c["imm"]),
         0x43: _unsigned(lambda x, y, c: c["r"]),
@@ -942,7 +942,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         **dict.fromkeys((0x02, 0x04, 0x06), _signed(lambda x, y, c: x * y)),
         **dict.fromkeys((0x03, 0x05), _signed(lambda x, y, c: y * c["t"])),
         0x07: lambda a, b, c: list(b if c["f88_91"] & 2 else a),
-        0x08: _B,
+        0x08: lambda a, b, c: list(b if c["t"] & LANE_MASK else a),
         0x0D: _B,
         0x09: _NEGATIVE,
         0x0A: _lane_numbers,
@@ -992,7 +992,7 @@ _LANE_READS = {
         a=(0x26, 0x27, *range(0x60, 0x7F)),
         b=(
             *(0x08, 0x09, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x14, 0x15, 0x16, 0x17),
-            *(0x1A, 0x1B, 0x34, 0x35, 0x36, 0x37, 0x3A, 0x3B, 0x3C, 0x3D, 0x41, 0x4D),
+            *(0x1A, 0x1B, 0x34, 0x35, 0x36, 0x37, 0x3A, 0x3B, 0x3C, 0x3D, 0x4D),
             *(0x44, 0x45),
         ),
     ),
@@ -1027,7 +1027,7 @@ _LANE_READS = {
             *range(0x60, 0x7F),
         ),
     ),
-    "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x08, 0x09, 0x0B, 0x0D)),
+    "s2": _reads(none=(0x0A,), b=(0x00, 0x01, 0x03, 0x05, 0x09, 0x0B, 0x0D)),
     "s3": _reads(
         none=(0x06, 0x11, 0x14, 0x18),
         b=(0x10, 0x12, 0x13, 0x15, 0x19, 0x1B, 0x1C, 0x20, 0x21, 0x22, 0x23),
@@ -1078,9 +1078,23 @@ def _ties_by_imm(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
     return I if any(y & (2 * half - 1) == half for y in b) else V
 
 
+def _move_by_t(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
+    # S2 0x8's a branch is inferred from program 13's bytes; b at t != 0 was measured.
+    return I if c["t"] & LANE_MASK == 0 and list(a) != list(b) else V
+
+
+def _move_by_r(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:
+    # S0 0x41's a branch is inferred from program 13's bytes; b at r != 0 was measured.
+    return I if c["r"] == 0 and list(a) != list(b) else V
+
+
 LANE_CAPS: dict[
     tuple[str, int], Callable[[Sequence[int], Sequence[int], Scalars], Confidence]
-] = {("s1", h): _ties_by_imm for h in (0x0E, 0x10, 0x14, 0x15)}
+] = {
+    **{("s1", h): _ties_by_imm for h in (0x0E, 0x10, 0x14, 0x15)},
+    ("s2", 0x08): _move_by_t,
+    ("s0", 0x41): _move_by_r,
+}
 """Rows whose tier depends on their operands' values: the cap at given lanes and scalars."""
 
 

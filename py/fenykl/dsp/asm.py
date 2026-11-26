@@ -727,7 +727,8 @@ S0 = Unit(
     3d add_s_us b s
     3e sub_us b a
     3f add_us a b
-    4d,41 mov b
+    41 rpick a b r
+    4d mov b
     42 mov_imm imm
     43 mov_r r
     44 sel_imm b s imm
@@ -832,7 +833,8 @@ S2 = Unit(
     05 mul_t b t
     03 mul_t_u b t
     07 pick b a sel
-    0d,08 mov b
+    08 tpick a b t
+    0d mov b
     09 ltz b
     0a lane
     0b gez b
