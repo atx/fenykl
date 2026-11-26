@@ -11,8 +11,12 @@ minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 t
 The registers the job's setup would provide (B3 = src, B2 = dst) are preset by `Boot.run`. Each
 word is a bundle of unit instructions and ports (`fenykl.dsp.asm`): `X0.load(A[1], k=i)` loads
 vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later. `Label("top")` names
-the word it is bundled with, `NOP` is the idle word.
+the word it is bundled with, `NOP` is the idle word. The stream engine is programmed by the
+values `hand` passes it through X1 0x1c (`lane_block`, `stream_load`, `stream_store`); `wait`
+is X1 0x1d.
 """
+
+import hashlib
 
 import pytest
 
@@ -24,7 +28,6 @@ from fenykl.dsp.asm import (
     OP,
     S1,
     X0,
-    X1,
     A,
     B,
     Bundle,
@@ -33,47 +36,23 @@ from fenykl.dsp.asm import (
     O,
     Part,
     R,
-    Reg,
+    b_add,
+    hand,
+    lane_block,
+    li,
+    stream_load,
+    stream_store,
     to,
+    wait,
 )
 from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import Program, assemble
 
 SRC, DST = 0xA0000000, 0xA1000000
-B_SRC, B_DST, B_LOAD, B_STORE = 3, 2, 13, 12
+B_SRC, B_DST, B_LOAD, B_STORE = B[3], B[2], B[13], B[12]
 CHUNK = 0x1000
 BANKS = (0x000, 0x080)
-
-
-def li(dst: Reg, v: int):
-    """Op 0x0b: the 16-bit immediate v (sign-extended) through the ALU bus to dst."""
-    return OP.li(v) | to(dst, OP)
-
-
-def b_add(r: int, src: int, k: int):
-    """X1 0x03: B[r] := B[src] + k (13-bit k)."""
-    return X1.add_imm(B[src], k) | to(B[r], X1)
-
-
-def hand(*items: int | tuple[str, int]) -> list[Bundle | Part]:
-    """Values to the stream engine through X1 0x1c: an int through B14 / B15, ("b", r) from
-    B[r], ("wait",) a 0x1d."""
-    out, scratch = [], 14
-    for it in items:
-        if isinstance(it, int):
-            out += [li(B[scratch], it), X1.hand(B[scratch])]
-            scratch ^= 1
-        elif it[0] == "b":
-            out.append(X1.hand(B[it[1]]))
-        else:
-            out.append(X1.wait(b=B[1]))
-    return out
-
-
-def block(channel: int, nbytes: int) -> list[int]:
-    """The channel's eight registers: the lane memory, byte elements, one row of nbytes."""
-    return [0x20 | channel << 6, 1, 0, 0x20, nbytes // 32, 0, 0x10, nbytes // 16, 1]
 
 
 def chunk(bank: int, top: str) -> list[Bundle | Part]:
@@ -109,36 +88,38 @@ def chunk(bank: int, top: str) -> list[Bundle | Part]:
 
 def xor_kernel(nbytes: int) -> Program:
     """The kernel over nbytes (a multiple of 4 KiB), every transfer waited for before the halt."""
-    words = hand(*block(0, CHUNK), *block(1, CHUNK))
+    words = hand(*lane_block(0, CHUNK), *lane_block(1, CHUNK))
     words += [b_add(B_LOAD, B_SRC, 0), b_add(B_STORE, B_DST, 0)]
-    words += hand(0, ("b", B_LOAD), BANKS[0] * 64)
+    words += hand(*stream_load(0, B_LOAD, BANKS[0]))
     out = ["L0"]
     n = nbytes // CHUNK
     for c in range(n):
         if c:
-            words += hand(0x46, BANKS[(c - 1) % 2] * 64, ("b", B_STORE))
+            words += hand(*stream_store(1, BANKS[(c - 1) % 2], B_STORE))
             words.append(b_add(B_STORE, B_STORE, CHUNK))
             out.append(f"S{c - 1}")
         while (
             out
         ):  # the engine runs its commands in order: wait until chunk c has landed
-            words += hand(("wait",))
+            words.append(wait())
             if out.pop(0) == f"L{c}":
                 break
         if c + 1 < n:
             words.append(b_add(B_LOAD, B_LOAD, CHUNK))
-            words += hand(0, ("b", B_LOAD), BANKS[(c + 1) % 2] * 64)
+            words += hand(*stream_load(0, B_LOAD, BANKS[(c + 1) % 2]))
             out.append(f"L{c + 1}")
         words += chunk(BANKS[c % 2], f"top{c}")
-    words += hand(0x46, BANKS[(n - 1) % 2] * 64, ("b", B_STORE))
-    words += hand(*[("wait",)] * (len(out) + 1))
+    words += hand(*stream_store(1, BANKS[(n - 1) % 2], B_STORE))
+    words += [wait()] * (len(out) + 1)
     return assemble([*words, OP.halt(), *[NOP] * 4])
 
 
 def run(nbytes: int, data: bytes):
     boot = Boot()
     boot.put(SRC, data, "src")
-    r = boot.run(xor_kernel(nbytes), regs={"B": {B_SRC: SRC, B_DST: DST, 1: 1}})
+    r = boot.run(
+        xor_kernel(nbytes), regs={"B": {B_SRC.index: SRC, B_DST.index: DST, 1: 1}}
+    )
     return boot.read(DST, nbytes), r.estimate
 
 
@@ -162,3 +143,11 @@ def test_the_kernel_hides_its_loads():
     _, e = run(0x4000, bytes(0x4000))
     waits = next(p for p in e.parts if p.name == "stream waits")
     assert waits.us < 4 * 1.5
+
+
+def test_the_kernel_keeps_its_words():
+    """Pinned: a change to the DSL or its helpers that moves a bit of the kernel shows here."""
+    words = b"".join(w.to_bytes() for w in xor_kernel(0x4000).words)
+    assert hashlib.sha256(words).hexdigest() == (
+        "a800ac458e385812e7bf9605ac88cd85d9f74a32c7ef7313500fa9273f192394"
+    )

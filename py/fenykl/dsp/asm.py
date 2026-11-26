@@ -15,6 +15,7 @@ import keyword
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from . import stream
 from .fields import (
     ALU_BUS,
     CONTROL_FLAG,
@@ -1030,6 +1031,74 @@ def _check_ports() -> None:
 _check_units()
 _check_ports()
 SOURCES = {t: s for s in (LOAD, S2_HI, *UNITS_BY_KEY.values()) for t in s.texts}
+
+
+# Constants and the stream engine ----------------------------------------------------------
+
+
+def li(dst: Reg, value: int) -> Bundle:
+    """Op 0x0b: `value`, a 16-bit immediate sign-extended, through the ALU bus into dst."""
+    return OP.li(value) | to(dst, OP)
+
+
+def b_add(dst: Reg, src: Reg, k: int) -> Bundle:
+    """X1 0x03 into B: dst := src + k, k a 13-bit immediate."""
+    return X1.add_imm(src, k) | to(dst, X1)
+
+
+SCRATCH = (B[14], B[15])
+"""The registers `hand` loads its integers into, in turn."""
+
+
+def hand(*values: int | Reg) -> list[Bundle | Instr]:
+    """X1 0x1c per value, in order, to the stream engine (`stream`): a register of B as it is,
+    an integer (16 bits, sign-extended) by `li` into the `SCRATCH` registers in turn the word
+    before its hand, so a value takes one word or two."""
+    out: list[Bundle | Instr] = []
+    scratch = 0
+    for v in values:
+        if isinstance(v, Reg):
+            out.append(X1.hand(v))
+            continue
+        out += [li(SCRATCH[scratch], v), X1.hand(SCRATCH[scratch])]
+        scratch ^= 1
+    return out
+
+
+def wait() -> Instr:
+    """X1 0x1d: waits for the oldest outstanding stream command. It names B[1] in its register
+    field as the waits that ran on the camera did; it reads no register."""
+    return X1.wait(b=B[1])
+
+
+def lane_block(channel: int, nbytes: int) -> list[int]:
+    """The values that program channel's eight registers (a block key, then r0..r7) for one row
+    of `nbytes` bytes between DRAM and the lane memory, one byte per lane, 32 per vector."""
+    if nbytes <= 0 or nbytes % 32:
+        raise ValueError(f"a lane block is whole vectors of 32 bytes, not {nbytes}")
+    return [
+        0x20 | channel << 6,
+        stream.LANE_MEMORY,
+        0,
+        0x20,
+        nbytes // 32,
+        0,
+        0x10,
+        nbytes // 16,
+        1,
+    ]
+
+
+def stream_load(channel: int, dram: int | Reg, vector: int) -> list[int | Reg]:
+    """The values of a load command on `channel` from DRAM address `dram` into the lane
+    memory from `vector` on."""
+    return [channel << 6 | stream.LOAD, dram, vector * stream.VECTOR_BYTES]
+
+
+def stream_store(channel: int, vector: int, dram: int | Reg) -> list[int | Reg]:
+    """The values of a store command on `channel` from the lane memory from `vector` on to
+    DRAM address `dram`."""
+    return [channel << 6 | stream.STORE, vector * stream.VECTOR_BYTES, dram]
 
 
 # Decoding ---------------------------------------------------------------------------------

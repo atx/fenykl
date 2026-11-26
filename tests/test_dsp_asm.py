@@ -29,6 +29,9 @@ from fenykl.dsp.asm import (
     O,
     Raw,
     U,
+    hand,
+    lane_block,
+    li,
     raw,
     to,
 )
@@ -208,6 +211,25 @@ def test_raw_takes_a_word():
     word = Word.from_fields({"xreg": 3, "ra": 2})
     assert raw(word) == raw(xreg=3, ra=2)
     assert (raw(IDLE) | X1.hand(B[3])).word() == X1.hand(B[3]).word()
+
+
+def test_hand_takes_registers_as_they_are_and_integers_through_alternating_scratch():
+    b14, b15 = B[14], B[15]
+    assert hand(1, B[3], 2, 3) == [
+        li(b14, 1),
+        X1.hand(b14),
+        X1.hand(B[3]),
+        li(b15, 2),
+        X1.hand(b15),
+        li(b14, 3),
+        X1.hand(b14),
+    ]
+
+
+@pytest.mark.parametrize("nbytes", [0, 48])
+def test_a_lane_block_is_whole_vectors(nbytes):
+    with pytest.raises(ValueError, match="whole vectors"):
+        lane_block(0, nbytes)
 
 
 def test_the_mnemonics_file_is_current():
