@@ -832,7 +832,8 @@ S2 = Unit(
     05 mul_t b t
     03 mul_t_u b t
     07 pick b a sel
-    0d,08 mov b
+    08 tpick a b t
+    0d mov b
     09 ltz b
     0a lane
     0b gez b

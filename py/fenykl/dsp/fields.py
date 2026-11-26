@@ -1411,7 +1411,19 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
                 "four lanes), the port in the head's word"
             ),
         ),
-        **_rows((0x08, 0x0D), "b", V),
+        0x08: (
+            "a where the low 16 bits of t are 0, else b",
+            V,
+            (
+                "b measured on the camera at t 7 and 0xfe85 (W[f57_60] with a != b); a at t 0 "
+                "inferred: program 13's loop head moves its outer tap lines with it (f53_56 2, "
+                "f57_60 4 and 1, f88_91 4 and 5), and only a where F2[f88_91] is 0, b where it is "
+                "1, gives the camera's bytes of the one-tap jobs, tap 0 on line a - 1 and tap 3 "
+                "on a + 2, the edge lines included; a t with a zero low half and a nonzero high "
+                "half never ran"
+            ),
+        ),
+        0x0D: ("b", V, ""),
         0x09: ("0xffff where b < 0, else 0", V, ""),
         0x0A: ("the lane number 0..31", V, ""),
         0x0B: ("0xffff where b >= 0, else 0", V, ""),

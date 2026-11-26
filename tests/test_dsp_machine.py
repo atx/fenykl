@@ -1033,6 +1033,22 @@ def test_s2s_high_half_by_a_negative_t_is_verified(head):
     assert s2_high_half(head, 0x8003, I).tier == I
 
 
+@pytest.mark.parametrize(
+    ("t", "want", "tier"),
+    [(0, A, I), (1, B, V), (0xFE85, B, V), (0x10000, A, I), (None, None, V)],
+)
+def test_s2_0x8_moves_a_where_t_is_0_else_b(t, want, tier):
+    m = Machine(Boot())
+    m.lanes["L2"][2], m.lanes["L2"][4] = Vec(A), Vec(B)
+    m.f["F2"][4] = Sv(t)
+    run(m, [w(f292_295=0x8, f53_56=2, f57_60=4, f88_91=4, f238_239=1, f151_154=9)])
+    got = m.lanes["L0"][9]
+    if want is None:
+        assert set(got.lanes) == {None}
+        return
+    assert got == Vec(tuple(want), tier)
+
+
 def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job():
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
     # op 3 to 6, the halt in its fourth slot: the tail is the target's three words.
