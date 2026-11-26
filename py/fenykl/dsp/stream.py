@@ -54,9 +54,10 @@ fewer than n elements on the memory side (r2 r3 < n) it never ends (verified).
 Zero counts: a lane-memory load of r3 units with r6 0 ended (inferred, three jobs; what it writes
 was not seen, so its vectors are unknown), a lane-memory load with r3 0 ended in the shapes of
 `ZERO_LOADS` (inferred; the vectors read back after it unchanged, the rest of its footprint
-unknown), and a lane-memory store with r3 0 of n > 0 elements ended and wrote nothing (inferred,
-five jobs). Every other load or store with r3 or r6 0, on either memory, was not measured and
-goes off script.
+unknown), a lane-memory store with r3 0 of n > 0 elements ended and wrote nothing (inferred,
+five jobs), and a lane-memory store with r6 0 ended and wrote nothing in the shapes of
+`ZERO_STORES` (inferred). Every other load or store with r3 or r6 0, on either memory, was not
+measured and goes off script.
 
 Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
 a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
@@ -245,6 +246,12 @@ for byte (five jobs at r6 0x40, two of them at a src other than the one the held
 the whole footprint; two at r6 0x100: its first 32 vectors, the other 96 read back as bytes of
 no known origin, so they are unknown). Inferred: the jobs idled a whole program word, not the
 count alone."""
+ZERO_STORES = frozenset((0x20, r3, 0x10) for r3 in (0, 0x20, 0x80, 0x88, 0x200))
+"""A lane-memory store with r6 0 (one row) by the (r2, r3, r5) that ran. Measured on the camera,
+29 jobs, each with this store as its only one, at dst: every job ended, dst read back as its fill
+over the whole length and the guards around it were intact (at r3 0x200 the length was 1 KiB of
+the 16 KiB a full count fills). Inferred: it writes nothing; the DRAM bytes a full r3 count would
+store keep their content at most inferred."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -890,6 +897,11 @@ class Engine:
             # It ended on the camera, writing nothing (inferred).
             self.cap = min(self.cap, I)
             return _nothing
+        zero = (r2, r3, r5) in ZERO_STORES and len(rows) == 1
+        if memory == LANE_MEMORY and not r6 and zero:
+            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+            self._zero_store(m, rows[0][0], r2 * r3 * bits // 8)
+            return _nothing
         if not r3 or not r6:
             raise _Off(f"a {_side(memory)} store at r3 {r3}, r6 {r6}: not measured")
         if r2 * r3 < n:
@@ -944,6 +956,14 @@ class Engine:
                 _write_dram(m, dram, got)
 
         return complete
+
+    @staticmethod
+    def _zero_store(m: Machine, dram: int, n: int) -> None:
+        """A lane-memory store at r6 0 (`ZERO_STORES`): the `n` DRAM bytes from `dram` a full
+        count would write keep their content, at most inferred."""
+        got = _read_dram(m, dram, n)
+        got.taint[:] = bytes(min(t, I) for t in got.taint)
+        _write_dram(m, dram, got)
 
     # ------------------------------------------------------------------ off script
 
