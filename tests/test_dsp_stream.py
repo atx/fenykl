@@ -903,6 +903,22 @@ def test_words_beside_other_shapes_keep_at_most_inferred():
         assert e.lane_tier(0x40) == I
 
 
+@pytest.mark.parametrize(
+    ("r3", "r6", "tier"), [(0x10, 0x40, V), (0x40, 0x100, V), (0x20, 0x80, I), (0x8, 0x20, I)]
+)
+def test_words_beside_a_one_row_16_bit_load_keep_their_tier_in_the_measured_sizes(r3, r6, tier):
+    m, e = machine(bytes(range(256)) * 16), stream.Engine()
+    drive(m, e, [*lanes(0, r3, r5=8, r6=r6), *load(0, SRC, 0)])
+    assert e.lane_tier(0) == H and e.lane_tier(0x40 + r3) == tier
+
+
+@pytest.mark.parametrize(("r3", "r6", "tier"), [(0x10, 0x40, V), (0x4, 0x10, I)])
+def test_words_beside_a_one_row_16_bit_store_keep_their_tier_in_the_measured_size(r3, r6, tier):
+    m, e = machine(bytes(range(256)) * 4), stream.Engine()
+    drive(m, e, [*lanes(0, r3, r5=8, r6=r6), *load(0, SRC, 0), WAIT, *store(0, 0, DST)])
+    assert e.lane_tier(0) == H and e.lane_tier(0x40) == tier
+
+
 def test_kind_4_rows_on_channel_1_store_as_run():
     """Kind 4 stores two rows at DRAM pitch 0x100 and three at 0x200 as kind 6, each shape run in
     one job: inferred."""

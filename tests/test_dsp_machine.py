@@ -67,25 +67,31 @@ def test_a_lane_load_lands_four_words_after_its_head(m, lag):
     ("heads", "at", "tier"),
     [
         ((0x1D, 0x1D), (0, 1), V),
-        ((0x1D,) * 4, (0, 1, 2, 3), V),
-        ((0x1D,) * 5, (0, 1, 2, 3, 4), I),
-        ((0x1D, 0x1D), (0, 3), I),
-        ((0x1D, 0x1D), (0, 4), I),
+        ((0x1D,) * 16, tuple(range(16)), V),
+        ((0x1D,) * 17, tuple(range(17)), I),
+        ((0x1D,) * 32, tuple(range(0, 64, 2)), V),
+        ((0x1D,) * 33, tuple(range(0, 66, 2)), I),
+        ((0x1D, 0x1D), (0, 3), V),
+        ((0x1D, 0x1D), (0, 4), V),
+        ((0x1D, 0x1D, 0x1D), (0, 4, 8), I),
+        ((0x1D,) * 6, (0, 1, 4, 5, 8, 9), V),
+        ((0x1D,) * 4, (0, 1, 4, 6), I),
+        ((0x1D, 0x1D, 0x1D), (0, 2, 3), I),
         ((0x1D, 0x1D), (0, 5), V),
         ((0x1C, 0x1D), (0, 1), I),
     ],
 )
 def test_lane_loads_in_flight_together(m, heads, at, tier):
-    """Only a short run of X0 0x1d heads in consecutive words keeps the loads verified."""
+    """The last of the loads lands verified while their chain begins a measured one."""
     m.a[1] = Sv(0x40)
     for k in range(len(at)):
         m.memory[0x40 + k] = Vec(A if k % 2 else B)
     words = [IDLE] * (at[-1] + 5)
     for k, (head, t) in enumerate(zip(heads, at, strict=True)):
         words[t] = w(f302_307=head, f100_104=1, f105_109=0, f2_6=k >> 1, f1=k & 1)
-    words[at[1] + 4] = w(f248_249=0, f171_174=5)
+    words[at[-1] + 4] = w(f248_249=0, f171_174=5)
     run(m, words)
-    assert m.lanes["L3"][5] == Vec(A, tier)
+    assert m.lanes["L3"][5] == Vec(A if (len(at) - 1) % 2 else B, tier)
 
 
 @pytest.mark.parametrize(
@@ -1051,6 +1057,110 @@ def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0,
     assert m.g[12] == Sv(0x0A5A, tier)
 
 
+@pytest.mark.parametrize(("s0", "tier"), [(0x0, V), (0x3, I)])
+def test_nothing_on_m_beside_x0_0x13_and_s0_0x0_keeps_x0s_port(m, s0, tier):
+    m.lanes["L0"][1], m.lanes["L0"][2] = Vec(A), Vec(B)
+    m.g[12] = Sv(0x0A5A)
+    x0_head = {"f302_307": 0x13, "f105_109": 8, "f2_6": 0x1E, "f1": 0}
+    s0_head = {"f278_284": s0, "f37_40": 1, "f41_44": 2}
+    run(m, [w(f276=0, f274_275=2, f272_273=2, f224_228=12, **x0_head, **s0_head)])
+    assert m.g[12] == Sv(0x0A5A, tier)
+
+
+SENTINEL = Sv(0x0A5A)
+UNIT_HEADS = {"s0": "f278_284", "s1": "f285_291", "s2": "f292_295", "s3": "f296_301"}
+OPERANDS = {
+    "f37_40": 1, "f41_44": 2, "f45_48": 1, "f49_52": 2,
+    "f53_56": 1, "f57_60": 2, "f61_64": 1, "f65_68": 2,
+    "f84_87": 3, "f88_91": 4, "f96_99": 13,
+}
+"""Each unit's a and b at register 1 and 2 of its lane file; S1 0x54's, S2 0xe's and S3 0x24's
+own-word results F1[3], F2[4], F3[13]."""
+
+
+def heads(*pairs: tuple[str, int]) -> dict[str, int]:
+    return {**OPERANDS, **{UNIT_HEADS[u]: h for u, h in pairs}}
+
+
+def m_read(words: list[dict[str, int]], at: int, sel: int) -> Sv:
+    """R[0] after `words` with M's strobe under `sel` in word `at` (a fresh machine)."""
+    m = Machine(Boot())
+    for file in ("L0", "L1", "L2", "L3"):
+        m.lanes[file][1], m.lanes[file][2] = Vec(A), Vec(B)
+    m.f["F1"][3], m.f["F2"][4], m.f["F3"][13] = Sv(0x20020), Sv(0x40040), Sv(0x80080)
+    m.r[0] = SENTINEL
+    words = [dict(x) for x in words] + [{} for _ in range(at + 1 - len(words))]
+    words[at] |= {**R0_UNDER, "f274_275": sel}
+    run(m, [w(**x) for x in words])
+    return m.r[0]
+
+
+@pytest.mark.parametrize(
+    ("pairs", "at", "sel", "tier"),
+    [
+        ((("s0", 0x0), ("s1", 0x0)), 1, 3, V),  # lane-only heads of two units
+        ((("s0", 0x0), ("s1", 0x0), ("s2", 0x8), ("s3", 0x19)), 0, 1, V),
+        ((("s0", 0x0), ("s1", 0x0), ("s2", 0x8)), 0, 3, I),  # three: not measured
+        ((("s2", 0x8), ("s3", 0x19)), 1, 2, I),  # S2 one word after its own head
+        ((("s2", 0x8), ("s3", 0x19)), 1, 0, V),
+        ((("s2", 0xE), ("s3", 0x19)), 0, 3, V),  # an own-word result beside a lane head
+        ((("s2", 0xE), ("s3", 0x19)), 0, 0, I),  # under a third unit
+        ((("s2", 0xE), ("s3", 0x19)), 1, 2, I),  # one word later
+        ((("s2", 0xE), ("s3", 0x24)), 0, 1, V),  # two own-word results
+        ((("s2", 0xE), ("s3", 0x24)), 1, 1, I),
+        ((("s0", 0x32), ("s1", 0x45)), 1, 2, V),  # two held results
+        ((("s0", 0x32), ("s1", 0x45)), 0, 2, I),
+    ],
+)
+def test_nothing_on_m_beside_several_units_heads(pairs, at, sel, tier):
+    assert m_read([heads(*pairs)], at, sel) == Sv(SENTINEL.value, tier)
+
+
+@pytest.mark.parametrize(
+    ("held", "beside", "tier"),
+    [
+        (("s0", 0x32), ("s2", 0xE), V),
+        (("s1", 0x45), ("s3", 0x24), V),
+        (("s0", 0x32), ("s1", 0x54), I),  # beside another own-word head
+        (("s0", 0x22), ("s2", 0xE), I),  # another held head
+    ],
+)
+def test_a_held_result_beside_another_units_own_word_result_is_on_m_alone(held, beside, tier):
+    sel = int(held[0][1])
+    alone = m_read([heads(held)], 1, sel)
+    assert alone.value is not None and alone.tier == V
+    assert m_read([heads(held), heads(beside)], 1, sel) == Sv(alone.value, tier)
+
+
+@pytest.mark.parametrize(("s0", "tier"), [(0x32, V), (0x22, I)])
+def test_two_held_results_in_one_word_each_under_its_unit(s0, tier):
+    alone = m_read([heads(("s0", s0))], 1, 0)
+    assert alone.value is not None and alone.tier == V
+    assert m_read([heads(("s0", s0), ("s1", 0x45))], 1, 0) == Sv(alone.value, tier)
+
+
+EXTRACT_A = {"f292_295": 0xC, "f53_56": 1, "f57_60": 2, "f88_91": 3}
+EXTRACT_B = {"f292_295": 0xC, "f53_56": 2, "f57_60": 2, "f88_91": 9}
+PRODUCT = {"f292_295": 0x1, "f53_56": 1, "f57_60": 2}
+
+
+def test_m_under_s2_after_consecutive_extracts_is_the_second_alone():
+    alone = m_read([EXTRACT_B], 0, 2)
+    assert alone.value is not None and alone.tier == V
+    assert m_read([EXTRACT_A, EXTRACT_B], 1, 2) == alone
+    # After a multiply the next extract on M is not measured.
+    after = m_read([PRODUCT, EXTRACT_B], 1, 2)
+    assert after.value is None and after.tier < V
+
+
+@pytest.mark.parametrize("first", [EXTRACT_A, PRODUCT])
+def test_nothing_on_m_under_s2_one_word_after_an_extract_or_a_multiply(first):
+    assert m_read([first], 1, 2) == SENTINEL
+    # Another unit's head in the next word: not measured.
+    beside = m_read([first, heads(("s3", 0x19))], 1, 2)
+    assert beside.value is None and beside.tier < V
+
+
 PENDING = "a jump pending behind a halt"
 
 
@@ -1226,7 +1336,7 @@ def test_two_divides_in_flight_land_as_alone(m, gap):
     assert m.g[5] == Sv(142, V) and m.g[6] == Sv(100, V)
 
 
-@pytest.mark.parametrize(("gaps", "tier"), [((1, 1, 1), V), ((2, 1), I)])
+@pytest.mark.parametrize(("gaps", "tier"), [((1, 1, 1), V), ((1, 1, 1, 1), I), ((2, 1), I)])
 def test_several_divides_in_flight_are_verified_back_to_back_only(m, gaps, tier):
     m.b[1], m.b[2] = Sv(1000), Sv(7)
     head = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
@@ -1249,6 +1359,51 @@ def test_a_quotient_beside_x1_0x13s_result_is_the_or(m):
     words.append(w(f272_273=0, f224_228=5, **x1k))
     run(m, words)
     assert m.g[5] == Sv(142 | k, V)
+
+
+def l0_after(first: dict[str, int], ports: dict[str, int]) -> Vec:
+    """L0[8] after S0 0x0 (lag 1), then `first`'s heads with `ports` on L0[8]."""
+    m = Machine(Boot())
+    for file in ("L0", "L1", "L3"):
+        m.lanes[file][1], m.lanes[file][2] = Vec(A), Vec(B)
+    m.lanes["L0"][8] = Vec((0x0A5A,) * 32)
+    run(m, [w(f278_284=0x0, f37_40=1, f41_44=2), w(**first, **ports)])
+    return m.lanes["L0"][8]
+
+
+S0_PORT = {"f236_237": 2, "f147_150": 8}
+"""L0's first port on register 8: S0's result."""
+
+
+@pytest.mark.parametrize(
+    ("second", "head", "tier"),
+    [
+        ({"f238_239": 0, "f151_154": 8}, {"f296_301": 0x19, "f61_64": 2}, V),  # S3's result
+        ({"f238_239": 2, "f151_154": 8}, {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}, I),  # S1's
+    ],
+)
+def test_two_ports_on_one_lane_register_the_first_wins(second, head, tier):
+    first = l0_after(head, S0_PORT)
+    other = l0_after(head, second)
+    assert first.tier == V and other.lanes != first.lanes
+    assert l0_after(head, {**S0_PORT, **second}) == Vec(first.lanes, tier)
+
+
+def l1_high(beside: dict[str, int]) -> Vec:
+    """L1[8] from S2's high port one word after S2 0x2, beside `beside`'s S2 head."""
+    m = Machine(Boot())
+    m.lanes["L2"][1], m.lanes["L2"][2] = Vec(A), Vec(tuple(0x8000 + x for x in B))
+    m.lanes["L1"][8] = Vec((0x0A5A,) * 32)
+    product = w(f292_295=0x2, f53_56=1, f57_60=2)
+    run(m, [product, w(**beside, f53_56=1, f57_60=2, f240_241=1, f155_158=8)])
+    return m.lanes["L1"][8]
+
+
+@pytest.mark.parametrize(("head", "tier"), [(0x8, V), (0xD, V), (0x9, I)])
+def test_a_products_high_half_beside_a_lag_0_s2_head(head, tier):
+    alone = l1_high({})
+    assert None not in alone.lanes and alone.tier == V
+    assert l1_high({"f292_295": head}) == Vec(alone.lanes, tier)
 
 
 @pytest.mark.parametrize(
