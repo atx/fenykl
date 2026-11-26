@@ -867,6 +867,7 @@ _LANE_VALUES: dict[str, dict[int, LaneValue | None]] = {
         0x45: _select(lambda a, c: [c["r"]] * LANE_COUNT),
         0x46: _select(lambda a, c: a),
         0x4B: lambda a, b, c: [c["s"] >> k & 1 for k in range(LANE_COUNT)],
+        0x52: None,
         **dict.fromkeys(range(0x60, 0x7F), lambda a, b, c: list(a)),
     },
     "s1": {

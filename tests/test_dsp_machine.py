@@ -111,20 +111,28 @@ def test_s3_0x6_gives_zeros_one_word_after_its_head_only(m, at):
     assert got.tier == Confidence.VERIFIED
 
 
+@pytest.mark.parametrize(
+    ("file", "port"), [("L3", {"f248_249": 1, "f171_174": 9}), ("L2", {"f244_245": 1, "f163_166": 9})]
+)
 @pytest.mark.parametrize("at", [0, 1, 2])
-def test_a_head_with_a_scalar_rule_and_no_lane_rule_gives_unknown_lanes(m, at):
-    """S0 0x52 returns F0[f76_79] on M; its lane result was never read."""
+def test_s0_0x52_keeps_the_port_register_beside_its_scalar_result(m, file, port, at):
+    """S0 0x52 returns F0[f76_79] on M and writes no lane (measured on the camera at lags 0 and 1)."""
     m.lanes["L0"][1] = Vec(A)
     m.lanes["L0"][2] = Vec(B)
-    m.lanes["L3"][9] = Vec((0x5555,) * 32)
-    s0 = {"f278_284": 0x52, "f37_40": 1, "f41_44": 2, "f76_79": 5}
-    port = {"f248_249": 1, "f171_174": 9}
+    m.lanes[file][9] = Vec((0x5555,) * 32)
+    s0 = {"f278_284": 0x52, "f37_40": 1, "f41_44": 2, "f76_79": 5, "f276": 0}
     run(m, [w(**s0, **port)] if at == 0 else [w(**s0), *[IDLE] * (at - 1), w(**port)])
-    got = m.lanes["L3"][9]
-    if at == 2:
-        assert got == Vec((0x5555,) * 32)
-    else:
-        assert got == Vec((None,) * 32, H)
+    assert m.lanes[file][9] == Vec((0x5555,) * 32)
+
+
+def test_a_lag_1_s0_head_reaches_the_port_in_an_s0_0x52_word(m):
+    """Program 15's 455 / 456 form: S0 0x20 (a + b), then S0 0x52 with S0's lane port."""
+    m.lanes["L0"][1] = Vec(A)
+    m.lanes["L0"][2] = Vec(B)
+    add = {"f278_284": 0x20, "f37_40": 1, "f41_44": 2}
+    s0 = {"f278_284": 0x52, "f37_40": 1, "f41_44": 2, "f76_79": 5, "f248_249": 1, "f171_174": 9}
+    run(m, [w(**add), w(**s0)])
+    assert m.lanes["L3"][9].lanes == tuple((x + y) & 0xFFFF for x, y in zip(A, B))
 
 
 @pytest.mark.parametrize(

@@ -93,7 +93,7 @@ an instruction also carries its fields' (`Instr.tier`).
 | 0x46 | `sel` | b, a, s | b where bit k of s is set, else a | verified |
 | 0x4b | `bits_s` | s | bit k of s: 1 or 0 | verified |
 | 0x4d | `mov` | b | b | verified |
-| 0x52 | `get_r` | r | M: F0[f76_79] | verified |
+| 0x52 | `get_r` | r | no lane result; M: F0[f76_79] | verified |
 | 0x60 | `latch` |  | a of the unit's last head in the job, the value it read then (latched), 0 with none | verified |
 | 0x61 | `latch_61` |  | a of the unit's last head in the job, the value it read then (latched), 0 with none | verified |
 | 0x62 | `latch_62` |  | a of the unit's last head in the job, the value it read then (latched), 0 with none | verified |

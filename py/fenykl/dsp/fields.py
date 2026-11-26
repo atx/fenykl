@@ -1313,6 +1313,17 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x45: ("b where bit k of s is set, else F0[f76_79]", V, ""),
         0x46: ("b where bit k of s is set, else a", V, ""),
         0x4B: ("bit k of s: 1 or 0", V, ""),
+        0x52: (
+            NO_LANE,
+            V,
+            (
+                f"{NO_LANE_LAGS}, through f248_249 = 1 (L3) and f244_245 = 1 (L2), and with M "
+                "(f276 = 0) in the head's word (f37_40 1, f41_44 2, f76_79 0 holding a known "
+                "value); after a lag-1 S0 head (0x20) the port in this head's word took that "
+                "head's result in every lane, with and without M, and the port one word later "
+                "nothing (program 15's word 456 has this form)"
+            ),
+        ),
         **_rows(
             range(0x60, 0x7F),
             "a of the unit's last head in the job, the value it read then (latched), 0 with "
