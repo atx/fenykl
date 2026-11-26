@@ -1049,6 +1049,19 @@ def test_s2_0x8_moves_a_where_t_is_0_else_b(t, want, tier):
     assert got == Vec(tuple(want), tier)
 
 
+@pytest.mark.parametrize(("r", "want", "tier"), [(0, A, I), (9, B, V), (None, None, V)])
+def test_s0_0x41_moves_a_where_r_is_0_else_b(r, want, tier):
+    m = Machine(Boot())
+    m.lanes["L0"][0], m.lanes["L0"][1] = Vec(A), Vec(B)
+    m.f["F0"][5] = Sv(r)
+    run(m, [w(f278_284=0x41, f37_40=0, f41_44=1, f76_79=5, f236_237=2, f147_150=9)])
+    got = m.lanes["L0"][9]
+    if want is None:
+        assert set(got.lanes) == {None}
+        return
+    assert got == Vec(tuple(want), tier)
+
+
 def test_a_halt_third_behind_a_halt_on_a_jumps_target_ends_the_job():
     halt = Word.from_fields({"f313_319": 7}, base=IDLE)
     # op 3 to 6, the halt in its fourth slot: the tail is the target's three words.

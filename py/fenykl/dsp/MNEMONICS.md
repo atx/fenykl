@@ -85,7 +85,7 @@ an instruction also carries its fields' (`Instr.tier`).
 | 0x3d | `add_s_us` | b, s | sat_u(b + s) | verified |
 | 0x3e | `sub_us` | b, a | sat_u(b - a) | verified |
 | 0x3f | `add_us` | a, b | sat_u(a + b) | verified |
-| 0x41 | `mov_41` | b | b | verified |
+| 0x41 | `rpick` | a, b, r | a where F0[f76_79] is 0, else b | verified |
 | 0x42 | `mov_imm` | imm | imm | verified |
 | 0x43 | `mov_r` | r | F0[f76_79] | verified |
 | 0x44 | `sel_imm` | b, s, imm | b where bit k of s is set, else imm | verified |

@@ -1288,7 +1288,18 @@ LANE_FUNCTIONS: dict[str, dict[int, LaneRow]] = {
         0x3D: ("sat_u(b + s)", V, ""),
         0x3E: ("sat_u(b - a)", V, ""),
         0x3F: ("sat_u(a + b)", V, ""),
-        **_rows((0x41, 0x4D), "b", V, NO_SELECT),
+        0x41: (
+            "a where F0[f76_79] is 0, else b",
+            V,
+            (
+                "b measured on the camera under the masks 5 and 0xc3a5f00f in s, F0[f76_79] 9 "
+                "among the values; a at F0[f76_79] 0 inferred: program 13's entry block moves "
+                "the line of tap 3 with it at word 418 (a the fourth tap line, F0[f76_79] 0, s "
+                "not known), and only a there gives the camera's bytes at b 0.5 and 1 + 1/16 "
+                "with own taps; a test of s instead was not separated"
+            ),
+        ),
+        0x4D: ("b", V, NO_SELECT),
         0x42: ("imm", V, NO_SELECT),
         0x43: ("F0[f76_79]", V, NO_SELECT),
         0x44: ("b where bit k of s is set, else imm", V, ""),

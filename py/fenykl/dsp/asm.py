@@ -727,7 +727,8 @@ S0 = Unit(
     3d add_s_us b s
     3e sub_us b a
     3f add_us a b
-    4d,41 mov b
+    41 rpick a b r
+    4d mov b
     42 mov_imm imm
     43 mov_r r
     44 sel_imm b s imm
