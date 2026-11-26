@@ -9,7 +9,7 @@ four vectors are loaded (X0 0x1d), moved into S1's lane file through its first p
 minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 to 16 passes).
 
 The registers the job's setup would provide (B3 = src, B2 = dst) are preset by `Boot.run`. Each
-word is a bundle of unit instructions and ports (`fenykl.dsp.asm`): `X0.load(A[1], k=i)` loads
+word is a bundle of unit instructions and ports (`fenykl.dsp.asm`, all imported from `fenykl.dsp`): `X0.load(A[1], k=i)` loads
 vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later. `Label("top")` names
 the word it is bundled with, `NOP` is the idle word. The stream engine is programmed by the
 values `hand` passes it through X1 0x1c (`lane_block`, `stream_load`, `stream_store`); `wait`
@@ -20,7 +20,7 @@ import hashlib
 
 import pytest
 
-from fenykl.dsp.asm import (
+from fenykl.dsp import (
     F1,
     L1,
     LOAD,
@@ -30,12 +30,16 @@ from fenykl.dsp.asm import (
     X0,
     A,
     B,
+    Boot,
     Bundle,
+    Confidence,
     G,
     Label,
     O,
     Part,
+    Program,
     R,
+    assemble,
     b_add,
     hand,
     lane_block,
@@ -45,9 +49,6 @@ from fenykl.dsp.asm import (
     to,
     wait,
 )
-from fenykl.dsp.emu import Boot
-from fenykl.dsp.fields import Confidence
-from fenykl.dsp.program import Program, assemble
 
 SRC, DST = 0xA0000000, 0xA1000000
 B_SRC, B_DST, B_LOAD, B_STORE = B[3], B[2], B[13], B[12]

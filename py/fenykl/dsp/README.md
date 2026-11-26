@@ -8,6 +8,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 
 | module | contents |
 |---|---|
+| `__init__.py` | the API for own programs (`__all__`): the DSL and its helpers, `assemble`, `Program`, `Word`, `Boot`, `Run`, `NoHalt`, the value types, `listing`, `source` |
 | `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the op meanings `OPS`, the target `TARGET`, the delay slots `DELAY_SLOTS` |
 | `units.py` | the units (a strobe and the fields that change under it), derived from the table |
 | `asm.py` | the DSL: register files, unit instructions by mnemonic (`MNEMONICS.md`) or code, ports, bundles and their exact decoding (`Bundle.of`), helpers for constants and the stream engine |
@@ -39,7 +40,7 @@ The DSL (`asm.py`) writes a word as a bundle of unit instructions and ports, one
 bundle:
 
 ```python
-from fenykl.dsp.asm import A, G, L1, LOAD, O, OP, S1, X0, to
+from fenykl.dsp import A, G, L1, LOAD, O, OP, S1, X0, to
 
 S1.xor_imm(L1[4], imm=0x20) | to(O[1], S1) | X0.store(A[1], k=0, o=O[1])
 to(L1[4], LOAD) | OP.add_imm(G[9], 4) | to(G[9], OP)
@@ -1051,7 +1052,7 @@ which order, not what they move.
 ### The datapath executor
 
 ```python
-from fenykl.dsp.emu import Boot
+from fenykl.dsp import Boot
 
 boot = Boot()
 boot.put(SRC, data, "src")
