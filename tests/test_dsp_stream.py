@@ -624,6 +624,17 @@ def test_store_format_0x0d_writes_zeros():
     assert all(got.known) and bytes(got.data) == bytes(32)
 
 
+@pytest.mark.parametrize("fmt", [0x00, 0x01, 0x40, 0x46, 0x80, 0x200, 0x400])
+def test_the_zero_formats_measured_after_the_run_write_zeros_inferred(fmt):
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(1, 33)))
+    m.boot.put(DST, b"\xa5" * 48, "prefill")
+    drive(m, e, [*lanes(0, 1, r5=fmt, r6=2), *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 48)
+    assert bytes(got.data[:32]) == bytes(32) and all(got.known[:32])
+    assert set(got.taint[:32]) == {I} and bytes(got.data[32:]) == b"\xa5" * 16
+
+
 def test_an_unknown_lane_leaves_the_bytes_it_reaches_unknown():
     m, e = machine(), stream.Engine()
     m.memory[0] = Vec((None, *range(1, 32)), I)
