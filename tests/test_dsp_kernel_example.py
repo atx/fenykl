@@ -9,11 +9,11 @@ four vectors are loaded (X0 0x1d), moved into S1's lane file through its first p
 minimum time within 10 us of `timing.estimate` (the jobs took 117 to 415 us, 1 to 16 passes).
 
 The registers the job's setup would provide (B3 = src, B2 = dst) are preset by `Boot.run`. Each
-word is a bundle of unit instructions and ports (`fenykl.dsp.asm`, all imported from `fenykl.dsp`): `X0.load(A[1], k=i)` loads
-vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4] four words later. `Label("top")` names
-the word it is bundled with, `NOP` is the idle word. The stream engine is programmed by the
-values `hand` passes it through X1 0x1c (`lane_block`, `stream_load`, `stream_store`); `wait`
-is X1 0x1d.
+word is a bundle of unit instructions and ports (`fenykl.dsp.asm`, all imported from
+`fenykl.dsp`): `X0.load(A[1], k=i)` loads vector A[1] + i, `to(L1[4], LOAD)` takes it into L1[4]
+four words later. `Label("top")` names the word it is bundled with, `NOP` is the idle word. The
+stream engine is programmed by the values `hand` passes it through X1 0x1c (`lane_block`,
+`stream_load`, `stream_store`); `wait` is X1 0x1d.
 """
 
 import hashlib

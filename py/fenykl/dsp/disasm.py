@@ -190,7 +190,7 @@ def source(
         if index in at:
             raise ValueError(f"labels {at[index]!r} and {label!r} on one word")
         at[index] = label
-    lines = [f"from fenykl.dsp.asm import {', '.join(EXPORTS)}", "", f"{name} = ["]
+    lines = [f"from fenykl.dsp import {', '.join(EXPORTS)}", "", f"{name} = ["]
     for index, word in enumerate(program.words, origin):
         note = "" if word.op == IDLE_OP else f" {_op_note(word)}"
         lines.append(f"    {Bundle.of(word, at, index)!r},  # {index}{note}")

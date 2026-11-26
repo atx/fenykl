@@ -29,10 +29,13 @@ from fenykl.dsp.asm import (
     O,
     Raw,
     U,
+    b_add,
     hand,
     lane_block,
     li,
     raw,
+    stream_load,
+    stream_store,
     to,
 )
 from fenykl.dsp.disasm import listing, source
@@ -230,6 +233,23 @@ def test_hand_takes_registers_as_they_are_and_integers_through_alternating_scrat
 def test_a_lane_block_is_whole_vectors(nbytes):
     with pytest.raises(ValueError, match="whole vectors"):
         lane_block(0, nbytes)
+
+
+@pytest.mark.parametrize(
+    ("build", "error", "match"),
+    [
+        (lambda: lane_block(4, 32), ValueError, "channel is 0..3, not 4"),
+        (lambda: stream_load(-1, B[3], 0), ValueError, "channel is 0..3, not -1"),
+        (lambda: stream_load(0, B[3], -1), ValueError, "vector is 0..511"),
+        (lambda: stream_store(0, 0x200, B[3]), ValueError, "vector is 0..511"),
+        (lambda: stream_load(0, 0xA0000000, 0), TypeError, "dram is a register of B"),
+        (lambda: stream_store(0, 0, G[3]), TypeError, "dram is a register of B"),
+        (lambda: b_add(G[3], B[1], 0), TypeError, "writes a register of B"),
+    ],
+)
+def test_the_stream_helpers_check_their_arguments(build, error, match):
+    with pytest.raises(error, match=match):
+        build()
 
 
 def test_the_mnemonics_file_is_current():

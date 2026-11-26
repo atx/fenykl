@@ -1014,6 +1014,14 @@ ALONE_PORTS = {"s0": ("f248_249", 1), "s1": ("f250_251", 2)}
 
 LANE_VECTORS = 0x400
 """The lane memory's size in vectors of 32 lanes; an address counts modulo it (`LANE_MEMORY`)."""
+VECTOR_BYTES = 64
+"""A lane-memory offset counts bytes of 16-bit elements: 64 per vector."""
+STREAM_CHANNELS = 4
+"""The stream engine's channels (`stream`)."""
+STREAM_LOAD, STREAM_NOTHING_MOVES, STREAM_STORE = 0, 1, 6
+"""The stream command kinds measured (`stream`)."""
+STREAM_LANE_MEMORY, STREAM_LOCAL_MEMORY = 1, 2
+"""A stream channel's r0: the DSP-side memory (`stream`)."""
 LANE_MEMORY = (
     f"the lane memory: {LANE_VECTORS:#x} vectors of 32 elements of 16 bits, addressed by vector "
     f"number modulo {LANE_VECTORS:#x} (verified on the camera: the wrap pre-registered at "
@@ -1075,9 +1083,9 @@ U_TAKES = {
 (verified on the camera, pre-registered); U's lanes 4..31 are not known after a write."""
 U_NOTHING = (0x18, 0x19, 0x22, 0x14)
 """S3 heads beside which U's port wrote nothing (measured on the camera)."""
-U_UNIDENTIFIED = (0x1A, 0x1D)
-"""S3 heads beside which U's port wrote U's lanes 0..3 with a content not identified (inferred,
-one run on the camera); U's lanes 4..31 were not read. Beside these and every head in neither
+U_UNIDENTIFIED: dict[int, Confidence] = {0x1A: I, 0x1D: I}
+"""S3 heads beside which U's port wrote U's lanes 0..3 with a content not identified, with its
+tier (inferred, one run on the camera); U's lanes 4..31 were not read in that run. Beside these and every head in neither
 `U_TAKES` nor `U_NOTHING` what U's port writes is open."""
 U_SAVED = "lanes 0..3 the S3 head beside it saves (`U_TAKES`)"
 U_SOURCES: dict[int, tuple[str, Confidence]] = {1: (U_SAVED, V)}

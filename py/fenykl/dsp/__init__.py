@@ -21,17 +21,20 @@ from .asm import (
     S2,
     S2_HI,
     S3,
+    SCRATCH,
     X0,
     X1,
     A,
     B,
     Bundle,
     G,
+    Instr,
     Label,
     M,
     O,
     Part,
     R,
+    Reg,
     U,
     b_add,
     hand,
@@ -47,7 +50,7 @@ from .disasm import listing, source
 from .emu import Boot, NoHalt, Run
 from .fields import Confidence
 from .machine import Sv, Vec
-from .program import Program, assemble
+from .program import Program, assemble, labels
 from .semantics import UnknownSemantics
 from .state import Bytes
 from .word import Word
@@ -69,6 +72,7 @@ __all__ = [
     "S2",
     "S2_HI",
     "S3",
+    "SCRATCH",
     "X0",
     "X1",
     "A",
@@ -78,6 +82,7 @@ __all__ = [
     "Bytes",
     "Confidence",
     "G",
+    "Instr",
     "Label",
     "M",
     "NoHalt",
@@ -85,6 +90,7 @@ __all__ = [
     "Part",
     "Program",
     "R",
+    "Reg",
     "Run",
     "Sv",
     "U",
@@ -94,6 +100,7 @@ __all__ = [
     "assemble",
     "b_add",
     "hand",
+    "labels",
     "lane_block",
     "li",
     "listing",

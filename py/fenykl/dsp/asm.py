@@ -15,7 +15,6 @@ import keyword
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
-from . import stream
 from .fields import (
     ALU_BUS,
     CONTROL_FLAG,
@@ -46,6 +45,10 @@ from .fields import (
     S2_RESULT,
     S3_RESULT,
     S_RESULTS,
+    STREAM_CHANNELS,
+    STREAM_LANE_MEMORY,
+    STREAM_LOAD,
+    STREAM_STORE,
     TAG,
     TARGET,
     TARGET_OPS,
@@ -53,6 +56,7 @@ from .fields import (
     U_SAVED,
     U_TAKES,
     U_UNIDENTIFIED,
+    VECTOR_BYTES,
     VECTOR_PORTS,
     X0_LANE_MEMORY,
     X_FUNCTIONS,
@@ -66,7 +70,7 @@ from .fields import (
     lookup,
     op,
 )
-from .semantics import OP_SEMANTICS
+from .semantics import LANE_COUNT, OP_SEMANTICS
 from .units import UNITS
 from .word import Word
 
@@ -517,6 +521,8 @@ def _function_tier(unit: str, code: int) -> Confidence:
     if unit in LANE_FUNCTIONS:
         rows = [r[1] for r in (LANE_FUNCTIONS[unit].get(code),) if r]
         rows += [r.tier for r in (S_RESULTS[unit].get(code),) if r]
+        if unit == "s3" and code in U_UNIDENTIFIED:
+            rows.append(U_UNIDENTIFIED[code])
         return min(rows, default=H)
     if unit in X_FUNCTIONS:
         rows = [r[1] for r in (X_FUNCTIONS[unit].get(code),) if r]
@@ -1044,7 +1050,9 @@ def li(dst: Reg, value: int) -> Bundle:
 
 
 def b_add(dst: Reg, src: Reg, k: int) -> Bundle:
-    """X1 0x03 into B: dst := src + k, k a 13-bit immediate."""
+    """X1 0x03 into B: dst := src + k, both registers of B, k a 13-bit immediate."""
+    if not isinstance(dst, Reg) or dst.file is not B:
+        raise TypeError(f"b_add writes a register of B, not {dst!r}")
     return X1.add_imm(src, k) | to(dst, X1)
 
 
@@ -1069,38 +1077,70 @@ def hand(*values: int | Reg) -> list[Bundle | Instr]:
 
 def wait() -> Instr:
     """X1 0x1d: waits for the oldest outstanding stream command and hands nothing (`stream`).
-    Its register field names B[1], which keeps the kernel example's words."""
+    Its register field names B[1], which keeps the words of the kernel example, whose shape
+    ran on the camera."""
     return X1.wait(b=B[1])
+
+
+_BLOCK = 0x20
+"""A block key's bits besides its channel: the next eight values are the channel's r0..r7."""
+LINE_BYTES = 16
+"""A DRAM line of the stream engine: 16 byte elements (r5 0x10)."""
+HANDED_VECTORS = range(0x8000 // VECTOR_BYTES)
+"""The lane-memory vectors whose offset an integer reaches through `li` (16 bits, signed)."""
+
+
+def _channel(channel: int) -> int:
+    if not 0 <= channel < STREAM_CHANNELS:
+        raise ValueError(f"channel is 0..{STREAM_CHANNELS - 1}, not {channel}")
+    return channel << 6
+
+
+def _vector(vector: int) -> int:
+    if vector not in HANDED_VECTORS:
+        raise ValueError(
+            f"vector is {HANDED_VECTORS.start}..{HANDED_VECTORS.stop - 1}, the vectors an "
+            f"offset handed through li reaches, not {vector}"
+        )
+    return vector * VECTOR_BYTES
+
+
+def _dram(dram: Reg) -> Reg:
+    if not isinstance(dram, Reg) or dram.file is not B:
+        raise TypeError(
+            f"dram is a register of B (an address is wider than li's 16 bits), not {dram!r}"
+        )
+    return dram
 
 
 def lane_block(channel: int, nbytes: int) -> list[int]:
     """The values that program channel's eight registers (a block key, then r0..r7) for one row
     of `nbytes` bytes between DRAM and the lane memory, one byte per lane, 32 per vector."""
-    if nbytes <= 0 or nbytes % 32:
+    if nbytes <= 0 or nbytes % LANE_COUNT:
         raise ValueError(f"a lane block is whole vectors of 32 bytes, not {nbytes}")
     return [
-        0x20 | channel << 6,
-        stream.LANE_MEMORY,
-        0,
-        0x20,
-        nbytes // 32,
-        0,
-        0x10,
-        nbytes // 16,
-        1,
+        _BLOCK | _channel(channel),
+        STREAM_LANE_MEMORY,  # r0: the lane memory
+        0,  # r1: the memory-side row pitch, unused for one row
+        LANE_COUNT,  # r2: elements per vector, one per lane
+        nbytes // LANE_COUNT,  # r3: vectors per row
+        0,  # r4: the DRAM row pitch, unused for one row
+        LINE_BYTES,  # r5: elements per DRAM line, bytes
+        nbytes // LINE_BYTES,  # r6: DRAM lines per row
+        1,  # r7: rows
     ]
 
 
-def stream_load(channel: int, dram: int | Reg, vector: int) -> list[int | Reg]:
-    """The values of a load command on `channel` from DRAM address `dram` into the lane
-    memory from `vector` on."""
-    return [channel << 6 | stream.LOAD, dram, vector * stream.VECTOR_BYTES]
+def stream_load(channel: int, dram: Reg, vector: int) -> list[int | Reg]:
+    """The values of a load command on `channel` from the DRAM address in `dram` (a register
+    of B) into the lane memory from `vector` on."""
+    return [_channel(channel) | STREAM_LOAD, _dram(dram), _vector(vector)]
 
 
-def stream_store(channel: int, vector: int, dram: int | Reg) -> list[int | Reg]:
-    """The values of a store command on `channel` from the lane memory from `vector` on to
-    DRAM address `dram`."""
-    return [channel << 6 | stream.STORE, vector * stream.VECTOR_BYTES, dram]
+def stream_store(channel: int, vector: int, dram: Reg) -> list[int | Reg]:
+    """The values of a store command on `channel` from the lane memory from `vector` on to the
+    DRAM address in `dram` (a register of B)."""
+    return [_channel(channel) | STREAM_STORE, _vector(vector), _dram(dram)]
 
 
 # Decoding ---------------------------------------------------------------------------------
@@ -1228,9 +1268,12 @@ def _u(code: int) -> str:
         return f"; U's port: b's lanes {lanes[0]}..{lanes[-1]} into U's lanes 0..3"
     if code in U_UNIDENTIFIED:
         return (
-            "; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read"
+            "; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read in "
+            "the measurement"
         )
-    return "; U's port beside it writes nothing" if code in U_NOTHING else ""
+    if code in U_NOTHING:
+        return "; U's port beside it writes nothing"
+    return "; what U's port writes beside it is open"
 
 
 def formula(unit: str, code: int) -> str:

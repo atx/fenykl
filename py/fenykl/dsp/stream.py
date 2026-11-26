@@ -86,16 +86,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from math import gcd
 
-from .fields import LANE_VECTORS, Confidence
+from .fields import LANE_VECTORS, VECTOR_BYTES, Confidence
+from .fields import STREAM_CHANNELS as CHANNELS
+from .fields import STREAM_LANE_MEMORY as LANE_MEMORY
+from .fields import STREAM_LOAD as LOAD
+from .fields import STREAM_LOCAL_MEMORY as LOCAL_MEMORY
+from .fields import STREAM_NOTHING_MOVES as NOTHING_MOVES
+from .fields import STREAM_STORE as STORE
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
 from .semantics import LANE_COUNT, LOCAL_BYTES
 from .state import DRAM_BYTES, LOCAL_BASE, Bytes, dram_alias
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
-CHANNELS, REGISTERS = 4, 8
-LOAD, NOTHING_MOVES, STORE = 0, 1, 6
-"""The command kinds measured."""
+REGISTERS = 8
 FILL = 8
 """Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits, or under r0 2 the
 local words at "to" with copies of "from"'s low r2-wide element (no DRAM side)."""
@@ -189,10 +193,6 @@ DEPTH = 44
 (measured, 44 again beside the wedges below); 45 and 46 wedged the job on two boots and 48
 twice, also with only 44 0x1d after them, so the depth is 44 and handing past it kills the job
 (measured). More than `DEPTH` raises `UnknownSemantics`."""
-LANE_MEMORY, LOCAL_MEMORY = 1, 2
-"""r0's values: the DSP-side memory."""
-VECTOR_BYTES = 64
-"""A lane-memory offset counts bytes of 16-bit elements: 64 per vector."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
 
