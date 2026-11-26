@@ -27,7 +27,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   bus at both lags 0 and 1 as a hypothesis; a lag-1 result and the next word's lag-0 result of
   one unit are OR-ed on its bus (verified on the camera in S0, S1, S2 and S3);
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
-  ports and O's port under enable 0; a port with no load arriving writes nothing;
+  ports and O's port under enable 0; a port with no load arriving writes nothing; loads in flight
+  together (issued fewer than four words apart) land at inferred (`Machine._loads_in_flight`);
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
   word; S3's reductions in the third word after the head only.
 
@@ -802,6 +803,7 @@ class Machine:
         self, index: int, word: Word, head: int, a: Sv, b: Sv, k: int, t: int
     ) -> None:
         by_reg = head in range(0x1E, 0x22)
+        flight = self._loads_in_flight(t) if head in X0_LANE_LOADS else V
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
                 why = "a lane store at an unknown address"
@@ -815,6 +817,7 @@ class Machine:
         tier = min(
             a.tier, b.tier if by_reg else V, X0_LANE_MEMORY[head][1], self.ceiling
         )
+        tier = min(tier, flight)
         if self.stream is not None:
             tier = min(tier, self.stream.lane_tier(addr))
         if self.lanes_lost:
@@ -840,6 +843,15 @@ class Machine:
         if self.trace is not None:
             source = f"x0 {head:#x}'s store of O[{reg}]"
             self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
+
+    def _loads_in_flight(self, t: int) -> Confidence:
+        """A lane load in word t beside loads in flight (issued less than `LANE_LOAD_LAG` words
+        before): each of them, and this one, lands at inferred. Measured on the camera without
+        pre-registration: four loads in consecutive words landed in four consecutive port words."""
+        flight = [when for when in self.load_due if when > t]
+        for when in flight:
+            self.load_due[when] = [_cap(v, I) for v in self.load_due[when]]
+        return I if flight else V
 
     # ------------------------------------------------------------------ S units
 
@@ -945,21 +957,21 @@ class Machine:
             else:
                 self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
         rule = LANE_RULES[unit].get(head)
-        if rule is None and head in S_RULES[unit]:
-            return
         zeros = self._alone_zeros(unit, head, word, t)
         if rule is None:
-            # A head without a rule: its lane result is unknown at either lag (but for
-            # `ALONE_ZEROS`), and so is M's result of its unit in those words.
+            # A head without a lane rule: its lane result is unknown at either lag (but for
+            # `ALONE_ZEROS`), and so is M's result of its unit in those words unless the head
+            # has a scalar rule (`S_RULES`), which then gives M.
             for when in (t, t + 1):
-                self.open_m.setdefault(when, set()).add(unit)
+                if head not in S_RULES[unit]:
+                    self.open_m.setdefault(when, set()).add(unit)
                 if zeros:
                     continue
                 unknown = Vec(UNKNOWN_VEC.lanes, H)
                 self.lane_due.setdefault(when, {}).setdefault(unit, []).append(
                     (unknown, unknown)
                 )
-                self._why(when, unit, f"{unit} {head:#x} has no rule")
+                self._why(when, unit, f"{unit} {head:#x} has no lane rule")
             if unit == "s3" and word["f232_233"] == 1:
                 self._u_write = (word["f141_144"], Vec(UNKNOWN_VEC.lanes, H))
             return

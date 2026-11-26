@@ -63,6 +63,20 @@ def test_a_lane_load_lands_four_words_after_its_head(m, lag):
     assert m.lanes["L3"][5].lanes == (A if lag == 4 else B)
 
 
+@pytest.mark.parametrize(("gap", "tier"), [(1, I), (3, I), (4, V)])
+def test_lane_loads_in_flight_together_land_at_inferred(m, gap, tier):
+    m.a[1] = Sv(0x40)
+    m.memory[0x40] = Vec(A)
+    m.memory[0x41] = Vec(B)
+    first = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=0, f1=0)
+    second = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=0, f1=1)
+    words = [IDLE] * (gap + 5)
+    words[0], words[gap] = first, second
+    words[gap + 4] = w(f248_249=0, f171_174=5)
+    run(m, words)
+    assert m.lanes["L3"][5] == Vec(B, tier)
+
+
 @pytest.mark.parametrize(
     ("head", "lag"), [(0x18, 0), (0xA, 1)]
 )  # a broadcast and a shuffle
@@ -95,6 +109,38 @@ def test_s3_0x6_gives_zeros_one_word_after_its_head_only(m, at):
     got = m.lanes["L3"][9]
     assert got.lanes == ((0x5555,) * 32 if at == 0 else (0,) * 32)
     assert got.tier == Confidence.VERIFIED
+
+
+@pytest.mark.parametrize("at", [0, 1, 2])
+def test_a_head_with_a_scalar_rule_and_no_lane_rule_gives_unknown_lanes(m, at):
+    """S0 0x52 returns F0[f76_79] on M; its lane result was never read."""
+    m.lanes["L0"][1] = Vec(A)
+    m.lanes["L0"][2] = Vec(B)
+    m.lanes["L3"][9] = Vec((0x5555,) * 32)
+    s0 = {"f278_284": 0x52, "f37_40": 1, "f41_44": 2, "f76_79": 5}
+    port = {"f248_249": 1, "f171_174": 9}
+    run(m, [w(**s0, **port)] if at == 0 else [w(**s0), *[IDLE] * (at - 1), w(**port)])
+    got = m.lanes["L3"][9]
+    if at == 2:
+        assert got == Vec((0x5555,) * 32)
+    else:
+        assert got == Vec((None,) * 32, H)
+
+
+@pytest.mark.parametrize(
+    ("head", "port"),
+    [
+        ({"f278_284": 0x12}, {"f248_249": 1, "f171_174": 9}),
+        ({"f292_295": 0xC}, {"f250_251": 1, "f175_178": 9}),
+        ({"f292_295": 0xE}, {"f250_251": 1, "f175_178": 9}),
+        ({"f296_301": 0x25}, {"f250_251": 0, "f175_178": 9}),
+    ],
+)
+@pytest.mark.parametrize("at", [0, 1])
+def test_a_head_measured_to_write_no_lane_leaves_the_port_register(m, head, port, at):
+    m.lanes["L3"][9] = Vec((0x5555,) * 32)
+    run(m, [w(**head, **port)] if at == 0 else [w(**head), w(**port)])
+    assert m.lanes["L3"][9] == Vec((0x5555,) * 32)
 
 
 def test_the_mask_chain_holds_one_word(m):

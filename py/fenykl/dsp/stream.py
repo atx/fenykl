@@ -281,12 +281,16 @@ STORE_FORMATS: dict[int, tuple[int, Confidence]] = {
     0x04: (32, V),
     0x44: (32, I),  # measured on byte elements: a wider element is not predicted
     0x0D: (0, V),
+    **dict.fromkeys((0x00, 0x01, 0x40, 0x46, 0x80, 0x200, 0x400), (0, I)),
 }
 """r5 on a store: 128 // bits elements per 16-byte line, each element's low bits packed least
 significant first and the line's last bits 0, by value: (bits per element, tier) (verified on the
 camera, pre-registered: 0x10 the low byte, 0x08 16 bits, 0x04 zero-extended to 32 bits, 0x0c /
 0x0a / 0x09 the 10-, 12- and 14-bit packs). 0x44 gave the 0x04 layout on byte elements only
-(inferred); 0x0d wrote zeros (bits 0). Other values were not run or never ended."""
+(inferred); 0x0d wrote zeros (bits 0). 0x00, 0x01, 0x40, 0x46, 0x80, 0x200 and 0x400 wrote zeros
+too (inferred: measured on the camera after the run, one to five jobs each over a dst prefilled with
+a nonzero byte, the job ending and every byte of the length 0). Other values were not run or never
+ended."""
 
 
 @dataclass(frozen=True)
