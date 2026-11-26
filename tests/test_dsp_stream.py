@@ -716,6 +716,27 @@ def test_three_store_rows_are_inferred_whatever_their_pitch():
         assert m.boot.read(DST, 32).weakest() == I
 
 
+def test_a_load_that_wraps_onto_its_own_vectors_leaves_them_unknown():
+    """LANE_VECTORS + 2 vectors from vector 0: the second writes of 0 and 1 race the first."""
+    data = bytes(range(256)) * (LANE_VECTORS // 8 + 1)
+    m, e = machine(data), stream.Engine()
+    r3 = LANE_VECTORS + 2
+    drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, 0), WAIT])
+    assert m.memory[0].lanes == m.memory[1].lanes == (None,) * 32
+    assert m.memory[2].lanes == tuple(data[64:96])
+    assert m.memory[LANE_VECTORS - 1].lanes == tuple(
+        data[32 * LANE_VECTORS - 32 : 32 * LANE_VECTORS]
+    )
+
+
+def test_a_load_of_2_to_the_27_vectors_ends_fast_with_every_vector_unknown():
+    """As the stock copy's word 68 hands with the loop 50..57 run (its count gone negative)."""
+    m, e = machine(), stream.Engine()
+    drive(m, e, [*lanes(0, 1 << 27, r6=1 << 28), *load(0, SRC, 0), WAIT])
+    assert len(m.memory) == LANE_VECTORS
+    assert all(v.lanes == (None,) * 32 for v in m.memory.values())
+
+
 def test_a_plain_load_that_wraps_keeps_at_most_inferred_beside_it():
     """A byte load of two vectors from vector 0x3ff wraps to vector 0: outside it inferred."""
     m, e = machine(bytes(range(64))), stream.Engine()

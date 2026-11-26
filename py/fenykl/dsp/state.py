@@ -229,7 +229,9 @@ class SparseSpace:
     def read(self, addr: int, n: int) -> Bytes:
         out = Bytes()
         for number, a, m in self._chunks(addr, n):
-            out = out + self._page(number).read(a, m)
+            part = self._page(number).read(a, m)
+            for name in Bytes.__slots__:
+                getattr(out, name).extend(getattr(part, name))
         return out
 
     def write(self, addr: int, b: Bytes) -> None:
