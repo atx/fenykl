@@ -68,12 +68,12 @@ from .fields import (
     OP_FIELD,
     STAIRCASE,
     TARGET,
-    TARGET_OPS,
     Confidence,
     Kind,
     lookup,
     op,
 )
+from .machine import Machine
 from .program import Program, stock_programs
 from .semantics import (
     KIB,
@@ -95,6 +95,7 @@ from .semantics import (
     destinations,
 )
 from .state import Bytes, JobView, Reg, RegisterFile
+from .stream import Engine
 from .units import UNITS
 from .word import IDLE, Word
 
@@ -1042,39 +1043,43 @@ class Copy16Model:
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
         """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
         dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
-        weaker through the branches before it); None when no such halt runs."""
+        weaker through the path to it); None when no such halt runs. The job is stepped on a
+        `Machine`, lenient: the halt is its first op 7, the three words behind it still run, and
+        the decisions on the path and their tiers are the machine's. A halt after a stream word
+        ran, or in a job whose stream engine stored (the tail included) or went off script,
+        raises: whether the stream drains first is open."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
             return None
-        length = view.length
-        assert length is not None
-        flow = Executor(Boot(), branching=copy_branches(length), strict=False).step(
-            job, start_copy
-        )
+        boot = Boot(view.boot)
+        machine = Machine(boot, None, Engine())
+        flow = Executor(boot, strict=False, datapath=machine).step(job)
         if flow.stop is not Stop.HALT:
             raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
-        at = flow.steps[-1].index
+        h = next(k for k, s in enumerate(flow.steps) if s.op == HALT_OP)
+        at = flow.steps[h].index
         if at in stock:
             return None
-        if any(s.index in STREAM for s in flow.steps):
-            raise UnknownSemantics(
-                at,
-                "halt",
-                [],
-                "a halt after the stream started: whether the stream drains first is open",
-            )
-        # Words after the halt do not run; edited words before it are not modelled.
+        engine = machine.stream
+        if any(s.index in STREAM for s in flow.steps[:h]) or engine.stored:
+            why = "a halt after the stream started: whether the stream drains first is open"
+            raise UnknownSemantics(at, "halt", [], why)
+        if engine.off:
+            why = f"the stream off script before the halt ({engine.off}): what it stores is open"
+            raise UnknownSemantics(at, "halt", [], why)
+        # Edited words that run, the tail's included, are not modelled.
         stock_words = self.program.words
         edited = any(
             s.index >= len(stock_words) or words[s.index] != stock_words[s.index]
-            for s in flow.steps[:-1]
+            for k, s in enumerate(flow.steps)
+            if k != h
         )
-        seen = at in HALTS_SEEN and length == KIB and words[at] == self.halt
-        conf = H if trace.ignored or edited else V if seen else I
-        for s in flow.steps:
-            if s.op in TARGET_OPS[:3] and s.confidence is not None:
-                conf = min(conf, s.confidence)
+        seen = at in HALTS_SEEN and view.length == KIB and words[at] == self.halt
+        conf = H if trace.ignored or edited or machine.lapses else V if seen else I
+        # The halt's own tier is `seen`'s; the other steps carry the path's and the tail's.
+        tiers = [s.confidence for k, s in enumerate(flow.steps) if k != h]
+        conf = min([conf, *(t for t in tiers if t is not None)])
         why = f"op 7 at word {at} halts the job before the stream: {Outcome.NO_STORE.value}"
         result = JobResult(Status.OK, [why], ignored=trace.ignored, notes=trace.notes)
         result.taint = conf

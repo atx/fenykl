@@ -448,8 +448,14 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     assert result.status is Status.OK and result.stored is None
     assert result.taint is Confidence.VERIFIED
     assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
-    # At another index before the stream: inferred; after the guard 45, as weak as its branch.
-    for at, taint in ((20, Confidence.INFERRED), (58, None)):
+    # At another index before the stream: inferred, at 58 too (no command was handed); behind
+    # the halt at 26, the brf 27 is a control word not measured there; after 58, open.
+    for at, taint in (
+        (20, Confidence.INFERRED),
+        (58, Confidence.INFERRED),
+        (26, Confidence.HYPOTHESIS),
+        (60, None),
+    ):
         words = list(stock().words)
         words[at] = words[5]
         if taint is None:
@@ -462,7 +468,12 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     words = list(stock().words)
     words[50 - 4] = words[5]  # in 45's delay slots, after its decision
     result, _ = run(Program(tuple(words)), length=0x408)
-    assert result.stored is None and result.taint is Confidence.HYPOTHESIS
+    assert result.stored is None and result.taint is Confidence.INFERRED
+    # With the guard idled the loop hands the stream values off its grammar.
+    words = list(idled(45).words)
+    words[52] = words[5]
+    with pytest.raises(UnknownSemantics, match="stream off script before the halt"):
+        run(Program(tuple(words)))
 
 
 def flipped(at: int, key: str, bits: int, base: Program | None = None) -> Program:

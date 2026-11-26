@@ -788,9 +788,10 @@ job) and the job resolves into a status, one load and one store. The rows are ou
 jobs measured with every other word stock, so they are resolved by index, not along the control
 flow: an idled control word (0, 5, 45, 79) has its row's outcome, and the words of the loop
 50..57, which no stock job runs, keep their rows too.
-An op 7 off the stock halt ends the job where stepping reaches it (`Copy16Model._halt`):
-before the stream words 58..79 with status 0 and dst not written; after the stream started it
-raises `UnknownSemantics`. Some timeouts come after the store (`Outcome.STORE_TIMEOUT`: idled
+An op 7 off the stock halt ends the job where stepping on a lenient `Machine` reaches it
+(`Copy16Model._halt`), its three tail words run: before the stream words 58..79 with status 0
+and dst not written, at the tiers of the machine's decisions on the path; after a stream word
+ran, or where the stream engine stored or went off script, it raises `UnknownSemantics`. Some timeouts come after the store (`Outcome.STORE_TIMEOUT`: idled
 5, 28 or 79, 45's target moved to the loop's top 50, bit 6 of 65's immediate cleared): dst is
 written, then the job never completes. The guard 45 skips the loop 50..57 in every tested job,
 so the loop's words are known only with the loop skipped: an edit of 28 or 45 together with one
