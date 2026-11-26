@@ -212,9 +212,9 @@ def test_a_load_of_no_units_that_ran_keeps_the_vectors_seen(r6, seen, footprint)
     for v in range(footprint + 1):
         m.memory[v] = Vec((v,) * 32, V)
     drive(m, e, [*lanes(0, 0, r6=r6), *load(0, SRC, 0), WAIT])
-    assert all(m.memory[v].lanes == (v,) * 32 for v in range(seen))
+    assert all(m.memory[v] == Vec((v,) * 32, I) for v in range(seen))
     assert all(m.memory[v].lanes == (None,) * 32 for v in range(seen, footprint))
-    assert m.memory[footprint].lanes == (footprint,) * 32
+    assert m.memory[footprint] == Vec((footprint,) * 32, V)
     assert e.cap == I and not e.off
 
 

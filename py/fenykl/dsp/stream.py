@@ -796,13 +796,19 @@ class Engine:
     @staticmethod
     def _zero_load(m: Machine, off: int, seen: int, needed: int):
         """A lane-memory load at r3 0 (`ZERO_LOADS`): the `seen` vectors from `off` keep their
-        content, the rest of the `needed` its footprint takes are unknown from its hand."""
+        content at most inferred, the rest of the `needed` its footprint takes are unknown from
+        its hand."""
         base = off // VECTOR_BYTES
+        kept = [(base + v) % LANE_VECTORS for v in range(min(seen, needed))]
         unseen = [(base + v) % LANE_VECTORS for v in range(seen, needed)]
 
         def complete(m: Machine, cap: Confidence) -> None:
-            if not m.lanes_lost:
-                m.memory.update(dict.fromkeys(unseen, UNKNOWN_VEC))
+            if m.lanes_lost:
+                return
+            for k in kept:
+                vec = m.memory.get(k, UNKNOWN_VEC)
+                m.memory[k] = replace(vec, tier=min(vec.tier, I))
+            m.memory.update(dict.fromkeys(unseen, UNKNOWN_VEC))
 
         complete(m, I)
         return complete
