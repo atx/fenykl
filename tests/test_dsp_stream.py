@@ -7,7 +7,7 @@ from fenykl.dsp.emu import LOCAL_BASE, Boot
 from fenykl.dsp.fields import LANE_VECTORS, Confidence
 from fenykl.dsp.machine import Machine, Sv, Vec
 from fenykl.dsp.semantics import UnknownSemantics
-from fenykl.dsp.state import Bytes
+from fenykl.dsp.state import DRAM_BYTES, Bytes
 from fenykl.dsp.word import IDLE, Word
 
 V, I, H = Confidence.VERIFIED, Confidence.INFERRED, Confidence.HYPOTHESIS
@@ -480,6 +480,16 @@ def test_a_store_to_an_unknown_address_raises():
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN)])
 
 
+def test_a_store_whose_rows_exceed_dram_raises():
+    rows = DRAM_BYTES // 0x100 + 1
+    with pytest.raises(UnknownSemantics, match="more than all of DRAM"):
+        drive(
+            machine(),
+            stream.Engine(),
+            [*lanes(0, 1, r6=16, r7=rows), *store(0, 0, DST)],
+        )
+
+
 def test_a_load_into_an_unknown_memory_raises():
     m = machine(bytes(64))
     regs = block(0, UNKNOWN, 0, 4, 0x10, 0, 0x10, 4, 1)
@@ -769,6 +779,10 @@ def forgotten(m: Machine) -> bool:
         ([*lanes(0, 1, r6=2), 0x09, SRC, DST, WAIT], "kind 0x9"),
         ([*lanes(0, 5, r6=10), 4, SRC, DST, WAIT], "outside the shapes it ran in"),
         ([*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN), WAIT], "DRAM address unknown"),
+        (
+            [*lanes(0, 0x7FFFFE20, r6=0xFFFFFC40), *store(0, 0, DST), WAIT],
+            "more than all of DRAM",
+        ),
     ],
 )
 def test_a_lenient_engine_forgets_every_memory_where_a_reach_is_not_known(values, why):

@@ -75,7 +75,7 @@ of kinds 0 / 6, inferred beside other lane-memory shapes (`Engine.lane_tier`).
 
 What was not measured takes the engine off script: the lane memory is unknown for the rest of the
 job and what later commands write is unknown (`off` says why). A command whose destination cannot
-be bounded, a value handed after the grammar is lost and a 0x1d among a command's values raise
+be bounded (a store's rows covering more than the DRAM alias space among them), a value handed after the grammar is lost and a 0x1d among a command's values raise
 `UnknownSemantics`, as do kinds and shapes not run and a job that never ends or wedges; on a
 lenient machine they lapse instead (`Machine.lapse`): a command that never ends goes off script,
 a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d that never
@@ -88,7 +88,7 @@ from dataclasses import dataclass, field, replace
 from .fields import LANE_VECTORS, Confidence
 from .machine import UNKNOWN_VEC, Machine, Sv, Vec
 from .semantics import LANE_COUNT, LOCAL_BYTES
-from .state import LOCAL_BASE, Bytes, dram_alias
+from .state import DRAM_BYTES, LOCAL_BASE, Bytes, dram_alias
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -793,6 +793,7 @@ class Engine:
             raise _Off(f"store format {r5:#x}: not measured")
         bits, ftier = STORE_FORMATS[r5]
         n = (128 // bits if bits else 0) * r6
+        _store_reach(r)
         rows, tier = self._rows(cmd, memory)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
         if memory == LANE_MEMORY:
@@ -887,7 +888,7 @@ class Engine:
         if rows < 1:
             raise _Off("no rows")
         if cmd.kind == STORE:
-            lines = _known(r[6], "r6")
+            lines = _store_reach(r)
             pitch = _known(r[4], "r4") if rows > 1 else 0
             at = _known(cmd.to, "a DRAM address")
             for k in range(rows):
@@ -910,6 +911,15 @@ class Engine:
         lost = m.boot.source("stream off script", self.off)
         for dram, n in self.stored:
             m.boot.dram.write(dram_alias(dram), Bytes.unknown(n, lost))
+
+
+def _store_reach(r: list[Sv | None]) -> int:
+    """A store's r6, its 16-byte lines per row; rows that cover more than the DRAM alias space
+    are not bounded."""
+    lines, rows = _known(r[6], "r6"), _known(r[7], "r7")
+    if 16 * lines * rows > DRAM_BYTES:
+        raise _Off(f"{rows} rows of {16 * lines:#x} bytes: more than all of DRAM")
+    return lines
 
 
 def _nothing(m: Machine, cap: Confidence) -> None:

@@ -29,9 +29,13 @@ H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 LOCAL_BASE = 0x9D000000
 
 
+DRAM_BYTES = 0x40000000
+"""The DRAM alias space: addresses that differ above it name the same bytes (`dram_alias`)."""
+
+
 def dram_alias(addr: int) -> int:
     """0x6xxxxxxx (cached) and 0xAxxxxxxx (uncached) are the same DRAM."""
-    return addr & 0x3FFFFFFF
+    return addr & DRAM_BYTES - 1
 
 
 @dataclass(frozen=True)
