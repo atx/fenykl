@@ -63,18 +63,29 @@ def test_a_lane_load_lands_four_words_after_its_head(m, lag):
     assert m.lanes["L3"][5].lanes == (A if lag == 4 else B)
 
 
-@pytest.mark.parametrize(("gap", "tier"), [(1, I), (3, I), (4, V)])
-def test_lane_loads_in_flight_together_land_at_inferred(m, gap, tier):
+@pytest.mark.parametrize(
+    ("heads", "at", "tier"),
+    [
+        ((0x1D, 0x1D), (0, 1), V),
+        ((0x1D,) * 4, (0, 1, 2, 3), V),
+        ((0x1D,) * 5, (0, 1, 2, 3, 4), I),
+        ((0x1D, 0x1D), (0, 3), I),
+        ((0x1D, 0x1D), (0, 4), I),
+        ((0x1D, 0x1D), (0, 5), V),
+        ((0x1C, 0x1D), (0, 1), I),
+    ],
+)
+def test_lane_loads_in_flight_together(m, heads, at, tier):
+    """Only a short run of X0 0x1d heads in consecutive words keeps the loads verified."""
     m.a[1] = Sv(0x40)
-    m.memory[0x40] = Vec(A)
-    m.memory[0x41] = Vec(B)
-    first = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=0, f1=0)
-    second = w(f302_307=0x1D, f100_104=1, f105_109=0, f2_6=0, f1=1)
-    words = [IDLE] * (gap + 5)
-    words[0], words[gap] = first, second
-    words[gap + 4] = w(f248_249=0, f171_174=5)
+    for k in range(len(at)):
+        m.memory[0x40 + k] = Vec(A if k % 2 else B)
+    words = [IDLE] * (at[-1] + 5)
+    for k, (head, t) in enumerate(zip(heads, at, strict=True)):
+        words[t] = w(f302_307=head, f100_104=1, f105_109=0, f2_6=k >> 1, f1=k & 1)
+    words[at[1] + 4] = w(f248_249=0, f171_174=5)
     run(m, words)
-    assert m.lanes["L3"][5] == Vec(B, tier)
+    assert m.lanes["L3"][5] == Vec(A, tier)
 
 
 @pytest.mark.parametrize(
