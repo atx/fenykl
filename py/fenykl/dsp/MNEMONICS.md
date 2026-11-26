@@ -520,7 +520,7 @@ an instruction also carries its fields' (`Instr.tier`).
 | 0x41 | `sar` | ra, rb | ra >> rb | verified |
 | 0x42 | `shr` | ra, rb | ra >>> rb | verified |
 | 0x43 | `shl` | ra, rb | ra << rb | verified |
-| 0x44 | `ring_inc` | ra, imm | the ring pointer step: s = zext(ra) + 1, L the low 8 bits of imm13, the result s + L if s < 0, s - L if s >= L, else s | verified |
+| 0x44 | `ring_inc` | ra, imm | the ring pointer step: s = zext(ra) + 1, L from imm13 (`ring_length`), the result s + L if s < 0, s - L if s >= L, else s | verified |
 | 0x45 | `ring_inc_reg` | ra, rb | ring step ra + 1, L rb | verified |
 | 0x46 | `ring` | ra, imm, rr | the ring pointer step as 0x44's with s = zext(ra) + sext(R[f120_122]) | verified |
 | 0x47 | `ring_reg` | ra, rb, rr | the ring pointer step as 0x46's with L = rb | verified |

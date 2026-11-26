@@ -138,6 +138,8 @@ from .semantics import (
     lane_result,
     lane_tier,
     product_high,
+    ring_length,
+    ring_step,
     s_result,
     x_result,
 )
@@ -618,12 +620,11 @@ class Machine:
         else:
             step = self._rd("R", word["f120_122"])
             step = Sv(None if step.value is None else _s32(step.value), step.tier)
-        length = rb.value if code == 0x47 else c & 0xFF
+        length, ltier = (rb.value, V) if code == 0x47 else ring_length(c)
         if step.value is None or length is None:
             return Sv(None, tier)
-        s = ra.value + step.value
-        s = s + length if s < 0 else s - length if s >= length else s
-        return Sv(s & M32, min(tier, step.tier))
+        s = ring_step(ra.value + step.value, length)
+        return Sv(s & M32, min(tier, step.tier, ltier))
 
     def _local(
         self,

@@ -153,6 +153,18 @@ def local_offset(width: int, imm13: int) -> int:
     return width * imm13
 
 
+def ring_length(imm13: int) -> tuple[int | None, Confidence]:
+    """The ring length L of 0x44 / 0x46 from imm13 and its tier: the low 8 bits (verified on the
+    camera), bit 8 too (inferred: two jobs at 0x100 and 0x1f0 shifted dst as L = imm & 0x1ff
+    does, not as imm & 0xff), bits 10 and 11 ignored (verified on the camera); bits 9 and 12
+    were not measured, so L is unknown where they are set."""
+    if imm13 & 0x1200:
+        return None, H
+    if imm13 & 0x100:
+        return imm13 & 0x1FF, I
+    return imm13 & 0xFF, V
+
+
 def ring_step(s: int, length: int) -> int:
     """A ring pointer step from s = zext(ra) + sext(R) by the ring length L."""
     if s < 0:
@@ -274,8 +286,8 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     ),
     0x44: OpSemantics(
         V,
-        "the ring pointer step: s = zext(ra) + 1, L the low 8 bits of imm13, the result s + L "
-        f"if s < 0, s - L if s >= L, else s ({EXACT} at 216 points with 0x46 and 0x47)",
+        "the ring pointer step: s = zext(ra) + 1, L from imm13 (`ring_length`), the result "
+        f"s + L if s < 0, s - L if s >= L, else s ({EXACT} at 216 points with 0x46 and 0x47)",
     ),
     0x46: OpSemantics(
         V,
