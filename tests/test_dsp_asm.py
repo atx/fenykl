@@ -38,6 +38,7 @@ from fenykl.dsp.asm import (
     stream_load,
     stream_store,
     to,
+    wait,
 )
 from fenykl.dsp.disasm import listing, source
 from fenykl.dsp.fields import FIELDS, Confidence, Operands
@@ -285,6 +286,15 @@ def test_a_lane_block_is_whole_vectors(nbytes):
 def test_the_stream_helpers_check_their_arguments(build, error, match):
     with pytest.raises(error, match=match):
         build()
+
+
+def test_the_transfers_take_register_a_0_unless_given_another():
+    """The idle word's a (31) never ran in a transfer; program 13's a = 2 wait stays expressible."""
+    assert X1.hand(B[3]).word()["f110_114"] == 0
+    assert wait().word()["f110_114"] == 0
+    other = X1.wait(B[2], b=B[5])
+    assert other.word()["f110_114"] == 2
+    assert Bundle.of(other.word()).parts[0] == X1.wait(B[2])
 
 
 def test_the_mnemonics_file_is_current():

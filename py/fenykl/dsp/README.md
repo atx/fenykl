@@ -133,7 +133,9 @@ assert r.machine.g[3].value == 13
 - `b_add(B[12], B[2], 0x1000)`: `X1.add_imm` into B, `dst = src + k`;
 - `hand(*values)`: `X1.hand` per value, to the stream engine; a register of B goes as it is, an
   integer through `li` into the `asm.SCRATCH` registers the word before;
-- `wait()`: `X1.wait`, waits for the oldest outstanding command;
+- `wait()`: `X1.wait`, waits for the oldest outstanding command. `X1.hand` and `X1.wait` take
+  register a B[0] unless given another (`fields.STREAM_SELECT`): a 0x1d with a 1, 2 or 8 hands
+  nothing, and any other a is not measured;
 - `lane_block(channel, nbytes)`, `stream_load(channel, dram, vector)`,
   `stream_store(channel, vector, dram)`: the values that program a channel and its commands, for
   `hand`. `channel` is below `fields.STREAM_CHANNELS` (4), `dram` a register of B, `vector` in

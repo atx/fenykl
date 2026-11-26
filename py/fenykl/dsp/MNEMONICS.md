@@ -446,8 +446,8 @@ an instruction also carries its fields' (`Instr.tier`).
 | 0x19 | `or_` | a, b | a \| b | verified |
 | 0x1a | `and_` | a, b | a & b | verified |
 | 0x1b | `not_` | b | ~b | verified |
-| 0x1c | `hand` | b | hands B[b] to the stream engine, read before the word's ports write (`stream`) | verified |
-| 0x1d | `wait` |  | hands nothing and waits for one command of the stream engine (`stream`) | verified |
+| 0x1c | `hand` | b, a | with a = B[0] hands B[b] to the stream engine, read before the word's ports write (`stream`); another a not measured | verified |
+| 0x1d | `wait` | a | with a = B[0] hands nothing and waits for one command of the stream engine (`stream`); with B[1], B[2] or B[8] hands nothing and returns; another a not measured | verified |
 | 0x1e | `div` | a, b | no result on the ALU bus in its own word: a / b signed on X1's result bus 4 words later | verified |
 
 ## OP
