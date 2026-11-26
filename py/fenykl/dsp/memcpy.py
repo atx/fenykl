@@ -1392,9 +1392,10 @@ class Copy16Model:
         dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
         weaker through the path to it); None when no such halt runs. The job is stepped on a
         `Machine`, lenient: the halt is its first op 7, the three words behind it still run, and
-        the decisions on the path and their tiers are the machine's. A halt after a stream word
-        ran, or in a job whose stream engine stored (the tail included) or went off script,
-        raises: whether the stream drains first is open."""
+        the decisions on the path and their tiers are the machine's. A halt at or after a stream
+        word, or in a job whose stream engine stored (the tail included) or went off script,
+        raises: whether the stream drains first is open (at 58 the machine has no command handed,
+        but a halt in place of a word shifts the values its tail hands, a state not measured)."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
@@ -1409,15 +1410,16 @@ class Copy16Model:
         if at in stock:
             return None
         engine = machine.stream
-        if any(s.index in STREAM for s in flow.steps[:h]) or engine.stored:
+        if any(s.index in STREAM for s in flow.steps[: h + 1]) or engine.stored:
             why = "a halt after the stream started: whether the stream drains first is open"
             raise UnknownSemantics(at, "halt", [], why)
         if engine.off:
             why = f"the stream off script before the halt ({engine.off}): what it stores is open"
             raise UnknownSemantics(at, "halt", [], why)
-        # Edited words that run, the tail's included, are not modelled.
+        # Edited words that run, the tail's included, and inserted ones (stepped without them)
+        # are not modelled.
         stock_words = self.program.words
-        edited = any(
+        edited = bool(trace.inserted) or any(
             s.index >= len(stock_words) or words[s.index] != stock_words[s.index]
             for k, s in enumerate(flow.steps)
             if k != h
@@ -1426,7 +1428,7 @@ class Copy16Model:
         conf = H if trace.ignored or edited or machine.lapses else V if seen else I
         # The halt's own tier is `seen`'s; the other steps carry the path's and the tail's.
         tiers = [s.confidence for k, s in enumerate(flow.steps) if k != h]
-        conf = min([conf, *(t for t in tiers if t is not None)])
+        conf = min([conf, engine.cap, *(t for t in tiers if t is not None)])
         why = f"op 7 at word {at} halts the job before the stream: {Outcome.NO_STORE.value}"
         result = JobResult(Status.OK, [why], ignored=trace.ignored, notes=trace.notes)
         result.taint = conf

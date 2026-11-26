@@ -448,12 +448,12 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     assert result.status is Status.OK and result.stored is None
     assert result.taint is Confidence.VERIFIED
     assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
-    # At another index before the stream: inferred, at 58 too (no command was handed); behind
-    # the halt at 26, the brf 27 is a control word not measured there; after 58, open.
+    # At another index before the stream: inferred; behind the halt at 26, the brf 27 is a
+    # control word not measured there; from the stream's first word 58 on, open.
     for at, taint in (
         (20, Confidence.INFERRED),
-        (58, Confidence.INFERRED),
         (26, Confidence.HYPOTHESIS),
+        (58, None),
         (60, None),
     ):
         words = list(stock().words)
@@ -747,12 +747,22 @@ def test_an_insert_after_the_last_word_moves_nothing():
     assert boot.read(DST, LEN).taint == base.read(DST, LEN).taint
 
 
-def test_a_port_that_writes_nothing_leaves_no_open_destination():
-    word = Word.from_fields(
-        {"f267_268": 2, "f211_215": 5, "f272_273": 1, "f224_228": 6},
-        base=Word.data(0x0B, Operands(ra=0, imm=1)),
+def test_a_result_goes_to_its_port_registers_or_is_open():
+    const = Word.data(0x0B, Operands(ra=0, imm=1))
+    both = Word.from_fields(
+        {"f267_268": 1, "f211_215": 5, "f272_273": 1, "f224_228": 6}, base=const
     )
-    assert destinations(word) == ([(RegSet.OPERAND, 6, 3)], [], "")
+    assert destinations(both) == ([(RegSet.XREG, 5, 4), (RegSet.OPERAND, 6, 3)], [], "")
+    # A port that writes nothing (f267_268 = 2) is no destination, open or not.
+    idle = Word.from_fields({"f267_268": 2, "f211_215": 5}, base=both)
+    assert destinations(idle) == ([(RegSet.OPERAND, 6, 3)], [], "")
+    assert destinations(const)[2] == "no PR port enabled: where the result goes is open"
+    other = Word.from_fields({"f272_273": 2, "f224_228": 4}, base=const)
+    assert destinations(other) == (
+        [],
+        ["f224_228"],
+        "where the result goes under f272_273=2 is open",
+    )
 
 
 def test_an_inserted_op_takes_its_semantics_tier():
