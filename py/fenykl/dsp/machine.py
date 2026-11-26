@@ -243,8 +243,8 @@ WEDGING_S0_WHY = (
     "a third S0 0x4f word under M's strobe with port 272 / 2 in the job: three or four such "
     "words (nibbles 1..3, G12 written) wedged the camera's job, each as a fresh boot's first "
     "job after a stock copy, so the boot's earlier jobs are not needed; one alone (four "
-    "settings, either port form) and two (three pairs, adjacent or not) ran (verified in one "
-    "frame; other frames and settings inferred)"
+    "settings, either port form) and two (four pairs, adjacent or not) ran; each of three "
+    "triples wedged (verified in one frame; other frames and settings inferred)"
 )
 """The S0 head whose words, under M's strobe and with port 272 / 2, never let a job end on the
 camera from the third such word in a job; one or two ran, each writing nothing through the port."""
