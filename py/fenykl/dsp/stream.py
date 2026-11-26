@@ -40,51 +40,54 @@ inferred):
 - r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
   loads at up to 4 rows, stores at up to 2 rows; more rows inferred).
 
-Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch handed as 0xfffffe00 steps
-back; verified on loads) and memory offset + k r1. A row's DRAM address is floored to 16 bytes (a
-load's pitch of 0x208 steps 0x200, verified), a lane-memory offset to its vector, vectors counted
-modulo `fields.LANE_VECTORS` (verified; the wrap inferred). A load row fills r3 units from its n = r5 r6 elements; with more
-units than ceil(n / r2) the transfer never ends, with fewer it fills r3 units and ends
-(verified); with no elements (r6 0) a lane-memory load of r3 units ended (inferred, three jobs; what
-it writes was not seen, so its vectors are unknown). Lane memory: element i goes to lane i % 32 of vector i / 32, its low 16 bits, the
-lanes beyond n 0 (verified). Local memory: element i goes to element i, zero-extended or
-truncated to the memory's width (`LOCAL_LOADS`). A store row takes its n elements in the same
-order, truncated to the DRAM width (`LOCAL_STORES`); with fewer than n elements on the memory
-side (r2 r3 < n) it never ends (verified), but a lane-memory store of no units (r3 0) ended and
-wrote nothing (inferred, five jobs). Zero counts on local memory were not measured.
+Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch handed as
+0xfffffe00 steps back; verified on loads) and memory offset + k r1. A row's DRAM address is
+floored to 16 bytes (a load's pitch of 0x208 steps 0x200, verified), a lane-memory offset to its
+vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap inferred). A load row
+fills r3 units from its n = r5 r6 elements; with more units than ceil(n / r2) the transfer never
+ends, with fewer it fills r3 units and ends (verified). Lane memory: element i goes to lane
+i % 32 of vector i / 32, its low 16 bits, the lanes beyond n 0 (verified). Local memory: element
+i goes to element i, zero-extended or truncated to the memory's width (`LOCAL_LOADS`). A store
+row takes its n elements in the same order, truncated to the DRAM width (`LOCAL_STORES`); with
+fewer than n elements on the memory side (r2 r3 < n) it never ends (verified).
+
+Zero counts: a lane-memory load of r3 units with r6 0 ended (inferred, three jobs; what it writes
+was not seen, so its vectors are unknown), and a lane-memory store with r3 0 of n > 0 elements
+ended and wrote nothing (inferred, five jobs). Every other load or store with r3 or r6 0, on
+either memory, was not measured and goes off script.
 
 Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
-a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with no
-command outstanding never returns once the job has handed one; in a job that has handed none it
-was not measured (it raises `UnknownSemantics`); commands still
-outstanding at the job's end complete (verified for a store, inferred for a load). Of commands
-handed back to back before any 0x1d (32-byte loads) the first 19 ran in one job (measured); the
-rest wait in the engine and run as 0x1d's free room: 32 loads handed, then 32 0x1d, all returned
-(verified) and the loads read back had landed (measured); with no 0x1d the 20th to 32nd had not
-run 8 us later (measured). So a 0x1d counts the commands handed, run or held (inferred). A
-command of kind 2 counted for a 0x1d in one job (measured: a load joined, then kind 2, then a
-0x1d that returned) and in another loaded 32 bytes from its "from" into the vector its "to"
-names, as kind 0 does (measured; the vector its "from" names kept its content). The emulator
-queues the held commands as the engine does, up to `DEPTH` outstanding; handing past it
-wedges the job, so more raises. The 19
-running at once change only when a held load lands, not what it writes. The emulator never predicts a racing read: a load's destination is unknown from its
-hand until its 0x1d or the job's end (`finish`), a load takes its DRAM source as of the hand (a
-store handed after it runs after it), a store takes its source as of the hand and writes DRAM at
-once (inferred where the source is rewritten before the store completes: that race was not
-measured), and the lane memory read while any command is outstanding is a hypothesis, but
-outside every outstanding command's vectors: there verified beside one-row byte loads and stores
-of kinds 0 / 6, inferred beside other lane-memory shapes (`Engine.lane_tier`).
+a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
+no command outstanding never returns once the job has handed one; in a job that has handed none
+it was not measured (it raises `UnknownSemantics`); commands still outstanding at the job's end
+complete (verified for a store, inferred for a load). Of commands handed back to back before any
+0x1d (32-byte loads) the first 19 ran in one job (measured); the rest wait in the engine and run
+as 0x1d's free room: 32 loads handed, then 32 0x1d, all returned (verified) and the loads read
+back had landed (measured); with no 0x1d the 20th to 32nd had not run 8 us later (measured). So
+a 0x1d counts the commands handed, run or held (inferred). A command of kind 2 counted for a
+0x1d in one job (measured: a load joined, then kind 2, then a 0x1d that returned) and in another
+loaded 32 bytes from its "from" into the vector its "to" names, as kind 0 does (measured; the
+vector its "from" names kept its content). The emulator queues the held commands as the engine
+does, up to `DEPTH` outstanding; handing past it wedges the job, so more raises. The 19 running
+at once change only when a held load lands, not what it writes. The emulator never predicts a
+racing read: a load's destination is unknown from its hand until its 0x1d or the job's end
+(`finish`), a load takes its DRAM source as of the hand (a store handed after it runs after it),
+a store takes its source as of the hand and writes DRAM at once (inferred where the source is
+rewritten before the store completes: that race was not measured), and the lane memory read
+while any command is outstanding is a hypothesis, but outside every outstanding command's
+vectors: there verified beside one-row byte loads and stores of kinds 0 / 6, inferred beside
+other lane-memory shapes (`Engine.lane_tier`).
 
-What was not measured takes the engine off script: the lane memory is unknown for the rest of the
-job, what later commands write is unknown (`off` says why), and so is whether the job ends: a
-command it holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at its
-halt (`Machine.open_end`). A command whose destination cannot
-be bounded (among them a store whose rows write more than the DRAM alias space), a value handed
-after the grammar is lost and a 0x1d among a command's values raise `UnknownSemantics`, as do
-kinds and shapes not run and a job that never ends or wedges; on a lenient machine they lapse
-instead (`Machine.lapse`): a command that never ends goes off script, a kind or shape not run and
-what cannot be bounded forget every memory, and a 0x1d that never returns or was not measured
-and a queue past `DEPTH` go on as if they had returned."""
+What was not measured takes the engine off script: the lane memory is unknown for the rest of
+the job, what later commands write is unknown (`off` says why), and so is whether the job ends:
+a command it holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at
+its halt (`Machine.open_end`). A command whose destination cannot be bounded (among them a store
+whose rows write more than the DRAM alias space), a value handed after the grammar is lost and a
+0x1d among a command's values raise `UnknownSemantics`, as do kinds and shapes not run and a job
+that never ends or wedges; on a lenient machine they lapse instead (`Machine.lapse`): a command
+that never ends goes off script, a kind or shape not run and what cannot be bounded forget every
+memory, and a 0x1d that never returns or was not measured and a queue past `DEPTH` go on as if
+they had returned."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -701,11 +704,11 @@ class Engine:
         else:
             raise _Off(f"r0 {memory:#x}: not measured")
         needed = -(-n // per)
-        if not n and r3:
-            if memory != LANE_MEMORY:
-                raise _Off("a local load of no elements: not measured")
+        if memory == LANE_MEMORY and r3 and not r6:
             self.cap = min(self.cap, I)  # it ended on the camera (inferred)
             return self._lane_load(m, cmd, rows, bits, 0, r2, r3, tier)
+        if not r3 or not r6:
+            raise _Off(f"a {_side(memory)} load at r3 {r3}, r6 {r6}: not measured")
         if r3 > needed:
             why = f"a load of {r3} units for {needed} never ends"
             m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
@@ -744,9 +747,8 @@ class Engine:
             if m.lanes_lost:
                 return
             for at, kv in once.items():
-                if (
-                    kv is None or not lines
-                ):  # what a load of no lines writes was not seen
+                # What a load of no lines writes was not seen.
+                if kv is None or not lines:
                     m.memory[at] = UNKNOWN_VEC
                     continue
                 k, v = kv
@@ -839,12 +841,12 @@ class Engine:
             tier = min(tier, LOCAL_STORES[(r2, r5)])
         else:
             raise _Off(f"r0 {memory:#x}: not measured")
-        if not r3 and n:
-            if memory != LANE_MEMORY:
-                raise _Off("a local store of no units: not measured")
+        if memory == LANE_MEMORY and not r3 and n:
             # It ended on the camera, writing nothing (inferred).
             self.cap = min(self.cap, I)
             return _nothing
+        if not r3 or not r6:
+            raise _Off(f"a {_side(memory)} store at r3 {r3}, r6 {r6}: not measured")
         if r2 * r3 < n:
             why = f"a store of {n} elements from {r2 * r3} never ends"
             m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
@@ -985,6 +987,10 @@ def _read_dram(m: Machine, dram: int, n: int) -> Bytes:
     if n <= head:
         return m.boot.dram.read(at, n)
     return m.boot.dram.read(at, head) + m.boot.dram.read(0, n - head)
+
+
+def _side(memory: int) -> str:
+    return "lane-memory" if memory == LANE_MEMORY else "local"
 
 
 def _nothing(m: Machine, cap: Confidence) -> None:

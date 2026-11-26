@@ -304,8 +304,8 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
     `engine` the machine drove (a fresh one per job, as the machine needs). The word parts and
     the waits are capped at the weakest control step's tier: the flow decides which words run.
     The waits are also capped at the overlap model's tier and their commands' rates'.
-    A flow with an unknown step (a lapse) or an engine off script has no estimate. Raises ValueError for a flow that did
-    not halt."""
+    A flow with an unknown step (a lapse) or an engine off script has no estimate. Raises
+    ValueError for a flow that did not halt."""
     if flow.stop not in (Stop.HALT, Stop.OPEN_END):
         raise ValueError(f"the job did not halt: {flow.why}")
     lapsed = next((s for s in flow.steps if s.unknown), None)

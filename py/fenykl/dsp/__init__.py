@@ -49,6 +49,7 @@ from .asm import (
 from .disasm import listing, source
 from .emu import Boot, NoHalt, Run
 from .fields import Confidence
+from .job import Stop
 from .machine import Sv, Vec
 from .program import Program, assemble, labels
 from .semantics import UnknownSemantics
@@ -92,6 +93,7 @@ __all__ = [
     "R",
     "Reg",
     "Run",
+    "Stop",
     "Sv",
     "U",
     "UnknownSemantics",
