@@ -29,7 +29,7 @@ inferred: the lane memory, DRAM after a store and local memory after a load are 
 inferred):
 
 - r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways); a store
-  under r0 0x40 writes nothing (`NO_MEMORY`);
+  under r0 0x00, 0x10 or 0x40 writes nothing (`NO_MEMORY`);
 - r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
   (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
   count that ends the load, `ZERO_FORMATS`, inferred otherwise); local memory 4 bytes or 2
@@ -94,7 +94,8 @@ later commands write is unknown (`off` says why), and so is whether the job ends
 holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at its halt
 (`Machine.open_end`). A command whose destination cannot be bounded (among them a store whose rows
 write more than the DRAM alias space), a value handed after the grammar is lost and a 0x1d among a
-command's values raise `UnknownSemantics`, as do kinds and shapes not run and a job that never ends
+command's values (but right after a register or store key with a command outstanding: it waits and
+the group goes on, `Engine._joins_in_group`) raise `UnknownSemantics`, as do kinds and shapes not run and a job that never ends
 or wedges; on a lenient machine they lapse instead (`Machine.lapse`): a command that never ends
 goes off script, a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d
 that never returns or was not measured and a queue past `DEPTH` go on as if they had returned."""
@@ -277,11 +278,12 @@ HALF_VECTOR_ROWS = (1, 0x20, 0x20, 1, None, 0x10, 2, 2)
 """A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes from a vector-aligned
 offset: row 1's offset floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
 pre-registered: one job, each row from its own DRAM line pair)."""
-NO_MEMORY = 0x40
-NO_MEMORY_STORE = (NO_MEMORY, None, 0x20, 1, None, 0x10, 2, 1)
-"""A store under r0 0x40 in this shape (one row of one vector of bytes) ended and wrote nothing:
-dst kept its nonzero fill over its whole length (verified, pre-registered against zeros and a
-lane-memory store). Other shapes, and loads under r0 0x40, were not measured."""
+NO_MEMORY = (0x00, 0x10, 0x40)
+NO_MEMORY_STORE = (None, None, 0x20, 1, None, 0x10, 2, 1)
+"""A store under r0 0x00, 0x10 or 0x40 in this shape (one row of one vector of bytes) ended and
+wrote nothing: dst kept its nonzero fill over its whole length (verified, pre-registered against
+zeros and a lane-memory store; one job each). Other shapes, other r0 values, and loads under
+these, were not measured."""
 LOCAL_LOAD_NEVER_ENDS = (2, None, 1, 8, None, 0x10, 2, 1)
 """A local-memory load of 32 bytes into eight 32-bit words (r2 1, r5 0x10, one row): the camera's
 job never ended (one job; the firmware timed it out and the store of those words after it, a
@@ -541,6 +543,12 @@ class Engine:
             self._command(m, cmd)
 
     def _wait(self, m: Machine, index: int, where: str) -> None:
+        if self._joins_in_group():
+            # Measured with one load outstanding: a 0x1d right after a register key, and right
+            # after a store's key, waited for the load, and the group went on (verified, one
+            # job each).
+            self._pop(m, self.cap)
+            return
         if self.key is not None:
             if self.key.value & 0x20 == 0:
                 m.lapse(index, "x1 0x1d", f"{where}: a 0x1d inside a command's values")
@@ -554,6 +562,12 @@ class Engine:
             m.lapse(index, "x1 0x1d", why)
         else:
             m.lapse(index, "x1 0x1d", "a 0x1d with no command outstanding never ends")
+
+    def _joins_in_group(self) -> bool:
+        if self.key is None or self.group or not self.outstanding:
+            return False
+        v = self.key.value
+        return v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)
 
     def _go_off(self, m: Machine, why: str, lost: bool = False) -> None:
         if not self.off:
@@ -967,7 +981,7 @@ class Engine:
         if r5 not in STORE_FORMATS:
             raise _Off(f"store format {r5:#x}: not measured")
         bits, ftier = STORE_FORMATS[r5]
-        if _fits(cmd, NO_MEMORY_STORE):
+        if memory in NO_MEMORY and _fits(cmd, NO_MEMORY_STORE):
             return _nothing  # it ended and wrote nothing (verified)
         n = (128 // bits if bits else 0) * r6
         _, ks = _store_reach(r)

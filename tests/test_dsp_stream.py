@@ -360,11 +360,12 @@ def test_other_lane_pitches_off_whole_vectors_go_off_script(r7, to):
     assert "memory pitch" in e.off
 
 
-def test_a_store_under_r0_0x40_writes_nothing():
+@pytest.mark.parametrize("r0", [0x00, 0x10, 0x40])
+def test_a_store_under_r0_without_memory_writes_nothing(r0):
     m, e = machine(), stream.Engine()
     m.memory[0] = Vec(tuple(range(1, 33)))
     m.boot.put(DST, b"\xa5" * 32, "prefill")
-    drive(m, e, [*block(0, 0x40, 0, 0x20, 1, 0, 0x10, 2, 1), *store(0, 0, DST), WAIT])
+    drive(m, e, [*block(0, r0, 0, 0x20, 1, 0, 0x10, 2, 1), *store(0, 0, DST), WAIT])
     got = m.boot.read(DST, 32)
     assert bytes(got.data) == b"\xa5" * 32 and all(got.known)
     assert not e.off and not e.outstanding
@@ -722,6 +723,23 @@ def test_a_wait_inside_a_commands_values_raises():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="inside a command"):
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), stream.LOAD, SRC, WAIT])
+
+
+def test_a_wait_right_after_a_register_or_store_key_joins_the_outstanding_load():
+    """With a load outstanding, the 0x1d waits for it and the key's values follow (measured
+    after a register key and after a store's key); after a load's key it still raises."""
+    for mid in (
+        [key(1, 2), WAIT, 0x20, 1 << 6 | stream.STORE, 0, DST],
+        [*lanes(1, 1, r6=2), 1 << 6 | stream.STORE, WAIT, 0, DST],
+    ):
+        m, e = machine(bytes(range(32))), stream.Engine()
+        drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(1, 1, r6=2), *mid, WAIT])
+        got = m.boot.read(DST, 32)
+        assert bytes(got.data) == bytes(range(32)) and got.weakest() == V
+        assert not e.off and not e.outstanding
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="inside a command"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), stream.LOAD, WAIT])
 
 
 @pytest.mark.parametrize(
