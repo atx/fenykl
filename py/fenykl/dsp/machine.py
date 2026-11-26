@@ -943,21 +943,21 @@ class Machine:
             else:
                 self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
         rule = LANE_RULES[unit].get(head)
-        if rule is None and head in S_RULES[unit]:
-            return
         zeros = self._alone_zeros(unit, head, word, t)
         if rule is None:
-            # A head without a rule: its lane result is unknown at either lag (but for
-            # `ALONE_ZEROS`), and so is M's result of its unit in those words.
+            # A head without a lane rule: its lane result is unknown at either lag (but for
+            # `ALONE_ZEROS`), and so is M's result of its unit in those words unless the head
+            # has a scalar rule (`S_RULES`), which then gives M.
             for when in (t, t + 1):
-                self.open_m.setdefault(when, set()).add(unit)
+                if head not in S_RULES[unit]:
+                    self.open_m.setdefault(when, set()).add(unit)
                 if zeros:
                     continue
                 unknown = Vec(UNKNOWN_VEC.lanes, H)
                 self.lane_due.setdefault(when, {}).setdefault(unit, []).append(
                     (unknown, unknown)
                 )
-                self._why(when, unit, f"{unit} {head:#x} has no rule")
+                self._why(when, unit, f"{unit} {head:#x} has no lane rule")
             if unit == "s3" and word["f232_233"] == 1:
                 self._u_write = (word["f141_144"], Vec(UNKNOWN_VEC.lanes, H))
             return
