@@ -41,16 +41,12 @@ from .program import Program
 from .semantics import (
     LOCAL_BYTES,
     OP_SEMANTICS,
-    OTHER_FILES,
     Branch,
     Branching,
     Given,
-    OpSemantics,
-    RegSet,
     Sequencer,
     Trace,
     UnknownSemantics,
-    destinations,
 )
 from .state import (
     LOCAL_BASE,
@@ -369,8 +365,9 @@ class Executor:
     program end raises `UnknownSemantics`: what it does is open. A return without a link, or
     one that pops a local op 3's link, raises `LinkError`: no return lies between that op 3 and
     its T, so the return is not its own (stepped as calls, a stock loop re-ran its tail).
-    A data op runs as the op slot's semantics `ops`, its operands read from the operand set
-    (`Boot.slot`); a result goes where the word's PR ports send it (`semantics.destinations`),
+    A data op runs as the op slot's semantics (`OP_SEMANTICS`) over register intervals, as the
+    copy model runs inserted words (`memcpy.op_effect`), its operands read from the operand set
+    (`Boot.slot`); a result goes where the word's PR ports send it (`memcpy.destinations`),
     landing `latency` executed words later and unknown until then. A result whose destination
     is open raises `UnknownSemantics` (strict) or makes the open ports' registers unknown in both
     sets. An op without semantics raises (strict) or is recorded in its step, and then its ra
@@ -390,7 +387,6 @@ class Executor:
         sequencer: Sequencer | None = None,
         *,
         branching: Branching | None = None,
-        ops: dict[int, OpSemantics] | None = None,
         limit: int = STEP_LIMIT,
         local_op3_jump: bool = False,
         datapath: "Datapath | None" = None,
@@ -402,7 +398,6 @@ class Executor:
         if datapath is not None:
             datapath.strict = strict
         self.branching = branching or datapath or Given()
-        self.ops = OP_SEMANTICS if ops is None else ops
         self._landing: list[tuple[int, RegisterFile, int, Reg | None]] = []
         """Results in flight: (step count they land at, set, register, value)."""
 
@@ -656,16 +651,15 @@ class Executor:
             regs[r] = value
         self._landing = [x for x in self._landing if x[0] > now]
 
-    def _sets(self) -> dict[RegSet, RegisterFile]:
-        return {RegSet.XREG: self.boot.regs, RegSet.OPERAND: self.boot.slot}
-
     def _route(self, i: int, word: Word, result: Reg | None, now: int) -> str:
         """Send a data op's result through its word's PR ports; returns why a destination is
         open ("" when none is)."""
+        from .memcpy import OTHER_FILES, RegSet, destinations  # memcpy imports emu
+
         dests, open_, why = destinations(word)
         if why and self.strict:
             raise UnknownSemantics(i, op(word.op).name, [], why)
-        sets = self._sets()
+        sets = {RegSet.XREG: self.boot.regs, RegSet.OPERAND: self.boot.slot}
         for to, r, latency in dests:
             sets[to][r] = None
             self._landing.append((now + latency, sets[to], r, result))
@@ -676,9 +670,15 @@ class Executor:
         return why
 
     def _data(self, i: int, word: Word, slot: bool, now: int = 0) -> Step:
+        from .memcpy import op_effect  # the copy model's evaluator; memcpy imports emu
+
         args = word.operands
-        sem = self.ops.get(word.op)
-        effect = None if sem is None else sem.run(word, self.boot.slot, self.boot.local)
+        sem = OP_SEMANTICS.get(word.op)
+        effect = (
+            None
+            if sem is None
+            else op_effect(sem, word, self.boot.slot, self.boot.local)
+        )
         if effect is not None:
             note = effect.note
             if effect.computes:

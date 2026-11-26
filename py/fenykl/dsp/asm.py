@@ -64,7 +64,7 @@ from .fields import (
     lookup,
     op,
 )
-from .semantics import OP_SEMANTICS, OpValue
+from .semantics import OP_SEMANTICS
 from .units import UNITS
 from .word import Word
 
@@ -1175,8 +1175,8 @@ def formula(unit: str, code: int) -> str:
             return f"{X0_LANE_MEMORY[code][0]}; scalar: {text}"
         return text
     sem = OP_SEMANTICS.get(code)
-    if sem is not None and isinstance(sem.run, OpValue):
-        return sem.run.text
+    if sem is not None and sem.rule is not None:
+        return sem.rule.text
     return _rule(op(code).fact if sem is None else sem.fact)
 
 

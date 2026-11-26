@@ -14,7 +14,7 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` with labels, `call_return_errors()` |
 | `disasm.py` | listings and DSL source (bundles) of a program |
-| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
+| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words (the op slot over register intervals, `op_effect`, `destinations`), the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
 | `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
 | `job.py` | `Job`, a program and its request; `Flow`, `Step`, `Stop`: what stepping a job executed |
@@ -246,7 +246,9 @@ raw: each X head reads it zero- or sign-extended.
 
 ```python
 word = S1.xor_imm(L1[4], imm=0x20, a=L1[4], r=F1[4]).word()  # S1 0x04: b ^ 0x20
-HEAD_VIEWS["s1"].decode(word.value)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
+HEAD_VIEWS["s1"].decode(
+    word.value
+)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
 ```
 
 A view is per unit, not per head value: no table gives which of s, t, r, u, idx, val or the
@@ -825,7 +827,7 @@ An inserted word is covered by its content: the idle word, or a data op whose fi
 are all in the op slot and the PR ports, at its op semantics' confidence (`OP_SEMANTICS`, or
 the executor's `ops`), when the semantics covers its operands. A load is recorded only (where
 its datum goes is open; with a PR port enabled it is UNKNOWN). A result goes through the word's
-PR ports (`semantics.destinations`), and only right after stock word 64, the site where ops were
+PR ports (`memcpy.destinations`), and only right after stock word 64, the site where ops were
 measured (`memcpy.ENGINE_AFTER`): there the operands r2 = (len + 0x1f) / 16 and r7 near 0x4000
 are known (inferred; r7 at len 0x2000 and 0x4000 only), a port-272 result feeds later
 inserts' operands three words on, and a port-267 result, times 16 (`memcpy.READOUT`), is what
@@ -1010,7 +1012,7 @@ order, with how the run stopped: halt, an undecided branch, or the step limit.
 - **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): the family A loads 0x1a,
   0x16, 0x14, 0x10 and 0x0e record their read (the datum's delivery three words on is not
   modelled), the stores 0x18, 0x12 and 0x0c make their bytes unknown (R is not modelled), the computing ops send their result through the word's PR
-  ports (`semantics.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
+  ports (`memcpy.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
   the operands three words on, unknown until then; exact readout shows the next word reading a
   272 / 1 write, which these latencies do not model yet), and the idle op does nothing in the
   slot. This is the stepper's own model; with `machine.Machine` as its datapath the loads
@@ -1046,7 +1048,11 @@ from fenykl.dsp.emu import Boot
 boot = Boot()
 boot.put(SRC, data, "src")
 r = boot.run(program, regs={"B": {3: SRC, 2: DST}})  # registers by file, over the carry
-r.machine.g[16], r.flow.runs(), r.estimate  # registers at the halt, the words run, the time
+(
+    r.machine.g[16],
+    r.flow.runs(),
+    r.estimate,
+)  # registers at the halt, the words run, the time
 boot.read(DST, n)  # what the program stored, known or not, with its tier
 boot.run(program2)  # starts with the registers and lane memory the run before left
 ```

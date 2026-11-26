@@ -13,7 +13,7 @@ from fenykl.dsp import commands
 from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.memcpy import Copy16Model
+from fenykl.dsp.memcpy import Copy16Model, RegSet, destinations
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
 from fenykl.dsp.semantics import OP_SEMANTICS, Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
@@ -747,6 +747,14 @@ def test_an_insert_after_the_last_word_moves_nothing():
     assert boot.read(DST, LEN).taint == base.read(DST, LEN).taint
 
 
+def test_a_port_that_writes_nothing_leaves_no_open_destination():
+    word = Word.from_fields(
+        {"f267_268": 2, "f211_215": 5, "f272_273": 1, "f224_228": 6},
+        base=Word.data(0x0B, Operands(ra=0, imm=1)),
+    )
+    assert destinations(word) == ([(RegSet.OPERAND, 6, 3)], [], "")
+
+
 def test_an_inserted_op_takes_its_semantics_tier():
     end = len(stock())
     stock_result, base = run(stock())
@@ -755,7 +763,7 @@ def test_an_inserted_op_takes_its_semantics_tier():
     weak = replace(OP_SEMANTICS[0x1A], confidence=Confidence.HYPOTHESIS)
     boot = Boot()
     boot.put(SRC, bytes(range(256)) * (LEN // 256), "src")
-    emu = Executor(boot, model(), ops={**OP_SEMANTICS, 0x1A: weak})
+    emu = Executor(boot, Copy16Model(stock(), ops={**OP_SEMANTICS, 0x1A: weak}))
     result = emu.run(commands.copy(inserted(end, LOAD), SRC, DST, LEN))
     dst = boot.read(DST, LEN)
     assert result.status is Status.OK and dst.data == base.read(DST, LEN).data
