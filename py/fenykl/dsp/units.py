@@ -8,6 +8,10 @@ inferred). The op slot is the op with its operands; PB and PR are banks of ports
 owning one field (`fields.PORTS`); M is the strobe that puts an S head's result on X0's result
 bus, with a held 2-bit field; Q is a mode. The constant bits form no unit. A unit's
 fields need not be contiguous; re-cutting one is an edit of the `unit` of its fields.
+
+In the stock programs S0..S3, PB and M (the compute group) act mostly in words with an idle op,
+and X0, X1 and PR (the transfer group) in words with the data ops, early in a routine (in the
+bytes).
 """
 
 from dataclasses import dataclass

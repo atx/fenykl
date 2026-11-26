@@ -101,8 +101,9 @@ READOUT = 16
 """The load offset (word 68) and the count (word 73) use a register value in units of 16 bytes:
 the copy model holds an inserted op's result there as those roles use it, 16 times what the op
 computes (inferred: the scale that read as immediates and results scaled by 16 through these
-two roles, and that exact readout of own programs on the camera does not show). The address
-role takes plain byte addresses.
+two roles, and that exact readout of own programs on the camera does not show; r2 & 0x1080
+through the count at len 0x1100 stored nothing, as a 16-byte unit predicts). The address role
+takes plain byte addresses.
 
 The values the transfers hand explain the scale. The load placement (68) and the store offset
 (76) are addresses in bytes of the lane memory's 16-bit elements, 64 per vector, value >> 6 the
@@ -448,7 +449,8 @@ or with 47 on 8 too, never ended (measured on the camera, one run each)."""
 # measured) each element zero-extended to a 32-bit word; 0x0d is no line count: the store
 # writes zeros over the whole length (verified on the camera, pre-registered against a 13 x 9-bit
 # pack); 0x14 and 0x18 never complete (the job times out; that they have no line is inferred).
-# The model has the formats of the registers above.
+# 16-bit lanes also leave as bytes, interleaved by S3 0xa / 0xb with a shift by 8 (verified on
+# the camera). The model has the formats of the registers above.
 
 _FORMATS: dict[int, str] = {
     6: "bytes",

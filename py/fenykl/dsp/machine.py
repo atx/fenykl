@@ -38,6 +38,24 @@ Lenient (`Machine.strict` False), a case the facts do not cover lapses instead (
 what it may write is forgotten, its word's step is unknown and all the job leaves and decides from
 there on is a hypothesis. A control word whose transfer cannot be followed (it leaves its program)
 raises in either mode.
+
+Programs composed from these rules ran exact on the camera, every output byte pre-registered:
+- a loop of 16 passes, each incrementing an index into G and A, loading two vectors into L2
+  (X0 0x1d), multiplying them (S2 0x2), taking the product's halves into L1 through the ports
+  of f155_158 and f159_162 under enable 1 and its low half into L3 through f175_178's under 1,
+  narrowing with S1 0x29 into O under 3,
+  storing with X0 0x1b and reducing the products in L3 with S3 0x2, read through M into G and
+  accumulated by op 0x35: the 32-bit sum of 512 products and every stored vector;
+- a 3 x 3 convolution of a byte image with signed weights in F2 and 32-bit accumulators per
+  lane (S2 0x5's product halves into L0 and L1, the 32-bit add per lane, S1 0x28's narrowing
+  shift, S0 0x8's clamp, an X0 store), DRAM to DRAM in one job; also as a loop of 27 words per
+  32-pixel output row, the multiplies one word apart, at about 5.4 ns per word (timed over
+  several copies);
+- a dense layer whose weights stay in the lane memory, so that later jobs carry only their
+  input;
+- layers chained in one job: two convolutions and a 2 x 2 max pool (max_u of row pairs, then
+  S3's even / odd lane splits 0xd / 0xc joined by max_u), the rows between the layers staying in
+  the lane memory.
 """
 
 from collections.abc import Mapping, Sequence
@@ -241,7 +259,13 @@ class Carry:
     """What one job leaves to the next of the same boot: the lane memory and every register file
     (verified on the camera: a job read what the job before had written into G, R, A, B, F0..F3,
     the four lane files, U, O and a lane-memory vector), each file by its name. A program
-    that runs between the two jobs changes what it writes: replaying it is the caller's part."""
+    that runs between the two jobs changes what it writes: replaying it is the caller's part.
+
+    Nothing clears the DSP's state between jobs: every register file, the lane memory and the
+    local memory (`emu.Boot`) keep their content, except what the next job's own words write; a
+    stock copy of n bytes overwrites lane-memory vectors 0..ceil(n / 32) - 1 and its own
+    registers (verified on the camera, pre-registered). After power-up they hold SRAM content,
+    stable within a boot and a few bits apart between boots (verified on the camera)."""
 
     lane_memory: dict[int, Vec] = field(default_factory=dict)
     registers: dict[str, list] = field(default_factory=dict)
