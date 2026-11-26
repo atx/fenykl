@@ -16,6 +16,7 @@ from ..semantics import (
     LOCAL_STORES_RB,
     LOCAL_UNITS,
     MULTIPLY_LAG,
+    OP_SEMANTICS,
     PR_ENABLES,
     OpSemantics,
     OpValue,
@@ -301,6 +302,21 @@ def _ring_r(text: str) -> Callable[[Word, RegisterFile, Space], Effect | None]:
     return run
 
 
+def _select(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+    """0x08: ra where R[f120_122] is 0, else rb; the R file is not modelled, so the result is
+    the hull of ra and rb."""
+    args = word.operands
+    assert args is not None and args.rb is not None
+    a, b = slot[args.ra], slot[args.rb]
+    name = f"R{word['f120_122']} == 0 ? r{args.ra} : r{args.rb} (op 0x8)"
+    if a is None or b is None:
+        return Effect(True, None, f"{name}: an unknown input")
+    taint = min(a.taint, b.taint, OP_SEMANTICS[0x08].confidence)
+    lo, hi = min(a.lo, b.lo), max(a.hi, b.hi)
+    value = f"{lo:#x}" if lo == hi else f"{lo:#x}..{hi:#x}"
+    return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
+
+
 def _multiply(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     """0x48 / 0x49: the low 32 bits of ra x rb, recorded only: stepping does not deliver a
     product to the next word's ports."""
@@ -333,6 +349,7 @@ _OWN_RULES: dict[int, Evaluate] = {
     **{code: _local_load_rb for code in LOCAL_LOADS_RB},
     **{code: _local_store_rb(width) for code, width in LOCAL_STORES_RB.items()},
     0x38: _and_mask,
+    0x08: _select,
     0x0B: _const,
     0x44: _ring_one,
     0x46: _ring_r("ring step ra + R, L imm"),

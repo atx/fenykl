@@ -365,6 +365,15 @@ def test_an_own_word_result_after_an_open_head_is_unknown(m):
     assert m.f["F1"][3].value is None
 
 
+def test_s0_0x4f_under_m_into_port_272_wedges(m):
+    with pytest.raises(UnknownSemantics, match="wedged"):
+        run(m, [w(f278_284=0x4F, f276=0, f272_273=2, f224_228=12)])
+
+
+def test_s0_0x4f_under_m_into_port_270_runs(m):
+    run(m, [w(f278_284=0x4F, f276=0, f270_271=2, f221_223=0)])
+
+
 def test_a_lone_own_word_result_under_another_unit_is_not_on_m(m):
     m.f["F1"][4] = Sv(0x55AA)
     m.f["F1"][3] = Sv(0x0A5A)
@@ -495,6 +504,22 @@ def test_the_ring_step_takes_its_length_from_all_of_rb(m, ra, r, rb, want):
     m.g[10], m.g[11], m.r[1] = Sv(ra), Sv(rb), Sv(r & 0xFFFFFFFF)
     run(m, [op_word(0x47, 10, 11, f120_122=1, f272_273=1, f224_228=12)])
     assert m.g[12].value == want
+
+
+@pytest.mark.parametrize(
+    "rr, r, want, tier",
+    [
+        (3, 0, 0x1111, Confidence.VERIFIED),
+        (3, 0x80000000, 0x2222, Confidence.VERIFIED),
+        (5, 0x10000, 0x2222, Confidence.VERIFIED),
+        (1, 0, 0x1111, Confidence.INFERRED),
+        (3, None, None, Confidence.VERIFIED),
+    ],
+)
+def test_op_8_selects_ra_on_a_zero_r_register(m, rr, r, want, tier):
+    m.g[10], m.g[11], m.r[rr] = Sv(0x1111), Sv(0x2222), Sv(r)
+    run(m, [op_word(0x08, 10, 11, f120_122=rr, f272_273=1, f224_228=12)])
+    assert m.g[12] == Sv(want, tier)
 
 
 def test_a_unit_bus_ors_a_late_result_with_the_next_words_own(m):

@@ -130,6 +130,7 @@ from .semantics import (
     OP_SEMANTICS,
     PR_ENABLES,
     S_RULES,
+    SELECT_MEASURED,
     X_RULES,
     Branch,
     UnknownInput,
@@ -235,6 +236,14 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
+WEDGING_S0 = 0x4F
+WEDGING_S0_WHY = (
+    "S0 0x4f under M's strobe with port 272 / 2: the camera wedged the job (measured on two "
+    "boots: four such words, nibbles 1..3, G12 written; with port 270 / 2 into R[0] and one "
+    "setting it ran); which word or setting wedges is not measured"
+)
+"""The S0 head whose word, under M's strobe and with port 272 / 2, never let a job end on the
+camera."""
 LATCH_MEASURED = {
     "s0": frozenset({0x05, 0x20, 0x41}),
     "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
@@ -523,6 +532,8 @@ class Machine:
         x1 = self._x(index, word, "x1", t)
         own = self._s_units(index, word, t)
         if word["f276"] == 0:
+            if word[HEAD_IDS["s0"]] == WEDGING_S0 and word["f272_273"] == 2:
+                self.lapse(index, "s0 0x4f", WEDGING_S0_WHY)
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
             # M; with nothing on M beside an X0 head the kept register is not measured).
@@ -589,6 +600,9 @@ class Machine:
                 (Sv(value, tier), "product")
             )
             return None
+        if code == 0x08:
+            assert rb is not None
+            return self._select(word, ra, rb, sem.confidence)
         if sem.rule is not None:
             rule = sem.rule
             ins = [ra] if rule.reads_ra else []
@@ -610,6 +624,21 @@ class Machine:
         raise UnknownSemantics(
             index, op(code).name, [(OP_FIELD, code)], "no exact rule"
         )
+
+    def _select(self, word: Word, ra: Sv, rb: Sv, tier: Confidence) -> Sv:
+        """Op 0x08: ra where R[f120_122] is 0, else rb (measured on the camera by exact readout:
+        R 0 gave ra at f120_122 0, 3, 5, 6 and 7, every non-zero R tried gave rb, also in
+        program 13's word 107, which so sets the first block at b = 1). An unknown R gives an
+        unknown result unless ra and rb agree."""
+        r = word["f120_122"]
+        x = self._rd("R", r)
+        if r not in SELECT_MEASURED:
+            tier = min(tier, I)
+        if x.value is None:
+            same = ra.value is not None and ra.value == rb.value
+            return Sv(ra.value if same else None, min(tier, ra.tier, rb.tier, x.tier))
+        pick = ra if x.value == 0 else rb
+        return Sv(pick.value, min(tier, x.tier, pick.tier))
 
     def _ring(
         self, index: int, word: Word, code: int, ra: Sv, rb: Sv | None, c: int, tier: Confidence

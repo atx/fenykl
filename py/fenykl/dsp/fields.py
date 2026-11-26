@@ -3229,12 +3229,12 @@ FAMILIES = (
         True,
         0,
         "ra, rb and f120_122, imm 0 in every word; register-register ALU ops, 32-bit wrap "
-        f"({EXACT} unless tagged): 0x08 / 0x09 rb, 0x32 abs(rb), 0x3c ra & rb, 0x3a "
+        f"({EXACT} unless tagged): 0x08 ra where R[f120_122] is 0, else rb; 0x09 rb, 0x32 abs(rb), 0x3c ra & rb, 0x3a "
         "ra | rb, 0x34 ra - rb, 0x35 ra + rb, 0x33 -rb, 0x3d ~ra, 0x2f min signed, 0x2e max "
         "signed, 0x2c max unsigned, 0x41 ra >> (rb & 31) arithmetic, 0x42 logical, "
         "0x43 ra << (rb & 31), compares to 1 or 0: 0x28 / 0x29 ra <= rb, ra < rb "
         "unsigned, 0x2a / 0x2b signed, 0x30 / 0x31 ra != rb, ra == rb; f120_122 has no effect "
-        "but in 0x47, family F's ring pointer step with R[f120_122] and L = rb; 0x48 and 0x49 "
+        "but in 0x08 and in 0x47, family F's ring pointer step with R[f120_122] and L = rb; 0x48 and 0x49 "
         "give no ALU result, change no operand and do not stall, their function open; no op "
         "screened multiplies",
     ),

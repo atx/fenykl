@@ -964,7 +964,8 @@ OP = Unit(
     03 jump to
     04 ret rb
     07 halt
-    09,08 mov rb
+    08 sel ra rb rr
+    09 mov rb
     0a orhi ra imm
     0b li imm
     0c stb ra imm rr
