@@ -80,9 +80,10 @@ does, up to `DEPTH` outstanding; handing past it wedges the job, so more raises.
 at once change only when a held load lands, not what it writes. The emulator never predicts a
 racing read: a load's destination is unknown from its hand until its 0x1d or the job's end
 (`finish`), a load takes its DRAM source as of the hand (a store handed after it runs after it),
-a store takes its source as of the hand and writes DRAM at once (inferred where the source is
-rewritten before the store completes: that race was not measured; so is the order of commands
-on one DRAM range while one of them is outstanding, inferred), and the lane memory read
+a store takes its source as of the hand and writes DRAM at once (where the source is rewritten
+before the store completes, inferred for a store of one vector and unknown for the rewritten
+vectors of a longer store: one of 0x80 vectors took the new bytes, measured), the order of
+commands on one DRAM range while one of them is outstanding is inferred, and the lane memory read
 while any command is outstanding is a hypothesis, but outside every outstanding command's
 vectors: there verified beside one-row byte loads and stores of kinds 0 / 6, inferred beside
 other lane-memory shapes (`Engine.lane_tier`).
@@ -286,6 +287,12 @@ LOCAL_LOAD_NEVER_ENDS = (2, None, 1, 8, None, 0x10, 2, 1)
 job never ended (one job; the firmware timed it out and the store of those words after it, a
 measured shape, wrote nothing), so this shape never ends (inferred). Other byte or 16-bit loads
 into 32-bit words were not run."""
+ROWS_LOAD_BESIDE = (1, 0x1000, 0x20, 0x40, 0x800, 0x10, 0x80, 3)
+LOCAL_LOAD_BESIDE = (2, 0, 4, 0x200, 0, 0x10, 0x80, 1)
+"""Loads beside which own lane words outside their vectors were measured on the camera: a 3-row
+byte load of 0x40 vectors per row, and a local-memory byte load of 0x800 bytes (which writes no
+lane vector). While each was outstanding, an X0 store into a vector outside it, and lane reads of
+such a vector, gave the bytes as alone (verified, pre-registered; one job each)."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -433,7 +440,8 @@ class Engine:
         `vector` lies outside every outstanding command's lane-memory vectors: lane loads and
         stores on one bank while a byte load of one row into the other and a byte store of one
         row from it were outstanding gave the pre-registered bytes on the camera (verified for
-        those shapes); beside any other lane-memory shape outside its vectors inferred."""
+        those shapes and `ROWS_LOAD_BESIDE` / `LOCAL_LOAD_BESIDE`); beside any other lane-memory
+        shape outside its vectors inferred."""
         if not self.outstanding:
             return self.cap
         if vector is None or any(s is None or vector in s[0] for s in self.spans):
@@ -450,9 +458,12 @@ class Engine:
         """The lane vectors a lane-memory load, store or fill writes or reads, as the command
         does (a load r3 per row, a store its elements' vectors per row, a fill r3), and the tier
         of words beside it elsewhere: verified for a plain (kind 0 / 6) one-row byte command at
-        r2 0x20, inferred for other shapes; None for other memory."""
+        r2 0x20 and the loads of `ROWS_LOAD_BESIDE`, inferred for other shapes; no vectors at
+        verified for the local load of `LOCAL_LOAD_BESIDE`; None for other memory."""
         r = cmd.regs
         if r[0].value != LANE_MEMORY:
+            if plain and cmd.kind != STORE and _fits(cmd, LOCAL_LOAD_BESIDE):
+                return frozenset(), V
             return None
         if cmd.kind == FILL:
             base = cmd.to.value // VECTOR_BYTES
@@ -483,7 +494,8 @@ class Engine:
             and r[5].value == 0x10
             and last < LANE_VECTORS  # a wrap is only inferred
         )
-        return vectors, V if byte_row else I
+        rows_beside = plain and cmd.kind != STORE and _fits(cmd, ROWS_LOAD_BESIDE)
+        return vectors, V if byte_row or rows_beside else I
 
     def finish(self, m: Machine) -> None:
         """The job ends: the commands still outstanding complete (inferred for loads: only a
@@ -1027,12 +1039,23 @@ class Engine:
                 )
             if same:
                 return
-            # The source was rewritten while the store was queued: a race not measured.
-            for dram, _ in rows:
+            # The source was rewritten while the store was queued. Measured on the camera with an
+            # X0 store into the store's last vector in the words right after its hand: a store of
+            # one vector had taken the old bytes, a store of 0x80 vectors took the new ones into
+            # its last vector. So the store keeps the old bytes (inferred) when it reads one vector;
+            # with more, a rewritten vector's bytes are unknown.
+            many = memory == LANE_MEMORY and sum(len(a) for a in taken) > 1
+            for (dram, _), was, new in zip(rows, taken, now, strict=True):
                 got = _read_dram(m, dram, 16 * r6)
                 for i, owner in enumerate(got.src):
                     if owner == src:
                         got.taint[i] = min(got.taint[i], I)
+                if many:
+                    per = 16 * r6 // len(was) if 16 * r6 % len(was) == 0 else 16 * r6
+                    for v, (x, y) in enumerate(zip(was, new, strict=True)):
+                        if x is not y:
+                            for i in range(v * per, min((v + 1) * per, 16 * r6)):
+                                got.known[i] = 0
                 _write_dram(m, dram, got)
 
         return complete

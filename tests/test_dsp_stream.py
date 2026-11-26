@@ -440,6 +440,21 @@ def test_a_lane_source_rewritten_while_the_store_is_queued_is_inferred():
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
 
 
+def test_a_rewritten_vector_of_a_longer_store_is_unknown():
+    """Measured on the camera: a store of 0x80 vectors took an X0 store into its last vector
+    made after its hand. With more than one vector, the rewritten one's bytes are unknown;
+    the others stay as of the hand (inferred)."""
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(32)))
+    m.memory[1] = Vec(tuple(range(32, 64)))
+    drive(m, e, [*lanes(0, 2, r6=4), *store(0, 0, DST)])
+    m.memory[1] = Vec((0,) * 32)
+    drive(m, e, [WAIT])
+    got = m.boot.read(DST, 64)
+    assert all(got.known[:32]) and set(got.taint[:32]) == {I}
+    assert not any(got.known[32:])
+
+
 def test_a_local_source_rewritten_while_the_store_is_queued_is_inferred():
     m, e = machine(), stream.Engine()
     m.boot.local.write(LOCAL_BASE + 0x400, Bytes.of(bytes(range(32)), 0))
@@ -901,6 +916,22 @@ def test_words_beside_other_shapes_keep_at_most_inferred():
         m, e = machine(bytes(range(256))), stream.Engine()
         drive(m, e, values)
         assert e.lane_tier(0x40) == I
+
+
+def test_words_beside_the_measured_rows_and_local_loads_are_verified():
+    """A 3-row byte load of 0x40 vectors per row and a local byte load of 0x800 bytes: outside
+    their vectors verified (measured beside each); another local shape leaves a hypothesis."""
+    rows = block(0, 1, 0x1000, 0x20, 0x40, 0x800, 0x10, 0x80, 3)
+    loc = block(0, 2, 0, 4, 0x200, 0, 0x10, 0x80, 1)
+    other = block(0, 2, 0, 4, 0x100, 0, 0x10, 0x40, 1)
+    for values, tier in (
+        ([*rows, *load(0, SRC, 0x100 * 64)], V),
+        ([*loc, *load(0, SRC, 0x1000)], V),
+        ([*other, *load(0, SRC, 0x1000)], H),
+    ):
+        m, e = machine(bytes(0x3000)), stream.Engine()
+        drive(m, e, values)
+        assert e.lane_tier(0x300) == tier
 
 
 def test_kind_4_rows_on_channel_1_store_as_run():
