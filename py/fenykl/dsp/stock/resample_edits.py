@@ -29,10 +29,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from .fields import GRID_A as GRID_A_FIELDS
-from .fields import GRID_B as GRID_B_FIELDS
-from .fields import P16_C2_BITS, Field, lookup
-from .word import IDLE, Word
+from ..fields import GRID_A as GRID_A_FIELDS
+from ..fields import GRID_B as GRID_B_FIELDS
+from ..fields import P16_C2_BITS, Field, lookup
+from ..word import IDLE, Word
 
 ONE = 0x10000
 
@@ -188,7 +188,7 @@ class Phase:
 @dataclass(frozen=True)
 class Substitute:
     """Plane 0 at b = 1 with tap `tap`'s product replaced by the boot's tap-0 substitute
-    (`Boot.substitute`), a per-lane value added without the multiply: the drop of the tap's
+    (`StockBoot.substitute`), a per-lane value added without the multiply: the drop of the tap's
     product (`Operands((None, 1, 2, 3))` for tap 0) where the substitute is known to be 0,
     unknown where it is not known. Taps 1 and 2 (words 440 and 441) ran only on boots where it
     was 0 and gave their drop there; that they read the same state is a hypothesis, so

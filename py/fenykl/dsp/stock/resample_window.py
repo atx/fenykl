@@ -18,6 +18,9 @@ writes and the eight S2 term words. What it takes from the stock region (the anc
 
 from collections.abc import Sequence
 
+from ..fields import Confidence, lookup
+from ..program import Program
+from ..word import Word
 from .exec import (
     COEFFICIENT_WRITE,
     PORT_WRITES,
@@ -33,8 +36,6 @@ from .exec import (
     is_load,
     out_of,
 )
-from .fields import Confidence, lookup
-from .program import Program
 from .resample_edits import (
     COEFFICIENT_SELECT,
     FACTS,
@@ -49,7 +50,6 @@ from .resample_edits import (
     Probe,
     Stock,
 )
-from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 

@@ -1,14 +1,14 @@
 """The op slot over register intervals: what a data op of `semantics.OP_SEMANTICS` does when its
-operands are `state.Reg` intervals (`op_effect`), and where the word's PR ports send its result
-(`destinations`). The copy model covers inserted words by it (`memcpy.Copy16Model`)."""
+operands are `registers.Reg` intervals (`op_effect`), and where the word's PR ports send its result
+(`destinations`). The copy model covers inserted words by it (`copy.Copy16Model`)."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from itertools import product
 
-from .fields import IDLE_OP, PR_SOURCES, Confidence, lookup
-from .semantics import (
+from ..fields import IDLE_OP, PR_SOURCES, Confidence, lookup
+from ..semantics import (
     LOCAL_BYTES,
     LOCAL_LOADS,
     LOCAL_LOADS_RB,
@@ -23,8 +23,9 @@ from .semantics import (
     local_offset,
     ring_step,
 )
-from .state import Reg, RegisterFile, Space
-from .word import Word
+from ..state import Space
+from ..word import Word
+from .registers import Reg, RegisterFile
 
 V = Confidence.VERIFIED
 
