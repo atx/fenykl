@@ -91,12 +91,41 @@ moves every label target; an undefined or duplicate label raises `AssemblyError`
 that moves a hypothesis field off idle gets one `HypothesisFieldWarning`.
 
 **Control flow.** The control ops (`loop`, `bz`, `bnz`, `jump`, `ret`) have
-`fields.DELAY_SLOTS` (4) delay slots: the words after them run before the transfer. A call, a
-`jump` whose slots set the link register, returns to the word after its slots;
+`fields.DELAY_SLOTS` (4) delay slots: the words after them run before the transfer. A loop end
+computes its register minus one but writes nothing itself: give it the port that writes the
+count back, `to(G[8], OP)`. A call is a `jump` whose delay slots set the link register (G[1] by
+the stock convention) to the word after its slots, and `ret` jumps to the word the link names;
 `program.call_return_errors` reports calls that would return past the end. `OP.halt()` ends the
 job, but the next `emu.HALT_TAIL` (3) words fetched still run, so end a program with idle words
-behind its halt, as the kernel example does. Give the control ops `rr=R[0]`: the idle word sets
-bits of f120_122 that the machine refuses in a control op.
+behind its halt. Give the control ops `rr=R[0]`: the idle word sets bits of f120_122 that the
+machine refuses in a control op.
+
+```python
+from fenykl.dsp import G, NOP, OP, R, Boot, Label, assemble, li, to
+from fenykl.dsp.fields import DELAY_SLOTS
+
+slots = [NOP] * DELAY_SLOTS
+words = [
+    li(G[8], 2),  # the loop runs 2 + 1 times
+    li(G[3], 0),
+    Label("top") | OP.add_imm(G[3], 1) | to(G[3], OP),
+    OP.loop(G[8], "top", rr=R[0]) | to(G[8], OP),  # the port writes G[8] - 1 back
+    *slots,
+]
+call = len(words)
+words += [
+    OP.jump("sub", rr=R[0]),  # a call: its first delay slot sets the link G[1]
+    li(G[1], call + DELAY_SLOTS + 1),
+    *slots[1:],
+    OP.halt(),  # the call returns here
+    *slots,
+    Label("sub") | OP.add_imm(G[3], 10) | to(G[3], OP),
+    OP.ret(G[1], rr=R[0]),
+    *slots,
+]
+r = Boot().run(assemble(words))
+assert r.machine.g[3].value == 13
+```
 
 **Stream helpers.** Constants and the stream engine take a few words each:
 
@@ -117,7 +146,7 @@ words = hand(*lane_block(0, 0x1000), *stream_load(0, B[13], 0)) + [wait()]
 ```
 
 At most `stream.DEPTH` (44) commands may be outstanding; handing more wedges the job on the
-camera.
+camera. Keep a job below `timing.LONGEST_JOB_US` (7000.0 us): the firmware aborts longer ones.
 
 **Lags are the author's job.** The DSL places fields; it does not schedule. Every unit reads the
 state from before the word, and every port write lands at the word's end, so a register written
@@ -211,19 +240,19 @@ assert r.lapses and r.estimate.us is None
 ## Reading results
 
 `Boot.read(addr, n)` returns `Bytes`: per byte its value (`data`), whether it is known
-(`known`), its tier (`taint`) and its provenance (`src`, an index into `Boot.sources`, and `off`,
-the offset in that source). An unknown byte's source says why it is unknown. `weakest()` gives
-the weakest tier of the known bytes, `ranges(known)` the runs of known or unknown bytes,
+(`known`), its tier (`taint`) and its provenance (`src`, an index into `Boot.sources`, and
+`off`, the offset in that source). An unknown byte's source says why it is unknown. `weakest()`
+gives the weakest tier of the known bytes, `ranges(known)` the runs of known or unknown bytes,
 `segments()` the runs that continue one source. Registers are `Sv` scalars and lane registers
-`Vec` vectors of `semantics.LANE_COUNT` (32) lanes, with None where not known, each with its tier. The
-emulator never guesses: a value no fact gives is unknown.
+`Vec` vectors of `semantics.LANE_COUNT` (32) lanes, with None where not known, each with its
+tier. The emulator never guesses: a value no fact gives is unknown.
 
 A result's tier is the weakest tier of every rule that produced or moved it, and of the control
 decisions that led there. Listings mark the tiers `!` (verified) and `~` (inferred); unmarked is
 a hypothesis.
 
 `Run.estimate` is the job's minimum time on the camera as an `Estimate`: `us` (None when not
-known; `unknown` says why), `tier` and `parts`, each a named `Part` with its own time and tier.
+known; `unknown` says why), `tier` and `parts`, each a `timing.Part` with its name, time and tier.
 The parts are the fixed cost per job, `timing.JOB` (97.9 us); the first run of each word,
 `timing.FIRST` (0.064 us); each word that never runs in a fetch line of `timing.LINE` (8) words
 that runs, `timing.UNRUN` (0.064 us); each repeated word, `timing.REPEAT` (0.0052 us); and what
@@ -331,9 +360,17 @@ A value is never filled in by a guess; an unknown byte carries the source that e
   once (the import raises otherwise), and give each new entry its idle value, kind, tier and a
   one-line fact. An id names both ends of the field's bits, so DSL source naming an old id fails
   loudly.
+  Moving a field to another unit is an edit of its `unit`, and of `fields.HEADS` or
+  `fields.PORTS` where it is a strobe.
 - **A stock model fact**: the outcome of a stock word goes in `copy._PARTS` or a role's table in
   `copy._CHANNELS`, a register value in `stock/registers.py`, a resampler edit in
   `resample_edits.FACTS` or `resample_window.SEMANTICS`. The docstrings there say which tier
   each kind of fact takes.
+- **A new use of a register value** in the copy (beyond address, offsets, count and format): a
+  new `model.Use`, handled in `Copy16Model._role`.
+- **A new field semantic of program 16**: a `model.WordClass` subclass with `match` (the field
+  values that identify it), `operands` (the fields it reads or ignores) and `act`, which records
+  into the job's `Trace`; have the model's `cover` run it. Every field outside `match` and
+  `operands` must be idle.
 
 Each semantic carries its tier, and a test should come with it.

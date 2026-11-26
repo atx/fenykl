@@ -20,10 +20,8 @@ words or their transfers idled they stayed within it too, so words with S1, S2 a
 their ports cost as idle words there (verified on the camera). The elementwise kernel is the
 worked example in `tests/test_dsp_kernel_example.py`.
 
-Own jobs of 0.4 to 7.0 ms all ended normally (verified on the camera, pre-registered); in them a
-looped word cost 5.21 ns at 64-word passes, plus about 105 us per job (fitted). Nothing between
-7.0 and 7.5 ms was run. The firmware gives this job type 8 ticks of 1 ms before it aborts
-the job, so keep a job below about 7 ms.
+Own jobs of 0.4 to 7.0 ms all ended normally (`LONGEST_JOB_US`); in them a looped word cost
+5.21 ns at 64-word passes, plus about 105 us per job (fitted).
 """
 
 from collections import deque
@@ -35,6 +33,11 @@ from .machine import HEAD_IDS
 from .stream import LANE_MEMORY, LOAD, LOCAL_MEMORY, STORE, Engine, Event
 
 I, V = Confidence.INFERRED, Confidence.VERIFIED
+
+LONGEST_JOB_US = 7000.0
+"""The longest own jobs run: jobs of 0.4 to 7.0 ms all ended normally (verified on the camera,
+pre-registered); nothing between 7.0 and 7.5 ms was run. The firmware gives this job type 8 ticks
+of 1 ms before it aborts the job, so keep a job below this."""
 
 
 @dataclass(frozen=True)
