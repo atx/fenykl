@@ -2595,7 +2595,8 @@ UNIT_FACTS = {
 direction. At program 13 words 433 and 439, idling the nibbles whose owner is active in the word
 gives the effect of idling the whole grid, byte for byte, and idling the held nibbles of idle
 owners has none (32 nibbles in three sets, at their idle values). An active owner is not
-sufficient: port f202_205 and X0's f69_71 are inert there."""
+sufficient: port f202_205 and X0's f69_71 are inert there. f57_60 = 5 at words 441 and 442
+reads plane 1's line a + 1 (verified on the camera)."""
 CAMERA_TIERS = {"f244_245": V}
 """Fields whose tier the camera raised above the bytes': an idled enable equal to idling its
 port or its word (verified)."""

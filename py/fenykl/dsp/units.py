@@ -10,8 +10,7 @@ bus, with a held 2-bit field; Q is a mode. The constant bits form no unit. A uni
 fields need not be contiguous; re-cutting one is an edit of the `unit` of its fields.
 
 In the stock programs S0..S3, PB and M (the compute group) act mostly in words with an idle op,
-and X0, X1 and PR (the transfer group) in words with the data ops, early in a routine (in the
-bytes).
+and X0, X1 and PR (the transfer group) in words with the data ops, early in a routine.
 """
 
 from dataclasses import dataclass

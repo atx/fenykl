@@ -64,7 +64,7 @@ def test_there_are_snippets_of_both_kinds():
 
 
 # `module.NAME` with an optional "(value)" after it; modules under fenykl.dsp or its stock.
-CITATION = re.compile(r"`([a-z_]+(?:\.[A-Za-z_]\w*)+)`(?: \(([^)]*)\))?")
+CITATION = re.compile(r"`([a-z_]+(?:\.[A-Za-z_]\w*)+)`(?: \((-?\d[^)]*)\))?")
 
 
 MODULES = {

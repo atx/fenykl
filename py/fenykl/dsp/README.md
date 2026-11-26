@@ -19,18 +19,20 @@ fact strings of the code that applies the rule. This file says how to use the pa
 
 ## Layout
 
-Two layers. `fenykl.dsp` is the core: the field table, the codec, the DSL, the listings and the
-emulator of own programs. Its `__all__` is the API for own programs. `fenykl.dsp.stock` holds the
-models of the stock programs; the core does not import it (`tests/test_dsp_layers.py`).
+Three layers: encode and decode, the runtime, and the stock models. The first two are the core,
+`fenykl.dsp`, whose `__all__` is the API for own programs; they do not import the third,
+`fenykl.dsp.stock`, as `tests/test_dsp_layers.py` checks.
 
 | module | contents |
 |---|---|
+| **encode and decode** | |
 | `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, tier, fact; the op meanings and the datapath facts the emulator uses |
 | `units.py` | the units: a strobe and the fields that change under it |
 | `word.py` | `Word`, an immutable word with views by field; `IDLE` |
 | `asm.py` | the DSL: register files, unit instructions, ports, bundles, `Bundle.of`, the helpers |
 | `program.py` | `Program`, `assemble`, `labels`, extraction of the stock programs from a firmware image |
 | `disasm.py` | `listing` and `source` |
+| **runtime** | |
 | `semantics.py` | the datapath rules: op slot, X units, lane functions, lane memory, `UnknownSemantics` |
 | `machine.py` | `Machine`, the datapath executor: register files, lane files, lane memory, buses |
 | `stream.py` | `Engine`, the stream engine between DRAM and the DSP's memories |
@@ -39,6 +41,7 @@ models of the stock programs; the core does not import it (`tests/test_dsp_layer
 | `state.py` | `Bytes`, tri-state bytes with provenance and taint; the memory spaces |
 | `timing.py` | `estimate`: a job's minimum time on the camera |
 | `cli.py` | `fenykl dsp` |
+| **stock models** | |
 | `stock/` | `model.py` (`StockBoot`, `run_model`), `copy.py` (program 16), `resample.py`, `resample_edits.py`, `resample_window.py`, `exec.py` (program 13), `taps.py`, `commands.py`, `registers.py`, `intervals.py` |
 
 ## Writing programs
@@ -97,11 +100,11 @@ bits of f120_122 that the machine refuses in a control op.
 
 **Stream helpers.** Constants and the stream engine take a few words each:
 
-- `li(G[9], 4)`: op 0x0b and its port, a 16-bit immediate sign-extended into the register;
-- `b_add(B[12], B[2], 0x1000)`: X1 0x03 into B, `dst = src + k`;
-- `hand(*values)`: X1 0x1c per value, to the stream engine; a register of B goes as it is, an
+- `li(G[9], 4)`: `OP.li` and its port, an immediate sign-extended into the register;
+- `b_add(B[12], B[2], 0x1000)`: `X1.add_imm` into B, `dst = src + k`;
+- `hand(*values)`: `X1.hand` per value, to the stream engine; a register of B goes as it is, an
   integer through `li` into the `asm.SCRATCH` registers the word before;
-- `wait()`: X1 0x1d, waits for the oldest outstanding command;
+- `wait()`: `X1.wait`, waits for the oldest outstanding command;
 - `lane_block(channel, nbytes)`, `stream_load(channel, dram, vector)`,
   `stream_store(channel, vector, dram)`: the values that program a channel and its commands, for
   `hand`. `channel` is below `fields.STREAM_CHANNELS` (4), `dram` a register of B, `vector` in
@@ -124,7 +127,7 @@ their head, in that word only, and a port at another word writes nothing:
 | result | arrives |
 |---|---|
 | a data op's result, an X unit's result | in the head's own word |
-| a multiply's product (ops 0x48, 0x49) | `semantics.MULTIPLY_LAG` (1) words later |
+| a multiply's product (`OP.mul`) | `semantics.MULTIPLY_LAG` (1) words later |
 | a local-memory load's datum | `semantics.LOAD_LAG` (3) words later |
 | a lane-memory load's vector (X0) | `fields.LOAD_LAG` (4) words later |
 | X1's divide | `fields.DIVIDE_LAG` (4) words later |
@@ -211,8 +214,8 @@ assert r.lapses and r.estimate.us is None
 (`known`), its tier (`taint`) and its provenance (`src`, an index into `Boot.sources`, and `off`,
 the offset in that source). An unknown byte's source says why it is unknown. `weakest()` gives
 the weakest tier of the known bytes, `ranges(known)` the runs of known or unknown bytes,
-`segments()` the runs that continue one source. Registers are `Sv` (32 bits) and lane registers
-`Vec` (`semantics.LANE_COUNT` (32) lanes), with None where not known, each with its tier. The
+`segments()` the runs that continue one source. Registers are `Sv` scalars and lane registers
+`Vec` vectors of `semantics.LANE_COUNT` (32) lanes, with None where not known, each with its tier. The
 emulator never guesses: a value no fact gives is unknown.
 
 A result's tier is the weakest tier of every rule that produced or moved it, and of the control
@@ -232,10 +235,10 @@ their wait.
 ## Reading programs
 
 ```python
-from fenykl.dsp import G, L1, NOP, O, OP, S1, Bundle, assemble, listing, source, to
+from fenykl.dsp import L1, NOP, O, OP, S1, Bundle, assemble, listing, source, to
 
 prog = assemble([S1.xor_imm(L1[4], imm=0x20) | to(O[1], S1), OP.halt(), *[NOP] * 4])
-print(listing(prog))  # 0   idle~  s1: op=4~ b=4! imm=0x20!  pb: osrc=3! odst=1!
+assert "s1: op=4~ b=4! imm=0x20!  pb: osrc=3! odst=1!" in listing(prog)
 print(source(prog))  # DSL source that assembles back to the same words
 assert repr(Bundle.of(prog.words[0])) == "S1.xor_imm(L1[4], 0x20) | to(O[1], S1)"
 ```
@@ -260,11 +263,17 @@ models keep across jobs; `run_model(boot, model, job)` runs a job by its model.
 
 ```python
 # image: the stock E-M10 II firmware .BIN, as bytes
-from fenykl.dsp.stock import commands
+from fenykl.dsp.stock import commands, taps
 from fenykl.dsp.stock.copy import Copy16Model
 from fenykl.dsp.stock.model import StockBoot, run_model
-from fenykl.dsp.stock.resample import Resample13Model, predict
-from fenykl.dsp.stock.taps import Taps
+from fenykl.dsp.stock.resample import (
+    H_MAX,
+    ONE,
+    PLANES,
+    STRIDE,
+    Resample13Model,
+    predict,
+)
 
 SRC, DST, data = 0xA0000000, 0xA1000000, bytes(range(256)) * 4
 copy = Copy16Model.from_image(image)
@@ -274,11 +283,11 @@ result = run_model(boot, copy, commands.copy(copy.program, SRC, DST, len(data)))
 assert bytes(boot.read(DST, len(data)).data) == data
 
 resample = Resample13Model.from_image(image)
-h = 16
-src = bytes(i & 0xFF for i in range(3 * 64 * h))  # three planes of 64 x h at stride 64
-# per output line (a, b): the source line a and the step b, both 16.16
-table = [(i << 16, 1 << 16) for i in range(h)]
-p = predict(resample, Taps.of([(0, 256, 0, 0)] * 16), src, table)  # 256 = 1.0
+h = H_MAX
+src = bytes(i & 0xFF for i in range(PLANES * STRIDE * h))  # three planes of STRIDE x h
+table = [(i * ONE, ONE) for i in range(h)]  # per output line: source line a, step b
+unit = (0, taps.ONE, 0, 0)  # every phase passes tap 1's line
+p = predict(resample, taps.Taps.of([unit] * taps.PHASES), src, table)
 assert all(p.dst.known)
 ```
 
