@@ -12,13 +12,14 @@ from conftest import stock_image
 from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import MAIN_CODE, Boot, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
+from fenykl.dsp.job import Stop
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
 from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.copy import Copy16Model
 from fenykl.dsp.stock.intervals import RegSet, destinations
 from fenykl.dsp.stock.model import Mode, Sequencer, Status, StockBoot, run_model
-from fenykl.dsp.stock.registers import R14_BELOW, R14_EXACT, BootParams
+from fenykl.dsp.stock.registers import R14_BELOW, R14_EXACT, BootParams, JobView
 from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
@@ -484,6 +485,17 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     words[52] = words[5]
     with pytest.raises(UnknownSemantics, match="stream off script before the halt"):
         run(Program(tuple(words)))
+
+
+def test_a_halt_flow_off_script_ends_open():
+    """The stepped flow stops at its open end, not raising; `_halt` refuses it after."""
+    words = list(idled(45).words)
+    words[52] = words[5]
+    job = commands.copy(Program(tuple(words)), SRC, DST, LEN)
+    view = JobView(SRC, DST, LEN, BootParams(R14_BELOW))
+    flow, machine = Copy16Model._halt_flow(job, view)
+    assert flow.stop is Stop.OPEN_END and machine.stream.off
+    assert machine.stream.off in flow.why
 
 
 def flipped(at: int, key: str, bits: int, base: Program | None = None) -> Program:

@@ -181,6 +181,7 @@ class _Transfers:
     (`stream.Engine.transfer`)."""
 
     cap = V
+    off = ""
 
     def __init__(self) -> None:
         self.got: list[tuple[int, Sv | None]] = []

@@ -64,8 +64,9 @@ class Run:
     estimate: Estimate
     """Not known for a run that lapsed or whose stream engine went off script."""
     lapses: tuple[str, ...] = ()
-    """Why the run lapsed (`Machine.lapse`, lenient), in order; empty for a run its facts
-    cover."""
+    """Why the run lapsed (`Machine.lapse`, lenient), in order; empty for a strict run and for
+    a lenient one that did not lapse. Empty lapses do not mean the facts cover the run: one that
+    went off script stops at `Stop.OPEN_END` (`flow.stop`)."""
 
 
 class Boot:
@@ -245,9 +246,8 @@ class Executor:
     still run (`HALT_TAIL`, `TAIL_SHAPES`). The flow stops at `Stop.OPEN_END` in place of
     `Stop.HALT` where the datapath cannot tell whether the job ends there
     (`Datapath.open_end`: the stream engine off script), the halt's step a hypothesis. A step
-    past the program end raises
-    `UnknownSemantics`: what it does is open. Strict mode raises at an undecided control op;
-    lenient mode stops there.
+    past the program end raises `UnknownSemantics`: what it does is open. Strict mode raises at
+    an undecided control op; lenient mode stops there.
 
     strict=False makes the datapath lenient (`Datapath.lapse`), each word that lapses an
     unknown step.
