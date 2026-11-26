@@ -124,6 +124,16 @@ STORE_ROWS2 = (1, 0x40, 0x20, 1, 0x100, 0x10, 2, 2)
 STORE_ROWS3 = (1, 0x40, 0x20, 1, 0x200, 0x10, 2, 3)
 """Two rows at DRAM pitch 0x100 and three at 0x200 of one vector each, memory pitch one vector:
 the store rows run for kind 4, one job each (inferred)."""
+LOCAL_STORE = (2, 0x490, 4, 0x10, 0x400, 0x10, 4, 3)
+"""Three rows of 16 local words (64 bytes) at local pitch 0x490 to DRAM pitch 0x400: the resampler's
+kind 4 store at its 64-wide request (verified on the camera, three jobs, from two local offsets)."""
+LOCAL_STORE_ROW = (2, 0x490, 4, 0x10, 0x400, 0x10, 4, 1)
+LOCAL_STORE_NARROW = (2, 0x490, 4, 0xC, 0x100, 0x10, 3, 3)
+"""One row of `LOCAL_STORE`, and three rows of 12 words at DRAM pitch 0x100 (inferred: one job
+each)."""
+LOCAL_STORES_ANY = (2, 0x490, 4, None, None, 0x10, None, 3)
+"""Three rows at local pitch 0x490 of any width and DRAM pitch (inferred: the widths and pitches the
+resampler hands at other requests, none run as such)."""
 LOCAL_SHAPE = (2, None, 4, 8, None, 0x10, 2, 1)
 """32 bytes as bytes in local memory (eight words)."""
 QUAD_SHAPE = (1, None, 0x20, 4, None, 0x10, 8, 1)
@@ -168,6 +178,10 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         TRIPLE_SHAPE: (I, DIRECT),
         STORE_ROWS2: (I, DIRECT),
         STORE_ROWS3: (I, DIRECT),
+        LOCAL_STORE: (V, DIRECT),
+        LOCAL_STORE_ROW: (I, DIRECT),
+        LOCAL_STORE_NARROW: (I, DIRECT),
+        LOCAL_STORES_ANY: (I, DIRECT),  # last: the measured rows above take precedence
     },
     5: {BASE_SHAPE: (I, WRAPPED)},
     7: {BASE_SHAPE: (I, WRAPPED)},
@@ -184,8 +198,9 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
 for kinds that move nothing; a lane fill's "to" also vector-aligned, as every one ran). Verified where two jobs (one at least pre-registered) matched, inferred for one job
 (local fills: `LOCAL_FILLS`);
-a wrapped offset that ran takes the shape's tier, not the wrap's. Rows ran for kind 2 (loads) and
-kind 4 (`STORE_ROWS2`, `STORE_ROWS3`).
+a wrapped offset that ran takes the shape's tier, not the wrap's; the first shape that matches
+gives the tier. Rows ran for kind 2 (loads) and kind 4 (`STORE_ROWS2`, `STORE_ROWS3`, the local
+stores). Each kind 4 command, in every shape run, takes exactly one 0x1d (verified).
 Another shape, or the other offset form, raises `UnknownSemantics`."""
 DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did

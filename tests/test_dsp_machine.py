@@ -1313,7 +1313,7 @@ def test_program_15_without_a_request_reaches_its_halt_on_a_lenient_machine():
     assert sum(s.unknown for s in flow.steps) == len(m.lapses) > 0
 
 
-def test_program_13_goes_past_an_unmeasured_command_on_a_lenient_machine():
+def test_program_13_halts_on_a_lenient_machine_past_its_surplus_waits():
     src, table, lines = 0x10000000, 0x10200000, 16
     job = commands.resample(stock(13), src, 0x10100000, table, 64, 64, lines)
 
@@ -1324,22 +1324,14 @@ def test_program_13_goes_past_an_unmeasured_command_on_a_lenient_machine():
         b.put(table, identity, "table")
         return b
 
-    with pytest.raises(
-        UnknownSemantics, match="word 192: .*kind 0x4 outside the shapes"
-    ):
+    # The kind 4 stores run; per line one 0x1d finds nothing outstanding, which is open.
+    surplus = "a 0x1d with no command outstanding never ends"
+    with pytest.raises(UnknownSemantics, match=f"word 231: .*{surplus}"):
         b = boot()
         Executor(b, datapath=Machine(b, None, Engine())).step(job)
-    b = boot()
-    flow, m = lenient(b, job, {})
-    # The command's reach is not known: every memory is forgotten, so 205 is undecided.
-    assert (
-        flow.stop is Stop.UNDECIDED and flow.why == "word 205: r3 undecided: r3 unknown"
-    )
-    assert m.lapses == [
-        "stream: transfer 92 (word 192): command kind 0x4 outside the shapes it ran in"
-    ]
-    request = b.local.read(LOCAL_BASE + commands.RESAMPLE_REQUEST, 24)
-    assert m.lanes_lost and not any(request.known)
+    flow, m = lenient(boot(), job, {})
+    assert flow.stop is Stop.HALT
+    assert len(m.lapses) == 15 and all(surplus in lapse for lapse in m.lapses)
 
 
 SRC, DST, LENGTH = 0xA0FCA800, 0xA1113600, 0x400
