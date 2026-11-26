@@ -1058,8 +1058,8 @@ LANE_MEMORY = (
     "or three words later the new content; a load one or two words after a store to the same "
     "vector reads the stored vector, and a store one, two or three words after a load of its "
     "vector does not change what the load delivers (verified on the camera, pre-registered); "
-    "four loads in consecutive words land in four consecutive port words (measured on the "
-    "camera, not pre-registered: inferred). It keeps its content across jobs within a boot (verified on the "
+    "up to four X0 0x1d loads in consecutive words land in consecutive port words "
+    "(`LOAD_RUN`). It keeps its content across jobs within a boot (verified on the "
     "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
     "output), so "
     "a job can leave data, such as a layer's weights, for the next"
@@ -1140,6 +1140,14 @@ X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
 included); the address modulo `LANE_VECTORS` (`LANE_MEMORY`)."""
 X0_LANE_LOADS = (0x1C, 0x1D, 0x20, 0x21)
 """X0's lane memory load heads; what f69_71 does on a load is open."""
+LOAD_RUN = (0x1D, 4)
+"""Lane loads in flight together that land as each would alone: up to this many heads of this
+value in consecutive words, each vector at its first lane port `LOAD_LAG` words after its head
+(verified on the camera, pre-registered: three in consecutive words into V and W in a 250-pass
+convolution loop, exact over six jobs; four in consecutive words into W and V, then L1 twice, 32
+lanes each; four into L0 in a max-pool loop, 29 vectors exact). Other loads in flight together
+(two or three words apart, longer runs, the other load heads, loads between stores) were not
+measured: inferred."""
 X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 """The lane memory heads that add A[b], not sK, to A[a]."""
 
