@@ -238,12 +238,14 @@ def _id(lo: int, hi: int) -> str:
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
 WEDGING_S0 = 0x4F
 WEDGING_S0_WHY = (
-    "S0 0x4f under M's strobe with port 272 / 2: the camera wedged the job (measured on two "
-    "boots: four such words, nibbles 1..3, G12 written; with port 270 / 2 into R[0] and one "
-    "setting it ran); which word or setting wedges is not measured"
+    "a second S0 0x4f word under M's strobe with port 272 / 2 in the job: four such words "
+    "(nibbles 1..3, G12 written) wedged the camera's job, on two boots, each after other jobs "
+    "of its boot; each of the four alone ran in either port form (272 / 2, 270 / 2 into R[0]) "
+    "as a fresh boot's second job; two or three such words, and whether the boot's earlier "
+    "jobs matter, are not measured"
 )
-"""The S0 head whose word, under M's strobe and with port 272 / 2, never let a job end on the
-camera."""
+"""The S0 head whose words, under M's strobe and with port 272 / 2, never let a job end on the
+camera when four of them ran in one job; one alone ran."""
 LATCH_MEASURED = {
     "s0": frozenset({0x05, 0x20, 0x41}),
     "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
@@ -406,6 +408,8 @@ class Machine:
         """The (unit, head) pairs that ran in that word."""
         self.heads_run: dict[tuple[str, int], int] = {}
         """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
+        self.wedging_runs = 0
+        """The words of the job so far with `WEDGING_S0` under M's strobe and port 272 / 2."""
         self.alone_runs: dict[tuple[str, int], int] = {}
         """Likewise the runs of `ALONE_ZEROS` heads in the form run on the camera."""
         self.alone: dict[str, tuple[int, int, int, bool, bool]] = {}
@@ -533,7 +537,9 @@ class Machine:
         own = self._s_units(index, word, t)
         if word["f276"] == 0:
             if word[HEAD_IDS["s0"]] == WEDGING_S0 and word["f272_273"] == 2:
-                self.lapse(index, "s0 0x4f", WEDGING_S0_WHY)
+                self.wedging_runs += 1
+                if self.wedging_runs > 1:
+                    self.lapse(index, "s0 0x4f", WEDGING_S0_WHY)
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
             # M; with nothing on M beside an X0 head the kept register is not measured).
