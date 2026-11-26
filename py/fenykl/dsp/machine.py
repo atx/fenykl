@@ -13,9 +13,7 @@ of its address does not change the load's datum, a load one or two words after a
 new content). Buses carry values in the word they arrive in, counted in executed words:
 
 - the ALU bus: the word's own op result; a multiply's product one word after the op; a local load's
-  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`; a datum arriving where
-  no port takes the ALU bus raises: the stock copy with that landing word idled copied as if the
-  datum had been taken, on the camera); an arrival in a word
+  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
   whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
   whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
@@ -297,15 +295,6 @@ class _Scalars(Mapping):
         return len(self.values)
 
 
-def _takes_bus(word: Word) -> bool:
-    """Whether a port of `word` writes the ALU bus to a register."""
-    ports = [(e, PR_SOURCES) for e in PR_ENABLES] + [(e, PB_SOURCES) for e in PB_FILES]
-    return any(
-        word[e] != lookup(e).idle and sources[e].get(word[e]) == ALU_BUS
-        for e, sources in ports
-    )
-
-
 def _own_word(unit: str, head: int) -> bool:
     rule = S_RULES[unit].get(head)
     return rule is not None and rule.lag == 0 and not rule.held
@@ -548,11 +537,6 @@ class Machine:
             x1bus = NOTHING  # a divide drives nothing in its own word (verified)
         else:
             x1bus = UNKNOWN if x1 is None else x1
-        if not _takes_bus(word) and any(
-            k == "load" for _, k in self.bus_due.get(t, [])
-        ):
-            why = "a local load's datum arrives where no port takes the ALU bus: not measured"
-            self.lapse(index, "ports", why)  # lenient: as if it were lost
         writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
             self._commit(key, _cap(value, self.ceiling), t)

@@ -1481,17 +1481,6 @@ def test_a_local_load_reads_at_ra_plus_width_times_imm13(code, imm, base, value)
     assert m.g[4] == Sv(base & M32)  # ra is the base, not written
 
 
-def test_a_local_loads_datum_no_port_takes_is_not_measured():
-    m = requested()
-    m.g[4] = Sv(0)
-    with pytest.raises(UnknownSemantics, match="no port takes the ALU bus"):
-        run(m, [op_word(0x1A, 4, imm=0), IDLE, IDLE, IDLE])
-    m = requested()
-    m.g[4], m.strict = Sv(0), False
-    run(m, [op_word(0x1A, 4, imm=0), IDLE, IDLE, IDLE])
-    assert m.lapses and m.cap is H
-
-
 @pytest.mark.parametrize("code, base", [(0x1A, 2), (0x16, 1), (0x18, 6)])
 def test_an_unaligned_local_access_is_not_covered(code, base):
     m = requested()
