@@ -237,15 +237,17 @@ def _id(lo: int, hi: int) -> str:
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
 WEDGING_S0 = 0x4F
+WEDGING_S0_AT = 3
+"""The count of `WEDGING_S0` words under M's strobe and port 272 / 2 at which a job lapses."""
 WEDGING_S0_WHY = (
-    "a second S0 0x4f word under M's strobe with port 272 / 2 in the job: four such words "
-    "(nibbles 1..3, G12 written) wedged the camera's job, on two boots, each after other jobs "
-    "of its boot; each of the four alone ran in either port form (272 / 2, 270 / 2 into R[0]) "
-    "as a fresh boot's second job; two or three such words, and whether the boot's earlier "
-    "jobs matter, are not measured"
+    "a third S0 0x4f word under M's strobe with port 272 / 2 in the job: three or four such "
+    "words (nibbles 1..3, G12 written) wedged the camera's job, each as a fresh boot's first "
+    "job after a stock copy, so the boot's earlier jobs are not needed; one alone (four "
+    "settings, either port form) and two (four pairs, adjacent or not) ran; each of three "
+    "triples wedged (verified in one frame; other frames and settings inferred)"
 )
 """The S0 head whose words, under M's strobe and with port 272 / 2, never let a job end on the
-camera when four of them ran in one job; one alone ran."""
+camera from the third such word in a job; one or two ran, each writing nothing through the port."""
 LATCH_MEASURED = {
     "s0": frozenset({0x05, 0x20, 0x41}),
     "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
@@ -538,7 +540,7 @@ class Machine:
         if word["f276"] == 0:
             if word[HEAD_IDS["s0"]] == WEDGING_S0 and word["f272_273"] == 2:
                 self.wedging_runs += 1
-                if self.wedging_runs > 1:
+                if self.wedging_runs >= WEDGING_S0_AT:
                     self.lapse(index, "s0 0x4f", WEDGING_S0_WHY)
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
