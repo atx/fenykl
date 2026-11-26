@@ -236,6 +236,14 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
+WEDGING_S0 = 0x4F
+WEDGING_S0_WHY = (
+    "S0 0x4f under M's strobe with port 272 / 2: the camera wedged the job (measured on two "
+    "boots: four such words, nibbles 1..3, G12 written; with port 270 / 2 into R[0] and one "
+    "setting it ran); which word or setting wedges is not measured"
+)
+"""The S0 head whose word, under M's strobe and with port 272 / 2, never let a job end on the
+camera."""
 LATCH_MEASURED = {
     "s0": frozenset({0x05, 0x20, 0x41}),
     "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
@@ -524,6 +532,8 @@ class Machine:
         x1 = self._x(index, word, "x1", t)
         own = self._s_units(index, word, t)
         if word["f276"] == 0:
+            if word[HEAD_IDS["s0"]] == WEDGING_S0 and word["f272_273"] == 2:
+                self.lapse(index, "s0 0x4f", WEDGING_S0_WHY)
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
             # M; with nothing on M beside an X0 head the kept register is not measured).
