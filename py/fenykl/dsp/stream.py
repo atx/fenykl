@@ -3,7 +3,8 @@ channel registers they program, and the loads and stores between DRAM and the DS
 
 The engine sees the values handed and nothing else of the program: which words hand them does not
 matter (verified on the camera). X1 0x1c hands B[f115_119] (read before the word's ports write);
-X1 0x1d hands nothing and waits for one command (below).
+X1 0x1d hands nothing and waits for one command (below); both with register a 0
+(`fields.STREAM_SELECT`, which `Machine` checks).
 
 Grammar (verified): the values form groups, each starting with a key v.
 

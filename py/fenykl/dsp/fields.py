@@ -581,8 +581,22 @@ on those misses then matched 100 of 100 pre-registered values on fresh operands,
 with K's top bit set)."""
 NO_RESULT = "no result on the ALU bus"
 TRANSFER_HEADS = (0x1C, 0x1D)
-"""X1's transfers to the stream engine (`stream.Engine`): 0x1c hands B[f115_119], 0x1d waits for
-one command; no result, no R, G or B register changed."""
+"""X1's transfers to the stream engine (`stream.Engine`) with register a (f110_114) =
+`STREAM_SELECT`: 0x1c hands B[f115_119], 0x1d waits for one command; no result, no R, G or B
+register changed."""
+WAIT_HEAD = 0x1D
+STREAM_SELECT = 0
+"""The register a of X1 0x1c and 0x1d that meet the stream engine: a 0x1c hands its value, a 0x1d
+waits (verified on the camera: a surplus wait hung, the engine's depth, loads landed only behind
+their wait). A 0x1c with another a is not measured (one lone 0x1c with a = 8 returned, whether
+its value was handed not known), nor a 0x1d with an a outside `WAIT_NOTHING` (31 included, the
+idle word's)."""
+WAIT_NOTHING = frozenset({1, 2, 8})
+"""The registers a with which X1 0x1d hands nothing to the stream engine and returns (inferred:
+a = 2 in an op 3 word and in an idle word, a = 1 in an op 3 word, one job each, the load behind
+them not landed; a = 8 a lone 0x1d in one job). The resampler's 0x1d in words 210 (a = 2) and
+312 (a = 1) are such. Reading (hypothesis): a selects what a 0x1d waits for, and only
+`STREAM_SELECT` is the stream engine's queue."""
 DIVIDE_HEAD, DIVIDE_LAG = 0x1E, 4
 """X1 0x1e divides a by b, signed, truncated toward zero, and puts the 32-bit quotient on X1's
 result bus exactly `DIVIDE_LAG` executed words after the head, nothing in its own word (verified
@@ -2798,7 +2812,8 @@ ROLES = dict(_table_roles()) | {
     "f100_104": "X0's register a, A[x0a] (`X_FUNCTIONS`, verified)",
     "f105_109": "X0's register b, A[x0b]; bits 10..6 of X0's immediate K (`X_IMMEDIATES`, "
     "verified)",
-    "f110_114": "X1's register a, B[x1a] (`X_FUNCTIONS`, verified)",
+    "f110_114": "X1's register a, B[x1a] (`X_FUNCTIONS`, verified); in X1 0x1c and 0x1d its "
+    "index, 0 the stream engine (`STREAM_SELECT`, `WAIT_NOTHING`)",
     "f115_119": "X1's register b, B[xreg], also the register X1 0x1c hands to the stream "
     "engine; bits 12..8 of X1's immediate K (`X_IMMEDIATES`, verified)",
     "f123_127": "the op slot's register ra, G[ra], in every data op (`FAMILIES`, verified)",

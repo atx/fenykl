@@ -71,7 +71,8 @@ def run(
         words += [IDLE] * (between or {}).get(k, 0)
         head = 0x1D if v is WAIT else 0x1C
         f115 = 0 if v is WAIT else regs.index(v)
-        words.append(Word.from_fields({"f308_312": head, "f115_119": f115}, base=IDLE))
+        fields = {"f308_312": head, "f110_114": 0, "f115_119": f115}
+        words.append(Word.from_fields(fields, base=IDLE))
     program = Program((*words, *body, HALT))
     return Boot().run(program, regs={"G": g or {}, "B": dict(enumerate(regs))}).estimate
 

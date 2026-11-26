@@ -588,7 +588,8 @@ def test_transfers_through_the_machine_carry_their_tier():
         m.b[k] = Sv(v, I if v == 0x20 else V)
     for t, v in enumerate(values):
         head = 0x1D if v is WAIT else 0x1C
-        m.execute(t, w(f308_312=head, f115_119=0 if v is WAIT else regs[v]), t)
+        b = 0 if v is WAIT else regs[v]
+        m.execute(t, w(f308_312=head, f110_114=0, f115_119=b), t)
     got = m.boot.read(DST, 64)
     assert all(got.known) and set(got.taint) == {I}
 

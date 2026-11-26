@@ -96,9 +96,12 @@ from .fields import (
     S_OWN_OPEN,
     STORE_NOTHING,
     STORE_SOURCES,
+    STREAM_SELECT,
     TRANSFER_HEADS,
     U_NOTHING,
     U_TAKES,
+    WAIT_HEAD,
+    WAIT_NOTHING,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
     X_IMMEDIATES,
@@ -705,6 +708,15 @@ class Machine:
         a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
         k = X_IMMEDIATES[unit].get(word.value)
         if unit == "x1" and head in TRANSFER_HEADS:
+            select = word["f110_114"]
+            if head == WAIT_HEAD and select in WAIT_NOTHING:
+                self.limit(I)  # hands nothing (inferred): what follows depends on it
+                return None
+            if select != STREAM_SELECT:
+                why = f"register a {select}: not measured (`STREAM_SELECT`)"
+                self.lapse(index, f"x1 {head:#x}", why, [(lookup("f110_114"), select)])
+                self.lose_memories(why)
+                return None
             if self.fitted:
                 # Lenient: handed as if the word runs.
                 self.lapse(
