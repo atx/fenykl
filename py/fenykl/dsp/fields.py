@@ -347,7 +347,7 @@ XREG_FACT = (
     "reached a later op's ra and rb and not word 68's xreg (inferred, strong). Per routine the "
     "registers xreg changes to and those the op slot names overlap only slightly more than "
     "chance (Jaccard 0.51 against 0.44 across later firmware versions of the same family). The "
-    "emulator keeps the two apart (`Boot.regs`, `Boot.slot`)"
+    "emulator keeps the two apart (`machine.Machine`'s files G and B)"
 )
 FLAGS_FACT = (
     "3 bits between the register specifiers. In a data op: bits 13..15 of the immediate in "
@@ -437,7 +437,7 @@ OPS: dict[int, Op] = {
         "slots hold 0x0b #(i + 5) with f272_273 = 1 on r1: 24 of the 42 op 3 words of the five "
         "stock programs (verified in the bytes), program 16's word 0 among them, which calls "
         "its job routine at 10; calls two deep with the link saved in another register ran as "
-        "written (verified on the camera). The other 18 (`Program.local_op3`: no return "
+        "written (verified on the camera). The other 18 (forward, after word 0, no return "
         "before T) are jumps: program 13's at word 210 runs in a job (verified on the camera: "
         "a halt there cuts the job). In the stock words f120_122 is 0 or 4 (verified in the "
         "bytes); an op 3 built with f120_122 = 7 left its program (measured on the camera), so "

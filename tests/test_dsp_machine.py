@@ -13,7 +13,6 @@ from fenykl.dsp import commands
 from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
-from fenykl.dsp.memcpy import copy_branches
 from fenykl.dsp.program import Program, stock_programs
 from fenykl.dsp.semantics import (
     LANE_RULES,
@@ -1301,9 +1300,9 @@ def test_a_halt_inside_a_called_routine_ends_the_job_after_its_tail():
     words = list(stock(16).words)
     words[11] = words[5]
     boot = Boot()
-    flow = Executor(
-        boot, datapath=Machine(boot, None, Engine()), branching=copy_branches(LENGTH)
-    ).step(copy_job(Program(tuple(words))))
+    flow = Executor(boot, datapath=Machine(boot, None, Engine())).step(
+        copy_job(Program(tuple(words)))
+    )
     assert flow.stop is Stop.HALT and flow.order() == span((0, 4), (10, 14))
 
 

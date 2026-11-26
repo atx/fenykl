@@ -57,6 +57,7 @@ from .emu import (
     Executor,
     Job,
     JobResult,
+    ModelRun,
     Status,
     Stop,
     dram_alias,
@@ -817,7 +818,7 @@ class Copy16Model:
     def from_image(cls, image: bytes) -> "Copy16Model":
         return cls(stock_programs(image)[ITEM])
 
-    def cover_job(self, emu: Executor, job: Job, trace: Trace) -> Job:
+    def cover_job(self, run: ModelRun, job: Job, trace: Trace) -> Job:
         """Cover the job's words and return it in the stock program's index space. A job that is
         the stock program with words inserted (`align`) has its stock words covered at their
         stock indices, their control targets moved back through the alignment, and its inserted
@@ -829,7 +830,7 @@ class Copy16Model:
         at = align(self.program.words, words)
         if at is None:
             for index, word in enumerate(words):
-                self.cover(trace, index, word, emu.strict)
+                self.cover(trace, index, word, run.strict)
             return job
         trace.inserted = [j for j, s in enumerate(at) if s is None]
         for j in trace.inserted:
@@ -853,7 +854,7 @@ class Copy16Model:
                     f"inserted in the delay slots of word {c}, it pushes a stock word out "
                     "of them",
                 )
-        length = emu.boot.u32(8)
+        length = run.boot.u32(8)
         operands = Operands16()
         prev = -1
         stocked = []
@@ -863,7 +864,7 @@ class Copy16Model:
                 site = prev == ENGINE_AFTER and length is not None
                 if site and not operands.seeded:
                     operands.seed(length)
-                self._cover_insert(emu, trace, j, word, operands if site else None)
+                self._cover_insert(run, trace, j, word, operands if site else None)
                 continue
             prev = s
             t = word.target
@@ -877,7 +878,7 @@ class Copy16Model:
                         f"its target {t} is no stock word of the job",
                     )
                 word = Word.from_int(TARGET.put(word.value, to))
-            self.cover(trace, s, word, emu.strict)
+            self.cover(trace, s, word, run.strict)
             stocked.append(word)
         if trace.writes:
             # The writer's distance in words to stock word ENGINE_AFTER + 1.
@@ -898,7 +899,7 @@ class Copy16Model:
 
     def _cover_insert(
         self,
-        emu: Executor,
+        run: ModelRun,
         trace: Trace,
         j: int,
         word: Word,
@@ -928,7 +929,7 @@ class Copy16Model:
         else:
             fields = [(OP_FIELD, word.op)]
             regs = RegisterFile() if operands is None else operands.at(j)
-            effect = op_effect(sem, word, regs, emu.boot.local)
+            effect = op_effect(sem, word, regs, run.boot.local)
             why = self._insert_effect(word, name, effect, operands, trace, j)
             if effect is None:
                 fields = [(f, word[f.id]) for f in UNITS["op_slot"].fields]
@@ -943,7 +944,7 @@ class Copy16Model:
                 note = effect.note
             trace.notes.append(f"inserted word {j}: {name}, {note}")
             return
-        if emu.strict:
+        if run.strict:
             raise UnknownSemantics(j, f"inserted word {j}", fields, why)
         trace.ignored.append((j, [f.id for f, _ in changed]))
         trace.taint = H
@@ -968,7 +969,7 @@ class Copy16Model:
             if any(f.unit == "pr" for f, _ in word.changed(IDLE)):
                 return f"{name}: a PR port enabled, where its datum goes is open"
             return ""
-        dests, _, why = destinations(word)
+        dests, why = destinations(word)
         if why:
             return f"{name} ({effect.note}): {why}"
         if operands is None:
@@ -1026,9 +1027,9 @@ class Copy16Model:
             trace.classes = min(trace.classes, nearest.confidence)
             nearest.act(trace, stock, index, strict)
 
-    def apply(self, emu: Executor, job: Job, trace: Trace) -> JobResult:
+    def apply(self, run: ModelRun, job: Job, trace: Trace) -> JobResult:
         """Resolve the job and apply its one load and one store to the boot."""
-        boot = emu.boot
+        boot = run.boot
         view = start_copy(boot)
         halted = self._halt(job, trace, view)
         if halted is not None:
@@ -1039,32 +1040,31 @@ class Copy16Model:
             for r, (v, _) in trace.writes.items():
                 late[r] = v
         plan = self.resolve(
-            trace, boot.regs, view, emu.sequencer, job.program.words, late
+            trace, boot.regs, view, run.sequencer, job.program.words, late
         )
         return self._apply(boot, plan, trace, view)
 
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
-        """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
-        dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
-        weaker through the path to it); None when no such halt runs. The job is stepped on a
-        `Machine`, lenient (`_halt_flow`): the halt is its first op 7 and the three words behind
-        it still run. A halt at or after a stream word, or in a job whose stream engine stored
-        (the tail included) or went off script, raises: whether the stream drains first is open
-        (at 58 the machine has no command handed, but a halt in place of a word shifts the values
-        its tail hands, a state not measured). So does a halt after a loop word (the loop's words
-        were measured with the loop skipped only), and a path that leaves the stock path the rows
-        were measured on (`copy_branches`) without reaching the off-stock op 7."""
+        """The result of a job that an op 7 off the stock halt ends before the stream:
+        status 0, dst not written (word 5 in place of 11 on the camera [verified], at any
+        length; elsewhere inferred, or weaker through the path to it); None when no such
+        halt runs. The job is stepped on a `Machine`, lenient (`_halt_flow`): the halt is
+        its first op 7 and the three words behind it still run. A halt at or after a
+        stream word, or in a job whose stream engine stored (the tail included) or went
+        off script, raises: whether the stream drains first is open (at 58 the machine
+        has no command handed, but a halt in place of a word shifts the values its tail
+        hands, a state not measured). So does a halt after a loop word (the loop's words
+        were measured with the loop skipped only), and a path that leaves the stock path
+        the rows were measured on (`_STOCK_PATH`) without reaching the off-stock op 7."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
             return None
-        length = view.length
-        assert length is not None
         flow, machine = self._halt_flow(job, view)
         h = next(k for k, s in enumerate(flow.steps) if s.op == HALT_OP)
         at = flow.steps[h].index
         if at in stock:
-            path = copy_branches(length).decisions
+            path = _STOCK_PATH
             left = [
                 s.index
                 for s in flow.steps
@@ -1095,7 +1095,7 @@ class Copy16Model:
             for k, s in enumerate(flow.steps)
             if k != h
         )
-        seen = at in HALTS_SEEN and length == KIB and words[at] == self.halt
+        seen = at in HALTS_SEEN and words[at] == self.halt
         conf = H if trace.ignored or edited or machine.lapses else V if seen else I
         # The halt's own tier is `seen`'s; the other steps carry the path's and the tail's.
         tiers = [s.confidence for k, s in enumerate(flow.steps) if k != h]
@@ -1108,18 +1108,16 @@ class Copy16Model:
     @staticmethod
     def _halt_flow(job: Job, view: JobView) -> tuple[Flow, Machine]:
         """The job stepped on a lenient `Machine`, which decides the branches; where it cannot,
-        `copy_branches` decides, a hypothesis from there on. Raises where neither does."""
+        `_STOCK_PATH` decides, a hypothesis from there on. Raises where neither does."""
         given: dict[int, bool] = {}
-        fallback = copy_branches(view.length).decisions
+        fallback = _STOCK_PATH
         while True:
             boot = Boot(view.boot)
             machine = Machine(boot, None, Engine())
             branching = (
                 Given(given, H, "as in the copies run on the camera") if given else None
             )
-            flow = Executor(
-                boot, strict=False, branching=branching, datapath=machine
-            ).step(job)
+            flow = Executor(boot, machine, strict=False, branching=branching).step(job)
             at = flow.steps[-1].index
             if flow.stop is not Stop.UNDECIDED or at not in fallback or at in given:
                 break
@@ -1501,27 +1499,11 @@ class Copy16Model:
         return out
 
 
-SEEN_LENGTHS = range(0x200, 0x4001, 0x10)
-"""The lengths within the range and alignment of the copies run on the camera: 0.5..16 KiB in
-whole 16-byte lines."""
-ODD_LENGTHS = (0x40F,)
-"""Odd lengths whose copies ran on the camera, with the halt test at 50 (`copy_branches`): at
-dst + 1 only, where the CPU wrapper copies a 15-byte head and the DSP job the aligned 0x400."""
-
-
-def copy_branches(length: int) -> Given:
-    """The decisions of the copy's two forward branches as the camera runs show them, for the
-    stepping: 27 (to the return 79) not taken (inferred: the store words after it act) and
-    45 (over the loop 50..57) taken (inferred, strong: idling its delay slots 46..49 times the
-    job out, idling 50..57 has no effect, moving its target to 50 changes the copy into a
-    timeout, and a halt at 50 with 51..57 idled has no effect in an aligned copy and with each
-    of src, dst, len, src + len, dst + len and src - dst odd, so no low-bit test of a job value
-    decides it). The loop's back-edge 53 is never reached; inferred at the lengths the runs had,
-    a hypothesis at others."""
-    seen = length in SEEN_LENGTHS or length in ODD_LENGTHS
-    return Given(
-        {27: False, 45: True},
-        Confidence.INFERRED if seen else Confidence.HYPOTHESIS,
-        "as in the copies run on the camera"
-        + ("" if seen else ", at other lengths than this one"),
-    )
+_STOCK_PATH = {27: False, 45: True}
+"""The decisions of the copy's two forward branches as the camera runs show them: 27 (to the
+return 79) not taken (inferred: the store words after it act) and 45 (over the loop 50..57)
+taken (inferred, strong: idling its delay slots 46..49 times the job out, idling 50..57 has no
+effect, moving its target to 50 changes the copy into a timeout, and a halt at 50 with 51..57
+idled has no effect in an aligned copy and with each of src, dst, len, src + len, dst + len and
+src - dst odd, so no low-bit test of a job value decides it). The loop's back-edge 53 is never
+reached."""

@@ -15,12 +15,12 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` with labels, `call_return_errors()` |
 | `disasm.py` | listings and DSL source (bundles) of a program |
-| `intervals.py` | the op slot over register intervals (`op_effect`) and the PR ports' destinations (`destinations`): the copy model's inserted words and the plain stepper's data ops |
+| `intervals.py` | the op slot over register intervals (`op_effect`) and the PR ports' destinations (`destinations`): the copy model's inserted words |
 | `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
 | `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
-| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and branch hypotheses (`Given`, `RaTest`) |
+| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and given branch decisions (`Given`) |
 | `job.py` | `Job`, a program and its request; `Flow`, `Step`, `Stop`: what stepping a job executed |
-| `emu.py` | `Boot`, `Executor`: runs a job word by word and has its model apply the trace, or steps a job through its control flow; `Boot.run` steps a program on the datapath executor |
+| `emu.py` | `Boot`; `run_model`: runs a job word by word and has its model apply the trace; `Executor`: steps a job through its control flow on the datapath executor, which `Boot.run` does in one call |
 | `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
 | `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
 | `stream.py` | `Engine`: the stream engine's channel registers, loads and stores as X1's transfers program them |
@@ -254,7 +254,9 @@ raw: each X head reads it zero- or sign-extended.
 
 ```python
 word = S1.xor_imm(L1[4], imm=0x20, a=L1[4], r=F1[4]).word()  # S1 0x04: b ^ 0x20
-HEAD_VIEWS["s1"].decode(word.value)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
+HEAD_VIEWS["s1"].decode(
+    word.value
+)  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
 ```
 
 A view is per unit, not per head value: no table gives which of s, t, r, u, idx, val or the
@@ -321,8 +323,8 @@ integers that wrap. The scalar unit has four register files:
 Each port's enable value selects its source (`fields.PR_SOURCES`, verified by exact readout); X0
 and X1 are their heads' results in the port's own word. A data op writes no register by itself:
 its result goes on the ALU bus, which also carries a load's datum three words after the load and
-a multiply's product one word after the multiply. The emulator models G (`Boot.slot`) and B
-(`Boot.regs`).
+a multiply's product one word after the multiply. The datapath executor models all four
+(`machine.Machine`).
 
 The compute side has four more files, F0..F3, of 32-bit scalar registers numbered by a nibble
 (`fields.SCALAR_FILES`; verified by exact readout), written by grid B ports and read by S heads
@@ -763,13 +765,13 @@ still through the buffer they come from (a held buffer of an older job).
 
 ```python
 from fenykl.dsp import commands
-from fenykl.dsp.emu import Boot, Executor
+from fenykl.dsp.emu import Boot, run_model
 from fenykl.dsp.memcpy import Copy16Model
 
 model = Copy16Model.from_image(image)  # the stock E-M10 II .BIN
 boot = Boot()  # BootParams: r14, r29, r21's format; None = unknown
 boot.put(src, data, "src")  # known DRAM bytes, with a source name
-result = Executor(boot, model).run(commands.copy(model.program, src, dst, len(data)))
+result = run_model(boot, model, commands.copy(model.program, src, dst, len(data)))
 out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), off
 ```
 
@@ -799,7 +801,7 @@ flow: an idled control word (0, 5, 45, 79) has its row's outcome, and the words 
 An op 7 off the stock halt ends the job where stepping on a lenient `Machine` reaches it
 (`Copy16Model._halt`), its three tail words run: before the stream words 58..79 with status 0
 and dst not written, at the tiers of the machine's decisions on the path (where it cannot
-decide 27 or 45, `copy_branches` does, a hypothesis); at or after a stream word, after a loop
+decide 27 or 45, the camera runs' path does (27 not taken, 45 taken), a hypothesis); at or after a stream word, after a loop
 word, or where the stream engine stored or went off script, it raises `UnknownSemantics`, as it
 does where the machine's path leaves the stock path without reaching that op 7 (the rows hold
 on the stock path only). Some timeouts come after the store (`Outcome.STORE_TIMEOUT`: idled
@@ -812,7 +814,7 @@ status 0) and no semantics otherwise.
 Strict mode (the default) raises `UnknownSemantics` for a word nothing covers, naming the fields
 that differ from what covers the stock word at its index, and for a role at a register without
 registered semantics, and for a transfer whose route nibbles differ from the stock transfers'
-values. `Executor(boot, model, strict=False)` runs the stock word at such a word's index,
+values. `run_model(boot, model, job, strict=False)` runs the stock word at such a word's index,
 ignores every field that differs from it and taints every byte the job loads or stores
 "hypothesis"; stock transfers run so yield to the transfers of their channel that the job
 carries, where they would overfill it (a transfer moved onto another word's index): as many as
@@ -864,7 +866,7 @@ taps = Taps.from_floats(
 boot.put(src, planes, "src")  # three planes of 64 x H bytes at stride 64 (format 0x306)
 boot.put(table, entries, "table")  # H x {s32 a, u32 b}: source line and step in 16.16
 job = model.job(taps, src, dst, table, w, h)  # the stock words, these tap words
-result = Executor(boot, model).run(job)
+result = run_model(boot, model, job)
 ```
 
 `predict(model, taps, image, [(a, b), ...], w)` runs that job on a fresh boot and returns a
@@ -992,62 +994,19 @@ bottom`).
 
 ### Stepping
 
-```python
-from fenykl.dsp.emu import Boot, Executor, start_copy
-from fenykl.dsp.memcpy import copy_branches
-
-job = commands.copy(model.program, src, dst, length)
-# start_copy: the copy's register facts in the transfer registers, after the job's setup
-flow = Executor(Boot(), branching=copy_branches(length), strict=False).step(
-    job, start_copy
-)
-print(flow.runs())  # 0, |1..4, 10..27, |28..31, 32..45, |46..49, 58..79, |80..83, 5
-```
-
-`Executor.step` follows the program counter from word 0: a call at i goes to T and returns to i + 5, a
-return goes back there, brf, br and a loop end go to T when taken, op 7 halts at any depth; the four delay
-slots of every control op run before its transfer (`DELAY_SLOTS`). Each executed word is a
-`Step` (index, op, operands, delay slot, decision or effect, confidence); `Flow` holds them in
-order, with how the run stopped: halt, an undecided branch, or the step limit.
-
-- **Branches** (`semantics.Branching`): no condition of ops 0..2 is known, so the default
-  `Given()` decides none. `Given({index: taken or [per visit]})` takes the caller's decisions;
-  `memcpy.copy_branches(len)` gives the copy's two forward branches as the camera runs show them
-  (27 not taken, 45 taken, also at odd src, dst and len). `RaTest` decides brf, br and the loop
-  end on ra == 0 or ra != 0, in the op slot's registers or the transfer registers, the loop end
-  testing ra as it is or after decrementing it; its brf and br defaults are the measured rules,
-  while the measured loop end (ra > 0, ra - 1 written back through a port) is not expressed. On the copy's transfer
-  registers it decides nothing: word 14 names 27's r7 through a port whose destination is open.
-- **Data ops** (`semantics.OP_SEMANTICS`, each with its confidence): the family A loads 0x1a,
-  0x16, 0x14, 0x10 and 0x0e record their read (the datum's delivery three words on is not
-  modelled), the stores 0x18, 0x12 and 0x0c make their bytes unknown (R is not modelled), the computing ops send their result through the word's PR
-  ports (`intervals.RESULT_PORTS`: 267 / 1 to the transfer registers four words on, 272 / 1 to
-  the operands three words on, unknown until then; exact readout shows the next word reading a
-  272 / 1 write, which these latencies do not model yet), and the idle op does nothing in the
-  slot. This is the stepper's own model; with `machine.Machine` as its datapath the loads
-  deliver, the stores write, and results reach their ports at the measured lags (`machine.py`). A
-  result with an open destination (no port, or another enable value) raises in strict mode and
-  makes the open ports' registers unknown in lenient mode. Every other op has no semantics:
-  strict mode raises `UnknownSemantics`, lenient mode records it in its step and makes its ra
-  and its ports' registers unknown. An undecided branch raises in
-  strict mode and stops the run in lenient mode. Every taken control op jumps after its own
-  four following words, also a control op in a taken control op's delay slots and one whose
-  target is one of its own slots [verified for a taken br in a br's first slot and a loop end
-  into its third slot; any other such step is inferred at most]. On the camera
-  op 3 is a jump and op 4 jumps to the word G[f128_132] names [verified]: with a `datapath` the
-  stepper takes op 4's target from that register (undecided while it is unknown) and keeps no
-  stack.
-- **Local op 3** (`Program.local_op3()`), plain stepping only: a forward op 3 after word 0 with
-  no return between it and T, a jump on the camera. The plain stepper, which holds no link
-  register, infers calls and returns with a stack of its own: such an op 3 runs as a call by
-  default, or as a jump with no link with `Executor(..., local_op3_jump=True)`. A return that pops a local op 3's link, or
-  finds no link, raises `LinkError` (an `UnknownSemantics`): no return of its own lies before
-  that T, and stepped as calls such a link re-ran a loop's tail.
-- **Registers**: the operands (`Boot.slot`, the file G) and the transfer registers
-  (`Boot.regs`, the file B); R and A are not modelled.
-
-Stepping models neither the register transfers nor the datapath, so it says which words run in
-which order, not what they move.
+`Executor(boot, datapath).step(job)` follows the program counter from word 0 and has the datapath
+(`machine.Machine`, below) run each word's units: op 3 jumps to T and writes no link, op 4 jumps
+to the word G[f128_132] names (undecided while it is unknown), brf, br and a loop end go to T as
+the datapath decides them on G[ra] (`Machine.decide`), op 7 halts at any depth and the three
+words fetched behind it still run; the four delay slots of every control op run before its
+transfer (`DELAY_SLOTS`) [verified]. Every taken control op jumps after its own four following
+words, also a control op in a taken control op's delay slots and one whose target is one of its
+own slots [verified for a taken br in a br's first slot and a loop end into its third slot; any
+other such step is inferred at most]. Each executed word is a `Step` (index, op, operands, delay
+slot, decision or effect, confidence); `Flow` holds them in order, with how the run stopped: halt,
+an undecided control op (strict mode raises there), or the step limit. `branching`
+(`semantics.Branching`, e.g. `Given({index: taken or [per visit]})`) decides ops 0..2 where it
+lists them, before the datapath.
 
 ### The datapath executor
 
@@ -1057,20 +1016,24 @@ from fenykl.dsp import Boot
 boot = Boot()
 boot.put(SRC, data, "src")
 r = boot.run(program, regs={"B": {3: SRC, 2: DST}})  # registers by file, over the carry
-r.machine.g[16], r.flow.runs(), r.estimate  # registers at the halt, the words run, the time
+(
+    r.machine.g[16],
+    r.flow.runs(),
+    r.estimate,
+)  # registers at the halt, the words run, the time
 boot.read(DST, n)  # what the program stored, known or not, with its tier
 boot.run(program2)  # starts with the registers and lane memory the run before left
 ```
 
 `Boot.run` steps a program from word 0 (`request` its local-memory request, `limit` the step
-limit) on a `Machine` with a fresh stream `Engine`, under `Executor(boot, datapath=machine)`, keeps
+limit) on a `Machine` with a fresh stream `Engine`, under `Executor(boot, machine)`, keeps
 what the job leaves for the next run (`Boot.carry`, `Machine.between_jobs`) and estimates its time
 (`timing.estimate`). `regs` takes an int or an `Sv` in G, A, B, R and F0..F3, a `Vec` or its 32
 lanes in L0..L3, U and O. A run that stops short of its halt raises `NoHalt` and drops the carry.
-By hand, per job: `m = Machine(boot, carry, stream=Engine())`, `Executor(boot, datapath=m).step(job)`,
+By hand, per job: `m = Machine(boot, carry, stream=Engine())`, `Executor(boot, m).step(job)`,
 `m.between_jobs()`.
 
-With a `branching` beside the machine (`Executor(boot, branching=Given({...}), datapath=m)`) the
+With a `branching` beside the machine (`Executor(boot, m, branching=Given({...}))`) the
 given decisions come first and the machine decides the rest; from a given decision on, all the job
 leaves and decides is capped at that decision's tier (`Machine.limit`). `strict=False` makes the
 machine lenient: a case its facts do not cover lapses (`Machine.lapse`) instead of raising. What
