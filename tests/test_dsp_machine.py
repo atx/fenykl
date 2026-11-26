@@ -365,9 +365,14 @@ def test_an_own_word_result_after_an_open_head_is_unknown(m):
     assert m.f["F1"][3].value is None
 
 
-def test_s0_0x4f_under_m_into_port_272_wedges(m):
+def test_one_s0_0x4f_under_m_into_port_272_runs(m):
+    run(m, [w(f278_284=0x4F, f276=0, f272_273=2, f224_228=12)])
+
+
+def test_a_second_s0_0x4f_under_m_into_port_272_wedges(m):
+    s0 = w(f278_284=0x4F, f276=0, f272_273=2, f224_228=12)
     with pytest.raises(UnknownSemantics, match="wedged"):
-        run(m, [w(f278_284=0x4F, f276=0, f272_273=2, f224_228=12)])
+        run(m, [s0, w(), s0])
 
 
 def test_s0_0x4f_under_m_into_port_270_runs(m):
