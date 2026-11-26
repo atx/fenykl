@@ -15,8 +15,8 @@ dst, table pointer and six geometry halfwords (caller block +8..+0x1E) to local 
 
 import struct
 
-from .emu import Job
-from .program import Program
+from ..job import Job
+from ..program import Program
 
 
 def copy(program: Program, src: int, dst: int, length: int) -> Job:

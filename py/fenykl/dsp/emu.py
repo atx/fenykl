@@ -1,19 +1,10 @@
 """The word-level emulator: a `Job` (a program and its request in local memory) run on a `Boot`.
 
-`run_model` runs a job of a stock program by its model: the words run in order; the model
-covers each at its index (the stock word's row, a field semantic such as X1's register
-transfer, or the coverage rule of a window), which records what it contributes to the job's
-`Trace`. At the end the model of the program (`memcpy.Copy16Model`,
-`resample.Resample13Model`) applies the trace: it reads the command's request from local
-memory, resolves the job and writes its result to the boot's state.
-
-Whatever a model cannot tell becomes UNKNOWN, with a source that says why; a later job that
-reads it gets UNKNOWN bytes, never guessed ones.
-
-`Executor.step` steps a job instead: a program counter that follows the control ops (jumps,
+`Executor.step` steps a job: a program counter that follows the control ops (jumps,
 branches and loop ends with their delay slots, the halt) and has the datapath executor
 (`machine.Machine`) run each word's units; its `Flow` lists every executed word in order.
-`Boot.run` steps a program on a `Machine` in one call.
+`Boot.run` steps a program on a `Machine` in one call. The stock programs also run by their
+models (`stock.model.run_model`).
 
 The emulator does not model time. On the camera a word costs about 62 ns the first time it runs
 (straight-line words; a branch over 1200 idle words cost nothing, running them about 62 ns
@@ -23,8 +14,7 @@ over three loop sizes, a per-pass cost not excluded) (measured on the camera; in
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
-from enum import Enum
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from ..firmware import unpack_firmware
@@ -36,16 +26,11 @@ from .semantics import (
     LOCAL_BYTES,
     Branch,
     Branching,
-    Sequencer,
-    Trace,
     UnknownSemantics,
 )
 from .state import (
     LOCAL_BASE,
-    BootParams,
     Bytes,
-    JobView,
-    RegisterFile,
     Source,
     Space,
     SparseSpace,
@@ -59,37 +44,6 @@ H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 LOCAL_SIZE = LOCAL_BYTES
 """Local memory, 8 KiB, which the scalar addresses wrap in (`semantics.LOCAL_BYTES`)."""
-BUFFER_LO, BUFFER_HI = -0x1000, 0x10000
-"""The modelled buffer indices, reaching below index 0. The buffer is the lane memory
-(`fields.LANE_MEMORY`), one source byte per element, so it holds 0x8000 bytes and its indices
-count modulo that (inferred); the modelled range exceeds 0x8000 because the model does not wrap
-them."""
-LINE_PAIRS = 3 * 2 * 64
-"""The resampler's held line pairs: plane c, line parity r, pixel x at (2 c + r) x 64 + x."""
-
-
-class Status(Enum):
-    OK = "ok"
-    TIMEOUT = "timeout-abort (0xA111)"
-    HAZARD = "wedged or link lost"
-
-
-@dataclass
-class JobResult:
-    status: Status
-    why: list[str] = field(default_factory=list)
-    """The outcomes that decided the status and the store."""
-    stored: tuple[int, int] | None = None
-    """The dst range the store wrote, None when it wrote nothing."""
-    taint: Confidence = V
-    """The confidence of what this job did: its status, whether it stored and the store itself;
-    stored bytes can be weaker still through the buffer they come from."""
-    ignored: list[tuple[int, list[str]]] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
-    edits: list[tuple[str, Confidence]] = field(default_factory=list)
-    """The measured edits of the stock program the job ran, each with the confidence of its
-    outcome on this job."""
-
 
 STEP_LIMIT = 100_000
 
@@ -120,22 +74,11 @@ class Run:
 class Boot:
     """The state of one camera boot; it persists across the jobs run on it."""
 
-    def __init__(self, params: BootParams | None = None) -> None:
-        self.params = params or BootParams()
+    def __init__(self) -> None:
         self.sources: list[Source] = []
         self._source_ids: dict[Source, int] = {}
-        self.regs = RegisterFile()
-        """The transfer registers as the copy model's register facts give them (`start_copy`)."""
         never = self.source("unwritten", "no job on this boot wrote it")
         self.local = Space("local", LOCAL_BASE, LOCAL_SIZE, never)
-        self.buffer = Space("buffer", BUFFER_LO, BUFFER_HI - BUFFER_LO, never)
-        self.lines = Space("line pairs", 0, LINE_PAIRS, never)
-        self.substitute: int | None = None
-        """The resampler's tap-0 substitute, a per-lane value that program 13 adds in place of tap
-        0's product when word 439's grid A is idled; None while it is not known: its value at boot
-        varies per boot and edits move it (`resample_edits.SUBSTITUTE_MOVER`)."""
-        self.substitute_at_boot = True
-        """Whether the substitute still holds its boot value: no edit has moved it."""
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
         self.carry: Carry | None = None
         """What the last job `run` left for the next (`machine.Carry`); None before the first
@@ -169,13 +112,6 @@ class Boot:
         b = self.local.read(LOCAL_BASE + offset, 4)
         return int.from_bytes(b.data, "little") if all(b.known) else None
 
-    def forget_held(self, why: int) -> None:
-        """What jobs hold across the boot, the held line pairs and the tap-0 substitute, becomes
-        unknown (source `why`): after a job that raised `UnknownSemantics`, whose effect on them
-        is not known."""
-        self.lines.forget(why)
-        self.substitute, self.substitute_at_boot = None, False
-
     def setup(self, job: Job) -> None:
         """Write the job's request to local memory, as its command's CPU setup does."""
         request = self.source("request", "written by the command's CPU setup")
@@ -206,54 +142,6 @@ class Boot:
         self.carry = None if machine.lapses else carry
         timed = estimate(job, flow, machine.stream)
         return Run(job, flow, machine, timed, tuple(machine.lapses))
-
-
-def start_copy(boot: Boot) -> JobView:
-    """Set the transfer registers that the copy's register facts give for the request in local
-    memory (src, dst and len at words 0..2); returns that view of the job."""
-    view = JobView(boot.u32(0), boot.u32(4), boot.u32(8), boot.params)
-    if view.dst is None or view.length is None:
-        raise ValueError("local memory holds no dst and len (no command setup ran)")
-    boot.regs.start_job(view)
-    return view
-
-
-@dataclass(frozen=True)
-class ModelRun:
-    """What a model runs a job with (`run_model`)."""
-
-    boot: Boot
-    strict: bool
-    """False: fields without semantics are ignored, and taint."""
-    sequencer: Sequencer
-
-
-class Model(Protocol):
-    """The model of one program: what covers each word of a job (`cover_job`, which records
-    into the job's trace, or raises `UnknownSemantics` in strict mode, and returns the job as
-    `apply` takes it), and what the trace does."""
-
-    program: Program
-
-    def cover_job(self, run: ModelRun, job: Job, trace: Trace) -> Job: ...
-
-    def apply(self, run: ModelRun, job: Job, trace: Trace) -> JobResult: ...
-
-
-def run_model(
-    boot: Boot,
-    model: Model,
-    job: Job,
-    *,
-    strict: bool = True,
-    sequencer: Sequencer | None = None,
-) -> JobResult:
-    """Run `job` on `boot` by `model`: the job's setup, the model's cover of its words, then the
-    model applies the trace to the boot."""
-    boot.setup(job)
-    run = ModelRun(boot, strict, sequencer or Sequencer())
-    trace = Trace()
-    return model.apply(run, model.cover_job(run, job, trace), trace)
 
 
 class Datapath(Protocol):

@@ -46,10 +46,10 @@ def cmd_source(args: argparse.Namespace) -> None:
 
 
 def cmd_flow(args: argparse.Namespace) -> None:
-    from . import commands
     from .emu import Boot, Executor
     from .machine import Machine
-    from .memcpy import ITEM
+    from .stock import commands
+    from .stock.copy import ITEM
     from .stream import Engine
 
     args.item = ITEM

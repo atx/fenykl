@@ -2,7 +2,7 @@ import struct
 
 import pytest
 
-from fenykl.dsp.taps import Rounding, Taps
+from fenykl.dsp.stock.taps import Rounding, Taps
 
 UNIT = [(0, 256, 0, 0)] * 16
 

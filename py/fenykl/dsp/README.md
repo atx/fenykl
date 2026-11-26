@@ -9,28 +9,35 @@ are read from the user's own firmware image at runtime; no stock microcode is pa
 | module | contents |
 |---|---|
 | `__init__.py` | the API for own programs (`__all__`): the DSL and its helpers, `assemble`, `Program`, `Word`, `Boot`, `Run`, `NoHalt`, the value types, `listing`, `source` |
+| **encode and decode** | |
 | `fields.py` | the field table, the single source of truth: bits, kind, unit, idle value, confidence, fact; the op meanings `OPS`, the target `TARGET`, the delay slots `DELAY_SLOTS` |
 | `units.py` | the units (a strobe and the fields that change under it), derived from the table |
 | `asm.py` | the DSL: register files, unit instructions by mnemonic (`MNEMONICS.md`) or code, ports, bundles and their exact decoding (`Bundle.of`), helpers for constants and the stream engine |
 | `word.py` | `Word`: an immutable 320-bit value with views by field (`word["xreg"]`, `changed()`) and as a control word (`control`, `end`, `target`); `IDLE` |
 | `program.py` | `Program`, the item layout, extraction of the five stock programs, `assemble()` with labels, `call_return_errors()` |
 | `disasm.py` | listings and DSL source (bundles) of a program |
-| `intervals.py` | the op slot over register intervals (`op_effect`) and the PR ports' destinations (`destinations`): the copy model's inserted words |
-| `memcpy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
-| `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, buffer, DRAM view); the register files; the register facts and boot parameters |
-| `semantics.py` | word classes, parts, roles and channels, the hidden sequencer, `UnknownSemantics`; the op slot's semantics `OP_SEMANTICS` and given branch decisions (`Given`) |
+| **runtime** | |
+| `state.py` | tri-state bytes with provenance and taint; the spaces (local memory, DRAM view) |
+| `semantics.py` | the datapath rules: the op slot's semantics `OP_SEMANTICS`, the X and S units' and the lane rules, the lane memory, `UnknownSemantics`, given branch decisions (`Given`) |
 | `job.py` | `Job`, a program and its request; `Flow`, `Step`, `Stop`: what stepping a job executed |
-| `emu.py` | `Boot`; `run_model`: runs a job word by word and has its model apply the trace; `Executor`: steps a job through its control flow on the datapath executor, which `Boot.run` does in one call |
-| `resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
-| `resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
+| `emu.py` | `Boot`; `Executor`: steps a job through its control flow on the datapath executor, which `Boot.run` does in one call |
+| `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
 | `stream.py` | `Engine`: the stream engine's channel registers, loads and stores as X1's transfers program them |
 | `timing.py` | `estimate`: a job's minimum time from a run of the datapath executor, with tiers |
-| `machine.py` | `Machine`, the datapath executor of own programs: the register files G, A, B, R, F0..F3, the lane files L0..L3, U and O, the lane memory, the ALU bus, X0, X1, the S heads at their lags and M, run word by word as `Executor.step`'s datapath |
-| `exec.py` | the field-level executor of a window of stock words: symbolic values, the window state `WindowState` (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
-| `resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
-| `taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
-| `commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
+| **stock models** (`stock/`) | |
+| `stock/model.py` | what the stock models run on: word classes, parts, roles and channels, the hidden sequencer, the `Trace`; `StockBoot`, a `Boot` with the state the models keep (the buffer, the held line pairs, the tap-0 substitute, the transfer registers); `run_model`: runs a job word by word and has its model apply the trace |
+| `stock/registers.py` | the copy model's transfer registers: register intervals, the register facts and the boot parameters |
+| `stock/copy.py` | `Copy16Model`: the model of the stock copy (item 16), built from the firmware's program: what each word does or does without, the transfer channels and roles, inserted words, the resolution of a job into one load and one store and their application |
+| `stock/intervals.py` | the op slot over register intervals (`op_effect`) and the PR ports' destinations (`destinations`): the copy model's inserted words |
+| `stock/resample.py` | `Resample13Model`: the model of the stock resampler (item 13), built from the firmware's program: its arithmetic measured from outside, the column blocks and their held line pairs; `model.job` (the stock words with own taps) and `predict` |
+| `stock/resample_edits.py` | the edits of program 13 measured on the camera: edit kinds, job classes and per plane what each does |
+| `stock/exec.py` | the field-level executor of a window of stock words: symbolic values, the window state `WindowState` (operand and coefficient registers, the load latch, accumulators), the step loop with its latency queue, the coverage rule per (word, field), scoped confidence, the def-use rule and the output stages |
+| `stock/resample_window.py` | program 13's loop-head window on the executor: its anchors, semantics and measured cells, the composition cap; the model takes its b = 1 bytes from it |
+| `stock/taps.py` | `Taps`: the resampler's 16 phases of 4 s16 taps, checked, packed as the 32 tap words, from floats with an explicit rounding |
+| `stock/commands.py` | the CPU setups of the commands as jobs (cmd 0xF, cmd 0xC) |
 | `cli.py` | `fenykl dsp disasm ITEM`, `fenykl dsp source ITEM`, `fenykl dsp fields`, `fenykl dsp flow` |
+
+The first two layers do not import `stock` (`tests/test_dsp_layers.py`).
 
 Bit k of a word is bit (k % 8) of byte k // 8 of its 40 bytes. A word decodes from any 320-bit
 value, so bytes -> Word -> bytes is exact whatever the table says; the tests check that the table
@@ -552,12 +559,12 @@ difference in address, lanes, element width or scalar result, and none writes A 
 [inferred]; what the low head bit selects is open [it is no wait on the stream engine: a load
 head beside a load in flight read the old content either way, measured].
 
-The lane memory is the stock copy's buffer (`memcpy`): at placement 0 the copy's load puts
+The lane memory is the stock copy's buffer (`stock.copy`): at placement 0 the copy's load puts
 source byte i, zero-extended, in lane i % 32 of vector i / 32, and its store writes each
 element's low 8 bits [verified]. A kernel with bulk input and output runs inside one stock copy:
 the loaded vectors are there once the copy's word 74 has run (three vectors read, 8 lanes each:
 word 74 is the load's 0x1d, which waits for it), own words between
-74 and 75 compute on them, and 75..78 store them (`memcpy`; verified: a dense layer of 32
+74 and 75 compute on them, and 75..78 store them (`stock.copy`; verified: a dense layer of 32
 neurons x 64 inputs, DRAM bytes to DRAM bytes, exact). The store's element format, word 47's
 value, is the number of elements per 16-byte line: 16 bytes, 12 a 10-bit pack, 10 a 12-bit
 pack, 9 a 14-bit pack, 8 16-bit little-endian, 4 zero-extended to 32 bits [verified; the 10-bit
@@ -612,7 +619,7 @@ result (verified by exact readout).
 The data ops (`OP_SEMANTICS`, each with its tier) compute on plain 32-bit values, with 32-bit
 wrap; a compare gives 1 or 0. An earlier indirect readout, through the copy's load offset and
 store count, showed immediates and results scaled by 16: that scale belongs to those two
-roles, which use a register value in units of 16 bytes (`memcpy.READOUT`; inferred: r2 & 0x1080
+roles, which use a register value in units of 16 bytes (`copy.READOUT`; inferred: r2 & 0x1080
 through the count at len 0x1100 stored nothing, as a 16-byte unit predicts), not to the ops.
 Verified by exact readout: 0x08 / 0x09 rb, 0x3c ra & rb, 0x3a ra | rb, 0x34 ra - rb, 0x35 ra +
 rb, 0x33 -rb, 0x3d ~ra, 0x2f min signed, 0x2e max signed, 0x41 ra >> (rb & 31) arithmetic, 0x43
@@ -764,12 +771,12 @@ still through the buffer they come from (a held buffer of an older job).
 ## The emulator
 
 ```python
-from fenykl.dsp import commands
-from fenykl.dsp.emu import Boot, run_model
-from fenykl.dsp.memcpy import Copy16Model
+from fenykl.dsp.stock import commands
+from fenykl.dsp.stock.copy import Copy16Model
+from fenykl.dsp.stock.model import StockBoot, run_model
 
 model = Copy16Model.from_image(image)  # the stock E-M10 II .BIN
-boot = Boot()  # BootParams: r14, r29, r21's format; None = unknown
+boot = StockBoot()  # BootParams: r14, r29, r21's format; None = unknown
 boot.put(src, data, "src")  # known DRAM bytes, with a source name
 result = run_model(boot, model, commands.copy(model.program, src, dst, len(data)))
 out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), off
@@ -777,7 +784,7 @@ out = boot.read(dst, len(data))  # Bytes: data, known, taint, src (provenance), 
 
 A `Job` is a program plus the bytes its command's CPU setup writes to local memory
 (`commands.copy` for cmd 0xF: src, dst and len at 0x9D000000..08). State persists across the jobs
-of a `Boot`: local memory, the buffer between load and store (position-addressed, reaching below
+of a `StockBoot`: local memory, the buffer between load and store (position-addressed, reaching below
 index 0), the resampler's held line pairs, the register file and the DRAM view. `back_firmware(boot, image)` maps the main code
 of a stock `.BIN` for loads from firmware text. A byte is known or UNKNOWN, and its source says
 where it came from or why it is unknown; the emulator never guesses a byte.
@@ -808,7 +815,7 @@ on the stock path only). Some timeouts come after the store (`Outcome.STORE_TIME
 5, 28 or 79, 45's target moved to the loop's top 50, bit 6 of 65's immediate cleared): dst is
 written, then the job never completes. The guard 45 skips the loop 50..57 in every tested job,
 so the loop's words are known only with the loop skipped: an edit of 28 or 45 together with one
-of 50..57 has the measured outcome of `memcpy._LOOP_ENTRIES` (45 and 53 idled: dst not written,
+of 50..57 has the measured outcome of `copy._LOOP_ENTRIES` (45 and 53 idled: dst not written,
 status 0) and no semantics otherwise.
 
 Strict mode (the default) raises `UnknownSemantics` for a word nothing covers, naming the fields
@@ -824,7 +831,7 @@ the later ones in their stock roles.
 ### Inserted words
 
 A job longer than the stock program that is the stock program with words inserted (and some
-edited in place) is covered by content (`memcpy.align`, `Copy16Model.cover_job`): its words
+edited in place) is covered by content (`copy.align`, `Copy16Model.cover_job`): its words
 are matched to the stock words with the control targets left out, an insert into a run of equal
 words counting as placed after the run. Each stock word is covered at its stock index, its
 target moved back through the match, so a target that follows its word (labels, or every
@@ -839,9 +846,9 @@ are all in the op slot and the PR ports, at its op semantics' confidence (`OP_SE
 `Copy16Model.ops`), when the semantics covers its operands. A load is recorded only (where
 its datum goes is open; with a PR port enabled it is UNKNOWN). A result goes through the word's
 PR ports (`intervals.destinations`), and only right after stock word 64, the site where ops were
-measured (`memcpy.ENGINE_AFTER`): there the operands r2 = (len + 0x1f) / 16 and r7 near 0x4000
+measured (`copy.ENGINE_AFTER`): there the operands r2 = (len + 0x1f) / 16 and r7 near 0x4000
 are known (inferred; r7 at len 0x2000 and 0x4000 only), a port-272 result feeds later
-inserts' operands three words on, and a port-267 result, times 16 (`memcpy.READOUT`), is what
+inserts' operands three words on, and a port-267 result, times 16 (`copy.READOUT`), is what
 words 68 and 73 read at that register four or more words on; other transfers reading it raise. A load offset or count that the
 model cannot place from such a value (unknown, negative, two placements, beyond the buffer, a
 count off 16-byte steps or above len) raises. Every other insert is UNKNOWN, naming the op or
@@ -855,8 +862,8 @@ them), a target on an inserted word.
 ### The resampler
 
 ```python
-from fenykl.dsp.resample import Resample13Model
-from fenykl.dsp.taps import Rounding, Taps
+from fenykl.dsp.stock.resample import Resample13Model
+from fenykl.dsp.stock.taps import Rounding, Taps
 
 model = Resample13Model.from_image(image)
 taps = Taps.of([(-8, 264, 0, 0)] * 16)  # phase p = taps 0..3, s16, 256 = 1.0
@@ -880,7 +887,7 @@ the request to 0x742..0x747; the table stays in DRAM. Own taps are a program wit
 (`model.job` builds it from the stock words). Word 2p of the tap words is phase p's tap 0 | tap 1
 << 16, word 2p + 1 tap 2 | tap 3 << 16. `Taps.from_floats` rounds each tap on its own and does not
 renormalise a phase to 256. No word of program 13 is decoded: a job's word is covered at its index by
-the stock word, a measured edit of it or the window's coverage rule, and the law (`resample.py`'s docstring) applies to the stock program
+the stock word, a measured edit of it or the window's coverage rule, and the law (`stock/resample.py`'s docstring) applies to the stock program
 as it is. Every byte the law computes is at most inferred, a law measured from outside;
 hypotheses: u0 held into [-16, 16) (b 2), a phase between the 16, at b != 1 a tap outside
 -637..2048 and in an edited program a tap outside -1840..2048 (the taps that ran there; with the
@@ -914,14 +921,14 @@ coefficient reads as p and 16 - p (p the phase in 16ths, the chroma planes' weig
 not modelled), so their plane 0 is unknown (rows). f57_60 = 5 at 441 and 442 reads plane 1's
 line a + 1 (verified), at 440 too (post hoc, inferred). Idling
 439's grid A (or the S2 triple) replaces tap 0's product by a per-lane value added without the
-multiply, the **tap-0 substitute** (`Boot.substitute`). Idling 440's or 441's grid A drops tap
+multiply, the **tap-0 substitute** (`StockBoot.substitute`). Idling 440's or 441's grid A drops tap
 1's or tap 2's product; it ran only on boots where the substitute was 0, so the model gives
 the drop there and unknown bytes elsewhere (`Substitute(tap)`). Idling 442's grid A changes plane
 0 along x, and its plane 0 is unknown. Its value at boot varies per boot, so it is unknown on a fresh
 boot and every such prediction there is unknown. A grid B idle of word 433 on a flat source at
 W 64 sets it from its boot value to 0 (`SUBSTITUTE_MOVER`, inferred: three boots), where the idle
 gives the drop of tap 0's product; the edits seen to keep it (`SUBSTITUTE_KEEPERS`) and stock jobs
-keep it. Any other edited job makes it unknown, as does `Boot.forget_held` after a job that
+keep it. Any other edited job makes it unknown, as does `StockBoot.forget_held` after a job that
 raised, and from there the grid B idle does not bring it back to a known value: grid edits that
 contain it left a non-zero moved value in place. `model.job(..., edits=[(439, GRID_C2)])` and `predict(..., edits=...)` apply them;
 `Resample13Model(program, facts)` takes another outcome table.
@@ -1175,14 +1182,14 @@ measured). A flow that did not halt raises `ValueError`.
 
 ### Adding a semantic
 
-- **A register value**: add or refine a `RegisterFact` in `state.py` (an exact value or an
+- **A register value**: add or refine a `RegisterFact` in `stock/registers.py` (an exact value or an
   interval, from the job's request or the boot parameters, with its confidence). A role that
   reads the value then works at that register without further change.
 - **A role's outcome at a register** (seen on the camera): add the register to the role's
-  `table` in `memcpy._CHANNELS` (and the job lengths it ran at to `seen`), or to
-  `memcpy._FORMATS` for word 47.
-- **A new use of the register value**: a new `semantics.Use`, handled in `Copy16Model._role`.
-- **What a stock word does without it**: its `Part` in `memcpy._PARTS` (`token`, `missing`
+  `table` in `copy._CHANNELS` (and the job lengths it ran at to `seen`), or to
+  `copy._FORMATS` for word 47.
+- **A new use of the register value**: a new `model.Use`, handled in `Copy16Model._role`.
+- **What a stock word does without it**: its `Part` in `copy._PARTS` (`token`, `missing`
   outcome and the fact); a swept field goes in `operand`, by value, with its key in
   `operand_field` (xreg by default; word 60's f76_79 copies at 0 only); single edits of other
   fields go in `flips`, by the bits flipped against the stock value (45's target, 65's
