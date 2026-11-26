@@ -9,7 +9,7 @@ from conftest import stock_image
 from test_dsp_exec import rne
 
 from fenykl.dsp import commands, resample_edits
-from fenykl.dsp.emu import Boot, Executor, Status
+from fenykl.dsp.emu import Boot, Status, run_model
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.resample import Resample13Model, footprint, predict
@@ -72,8 +72,7 @@ def edit_of(entry: dict) -> Idle:
     return kinds.get(name) or bit(int(name.split()[1]))
 
 
-def run_job(emu: Executor, job: dict, k: int):
-    boot = emu.boot
+def run_job(boot: Boot, job: dict, k: int):
     ctx = bytes([job["src"]["ctx"]]) * CTX
     boot.put(
         SRC - CTX, ctx + base64.b64decode(job["src"]["data"]) + ctx, f"job {k} src"
@@ -86,26 +85,26 @@ def run_job(emu: Executor, job: dict, k: int):
     )
     edits = [(job["edit"]["word"], edit_of(job["edit"]))] if "edit" in job else []
     rjob = model().job(taps_of(job["taps"]), SRC, DST, TABLE, job["w"], job["h"], edits)
-    result = emu.run(rjob)
+    result = run_model(boot, model(), rjob)
     assert [c for _, c in result.edits] == [Confidence.VERIFIED] * len(edits)
     return result, prefill
 
 
 def run_vector(vector: dict) -> list[str]:
     bad = []
-    emu = Executor(Boot(), model())
+    boot = Boot()
     taints = TAINTS[vector["name"]].split()
     if len(taints) != len(vector["jobs"]):
         bad.append(f"{len(taints)} taints for {len(vector['jobs'])} jobs")
     for k, (job, taint) in enumerate(zip(vector["jobs"], taints)):
-        result, prefill = run_job(emu, job, k)
+        result, prefill = run_job(boot, job, k)
         if result.status.name.lower() != job["expect"]["status"]:
             bad.append(f"job {k}: status {result.status.name}")
         if CONF[taint[1]] is not result.taint:
             bad.append(
                 f"job {k}: result taint {result.taint.name}, expected {taint[1]}"
             )
-        got = emu.boot.read(DST, footprint(job["h"]))
+        got = boot.read(DST, footprint(job["h"]))
         written = [
             t for t, s, kn in zip(got.taint, got.src, got.known) if kn and s != prefill
         ]
@@ -184,37 +183,37 @@ def test_an_edited_program_has_no_semantics():
     boot = Boot()
     job = commands.resample(program, SRC, DST, TABLE, 64, 64, 16)
     with pytest.raises(UnknownSemantics, match="word 439"):
-        Executor(boot, model()).run(job)
-    result = Executor(boot, model(), strict=False).run(job)
+        run_model(boot, model(), job)
+    result = run_model(boot, model(), job, strict=False)
     assert result.taint is Confidence.HYPOTHESIS
 
 
 def test_a_partial_block_on_a_fresh_boot_is_unknown():
-    emu = Executor(Boot(), model())
-    run_job(emu, identity_job(w=48), 0)
-    line = emu.boot.read(DST, 64)
+    boot = Boot()
+    run_job(boot, identity_job(w=48), 0)
+    line = boot.read(DST, 64)
     assert all(line.known[:32]) and not any(line.known[32:48])
-    assert {emu.boot.sources[s].name for s in line.src[32:48]} == {"unwritten"}
+    assert {boot.sources[s].name for s in line.src[32:48]} == {"unwritten"}
     assert bytes(line.data[48:]) == b"\xe7" * 16
 
 
 def test_a_partial_block_of_a_job_that_is_no_identity_is_unknown():
     # The held lines are known after the first job; the second reads source lines 2i.
-    emu = Executor(Boot(), model())
-    run_job(emu, identity_job(), 0)
+    boot = Boot()
+    run_job(boot, identity_job(), 0)
     job = identity_job(w=48)
     job["table"] = [[min(2 * i, 15) << 16, 0x10000] for i in range(16)]
-    run_job(emu, job, 1)
-    line = emu.boot.read(DST, 64)
+    run_job(boot, job, 1)
+    line = boot.read(DST, 64)
     assert all(line.known[:32]) and not any(line.known[32:48])
-    assert {emu.boot.sources[s].name for s in line.src[32:48]} == {"resampler partial"}
+    assert {boot.sources[s].name for s in line.src[32:48]} == {"resampler partial"}
 
 
 def test_an_odd_height_above_1_is_unknown():
-    emu = Executor(Boot(), model())
-    result, _ = run_job(emu, identity_job(h=3), 0)
+    boot = Boot()
+    result, _ = run_job(boot, identity_job(h=3), 0)
     assert result.status is Status.OK and result.stored == (DST, DST + footprint(3))
-    assert not any(emu.boot.read(DST, footprint(3)).known)
+    assert not any(boot.read(DST, footprint(3)).known)
 
 
 # Per own-tap vector, the reasons the prediction gives for its unknown bytes.
@@ -358,7 +357,7 @@ def run_on(boot: Boot, taps: Taps, edits=()) -> bytes:
     boot.put(TABLE, b"".join(struct.pack("<iI", a, b) for a, b in TABLE13), "table")
     job = model().job(taps, SRC, DST, TABLE, 64, 16, edits)
     try:
-        Executor(boot, model()).run(job)
+        run_model(boot, model(), job)
     except UnknownSemantics:
         boot.forget_held(boot.source("unmodelled job"))
     got = boot.read(DST, footprint(16))
@@ -400,8 +399,8 @@ def test_word_439s_grid_a_idle_reads_the_boots_tap0_substitute():
     # The mover acts on its class only: on a source varying along x it makes it unknown.
     boot = Boot()
     boot.put(SRC, bytes(range(64)) * 48, "src")
-    Executor(boot, model()).run(
-        model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
+    run_model(
+        boot, model(), model().job(taps, SRC, DST, TABLE, 64, 16, [(433, GRID_B_ONLY)])
     )
     assert plane0(run_on(boot, taps, [(439, GRID_A_ONLY)])) is None
 

@@ -1,7 +1,6 @@
 """The op slot over register intervals: what a data op of `semantics.OP_SEMANTICS` does when its
 operands are `state.Reg` intervals (`op_effect`), and where the word's PR ports send its result
-(`destinations`). The copy model covers inserted words by it (`memcpy.Copy16Model`); the plain
-stepper (`emu.Executor.step` without a datapath) runs its data ops by it."""
+(`destinations`). The copy model covers inserted words by it (`memcpy.Copy16Model`)."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -48,8 +47,8 @@ class RegSet(Enum):
     port 267 writes, and G, which ra and rb read and port 272 writes (verified on the camera by
     exact readout that port 267 writes no G register). R and A are not modelled."""
 
-    XREG = "B, the file X1 reads (`Boot.regs`)"
-    OPERAND = "G, the file ra and rb read (`Boot.slot`)"
+    XREG = "B, the file X1 reads"
+    OPERAND = "G, the file ra and rb read"
 
 
 @dataclass(frozen=True)
@@ -78,21 +77,15 @@ words after it; exact readout on the camera shows the G write read by the very n
 the operand latency here does not model yet."""
 
 
-OTHER_FILES = {"f206_210": "A", "f221_223": "R"}
-"""Port registers of the register files the emulator does not model: a write there leaves G
-and B as they are."""
-
-
-def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], str]:
+def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], str]:
     """Where the word's data op result goes: (set, register, latency) per decoded enabled port,
-    the port fields of the enabled ports whose destination is open, and why the destination is
-    incomplete ("" when every enabled port is decoded and one is). An enable that takes X0's or
-    X1's result (`fields.PR_SOURCES`), which stepping does not run, or writes R or A counts as
+    and why the destination is incomplete ("" when every enabled port is decoded and one is).
+    An enable that takes X0's or X1's result (`fields.PR_SOURCES`) or writes R or A counts as
     open here; one that writes nothing (f267_268 = 2) is skipped as idle. Without an enabled
-    port a data op writes no register (verified on the camera by exact readout); stepping still
+    port a data op writes no register (verified on the camera by exact readout); this still
     reports such a result as open rather than dropping it."""
-    dests, open_, names = [], [], []
-    for enable, reg in PR_ENABLES.items():
+    dests, names = [], []
+    for enable in PR_ENABLES:
         v = word[enable]
         if v == lookup(enable).idle or (
             v in PR_SOURCES[enable] and PR_SOURCES[enable][v] is None
@@ -102,7 +95,6 @@ def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], 
             (p for p in RESULT_PORTS if p.enable == enable and p.value == v), None
         )
         if port is None:
-            open_.append(reg)
             names.append(f"{enable}={v}")
         else:
             dests.append((port.to, word[port.reg], port.latency))
@@ -112,7 +104,7 @@ def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], list[str], 
         why = "no PR port enabled: where the result goes is open"
     else:
         why = ""
-    return dests, open_, why
+    return dests, why
 
 
 ENUM_LIMIT = 1 << 16

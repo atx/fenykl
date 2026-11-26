@@ -111,18 +111,6 @@ class Program:
             for j in range(i + 1, min(i + DELAY_SLOTS + 1, len(self.words)))
         }
 
-    def local_op3(self) -> set[int]:
-        """The indices of the local op 3 words: forward, after word 0, with no return (op 4)
-        between the word and T. Word 0 calls the job routine although no return lies before its
-        T; whether a local op 3 is a call or a jump is open."""
-        local = set()
-        for i, w in enumerate(self.words):
-            if w.op != 3 or i == 0 or w.target <= i:
-                continue
-            if all(v.op != 4 for v in self.words[i + 1 : w.target]):
-                local.add(i)
-        return local
-
 
 def decode_item(data: bytes, spec: StockProgram) -> Program:
     """The program in item bytes `data`; raises ProgramFormatError if the layout is off."""
