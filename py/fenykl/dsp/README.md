@@ -63,14 +63,17 @@ to(L1[4], LOAD) | OP.add_imm(G[9], 4) | to(G[9], OP)
 - Ports `to(dst, src)`: the one port of dst's file that writes src (`LOAD`, `S0..S3`, `S2_HI`, `X0`,
   `X1`, `OP` for the ALU bus); a (file, source) without a table row raises.
 - `a | b` bundles parts: the word is the idle word with their fields set. A field set by two
-  parts raises, even with one value, as does a register written by two ports (L1 has two). `NOP`
+  parts raises, even with one value, as does a register written by two ports (L1 has two); only a
+  raw part may set the bits of a field an instruction sets in part, agreeing on its bits. `NOP`
   is the empty bundle, the idle word; a `Word` goes in as `raw(word)`, and `|` with a bare `Word`
   raises.
 - `Label("top") | ...` names its word, alone an idle word; a control op's target is a word index
   or a label (`OP.loop(G[8], "top")`), resolved by `program.assemble`.
 - `Bundle.of(word, labels, at)` reads any word back, with its `Label` where `labels` names index
-  `at`; the fields no instruction or port expresses (a register held under an idle head or enable,
-  an immediate wider than its op's, a second port on one register) form a `raw(...)` part, so
+  `at`; a head's instruction takes the operands its head reads (`semantics.head_reads`; every one
+  that differs where they are not known), and the fields with bits no instruction or port
+  expresses (an operand the head does not read, a register held under an idle head or enable, an
+  immediate wider than its op's, a second port on one register) form a `raw(...)` part, so
   decoding is exact.
 - Helpers: `li(G[9], 4)` is op 0x0b with its port, `b_add(B[12], B[2], 0x1000)` X1 0x03 into B.
   The stream engine (`stream.py`) takes values: `hand(*values)` is X1 0x1c per value, a register
@@ -266,11 +269,20 @@ HEAD_VIEWS["s1"].decode(
 )  # {'op': 4, 'a': 4, 'b': 4, 't': 0, 'r': 4, 'imm': 32}
 ```
 
-A view is per unit, not per head value: no table gives which of s, t, r, u, idx, val or the
-immediate a head reads (the rules' `reads` cover a and b only), so a listing shows every operand
-that differs, also one the word's head does not read. Listings show these units by their operands
-where they differ (`s1: op=4~ a=4! ... imm=0x20!`). A mnemonic's positional operands are those its
-formula reads (`MNEMONICS.md`); DSL source gives them first, then every other operand that differs.
+A view is per unit; which of its operands a head reads is `semantics.HEAD_READS`, derived from
+the rules (the lane operands they declare, the scalars a rule reads) and what the machine does
+with the head (X0's lane-memory address and store register, X1's transfer and divide, a lane
+shift's U, the b S3's U port takes), and `head_reads` per word, which adds the operand S0 / S1
+latch for their 0x60.. heads (S0 its a, S1 its b) and reads nothing at an idle head. A property
+test drives the machine's code for every head: bits outside its reads never change what it does,
+and each operand it reads does on some input. Not known: a head without a rule, S1 0x12 (its
+scalar rule not exact) and 0x55..0x5f (open), X0 0x16..0x19 and 0x22 (no result, nothing else
+modelled), and an S3 head whose U take is open in a word whose U port takes it. Listings show
+these units by the operands the head reads where they differ (`s1: op=4~ b=4! imm=0x20!`), then
+each field with another bit that differs raw (`s1a=4!`); a head whose reads are not known shows
+every operand that differs. A mnemonic's positional operands are those its formula reads
+(`MNEMONICS.md`, checked against `HEAD_READS`); DSL source gives them first, then the latched
+operand where it differs, or every operand that differs where the reads are not known.
 
 To add or refine a field, edit `FIELDS`: split or merge entries so that the bits stay covered
 exactly once (the import raises otherwise), and give the new entries their idle value, kind,
