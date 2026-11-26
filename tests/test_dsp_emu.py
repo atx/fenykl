@@ -451,6 +451,10 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
     assert result.status is Status.OK and result.stored is None
     assert result.taint is Confidence.VERIFIED
     assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
+    # The machine's path stands at other lengths than the 1 KiB run.
+    for length in (0x408, 0x4000, 0x10):
+        result, _ = run(Program(tuple(words)), length=length)
+        assert result.stored is None and result.taint is Confidence.VERIFIED
     # At another index before the stream: inferred; behind the halt at 26, the brf 27 is a
     # control word not measured there; from the stream's first word 58 on, open.
     for at, taint in (

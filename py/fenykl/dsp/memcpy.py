@@ -1045,22 +1045,21 @@ class Copy16Model:
         return self._apply(boot, plan, trace, view)
 
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
-        """The result of a job that an op 7 off the stock halt ends before the stream: status 0,
-        dst not written (word 5 in place of 11 on the camera [verified]; elsewhere inferred, or
-        weaker through the path to it); None when no such halt runs. The job is stepped on a
-        `Machine`, lenient (`_halt_flow`): the halt is its first op 7 and the three words behind
-        it still run. A halt at or after a stream word, or in a job whose stream engine stored
-        (the tail included) or went off script, raises: whether the stream drains first is open
-        (at 58 the machine has no command handed, but a halt in place of a word shifts the values
-        its tail hands, a state not measured). So does a halt after a loop word (the loop's words
-        were measured with the loop skipped only), and a path that leaves the stock path the rows
-        were measured on (`_STOCK_PATH`) without reaching the off-stock op 7."""
+        """The result of a job that an op 7 off the stock halt ends before the stream:
+        status 0, dst not written (word 5 in place of 11 on the camera [verified], at any
+        length; elsewhere inferred, or weaker through the path to it); None when no such
+        halt runs. The job is stepped on a `Machine`, lenient (`_halt_flow`): the halt is
+        its first op 7 and the three words behind it still run. A halt at or after a
+        stream word, or in a job whose stream engine stored (the tail included) or went
+        off script, raises: whether the stream drains first is open (at 58 the machine
+        has no command handed, but a halt in place of a word shifts the values its tail
+        hands, a state not measured). So does a halt after a loop word (the loop's words
+        were measured with the loop skipped only), and a path that leaves the stock path
+        the rows were measured on (`_STOCK_PATH`) without reaching the off-stock op 7."""
         stock = {i for i, w in enumerate(self.program.words) if w.op == HALT_OP}
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
             return None
-        length = view.length
-        assert length is not None
         flow, machine = self._halt_flow(job, view)
         h = next(k for k, s in enumerate(flow.steps) if s.op == HALT_OP)
         at = flow.steps[h].index
@@ -1096,7 +1095,7 @@ class Copy16Model:
             for k, s in enumerate(flow.steps)
             if k != h
         )
-        seen = at in HALTS_SEEN and length == KIB and words[at] == self.halt
+        seen = at in HALTS_SEEN and words[at] == self.halt
         conf = H if trace.ignored or edited or machine.lapses else V if seen else I
         # The halt's own tier is `seen`'s; the other steps carry the path's and the tail's.
         tiers = [s.confidence for k, s in enumerate(flow.steps) if k != h]
