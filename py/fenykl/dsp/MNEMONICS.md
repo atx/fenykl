@@ -7,13 +7,15 @@ Scheme: the operation, then the operand it takes besides the lane operands (`_im
 `_next` / `_bnext` a's / b's next lane), then the arithmetic (`_ss` / `_us` saturated
 signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart
 from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`
-the lanes U's port takes, `_u` / `_ua` an S2 product's unsigned operands). Codes whose
-rows differ in nothing else share a name: the one the stock programs use most (the
-lowest on a tie) takes it, the others add their code (`abd_ss_05`). `sub` and its
-kin compute the first operand minus the second, `andn` the first and not the second.
-`and_`, `or_`, `not_` avoid Python keywords. Operands are those the formula reads, in
-positional order; every other operand of the unit's view is a keyword. The tier is
-the table's for the function; an instruction also carries its fields' (`Instr.tier`).
+the lanes U's port takes, `save_unk` a content U's port writes that is not
+identified, `_save_open` what U's port takes open, `_u` / `_ua` an S2
+product's unsigned operands). Codes whose rows differ in nothing else share a name:
+the one the stock programs use most (the lowest on a tie) takes it, the others add
+their code (`abd_ss_05`). `sub` and its kin compute the first operand minus the
+second, `andn` the first and not the second. `and_`, `or_`, `not_` avoid Python
+keywords. Operands are those the formula reads, in positional order; every other
+operand of the unit's view is a keyword. The tier is the table's for the function;
+an instruction also carries its fields' (`Instr.tier`).
 
 ## S0
 
@@ -280,69 +282,69 @@ the table's for the function; an instruction also carries its fields' (`Instr.ti
 
 | code | name | operands | formula | tier |
 |---|---|---|---|---|
-| 0x00 | `rmax_u` | b | no lane result; M: the unsigned maximum of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other | verified |
-| 0x01 | `rmin_u` | b | no lane result; M: the unsigned minimum of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other | verified |
-| 0x02 | `rsum_u` | b | no lane result; M: the sum, the lanes zero-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other | verified |
-| 0x03 | `rmax` | b | no lane result; M: the signed maximum, sign-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other | verified |
-| 0x04 | `rmin` | b | no lane result; M: the signed minimum, sign-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other | verified |
-| 0x05 | `rsum` | b | no lane result; M: the sum, the lanes sign-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other | verified |
-| 0x06 | `zero` |  | 0 in every lane | verified |
-| 0x07 | `blk8` | a, b | lanes 8j..8j + 7 := b's 8-lane block a[j] where a[j] < 4, else 0, for j = 0..3 | verified |
-| 0x08 | `blk16` | a, b | lanes 16j..16j + 15 := b's 16-lane half a[j] where a[j] < 2, else 0, for j = 0, 1 | verified |
-| 0x09 | `perm` | a, b | b[(k & 16) + a[k]] where a[k] < 16, else 0 | verified |
-| 0x0a | `zip_lo` | a, b | lanes 2k, 2k + 1 := b[k], a[k] for k = 0..15 | verified |
-| 0x0b | `zip_hi` | a, b | lanes 2k, 2k + 1 := b[16 + k], a[16 + k] for k = 0..15 | verified |
-| 0x0c | `unzip_odd` | a, b | b's odd lanes, then a's odd lanes | verified |
-| 0x0d | `unzip_even` | a, b | b's even lanes, then a's even lanes | verified |
-| 0x0e | `ext_u` | b, lane | no lane result; M: lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], zero-extended | verified |
-| 0x0f | `ext` | b, lane | no lane result; M: lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], sign-extended | verified |
-| 0x10 | `ins` | b, val, lane | b with lane f92_95 + 16 x (f31_34 bit 2) := F3[f96_99] | verified |
-| 0x11 | `mov_imm` | imm | an immediate in every lane | verified |
-| 0x12 | `ltz` | b | 0xffff where b < 0, else 0 | verified |
-| 0x13 | `gez` | b | 0xffff where b >= 0, else 0 | verified |
+| 0x00 | `rmax_u` | b | no lane result; M: the unsigned maximum of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other; what U's port writes beside it is open | verified |
+| 0x01 | `rmin_u` | b | no lane result; M: the unsigned minimum of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other; what U's port writes beside it is open | verified |
+| 0x02 | `rsum_u` | b | no lane result; M: the sum, the lanes zero-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other; what U's port writes beside it is open | verified |
+| 0x03 | `rmax` | b | no lane result; M: the signed maximum, sign-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other; what U's port writes beside it is open | verified |
+| 0x04 | `rmin` | b | no lane result; M: the signed minimum, sign-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other; what U's port writes beside it is open | verified |
+| 0x05 | `rsum` | b | no lane result; M: the sum, the lanes sign-extended, of the 32 lanes of L3[f65_68], on M's bus in the third word after the head and in no other; what U's port writes beside it is open | verified |
+| 0x06 | `zero` |  | 0 in every lane; what U's port writes beside it is open | verified |
+| 0x07 | `blk8` | a, b | lanes 8j..8j + 7 := b's 8-lane block a[j] where a[j] < 4, else 0, for j = 0..3; what U's port writes beside it is open | verified |
+| 0x08 | `blk16` | a, b | lanes 16j..16j + 15 := b's 16-lane half a[j] where a[j] < 2, else 0, for j = 0, 1; what U's port writes beside it is open | verified |
+| 0x09 | `perm` | a, b | b[(k & 16) + a[k]] where a[k] < 16, else 0; what U's port writes beside it is open | verified |
+| 0x0a | `zip_lo` | a, b | lanes 2k, 2k + 1 := b[k], a[k] for k = 0..15; what U's port writes beside it is open | verified |
+| 0x0b | `zip_hi` | a, b | lanes 2k, 2k + 1 := b[16 + k], a[16 + k] for k = 0..15; what U's port writes beside it is open | verified |
+| 0x0c | `unzip_odd` | a, b | b's odd lanes, then a's odd lanes; what U's port writes beside it is open | verified |
+| 0x0d | `unzip_even` | a, b | b's even lanes, then a's even lanes; what U's port writes beside it is open | verified |
+| 0x0e | `ext_u` | b, lane | no lane result; M: lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], zero-extended; what U's port writes beside it is open | verified |
+| 0x0f | `ext` | b, lane | no lane result; M: lane f92_95 + 16 x (f31_34 bit 2) of L3[f65_68], sign-extended; what U's port writes beside it is open | verified |
+| 0x10 | `ins` | b, val, lane | b with lane f92_95 + 16 x (f31_34 bit 2) := F3[f96_99]; what U's port writes beside it is open | verified |
+| 0x11 | `mov_imm` | imm | an immediate in every lane; what U's port writes beside it is open | verified |
+| 0x12 | `ltz` | b | 0xffff where b < 0, else 0; what U's port writes beside it is open | verified |
+| 0x13 | `gez` | b | 0xffff where b >= 0, else 0; what U's port writes beside it is open | verified |
 | 0x14 | `lane` |  | the lane number 0..31; U's port beside it writes nothing | verified |
-| 0x15 | `ins_reg` | b, idx, val | b with lane F3[f92_95] & 31 := F3[f96_99] | verified |
-| 0x16 | `ext_reg_u` | b, idx | no lane result; M: lane F3[f92_95] & 31 of L3[f65_68], zero-extended | verified |
-| 0x17 | `ext_reg` | b, idx | no lane result; M: lane F3[f92_95] & 31 of L3[f65_68], sign-extended | verified |
+| 0x15 | `ins_reg` | b, idx, val | b with lane F3[f92_95] & 31 := F3[f96_99]; what U's port writes beside it is open | verified |
+| 0x16 | `ext_reg_u` | b, idx | no lane result; M: lane F3[f92_95] & 31 of L3[f65_68], zero-extended; what U's port writes beside it is open | verified |
+| 0x17 | `ext_reg` | b, idx | no lane result; M: lane F3[f92_95] & 31 of L3[f65_68], sign-extended; what U's port writes beside it is open | verified |
 | 0x18 | `bcast` | val | F3[f96_99] in every lane: a broadcast; U's port beside it writes nothing | verified |
 | 0x19 | `mov` | b | b; U's port beside it writes nothing | verified |
-| 0x1a | `save_unk` |  | no lane result | verified |
+| 0x1a | `save_unk` |  | no lane result; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read in the measurement | inferred |
 | 0x1b | `shift_save_hi` | b, u, idx | b moved up by n = f92_95 = 1..4: lane k := b[k + n], the top n lanes U's lanes 0..n-1; down by m = 16 - f92_95 = 1..4: lane k := b[k - m], the bottom m lanes U's lanes 4-m..3; U's port: b's lanes 28..31 into U's lanes 0..3 | verified |
 | 0x1c | `shift_save_lo` | b, u, idx | as 0x1b at f92_95 = 1..5, 8 and 11..15; 6, 7, 9 and 10 not predicted; U's port: b's lanes 0..3 into U's lanes 0..3 | verified |
-| 0x1d | `save_unk_1d` |  | no lane result | verified |
+| 0x1d | `save_unk_1d` |  | no lane result; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read in the measurement | inferred |
 | 0x1e | `save_hi` | b | no lane result; U's port: b's lanes 28..31 into U's lanes 0..3 | verified |
 | 0x1f | `save_lo` | b | no lane result; U's port: b's lanes 0..3 into U's lanes 0..3 | verified |
 | 0x20 | `mov_save_hi` | b | b; U's port: b's lanes 28..31 into U's lanes 0..3 | verified |
 | 0x21 | `mov_save_lo` | b | b; U's port: b's lanes 0..3 into U's lanes 0..3 | verified |
 | 0x22 | `shift` | b, u, idx | as 0x1b at f92_95 = 1..5, 8 and 11..15; 6, 7, 9 and 10 not predicted; U's port beside it writes nothing | verified |
-| 0x23 | `mov_23` | b | b | verified |
-| 0x24 | `get_val` | val | no lane result; M: F3[f96_99] | verified |
-| 0x25 | `none` |  | no lane result | verified |
-| 0x26 | `none_26` |  | no lane result | verified |
-| 0x27 | `none_27` |  | no lane result | verified |
-| 0x28 | `none_28` |  | no lane result | verified |
-| 0x29 | `none_29` |  | no lane result | verified |
-| 0x2a | `none_2a` |  | no lane result | verified |
-| 0x2b | `none_2b` |  | no lane result | verified |
-| 0x2c | `none_2c` |  | no lane result | verified |
-| 0x2d | `none_2d` |  | no lane result | verified |
-| 0x2e | `none_2e` |  | no lane result | verified |
-| 0x2f | `none_2f` |  | no lane result | verified |
-| 0x30 | `none_30` |  | no lane result | verified |
-| 0x31 | `none_31` |  | no lane result | verified |
-| 0x32 | `none_32` |  | no lane result | verified |
-| 0x33 | `none_33` |  | no lane result | verified |
-| 0x34 | `none_34` |  | no lane result | verified |
-| 0x35 | `none_35` |  | no lane result | verified |
-| 0x36 | `none_36` |  | no lane result | verified |
-| 0x37 | `none_37` |  | no lane result | verified |
-| 0x38 | `none_38` |  | no lane result | verified |
-| 0x39 | `none_39` |  | no lane result | verified |
-| 0x3a | `none_3a` |  | no lane result | verified |
-| 0x3b | `none_3b` |  | no lane result | verified |
-| 0x3c | `none_3c` |  | no lane result | verified |
-| 0x3d | `none_3d` |  | no lane result | verified |
-| 0x3e | `none_3e` |  | no lane result | verified |
+| 0x23 | `mov_save_open` | b | b; what U's port writes beside it is open | verified |
+| 0x24 | `get_val` | val | no lane result; M: F3[f96_99]; what U's port writes beside it is open | verified |
+| 0x25 | `none` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x26 | `none_26` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x27 | `none_27` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x28 | `none_28` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x29 | `none_29` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x2a | `none_2a` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x2b | `none_2b` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x2c | `none_2c` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x2d | `none_2d` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x2e | `none_2e` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x2f | `none_2f` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x30 | `none_30` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x31 | `none_31` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x32 | `none_32` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x33 | `none_33` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x34 | `none_34` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x35 | `none_35` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x36 | `none_36` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x37 | `none_37` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x38 | `none_38` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x39 | `none_39` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x3a | `none_3a` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x3b | `none_3b` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x3c | `none_3c` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x3d | `none_3d` |  | no lane result; what U's port writes beside it is open | verified |
+| 0x3e | `none_3e` |  | no lane result; what U's port writes beside it is open | verified |
 
 ## X0
 

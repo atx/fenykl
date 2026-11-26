@@ -45,12 +45,18 @@ from .fields import (
     S2_RESULT,
     S3_RESULT,
     S_RESULTS,
+    STREAM_CHANNELS,
+    STREAM_LANE_MEMORY,
+    STREAM_LOAD,
+    STREAM_STORE,
     TAG,
     TARGET,
     TARGET_OPS,
     U_NOTHING,
     U_SAVED,
     U_TAKES,
+    U_UNIDENTIFIED,
+    VECTOR_BYTES,
     VECTOR_PORTS,
     X0_LANE_MEMORY,
     X_FUNCTIONS,
@@ -64,7 +70,7 @@ from .fields import (
     lookup,
     op,
 )
-from .semantics import OP_SEMANTICS
+from .semantics import LANE_COUNT, OP_SEMANTICS
 from .units import UNITS
 from .word import Word
 
@@ -515,6 +521,8 @@ def _function_tier(unit: str, code: int) -> Confidence:
     if unit in LANE_FUNCTIONS:
         rows = [r[1] for r in (LANE_FUNCTIONS[unit].get(code),) if r]
         rows += [r.tier for r in (S_RESULTS[unit].get(code),) if r]
+        if unit == "s3" and code in U_UNIDENTIFIED:
+            rows.append(U_UNIDENTIFIED[code])
         return min(rows, default=H)
     if unit in X_FUNCTIONS:
         rows = [r[1] for r in (X_FUNCTIONS[unit].get(code),) if r]
@@ -821,7 +829,8 @@ S3 = Unit(
     16 ext_reg_u b idx:F3
     17 ext_reg b idx:F3
     18 bcast val
-    19,23 mov b
+    19 mov b
+    23 mov_save_open b
     20 mov_save_hi b
     21 mov_save_lo b
     22 shift b u idx
@@ -1032,6 +1041,108 @@ _check_ports()
 SOURCES = {t: s for s in (LOAD, S2_HI, *UNITS_BY_KEY.values()) for t in s.texts}
 
 
+# Constants and the stream engine ----------------------------------------------------------
+
+
+def li(dst: Reg, value: int) -> Bundle:
+    """Op 0x0b: `value`, a 16-bit immediate sign-extended, through the ALU bus into dst."""
+    return OP.li(value) | to(dst, OP)
+
+
+def b_add(dst: Reg, src: Reg, k: int) -> Bundle:
+    """X1 0x03 into B: dst := src + k, both registers of B, k a 13-bit immediate."""
+    if not isinstance(dst, Reg) or dst.file is not B:
+        raise TypeError(f"b_add writes a register of B, not {dst!r}")
+    return X1.add_imm(src, k) | to(dst, X1)
+
+
+SCRATCH = (B[14], B[15])
+"""The registers `hand` loads its integers into, in turn."""
+
+
+def hand(*values: int | Reg) -> list[Bundle | Instr]:
+    """X1 0x1c per value, in order, to the stream engine (`stream`): a register of B as it is,
+    an integer (16 bits, sign-extended) by `li` into the `SCRATCH` registers in turn the word
+    before its hand, so a value takes one word or two."""
+    out: list[Bundle | Instr] = []
+    scratch = 0
+    for v in values:
+        if isinstance(v, Reg):
+            out.append(X1.hand(v))
+            continue
+        out += [li(SCRATCH[scratch], v), X1.hand(SCRATCH[scratch])]
+        scratch ^= 1
+    return out
+
+
+def wait() -> Instr:
+    """X1 0x1d: waits for the oldest outstanding stream command and hands nothing (`stream`).
+    Its register field names B[1], which keeps the words of the kernel example, whose shape
+    ran on the camera."""
+    return X1.wait(b=B[1])
+
+
+_BLOCK = 0x20
+"""A block key's bits besides its channel: the next eight values are the channel's r0..r7."""
+LINE_BYTES = 16
+"""A DRAM line of the stream engine: 16 byte elements (r5 0x10)."""
+HANDED_VECTORS = range(0x8000 // VECTOR_BYTES)
+"""The lane-memory vectors whose offset an integer reaches through `li` (16 bits, signed)."""
+
+
+def _channel(channel: int) -> int:
+    if not 0 <= channel < STREAM_CHANNELS:
+        raise ValueError(f"channel is 0..{STREAM_CHANNELS - 1}, not {channel}")
+    return channel << 6
+
+
+def _vector(vector: int) -> int:
+    if vector not in HANDED_VECTORS:
+        raise ValueError(
+            f"vector is {HANDED_VECTORS.start}..{HANDED_VECTORS.stop - 1}, the vectors an "
+            f"offset handed through li reaches, not {vector}"
+        )
+    return vector * VECTOR_BYTES
+
+
+def _dram(dram: Reg) -> Reg:
+    if not isinstance(dram, Reg) or dram.file is not B:
+        raise TypeError(
+            f"dram is a register of B (an address is wider than li's 16 bits), not {dram!r}"
+        )
+    return dram
+
+
+def lane_block(channel: int, nbytes: int) -> list[int]:
+    """The values that program channel's eight registers (a block key, then r0..r7) for one row
+    of `nbytes` bytes between DRAM and the lane memory, one byte per lane, 32 per vector."""
+    if nbytes <= 0 or nbytes % LANE_COUNT:
+        raise ValueError(f"a lane block is whole vectors of 32 bytes, not {nbytes}")
+    return [
+        _BLOCK | _channel(channel),
+        STREAM_LANE_MEMORY,  # r0: the lane memory
+        0,  # r1: the memory-side row pitch, unused for one row
+        LANE_COUNT,  # r2: elements per vector, one per lane
+        nbytes // LANE_COUNT,  # r3: vectors per row
+        0,  # r4: the DRAM row pitch, unused for one row
+        LINE_BYTES,  # r5: elements per DRAM line, bytes
+        nbytes // LINE_BYTES,  # r6: DRAM lines per row
+        1,  # r7: rows
+    ]
+
+
+def stream_load(channel: int, dram: Reg, vector: int) -> list[int | Reg]:
+    """The values of a load command on `channel` from the DRAM address in `dram` (a register
+    of B) into the lane memory from `vector` on."""
+    return [_channel(channel) | STREAM_LOAD, _dram(dram), _vector(vector)]
+
+
+def stream_store(channel: int, vector: int, dram: Reg) -> list[int | Reg]:
+    """The values of a store command on `channel` from the lane memory from `vector` on to the
+    DRAM address in `dram` (a register of B)."""
+    return [_channel(channel) | STREAM_STORE, _vector(vector), _dram(dram)]
+
+
 # Decoding ---------------------------------------------------------------------------------
 
 
@@ -1155,7 +1266,14 @@ def _u(code: int) -> str:
     if code in U_TAKES:
         lanes = U_TAKES[code]
         return f"; U's port: b's lanes {lanes[0]}..{lanes[-1]} into U's lanes 0..3"
-    return "; U's port beside it writes nothing" if code in U_NOTHING else ""
+    if code in U_UNIDENTIFIED:
+        return (
+            "; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read in "
+            "the measurement"
+        )
+    if code in U_NOTHING:
+        return "; U's port beside it writes nothing"
+    return "; what U's port writes beside it is open"
 
 
 def formula(unit: str, code: int) -> str:
@@ -1192,13 +1310,15 @@ def mnemonics_markdown() -> str:
         "`_next` / `_bnext` a's / b's next lane), then the arithmetic (`_ss` / `_us` saturated",
         "signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart",
         "from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`",
-        "the lanes U's port takes, `_u` / `_ua` an S2 product's unsigned operands). Codes whose",
-        "rows differ in nothing else share a name: the one the stock programs use most (the",
-        "lowest on a tie) takes it, the others add their code (`abd_ss_05`). `sub` and its",
-        "kin compute the first operand minus the second, `andn` the first and not the second.",
-        "`and_`, `or_`, `not_` avoid Python keywords. Operands are those the formula reads, in",
-        "positional order; every other operand of the unit's view is a keyword. The tier is",
-        "the table's for the function; an instruction also carries its fields' (`Instr.tier`).",
+        "the lanes U's port takes, `save_unk` a content U's port writes that is not",
+        "identified, `_save_open` what U's port takes open, `_u` / `_ua` an S2",
+        "product's unsigned operands). Codes whose rows differ in nothing else share a name:",
+        "the one the stock programs use most (the lowest on a tie) takes it, the others add",
+        "their code (`abd_ss_05`). `sub` and its kin compute the first operand minus the",
+        "second, `andn` the first and not the second. `and_`, `or_`, `not_` avoid Python",
+        "keywords. Operands are those the formula reads, in positional order; every other",
+        "operand of the unit's view is a keyword. The tier is the table's for the function;",
+        "an instruction also carries its fields' (`Instr.tier`).",
     ]
     for key, unit in UNITS_BY_KEY.items():
         lines += [
