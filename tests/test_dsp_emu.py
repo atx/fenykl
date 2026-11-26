@@ -13,7 +13,8 @@ from fenykl.dsp import commands
 from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import MAIN_CODE, Boot, Executor, Status, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.memcpy import Copy16Model, RegSet, destinations
+from fenykl.dsp.intervals import RegSet, destinations
+from fenykl.dsp.memcpy import Copy16Model
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
 from fenykl.dsp.semantics import OP_SEMANTICS, Mode, Sequencer, UnknownSemantics
 from fenykl.dsp.state import R14_BELOW, R14_EXACT, BootParams
@@ -564,6 +565,45 @@ def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
     result, dst = copy(Boot(), flipped(45, "imm", TARGET_50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None
     assert bytes(dst.data) == b"\xa5" * LEN
+
+
+def halted(at: int, base: Program | None = None) -> Program:
+    """`base` (default the stock copy) with the halt word in place of word `at`."""
+    words = list((base or stock()).words)
+    words[at] = stock().words[5]
+    return Program(tuple(words))
+
+
+@pytest.mark.parametrize(
+    "program, length, match",
+    [
+        # The machine takes 27 at len 1: the halt is not reached, and the rows hold on the stock
+        # path only.
+        *(
+            (lambda at=at: halted(at), 1, "leaves the stock path at word 27")
+            for at in (50, 60, 78)
+        ),
+        (lambda: halted(51, idled(28)), LEN, "after a loop word"),
+        (lambda: halted(52, idled(28)), LEN, "after a loop word"),
+        # 45 to the loop's top: the store at 56 is handed before the halt at 57.
+        (
+            lambda: halted(57, flipped(45, "imm", TARGET_50)),
+            LEN,
+            "after the stream started",
+        ),
+    ],
+)
+def test_a_halt_off_the_measured_path_raises(program, length, match):
+    for strict in (True, False):
+        with pytest.raises(UnknownSemantics, match=match):
+            run(program(), length=length, strict=strict)
+
+
+def test_a_halt_is_a_hypothesis_after_an_edit_it_runs_or_with_an_insert():
+    # Word 12 runs behind the halt at 11; the insert is stepped without.
+    for program in (halted(11, idled(12)), halted(20, inserted(len(stock()), IDLE))):
+        result, _ = run(program)
+        assert result.stored is None and result.taint is Confidence.HYPOTHESIS
 
 
 def test_route_nibbles_must_hold_the_stock_values():

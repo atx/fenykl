@@ -35,6 +35,7 @@ from .fields import (
     lookup,
     op,
 )
+from .intervals import OTHER_FILES, RegSet, destinations, op_effect
 from .job import Flow, Job, Step, Stop
 from .machine import Carry, Machine, Preset
 from .program import Program
@@ -366,8 +367,8 @@ class Executor:
     one that pops a local op 3's link, raises `LinkError`: no return lies between that op 3 and
     its T, so the return is not its own (stepped as calls, a stock loop re-ran its tail).
     A data op runs as the op slot's semantics (`OP_SEMANTICS`) over register intervals, as the
-    copy model runs inserted words (`memcpy.op_effect`), its operands read from the operand set
-    (`Boot.slot`); a result goes where the word's PR ports send it (`memcpy.destinations`),
+    copy model runs inserted words (`intervals.op_effect`), its operands read from the operand set
+    (`Boot.slot`); a result goes where the word's PR ports send it (`intervals.destinations`),
     landing `latency` executed words later and unknown until then. A result whose destination
     is open raises `UnknownSemantics` (strict) or makes the open ports' registers unknown in both
     sets. An op without semantics raises (strict) or is recorded in its step, and then its ra
@@ -654,8 +655,6 @@ class Executor:
     def _route(self, i: int, word: Word, result: Reg | None, now: int) -> str:
         """Send a data op's result through its word's PR ports; returns why a destination is
         open ("" when none is)."""
-        from .memcpy import OTHER_FILES, RegSet, destinations  # memcpy imports emu
-
         dests, open_, why = destinations(word)
         if why and self.strict:
             raise UnknownSemantics(i, op(word.op).name, [], why)
@@ -670,8 +669,6 @@ class Executor:
         return why
 
     def _data(self, i: int, word: Word, slot: bool, now: int = 0) -> Step:
-        from .memcpy import op_effect  # the copy model's evaluator; memcpy imports emu
-
         args = word.operands
         sem = OP_SEMANTICS.get(word.op)
         effect = (
