@@ -6,8 +6,11 @@ An instruction holds the fields of its own unit only, composed through the head 
 (`fields.HEAD_VIEWS`) or the op slot's format (`fields.FORMATS`); a port, `to(dst, src)`, the
 enable and register of the one port of dst's file that takes src. A bundle's word is the idle
 word with its parts' fields set; two parts that set one field, or two ports that write one
-register, raise. `Label("top")` names the word of its bundle, `NOP` is the idle word. `Bundle.of`
-reads any word back, the fields no instruction or port expresses in a raw part, so decoding is
+register, raise, but for a raw part that sets the bits of a field an instruction leaves (an
+immediate's part of a register field) and agrees with it on the others. `Label("top")` names the
+word of its bundle, `NOP` is the idle word. `Bundle.of` reads any word back: a head's
+instruction with the operands it reads (`semantics.head_reads`, every one that differs where its
+reads are not known), the bits no instruction or port expresses in a raw part, so decoding is
 exact.
 """
 
@@ -70,7 +73,7 @@ from .fields import (
     lookup,
     op,
 )
-from .semantics import LANE_COUNT, OP_SEMANTICS
+from .semantics import HEAD_READS, LANE_COUNT, OP_SEMANTICS, head_reads
 from .units import UNITS
 from .word import Word
 
@@ -178,6 +181,10 @@ class Part:
     def word(self, labels: Mapping[str, int] | None = None) -> Word:
         return Bundle((self,)).word(labels)
 
+    def bits(self, f: str) -> int:
+        """The bits of field `f`'s value the part sets: all of them."""
+        return lookup(f).mask
+
 
 def _not_a_part(other: object):
     raise TypeError(
@@ -203,10 +210,16 @@ class Instr(Part):
     fields: Mapping[str, int] = field(repr=False)
     tier: Confidence = field(compare=False)
     target: str | None = None
+    span: int = field(default=-1, compare=False, repr=False)
+    """The word bits its operands and target set; the rest of its fields stay idle."""
 
     @property
     def name(self) -> str | None:
         return self.unit.names.get(self.code)
+
+    def bits(self, f: str) -> int:
+        fld = lookup(f)
+        return (self.span & fld.span) >> fld.lo
 
     def __repr__(self) -> str:
         if self.name is None:
@@ -329,9 +342,9 @@ class Bundle:
         writes: dict[Reg, Port] = {}
         for p in self.parts:
             for f in p.fields:
-                if f in seen:
+                if f in seen and not _completes(seen[f], p, f):
                     raise ValueError(f"{lookup(f).label} set by {seen[f]!r} and {p!r}")
-                seen[f] = p
+                seen.setdefault(f, p)
             if isinstance(p, Port):
                 if p.dst in writes:
                     raise ValueError(
@@ -378,7 +391,8 @@ class Bundle:
         value = IDLE_VALUE
         for p in self.parts:
             for f, v in p.fields.items():
-                value = lookup(f).put(value, v)
+                fld, bits = lookup(f), p.bits(f)
+                value = fld.put(value, fld.get(value) & ~bits | v & bits)
         if self.target is not None:
             if labels is None or self.target not in labels:
                 raise KeyError(f"label {self.target!r} is not defined")
@@ -387,6 +401,20 @@ class Bundle:
 
     def __repr__(self) -> str:
         return " | ".join(map(repr, self.parts)) if self.parts else "NOP"
+
+
+def _completes(p: Part, q: Part, f: str) -> bool:
+    """Whether one of p and q is raw and sets the bits of field f the other leaves, agreeing on
+    the others."""
+    if isinstance(q, Raw):
+        p, q = q, p
+    other = q.bits(f)
+    return (
+        isinstance(p, Raw)
+        and not isinstance(q, Raw)
+        and other != lookup(f).mask
+        and not (p.fields[f] ^ q.fields[f]) & other
+    )
 
 
 NOP = Bundle(())
@@ -548,7 +576,7 @@ def _instr(unit: Unit, code: int, operands: Mapping[str, Value]) -> Instr:
     owned = [f for f in UNITS[_UNIT_OF[unit.unit]].fields if f.span & span]
     fields = {f.id: f.get(value) for f in owned}
     tier = min(_function_tier(unit.unit, code), *(f.confidence for f in owned))
-    return Instr(unit, code, tuple(operands.items()), fields, tier, target)
+    return Instr(unit, code, tuple(operands.items()), fields, tier, target, span)
 
 
 _UNIT_OF = {"op": "op_slot"} | {u: u for u in HEAD_VIEWS}
@@ -619,8 +647,8 @@ def M(unit: Unit) -> MPart:
 
 # Mnemonics: "codes name operands". Codes whose table rows differ only in their code share a
 # name: the one the stock programs use most (the lowest on a tie) takes it, the others
-# name_<code>. Operands are those the formula reads, in positional order; "idx:F3" types an
-# operand as a register of F3 for that code.
+# name_<code>. Operands are those the formula reads, in positional order (`HEAD_READS` where
+# known, checked); "idx:F3" types an operand as a register of F3 for that code.
 
 S0 = Unit(
     "s0",
@@ -1020,6 +1048,9 @@ def _check_units() -> None:
             bad = set(unit.reads[code]) - set(_OPERAND_FILES[key])
             if bad:
                 raise ValueError(f"{key} {name}: no operands {bad}")
+            reads = HEAD_READS.get(key, {}).get(code)
+            if reads is not None and set(unit.reads[code]) != reads:
+                raise ValueError(f"{key} {name}: the rules read {sorted(reads)}")
 
 
 def _check_ports() -> None:
@@ -1156,10 +1187,13 @@ def _head(unit: Unit, value: int) -> Instr | None:
     code = view.operands["op"].get(value)
     if code == view.operands["op"].idle:
         return None
+    reads = head_reads(unit.unit, value)
     given = {k: view.operands[k].get(value) for k in unit.reads.get(code, ())}
     word = view.encode(IDLE_VALUE, {"op": code, **given})
     for k, o in view.operands.items():
-        if k != "op" and k not in given and o.get(word) != o.get(value):
+        if k == "op" or k in given or (reads is not None and k not in reads):
+            continue
+        if o.get(word) != o.get(value):
             given[k] = o.get(value)
             word = view.encode(word, {k: given[k]})
     typed = {k: _typed(unit, code, k, v) for k, v in given.items()}
@@ -1221,7 +1255,9 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
             for f, v in instr.fields.items()
             if not instr.target or f not in reserved
         }
-        if all(lookup(f).get(value) == v for f, v in fields.items()):
+        if all(
+            not (lookup(f).get(value) ^ v) & instr.bits(f) for f, v in fields.items()
+        ):
             parts.append(instr)
     if lookup("m_n").get(value) == 0:
         parts.append(M(UNITS_BY_KEY[M_UNITS[lookup("msel").get(value)]]))
@@ -1235,11 +1271,14 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
             continue  # a second port on one register stays raw
         written.add(dst)
         parts.append(Port(dst, SOURCES[spec.sources[v][0]], spec, v))
-    taken = {f for p in parts for f in p.fields}
+    taken: dict[str, int] = {}
+    for p in parts:
+        for f in p.fields:
+            taken[f] = taken.get(f, 0) | p.bits(f)
     rest = {
         f.id: f.get(value)
         for f in FIELDS
-        if f.id not in taken and f.get(value) != f.idle
+        if (f.get(value) ^ f.idle) & ~taken.get(f.id, 0)
     }
     if rest:
         parts.append(Raw(rest))

@@ -20,6 +20,7 @@ from fenykl.dsp.asm import (
     S2,
     S2_HI,
     S3,
+    VIEWS,
     X0,
     X1,
     B,
@@ -49,6 +50,8 @@ from fenykl.dsp.program import (
     labels,
     stock_programs,
 )
+from fenykl.dsp.semantics import HEAD_READS
+from fenykl.dsp.units import UNITS
 from fenykl.dsp.word import IDLE, Word
 
 
@@ -79,6 +82,13 @@ def test_any_word_decodes_exactly():
         near = {f.id: rng.randrange(f.mask + 1) for f in rng.sample(FIELDS, 6)}
         word = Word.from_fields(near)
         assert Bundle.of(word).word() == word, near
+        # A head whose reads are known among random fields of its unit: the bits it does not
+        # read, also those inside a field it reads in part, go to a raw part.
+        unit = rng.choice(list(HEAD_READS))
+        values = {f.id: rng.randrange(f.mask + 1) for f in UNITS[unit].fields}
+        values[VIEWS[unit].operands["op"].id] = rng.choice(list(HEAD_READS[unit]))
+        word = Word.from_fields(values)
+        assert Bundle.of(word).word() == word, values
 
 
 def test_a_kernel_word_decodes_to_its_instructions():
@@ -87,9 +97,13 @@ def test_a_kernel_word_decodes_to_its_instructions():
         | to(O[1], S1)
         | X0.store(asm.A[1], k=0, o=O[1])
     ).word()
-    assert repr(Bundle.of(word)) == (
-        "S1.xor_imm(L1[4], 0x20, a=L1[4], r=F1[4]) | X0.store(A[1], 0, O[1]) | to(O[1], S1)"
+    # xor_imm reads neither a nor r: a raw part holds them, r's bits beside imm's included.
+    decoded = Bundle.of(word)
+    assert repr(decoded) == (
+        "S1.xor_imm(L1[4], 0x20) | X0.store(A[1], 0, O[1]) | to(O[1], S1) | "
+        "raw(s1a=0x4, s1r=0x4)"
     )
+    assert decoded.word() == word
     # A field no part expresses, here a register held under an idle head, stays raw.
     held = Word.data(0x0B, Operands(ra=31, imm=5), base=Word.from_fields({"xreg": 3}))
     parts = Bundle.of(held).parts
@@ -145,6 +159,14 @@ def test_operands_are_typed_and_checked(build, error):
 def test_a_field_set_by_two_parts_raises_even_with_equal_values(parts):
     with pytest.raises(ValueError, match="set by"):
         Bundle(parts)
+
+
+def test_a_raw_part_completes_a_field_an_instruction_sets_in_part():
+    """xor_imm's imm holds bits 2..3 of r's field: a raw r may set the other two, agreeing."""
+    instr = S1.xor_imm(L1[4], imm=0x20)
+    assert (instr | raw(s1r=0x4)).word()["s1r"] == 0x4
+    with pytest.raises(ValueError, match="set by"):
+        instr | raw(s1r=0x0)
 
 
 def test_a_port_is_the_one_of_its_file_that_takes_the_source():
@@ -296,7 +318,7 @@ def test_listing_names_ops_targets_and_delay_slots():
     text = listing(Program((call, *[IDLE] * 6, ret, data, flagged)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
-        "0   call! -> 1443!  x0: k=0x7c1!",
+        "0   call! -> 1443!  x0: x0k_lo=1!",
         "1..4 | idle x4",
         "5..6   idle x2",
         "7   ret!  op_slot: rb=r1!",
@@ -312,10 +334,10 @@ def test_listing_collapses_idle_runs_repeats_and_deltas():
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body == [
         "0..1   idle x2",
-        "2..4   x3 idle~  op_slot: ra=r2!  x1: b=r3! k=0x300!",
-        "5   idle~  ^  x1: b=r7! k=0x700!",
+        "2..4   x3 idle~  op_slot: ra=r2!  x1: xreg=r3!",
+        "5   idle~  ^  x1: xreg=r7!",
         "6   idle",
-        "7   idle~  op_slot: ra=r2!  x1: b=r7! k=0x700!",
+        "7   idle~  op_slot: ra=r2!  x1: xreg=r7!",
     ]
 
 

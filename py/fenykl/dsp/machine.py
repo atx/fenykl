@@ -96,6 +96,9 @@ from .semantics import (
     IDLE_OP,
     LANE_COUNT,
     LANE_RULES,
+    LANE_SHIFTS,
+    LATCH_OPERAND,
+    LATCHED,
     LOAD_LAG,
     LOCAL_BYTES,
     LOCAL_LOADS,
@@ -201,7 +204,6 @@ def _sext(v: int, bits: int) -> int:
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
 
 
-LANE_SHIFTS = (0x1B, 0x1C, 0x22)
 HALF = 1 << 16
 
 
@@ -210,10 +212,6 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
-LATCHED = range(0x60, 0x7F)
-"""S0's and S1's heads that give the operand their unit's last head read in the job, latched
-(S0 its a, S1 its b; 0 with none), not their own nibbles' (verified on the camera)."""
-LATCH_OPERAND = {"s0": "a", "s1": "b"}
 LATCH_MEASURED = {
     "s0": frozenset({0x05, 0x20, 0x41}),
     "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
