@@ -415,12 +415,12 @@ def test_a_vector_written_while_the_load_runs_is_unknown():
 
 
 def test_a_load_reads_dram_before_a_store_handed_after_it():
-    """In the order handed; on one DRAM range that order was not measured (inferred)."""
+    """In the order handed, measured for one-vector byte commands on one DRAM range (verified)."""
     m, e = machine(bytes(range(64))), stream.Engine()
     m.memory[5] = Vec(tuple(range(100, 132)))
     drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *store(0, 5 * 64, SRC)])
     drive(m, e, [WAIT, WAIT])
-    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == I
+    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == V
 
 
 def test_a_load_reads_what_a_store_handed_before_it_wrote():
@@ -428,7 +428,7 @@ def test_a_load_reads_what_a_store_handed_before_it_wrote():
     m.memory[5] = Vec(tuple(range(100, 132)))
     drive(m, e, [*lanes(0, 1, r6=2), *store(0, 5 * 64, SRC), *load(0, SRC, 0)])
     drive(m, e, [WAIT, WAIT])
-    assert m.memory[0].lanes == tuple(range(100, 132)) and m.memory[0].tier == I
+    assert m.memory[0].lanes == tuple(range(100, 132)) and m.memory[0].tier == V
 
 
 def test_a_lane_source_rewritten_while_the_store_is_queued_is_inferred():
@@ -676,8 +676,9 @@ def test_store_rows_at_one_address_write_it_once_the_last_row():
 
 
 def test_dram_behind_an_outstanding_store_is_inferred():
-    """A load of DRAM a store still outstanding writes, and a second store over it, run in order
-    at inferred; a load of other DRAM beside them stays verified."""
+    """A load of DRAM a store still outstanding writes, from half a vector into it, runs in order
+    at inferred; a second one-vector store over the first at verified (that overlap measured);
+    a load of other DRAM beside them stays verified."""
     data = bytes(range(64))
     m, e = machine(data), stream.Engine()
     drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT, *lanes(1, 1, r6=2)])
@@ -687,7 +688,23 @@ def test_dram_behind_an_outstanding_store_is_inferred():
     assert m.memory[0x10].tier == I
     assert m.memory[0x12].tier == V
     got = m.boot.read(DST, 32)
-    assert bytes(got.data) == data[32:] and set(got.taint) == {I}
+    assert bytes(got.data) == data[32:] and set(got.taint) == {V}
+
+
+def test_two_loads_to_one_vector_and_a_store_behind_a_load_run_in_order():
+    """One-vector byte loads to one vector: the later lands (verified); a store of the vector an
+    outstanding load writes stores the load's bytes (verified); with a two-vector load inferred."""
+    data = bytes(range(128))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(2, 1, r6=2), *load(2, SRC + 64, 0)])
+    drive(m, e, [WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(64, 96)) and m.memory[0].tier == V
+    for r3, tier in ((1, V), (2, I)):
+        m, e = machine(data), stream.Engine()
+        drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, 0), *lanes(1, 1, r6=2)])
+        drive(m, e, [*store(1, (r3 - 1) * 64, DST), WAIT, WAIT])
+        got = m.boot.read(DST, 32)
+        assert bytes(got.data) == data[32 * (r3 - 1) : 32 * r3] and got.weakest() == tier
 
 
 def test_a_store_row_wraps_at_the_top_of_dram():

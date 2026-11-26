@@ -295,6 +295,13 @@ LOCAL_LOAD_BESIDE = (2, 0, 4, 0x200, 0, 0x10, 0x80, 1)
 byte load of 0x40 vectors per row, and a local-memory byte load of 0x800 bytes (which writes no
 lane vector). While each was outstanding, an X0 store into a vector outside it, and lane reads of
 such a vector, gave the bytes as alone (verified, pre-registered; one job each)."""
+QUEUE_SHAPES = tuple((1, None, 0x20, n, None, 0x10, 2 * n, 1) for n in (1, 0x80))
+"""One-row byte loads and stores of one and of 0x80 vectors. Handed back to back on one DRAM range
+or one lane vector, they ran in the order handed (verified, pre-registered against the reverse;
+one job each): a load after a store read the stored bytes, a store after a load did not reach it,
+the later of two stores to one address won, two loads to one vector (on two channels and on one)
+left the later's bytes, and a store of the last vector an outstanding load writes stored the
+load's bytes. Other shapes keep the order at inferred."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -398,6 +405,11 @@ class Engine:
     bounded (a local-memory command, one that moves nothing, the engine off script)."""
     drams: list["_Dram"] = field(default_factory=list)
     """Per outstanding command the DRAM it reads and writes (`_behind`)."""
+    held: list[tuple[dict[int, Vec], bool, Callable[[Machine, Confidence], None]]] = field(
+        default_factory=list
+    )
+    """Per outstanding lane-memory load the vectors it holds (unknown until it lands), whether
+    it is of `QUEUE_SHAPES`, and its completion."""
     commands: int = 0
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); before the first it was not measured."""
@@ -636,7 +648,8 @@ class Engine:
         self.commands += 1
         self.outstanding.append(_nothing)
         self.spans.append(None)
-        self.drams.append(_Dram())
+        queue = cmd.kind in (LOAD, STORE) and any(_fits(cmd, s) for s in QUEUE_SHAPES)
+        self.drams.append(_Dram(queue=queue))
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
@@ -784,11 +797,12 @@ class Engine:
         for one DRAM range."""
         mine = [(dram_alias(dram), n) for dram, _ in rows]
         tier = V
+        queue = self.drams[-1].queue
         for d in self.drams[:-1]:
             if _overlap(d.writes, mine):
-                tier = I
+                tier = min(tier, V if queue and d.queue and _inside(d.writes, mine) else I)
             if store and _overlap(d.reads, mine):
-                d.cap = I
+                d.cap = min(d.cap, V if queue and d.queue and _inside(d.reads, mine) else I)
         if store:
             self.drams[-1].writes = mine
         else:
@@ -863,6 +877,9 @@ class Engine:
                 at = (off // VECTOR_BYTES + v) % LANE_VECTORS
                 twice = (at in once and not later) or v + LANE_VECTORS < r3
                 once[at] = None if twice else (k, v)
+        queue = any(_fits(cmd, s) for s in QUEUE_SHAPES)
+        # Vectors an earlier outstanding load holds: this one lands after it, in queue order.
+        behind = {at: q for h, q, _ in self.held for at in once if m.memory.get(at) is h.get(at)}
         held = {at: Vec(UNKNOWN_VEC.lanes) for at in once}
         if not m.lanes_lost:
             m.memory.update(held)
@@ -877,9 +894,12 @@ class Engine:
         ]
 
         def complete(m: Machine, cap: Confidence) -> None:
+            self.held = [x for x in self.held if x[2] is not complete]
             if m.lanes_lost:
                 return
             for at, kv in once.items():
+                if m.memory.get(at) is not held[at] and self._held(m, at):
+                    continue  # a later load holds it and lands after this one
                 # What a load of no lines writes was not seen.
                 if kv is None or not lines:
                     m.memory[at] = UNKNOWN_VEC
@@ -895,11 +915,27 @@ class Engine:
                     chunk = [(0, V)] * LANE_COUNT  # zeros (verified)
                 lanes = tuple(None if x is None else x & 0xFFFF for x, _ in chunk)
                 t = min([tier, cap, wrap, *(t for x, t in chunk if x is not None)])
+                if at in behind:
+                    t = min(t, V if queue and behind[at] else I)
                 # A vector written while the load ran raced it: not known.
                 racing = m.memory.get(at) is not held[at]
                 m.memory[at] = UNKNOWN_VEC if racing else Vec(lanes, t)
 
+        self.held.append((held, queue, complete))
         return complete
+
+    def _held(self, m: Machine, at: int) -> bool:
+        return any(m.memory.get(at) is h.get(at) for h, _, _ in self.held)
+
+    def _land_loads(self, m: Machine, vectors: set[int]) -> None:
+        """A store handed after a load that writes vectors it reads lands that load first."""
+        for h, q, complete in list(self.held):
+            if not any(m.memory.get(at) is h.get(at) for at in vectors):
+                continue
+            ordered = V if q and self.drams[-1].queue else I
+            complete(m, min(self.cap, ordered))
+            k = next(i for i, f in enumerate(self.outstanding) if f is complete)
+            self.outstanding[k] = _nothing
 
     @staticmethod
     def _zero_load(m: Machine, off: int, seen: int, needed: int):
@@ -1018,6 +1054,9 @@ class Engine:
             nb = 4 // r2
             for _, off in rows:
                 self._local_offset(off, n * nb)
+        if memory == LANE_MEMORY and not m.lanes_lost:
+            per = -(-n // LANE_COUNT)
+            self._land_loads(m, {(off // VECTOR_BYTES + v) % LANE_VECTORS for _, off in rows for v in range(per)})
         src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
         taken = []
         for dram, off in rows:
@@ -1057,9 +1096,10 @@ class Engine:
             # X0 store into the store's last vector in the words right after its hand: a store of
             # one vector had taken the old bytes, a store of 0x80 vectors took the new ones into
             # its last vector. So the store keeps the old bytes (inferred) when it reads one vector;
-            # with more, a rewritten vector's bytes are unknown.
+            # with more, a vector rewritten by own words is unknown. A load handed after the
+            # store runs after it (a kernel that reloads a stored bank got its bytes exact).
             many = memory == LANE_MEMORY and sum(len(a) for a in taken) > 1
-            for (dram, _), was, new in zip(rows, taken, now, strict=True):
+            for (dram, off), was, new in zip(rows, taken, now, strict=True):
                 got = _read_dram(m, dram, 16 * r6)
                 for i, owner in enumerate(got.src):
                     if owner == src:
@@ -1067,7 +1107,8 @@ class Engine:
                 if many:
                     per = 16 * r6 // len(was) if 16 * r6 % len(was) == 0 else 16 * r6
                     for v, (x, y) in enumerate(zip(was, new, strict=True)):
-                        if x is not y:
+                        at = (off // VECTOR_BYTES + v) % LANE_VECTORS
+                        if x is not y and not self._held(m, at):
                             for i in range(v * per, min((v + 1) * per, 16 * r6)):
                                 got.known[i] = 0
                 _write_dram(m, dram, got)
@@ -1149,6 +1190,16 @@ class _Dram:
     reads: list[tuple[int, int]] = field(default_factory=list)
     writes: list[tuple[int, int]] = field(default_factory=list)
     cap: Confidence = V
+    queue: bool = False
+    """The command is of `QUEUE_SHAPES`."""
+
+
+def _inside(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
+    """Every row of `ys` lies in a row of `xs`, a whole number of vectors of bytes from its start
+    (the overlaps `QUEUE_SHAPES` measured)."""
+    return all(
+        any(b <= a and a + n <= b + k and (a - b) % 32 == 0 for b, k in xs) for a, n in ys
+    )
 
 
 def _fits(cmd: _Command, shape: tuple[int | None, ...]) -> bool:
