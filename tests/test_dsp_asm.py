@@ -393,7 +393,7 @@ def test_a_target_over_13_bits_raises():
 def test_labelled_source_reassembles_the_program():
     program = build(labelled(), 32)
     text = source(program, "P", labels(labelled(), 32), 32)
-    assert "    OP.jump('routine'),  # 32 call -> 38\n    NOP,  # 33\n" in text
+    assert "    OP.jump('routine'),  # 32 jump -> 38\n    NOP,  # 33\n" in text
     assert "    Label('routine') | raw(xreg=3),  # 38\n" in text
     assert "    OP.loop(G[31], 'routine') | raw(x0k_lo=0x1),  # 39 loop -> 38\n" in text
     assert text.endswith("  # 48\n    Label('end'),  # 49\n]\n")

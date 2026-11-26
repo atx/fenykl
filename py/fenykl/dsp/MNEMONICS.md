@@ -7,13 +7,15 @@ Scheme: the operation, then the operand it takes besides the lane operands (`_im
 `_next` / `_bnext` a's / b's next lane), then the arithmetic (`_ss` / `_us` saturated
 signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart
 from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`
-the lanes U's port takes, `_u` / `_ua` an S2 product's unsigned operands). Codes whose
-rows differ in nothing else share a name: the one the stock programs use most (the
-lowest on a tie) takes it, the others add their code (`abd_ss_05`). `sub` and its
-kin compute the first operand minus the second, `andn` the first and not the second.
-`and_`, `or_`, `not_` avoid Python keywords. Operands are those the formula reads, in
-positional order; every other operand of the unit's view is a keyword. The tier is
-the table's for the function; an instruction also carries its fields' (`Instr.tier`).
+the lanes U's port takes, `save_unk` a content U's port writes that is not
+identified, `_save_open` what U's port takes not measured, `_u` / `_ua` an S2
+product's unsigned operands). Codes whose rows differ in nothing else share a name:
+the one the stock programs use most (the lowest on a tie) takes it, the others add
+their code (`abd_ss_05`). `sub` and its kin compute the first operand minus the
+second, `andn` the first and not the second. `and_`, `or_`, `not_` avoid Python
+keywords. Operands are those the formula reads, in positional order; every other
+operand of the unit's view is a keyword. The tier is the table's for the function;
+an instruction also carries its fields' (`Instr.tier`).
 
 ## S0
 
@@ -306,16 +308,16 @@ the table's for the function; an instruction also carries its fields' (`Instr.ti
 | 0x17 | `ext_reg` | b, idx | no lane result; M: lane F3[f92_95] & 31 of L3[f65_68], sign-extended | verified |
 | 0x18 | `bcast` | val | F3[f96_99] in every lane: a broadcast; U's port beside it writes nothing | verified |
 | 0x19 | `mov` | b | b; U's port beside it writes nothing | verified |
-| 0x1a | `save_unk` |  | no lane result | verified |
+| 0x1a | `save_unk` |  | no lane result; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read | verified |
 | 0x1b | `shift_save_hi` | b, u, idx | b moved up by n = f92_95 = 1..4: lane k := b[k + n], the top n lanes U's lanes 0..n-1; down by m = 16 - f92_95 = 1..4: lane k := b[k - m], the bottom m lanes U's lanes 4-m..3; U's port: b's lanes 28..31 into U's lanes 0..3 | verified |
 | 0x1c | `shift_save_lo` | b, u, idx | as 0x1b at f92_95 = 1..5, 8 and 11..15; 6, 7, 9 and 10 not predicted; U's port: b's lanes 0..3 into U's lanes 0..3 | verified |
-| 0x1d | `save_unk_1d` |  | no lane result | verified |
+| 0x1d | `save_unk_1d` |  | no lane result; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read | verified |
 | 0x1e | `save_hi` | b | no lane result; U's port: b's lanes 28..31 into U's lanes 0..3 | verified |
 | 0x1f | `save_lo` | b | no lane result; U's port: b's lanes 0..3 into U's lanes 0..3 | verified |
 | 0x20 | `mov_save_hi` | b | b; U's port: b's lanes 28..31 into U's lanes 0..3 | verified |
 | 0x21 | `mov_save_lo` | b | b; U's port: b's lanes 0..3 into U's lanes 0..3 | verified |
 | 0x22 | `shift` | b, u, idx | as 0x1b at f92_95 = 1..5, 8 and 11..15; 6, 7, 9 and 10 not predicted; U's port beside it writes nothing | verified |
-| 0x23 | `mov_23` | b | b | verified |
+| 0x23 | `mov_save_open` | b | b | verified |
 | 0x24 | `get_val` | val | no lane result; M: F3[f96_99] | verified |
 | 0x25 | `none` |  | no lane result | verified |
 | 0x26 | `none_26` |  | no lane result | verified |

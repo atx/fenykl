@@ -52,6 +52,7 @@ from .fields import (
     U_NOTHING,
     U_SAVED,
     U_TAKES,
+    U_UNIDENTIFIED,
     VECTOR_PORTS,
     X0_LANE_MEMORY,
     X_FUNCTIONS,
@@ -822,7 +823,8 @@ S3 = Unit(
     16 ext_reg_u b idx:F3
     17 ext_reg b idx:F3
     18 bcast val
-    19,23 mov b
+    19 mov b
+    23 mov_save_open b
     20 mov_save_hi b
     21 mov_save_lo b
     22 shift b u idx
@@ -1224,6 +1226,10 @@ def _u(code: int) -> str:
     if code in U_TAKES:
         lanes = U_TAKES[code]
         return f"; U's port: b's lanes {lanes[0]}..{lanes[-1]} into U's lanes 0..3"
+    if code in U_UNIDENTIFIED:
+        return (
+            "; U's port: U's lanes 0..3 a content not identified, lanes 4..31 not read"
+        )
     return "; U's port beside it writes nothing" if code in U_NOTHING else ""
 
 
@@ -1261,13 +1267,15 @@ def mnemonics_markdown() -> str:
         "`_next` / `_bnext` a's / b's next lane), then the arithmetic (`_ss` / `_us` saturated",
         "signed / unsigned, `_u` unsigned; none: wrapping or signed), then what sets it apart",
         "from a code of the same formula (`_m` a scalar result on M, `_save_lo` / `_save_hi`",
-        "the lanes U's port takes, `_u` / `_ua` an S2 product's unsigned operands). Codes whose",
-        "rows differ in nothing else share a name: the one the stock programs use most (the",
-        "lowest on a tie) takes it, the others add their code (`abd_ss_05`). `sub` and its",
-        "kin compute the first operand minus the second, `andn` the first and not the second.",
-        "`and_`, `or_`, `not_` avoid Python keywords. Operands are those the formula reads, in",
-        "positional order; every other operand of the unit's view is a keyword. The tier is",
-        "the table's for the function; an instruction also carries its fields' (`Instr.tier`).",
+        "the lanes U's port takes, `save_unk` a content U's port writes that is not",
+        "identified, `_save_open` what U's port takes not measured, `_u` / `_ua` an S2",
+        "product's unsigned operands). Codes whose rows differ in nothing else share a name:",
+        "the one the stock programs use most (the lowest on a tie) takes it, the others add",
+        "their code (`abd_ss_05`). `sub` and its kin compute the first operand minus the",
+        "second, `andn` the first and not the second. `and_`, `or_`, `not_` avoid Python",
+        "keywords. Operands are those the formula reads, in positional order; every other",
+        "operand of the unit's view is a keyword. The tier is the table's for the function;",
+        "an instruction also carries its fields' (`Instr.tier`).",
     ]
     for key, unit in UNITS_BY_KEY.items():
         lines += [

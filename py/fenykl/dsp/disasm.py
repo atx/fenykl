@@ -17,7 +17,7 @@ marks the delay slots of a control word.
 
 from collections.abc import Iterator, Mapping
 
-from .asm import EXPORTS, Bundle
+from .asm import EXPORTS, OP, Bundle
 from .fields import (
     CONTROL_FLAG,
     HEAD_VIEWS,
@@ -71,18 +71,18 @@ def operand_text(args: Operands) -> str:
     return ", ".join(parts)
 
 
-def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
+def _head(word: Word) -> tuple[str, set[str]]:
     """The op, operands and target part of `word` and the ids of the fields it stands for."""
     meaning = op(word.op)
     sem = OP_SEMANTICS.get(word.op)
     tier = meaning.confidence if sem is None else sem.confidence
-    head = meaning.name + (tier.mark if marks else "")
+    head = meaning.name + tier.mark
     shown = {OP_FIELD.id}
     if meaning.format is not None:
         head += f" {operand_text(meaning.format.decode(word.value))}"
         shown.update(f.id for f in meaning.format.fields)
     if word.target is not None:
-        head += f" -> {word.target}" + (TARGET.confidence.mark if marks else "")
+        head += f" -> {word.target}{TARGET.confidence.mark}"
         shown.update(f.id for f in TARGET.parts)
     if word.control:
         # f229 is clear in every stock control word; a set one would equal idle and go unseen.
@@ -91,6 +91,13 @@ def _head(word: Word, marks: bool = True) -> tuple[str, set[str]]:
         if flag:
             head += f" {_value(CONTROL_FLAG, flag)}"
     return head, shown
+
+
+def _op_note(word: Word) -> str:
+    """The op's mnemonic (`MNEMONICS.md`), its code where it has none, and a control op's
+    target word index."""
+    note = OP.names.get(word.op, f"{word.op:#04x}")
+    return note if word.target is None else f"{note} -> {word.target}"
 
 
 def word_parts(word: Word, base: Word = IDLE) -> list[str]:
@@ -174,7 +181,8 @@ def source(
 
     With `labels` (`labels(bundles, origin)` of `program.py`) the source is a bundle list for
     `assemble(..., origin=origin)`: a labelled word starts with its `Label`, a control op whose
-    target has a label names it; the comments give word indices from `origin` and the op."""
+    target has a label names it; the comments give word indices from `origin` and the op's
+    mnemonic with a control op's target index."""
     at: dict[int, str] = {}
     for label, index in (labels or {}).items():
         if not origin <= index < origin + len(program):
@@ -184,7 +192,7 @@ def source(
         at[index] = label
     lines = [f"from fenykl.dsp.asm import {', '.join(EXPORTS)}", "", f"{name} = ["]
     for index, word in enumerate(program.words, origin):
-        note = "" if word.op == IDLE_OP else f" {_head(word, marks=False)[0]}"
+        note = "" if word.op == IDLE_OP else f" {_op_note(word)}"
         lines.append(f"    {Bundle.of(word, at, index)!r},  # {index}{note}")
     lines.append("]")
     return "\n".join(lines) + "\n"
