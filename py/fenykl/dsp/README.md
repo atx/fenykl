@@ -216,9 +216,12 @@ print(r.flow.runs(), r.estimate)
 A `Run` holds the `job`, the `flow` (every executed word as a `Step`, in order, and why it
 stopped), the `machine` (its registers and lane memory at the halt, its stream engine), the
 `estimate` and the `lapses`. A run that stops short of its halt raises `NoHalt`, with the flow in
-`e.flow`. Each run starts from what the last one left (`Boot.carry`: every register file and the
-lane memory, as on the camera); a run that raised, lapsed or did not halt leaves nothing, and
-the next starts unknown.
+`e.flow`. A run that reaches its halt after the stream engine went off script returns with
+`flow.stop` `Stop.OPEN_END`, not `Stop.HALT`: a command the engine holds may never complete, so
+whether the job ends (or times out on the camera) is not known. Each run starts from what the
+last one left (`Boot.carry`: every register file and the lane memory, as on the camera); a run
+that raised, lapsed, did not halt or may not have ended leaves nothing, and the next starts
+unknown.
 
 **Strict and lenient.** Strict (the default): a case the facts do not cover raises
 `UnknownSemantics`, naming the word and why. Lenient (`strict=False`): the case lapses instead.

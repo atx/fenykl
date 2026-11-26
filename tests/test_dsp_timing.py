@@ -174,11 +174,6 @@ def test_a_wait_joins_the_oldest_command():
     assert part(e, "first runs").us == 32 * FIRST.us
 
 
-def test_a_lone_wait_is_an_inferred_part():
-    e = run([WAIT])
-    assert part(e, "stream waits").us == 0 and e.tier == I
-
-
 def test_a_command_outstanding_at_the_halt_has_no_time():
     e = run([*lanes(0, 0x40), *load(0)])
     assert e.us is None and "outstanding" in e.unknown

@@ -46,7 +46,7 @@ def cmd_source(args: argparse.Namespace) -> None:
 
 
 def cmd_flow(args: argparse.Namespace) -> None:
-    from .emu import Boot, Executor
+    from .emu import Boot, Executor, Stop
     from .machine import Machine
     from .stock import commands
     from .stock.copy import ITEM
@@ -64,9 +64,11 @@ def cmd_flow(args: argparse.Namespace) -> None:
         if step.op != 0x7F:
             print(step)
     unknown = sum(s.unknown for s in flow.steps)
+    # An open end's why is on its halt step, printed above.
+    why = flow.why if flow.why and flow.stop is not Stop.OPEN_END else ""
     print(
         f"{len(flow.steps)} steps, {unknown} not covered; stop: "
-        f"{flow.stop.value}{': ' + flow.why if flow.why else ''}"
+        f"{flow.stop.value}{': ' + why if why else ''}"
     )
 
 

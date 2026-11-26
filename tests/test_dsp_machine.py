@@ -9,8 +9,9 @@ from functools import cache
 import pytest
 from conftest import stock_image
 
+from fenykl.dsp import NOP, OP, assemble, hand
 from fenykl.dsp.asm import VIEWS
-from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
+from fenykl.dsp.emu import HALT_OP, LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import LANE_VECTORS, Composite, Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
 from fenykl.dsp.program import Program, stock_programs
@@ -180,6 +181,7 @@ class _Transfers:
     (`stream.Engine.transfer`)."""
 
     cap = V
+    off = ""
 
     def __init__(self) -> None:
         self.got: list[tuple[int, Sv | None]] = []
@@ -665,6 +667,17 @@ def test_a_run_that_does_not_halt_raises_and_leaves_no_carry():
         boot.run(Program((control(3, 0), *[IDLE] * 4)), limit=50)
     assert e.value.flow.stop is Stop.STEP_LIMIT
     assert boot.carry is None
+
+
+def test_a_halt_after_the_stream_goes_off_script_leaves_the_end_open():
+    """A key with bits outside its fields: whether the job ends is not known."""
+    boot = Boot()
+    boot.run(assemble([OP.halt(), *[NOP] * 4]))
+    run = boot.run(assemble([*hand(0x234), OP.halt(), *[NOP] * 4]))
+    assert run.flow.stop is Stop.OPEN_END and "bits outside its fields" in run.flow.why
+    stop = next(s for s in run.flow.steps if s.op == HALT_OP)
+    assert stop.confidence is H and "off script" in stop.note
+    assert run.estimate.us is None and boot.carry is None
 
 
 def test_a_job_starts_with_the_registers_the_job_before_left(m):

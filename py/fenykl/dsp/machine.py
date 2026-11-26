@@ -305,6 +305,8 @@ class Stream(Protocol):
 
     cap: Confidence
     """The tier cap of what the engine writes from here on (`Machine.limit` lowers it)."""
+    off: str
+    """Why the engine went off script; empty while it follows the measured model."""
 
     def transfer(self, m: "Machine", index: int, head: int, value: Sv, t: int) -> None:
         """Transfer `head` of word `index`, executed word `t` of the job, hands `value`
@@ -421,6 +423,13 @@ class Machine:
         names = ("G", "A", "B", "R", *self.f, *self.lanes, "U", "O")
         registers = {name: list(self._file(name)) for name in names}
         return Carry({} if self.lanes_lost else dict(self.memory), registers)
+
+    def open_end(self) -> str:
+        """Why whether the job ends is not known, empty when its halt ends it: off script, the
+        stream engine may hold a command that never completes."""
+        if self.stream is None or not self.stream.off:
+            return ""
+        return f"the stream engine went off script: {self.stream.off}"
 
     def lose_lanes(self) -> None:
         """The lane memory is not known from now on (the stream engine's activity is not)."""

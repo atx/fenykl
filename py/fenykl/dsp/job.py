@@ -18,6 +18,7 @@ class Job:
 
 class Stop(Enum):
     HALT = "halt"
+    OPEN_END = "the halt, but whether the job ends is not known"
     UNDECIDED = "a conditional control op the branching hypothesis does not decide"
     STEP_LIMIT = "the step limit"
 
