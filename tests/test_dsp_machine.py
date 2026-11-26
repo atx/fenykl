@@ -9,38 +9,25 @@ from functools import cache
 import pytest
 from conftest import stock_image
 
+from fenykl.dsp.asm import VIEWS
 from fenykl.dsp.emu import LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
-from fenykl.dsp.fields import Confidence, Operands
+from fenykl.dsp.fields import LANE_VECTORS, Composite, Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
 from fenykl.dsp.program import Program, stock_programs
 from fenykl.dsp.semantics import (
-    LANE_RULES,
-    X_RULES,
+    HEAD_READS,
     Given,
     UnknownSemantics,
-    lane_result,
+    head_reads,
     s_result,
-    x_result,
 )
 from fenykl.dsp.state import Bytes
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stream import Engine
+from fenykl.dsp.units import UNITS
 from fenykl.dsp.word import IDLE, Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
-SCALAR_KEYS = (
-    "s",
-    "r",
-    "imm",
-    "t",
-    "f31_34",
-    "f53_56",
-    "f88_91",
-    "f65_68",
-    "f92_95",
-    "f96_99",
-)
-SCALAR_KEYS += ("index", "value")
 A = tuple(range(100, 132))
 B = tuple((7 * k + 3) % 64 for k in range(32))
 
@@ -185,46 +172,136 @@ def test_a_counted_loop_stores_through_r():
 PROBE_SPECIAL = (0, 1, 2, 0x100, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF)
 
 
-def test_declared_lane_reads_cover_what_the_rules_read():
-    """Changing an operand a rule is not declared to read never changes its result, also on
-    equal operands and edge values (where a random probe misses equality rules)."""
-    rng = random.Random(7)
-
-    def vec():
-        return [rng.choice(PROBE_SPECIAL) for _ in range(32)]
-
-    for unit, rules in LANE_RULES.items():
-        for head, rule in rules.items():
-            if rule.value is None:
-                continue
-            for i in range(60):
-                a, b = vec(), vec()
-                if i % 2:
-                    b = list(a)
-                c = {k: rng.randrange(16) for k in SCALAR_KEYS}
-                base = lane_result(unit, head, a, b, c)
-                if "a" not in rule.reads:
-                    assert lane_result(unit, head, vec(), b, c) == base, (unit, head)
-                if "b" not in rule.reads:
-                    assert lane_result(unit, head, a, vec(), c) == base, (unit, head)
+X_VALUES = (0, 1, 5, 0x7FF, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
 
 
-def test_declared_x_reads_cover_what_the_rules_read():
-    rng = random.Random(7)
-    values = (0, 1, 5, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
-    for unit, rules in X_RULES.items():
-        for head, rule in rules.items():
-            if rule.value is None:
-                continue
-            for _ in range(60):
-                a, b = rng.choice(values), rng.choice(values)
-                k = rng.choice((0, 1, 5))
-                base = x_result(unit, head, a, b, k)
-                for other in values:
-                    if "a" not in rule.reads:
-                        assert x_result(unit, head, other, b, k) == base, (unit, head)
-                    if "b" not in rule.reads:
-                        assert x_result(unit, head, a, other, k) == base, (unit, head)
+class _Transfers:
+    """A stream engine that keeps what X1's transfers hand it; 0x1d hands nothing
+    (`stream.Engine.transfer`)."""
+
+    cap = V
+
+    def __init__(self) -> None:
+        self.got: list[tuple[int, Sv | None]] = []
+
+    def transfer(self, m, index, head, value, t) -> None:
+        self.got.append((head, None if head == 0x1D else value))
+
+    def lane_tier(self, vector=None):
+        return V
+
+
+def _registers(rng: random.Random, unit: str, words: tuple[Word, ...]) -> dict:
+    """Known registers of every file from edge values and the words' immediates zero- and
+    sign-extended, so compares against an immediate meet equal values; on every third draw one
+    value or vector fills each file, so equality rules meet equal operands."""
+    imms = []
+    for o in VIEWS[unit].operands.values():
+        if isinstance(o, Composite):
+            for w in words:
+                v = o.get(w.value) & ((1 << o.width) - 1)
+                imms += [v, v - (v >> (o.width - 1) << o.width)]
+    words = X_VALUES + tuple(v & 0xFFFFFFFF for v in imms)
+    lanes = PROBE_SPECIAL + tuple(v & 0xFFFF for v in imms)
+    pool = [Vec(tuple(rng.choice(lanes) for _ in range(32))) for _ in range(8)]
+    equal = rng.randrange(3) == 0
+
+    def scalars(n: int) -> list[Sv]:
+        if equal:
+            return [Sv(rng.choice(words))] * n
+        return [Sv(rng.choice(words + (rng.getrandbits(32),))) for _ in range(n)]
+
+    def vectors(n: int) -> list[Vec]:
+        return [pool[0]] * n if equal else [rng.choice(pool) for _ in range(n)]
+
+    regs = {"g": scalars(32), "a": scalars(32), "b": scalars(32), "r": scalars(8)}
+    regs["f"] = {name: scalars(16) for name in ("F0", "F1", "F2", "F3")}
+    regs["lanes"] = {name: vectors(16) for name in ("L0", "L1", "L2", "L3")}
+    regs["u"], regs["o"] = vectors(16), vectors(8)
+    regs["latched"] = {"s0": rng.choice(pool), "s1": rng.choice(pool)}
+    if unit == "x0":
+        regs["memory"] = {k: rng.choice(pool) for k in range(LANE_VECTORS)}
+    return regs
+
+
+def _head_result(unit: str, regs: dict, word: Word) -> tuple:
+    """What the machine's code for `unit`'s head does in `word` on `regs`: its result and what it
+    leaves (results due, the lane memory, the latch, U's port, the stream's transfers)."""
+    stream = _Transfers()
+    m = Machine(Boot(), stream=stream)
+    for name, v in regs.items():
+        nested = name in ("f", "lanes")
+        setattr(m, name, {k: list(x) for k, x in v.items()} if nested else v.copy())
+    got = m._x(0, word, unit, 0) if unit in ("x0", "x1") else m._s_units(0, word, 0)
+    return (
+        got,
+        m.lane_due,
+        m.held_due,
+        m.reductions,
+        m.x1_due,
+        m.load_due,
+        m.memory,
+        m.latched,
+        m._u_write,
+        stream.got,
+    )
+
+
+def _changes(rng: random.Random, o, value: int) -> list[int]:
+    """Other values of operand `o`: edge values and a random one."""
+    width = o.width
+    out = []
+    for v in (0, 1, -1, o.get(value) ^ 1, rng.getrandbits(width)):
+        v &= (1 << width) - 1
+        if isinstance(o, Composite) and o.signed and v >> (width - 1):
+            v -= 1 << width
+        out.append(v)
+    return out
+
+
+@pytest.mark.parametrize("unit", list(HEAD_READS))
+def test_head_reads_are_what_the_machine_reads(unit):
+    """For every head with known reads: bits of its unit outside the operands it reads never
+    change what the machine does for it (32 draws), and each operand it reads changes it on some
+    draw (up to 400)."""
+    rng = random.Random(unit)
+    view = VIEWS[unit]
+    op_field = view.operands["op"]
+    fields = [f for f in UNITS[unit].fields if f.id != op_field.id]
+    unit_span = sum(f.span for f in fields)
+    for head, declared in HEAD_READS[unit].items():
+        wanted: set[str] = set()
+        changed: set[str] = set()
+        for draw in range(400):
+            if draw >= 32 and changed == wanted:
+                break
+            values = {
+                f.id: rng.choice((0, f.mask, rng.randrange(f.mask + 1))) for f in fields
+            }
+            if unit == "s3" and rng.randrange(2):
+                values |= {"f232_233": 1, "f141_144": rng.randrange(16)}
+            word = Word.from_fields({**values, op_field.id: head}, base=IDLE)
+            reads = head_reads(unit, word.value)
+            if reads is None:
+                continue  # an S3 head whose U port take is open
+            assert declared <= reads
+            wanted |= reads
+            span = op_field.span
+            for k in reads:
+                span |= view.operands[k].span
+            outside = unit_span & ~span
+            other = Word(word.value & ~outside | rng.getrandbits(320) & outside)
+            regs = _registers(rng, unit, (word, other))
+            base = _head_result(unit, regs, word)
+            if draw < 32:
+                assert _head_result(unit, regs, other) == base, (unit, hex(head))
+            for k in reads - changed:
+                o = view.operands[k]
+                for v in _changes(rng, o, word.value):
+                    if _head_result(unit, regs, Word(o.put(word.value, v))) != base:
+                        changed.add(k)
+                        break
+        assert changed == wanted, (unit, hex(head), wanted - changed)
 
 
 @pytest.mark.parametrize(

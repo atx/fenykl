@@ -3,8 +3,10 @@
 A listing shows per word the fields that differ from the idle word, grouped by unit (strobes
 first), under their semantic names or ids; the units of the heads S0..S3, X0 and X1 show their
 operand view instead (`fields.HEAD_VIEWS`: op, the registers, an immediate composed and signed as
-the machine reads it, each where it differs); a mark after the value gives the field's confidence
-(`!` verified, `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
+the machine reads it, each where it differs): the operands the head reads
+(`semantics.head_reads`), then each field with a bit outside them that differs, raw; a head whose
+reads are not known shows every operand that differs. A mark after the value gives the field's
+confidence (`!` verified, `~` inferred, none for a hypothesis). Idle words and runs of identical words are collapsed, and a
 word that differs from the one before in at most `DELTA` fields is shown as that delta (`^`).
 Every word but the idle word starts with its op's name (`fields.op`) in place of f313_319; a
 control op 0..3 follows it with `-> T`, its target word index, in place of T's fields. A data op
@@ -17,7 +19,7 @@ marks the delay slots of a control word.
 
 from collections.abc import Iterator, Mapping
 
-from .asm import EXPORTS, OP, Bundle
+from .asm import EXPORTS, OP, VIEWS, Bundle
 from .fields import (
     CONTROL_FLAG,
     HEAD_VIEWS,
@@ -31,7 +33,7 @@ from .fields import (
     op,
 )
 from .program import Program
-from .semantics import OP_SEMANTICS
+from .semantics import OP_SEMANTICS, head_reads
 from .units import UNITS
 from .word import IDLE, Word
 
@@ -108,18 +110,37 @@ def word_parts(word: Word, base: Word = IDLE) -> list[str]:
     parts = [head]
     for name, unit in UNITS.items():
         if name in HEAD_VIEWS:
-            view = HEAD_VIEWS[name]
-            now, was = view.decode(word.value), view.decode(base.value)
-            items = [
-                _operand(k, o, now[k])
-                for k, o in view.operands.items()
-                if now[k] != was[k]
-            ]
+            items = _head_items(name, word, base)
         else:
             items = [_value(f, changed[f.id]) for f in unit.fields if f.id in changed]
         if items:
             parts.append(f"{name}: {' '.join(items)}")
     return parts
+
+
+def _head_items(unit: str, word: Word, base: Word) -> list[str]:
+    """The head view's operands of `unit` in `word` that differ from `base`: those the head
+    reads and the fields with other bits that differ, or every operand where not known."""
+    reads = head_reads(unit, word.value)
+    if reads is None:
+        operands = HEAD_VIEWS[unit].operands
+    else:
+        operands = {
+            k: o for k, o in VIEWS[unit].operands.items() if k in reads or k == "op"
+        }
+    items, span = [], 0
+    for k, o in operands.items():
+        span |= o.span
+        if o.get(word.value) != o.get(base.value):
+            items.append(_operand(k, o, o.get(word.value)))
+    if reads is not None:
+        changed = word.value ^ base.value
+        items += [
+            _value(f, f.get(word.value))
+            for f in UNITS[unit].fields
+            if changed & f.span & ~span
+        ]
+    return items
 
 
 def _runs(words: tuple[Word, ...], slots: set[int]) -> Iterator[tuple[int, int]]:
