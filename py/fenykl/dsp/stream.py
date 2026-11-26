@@ -28,7 +28,8 @@ command on a channel with a register not handed in this job moves nothing and co
 inferred: the lane memory, DRAM after a store and local memory after a load are then capped at
 inferred):
 
-- r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways);
+- r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways); a store
+  under r0 0x40 writes nothing (`NO_MEMORY`);
 - r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
   (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
   count that ends the load, `ZERO_FORMATS`, inferred otherwise); local memory 4 bytes or 2
@@ -38,12 +39,16 @@ inferred):
 - r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
   line's remaining bits 0 (`LOAD_FORMATS`, `STORE_FORMATS`);
 - r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
-  loads at up to 4 rows, stores at up to 2 rows; more rows inferred).
+  `LANE_LOAD_ROWS`, `LANE_STORE_ROWS`, local memory loads at up to 4 rows and stores at up to 2;
+  other counts inferred).
 
 Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch handed as
 0xfffffe00 steps back; verified on loads) and memory offset + k r1. A row's DRAM address is
-floored to 16 bytes (a load's pitch of 0x208 steps 0x200, verified), a lane-memory offset to its
-vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap inferred). A load row
+floored to 16 bytes (a load's pitch of 0x208 steps 0x200, verified; a store's of 0x108 at two rows
+steps 0x100, verified, other store pitches off 16 bytes not run), a lane-memory offset to its
+vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap inferred). Of the lane
+pitches that are not whole vectors only `HALF_VECTOR_ROWS` ran: both rows write one vector, and
+the later row lands (verified). A load row
 fills r3 units from its n = r5 r6 elements; with more units than ceil(n / r2) the transfer never
 ends, with fewer it fills r3 units and ends (verified). Lane memory: element i goes to lane
 i % 32 of vector i / 32, its low 16 bits, the lanes beyond n 0 (verified). Local memory: element
@@ -253,6 +258,31 @@ ZERO_STORES = frozenset((0x20, r3, 0x10) for r3 in (0, 0x20, 0x80, 0x88, 0x200))
 over the whole length and the guards around it were intact (at r3 0x200 the length was 1 KiB of
 the 16 KiB a full count fills). Inferred: it writes nothing; the DRAM bytes a full r3 count would
 store keep their content at most inferred."""
+LANE_LOAD_ROWS = frozenset((*range(1, 6), 8))
+"""Rows of a lane-memory load measured on the camera (verified; pre-registered: five rows at DRAM
+pitch 0x100 of one vector each, eight at 0x200 at a lane pitch of two vectors, each row at its
+pitch). Other counts inferred."""
+LANE_STORE_ROWS = range(1, 5)
+"""Rows of a lane-memory store measured on the camera (verified; pre-registered: three rows at DRAM
+pitch 0x200 and four at 0x100, one vector each, each row at its pitch). More rows inferred."""
+STORE_PITCH_OFF16 = 8
+"""The only low four bits of a store's DRAM pitch that ran at two rows (verified, pre-registered:
+0x108 put row 1 at +0x100, not +0x108 or +0x110); a store pitch with other low bits, or at more
+rows, was not measured."""
+HALF_VECTOR_ROWS = (1, 0x20, 0x20, 1, None, 0x10, 2, 2)
+"""A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes: row 1's offset
+floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
+pre-registered: one job, each row from its own DRAM line pair)."""
+NO_MEMORY = 0x40
+NO_MEMORY_STORE = (NO_MEMORY, None, 0x20, 1, None, 0x10, 2, 1)
+"""A store under r0 0x40 in this shape (one row of one vector of bytes) ended and wrote nothing:
+dst kept its nonzero fill over its whole length (verified, pre-registered against zeros and a
+lane-memory store). Other shapes, and loads under r0 0x40, were not measured."""
+LOCAL_LOAD_NEVER_ENDS = (2, None, 1, 8, None, 0x10, 2, 1)
+"""A local-memory load of 32 bytes into eight 32-bit words (r2 1, r5 0x10, one row): the camera's
+job never ended (one job; the firmware timed it out and the store of those words after it, a
+measured shape, wrote nothing), so this shape never ends (inferred). Other byte or 16-bit loads
+into 32-bit words were not run."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -268,10 +298,12 @@ bytes, bytes zero-extended to 16 bits, 16-bit elements truncated to their low by
 LOCAL_STORES: dict[tuple[int, int], Confidence] = {
     (4, 0x10): V,
     (2, 0x10): V,
+    (2, 0x08): V,
     (1, 0x04): V,
 }
 """(r2, r5) measured on a store from local memory (verified): bytes copied, 16-bit elements
-truncated to their low byte, 32-bit elements copied. Other pairs were not measured."""
+truncated to their low byte (r5 0x10) or copied as 16 bits (r5 0x08: pre-registered against
+the low bytes, one job), 32-bit elements copied. Other pairs were not measured."""
 
 STORE_FORMATS: dict[int, tuple[int, Confidence]] = {
     0x10: (8, V),
@@ -282,16 +314,19 @@ STORE_FORMATS: dict[int, tuple[int, Confidence]] = {
     0x04: (32, V),
     0x44: (32, I),  # measured on byte elements: a wider element is not predicted
     0x0D: (0, V),
-    **dict.fromkeys((0x00, 0x01, 0x40, 0x46, 0x80, 0x200, 0x400), (0, I)),
+    0x00: (0, V),
+    0x40: (0, V),
+    **dict.fromkeys((0x01, 0x46, 0x80, 0x200, 0x400), (0, I)),
 }
 """r5 on a store: 128 // bits elements per 16-byte line, each element's low bits packed least
 significant first and the line's last bits 0, by value: (bits per element, tier) (verified on the
 camera, pre-registered: 0x10 the low byte, 0x08 16 bits, 0x04 zero-extended to 32 bits, 0x0c /
 0x0a / 0x09 the 10-, 12- and 14-bit packs). 0x44 gave the 0x04 layout on byte elements only
-(inferred); 0x0d wrote zeros (bits 0). 0x00, 0x01, 0x40, 0x46, 0x80, 0x200 and 0x400 wrote zeros
-too (inferred: measured on the camera after the run, one to five jobs each over a dst prefilled with
-a nonzero byte, the job ending and every byte of the length 0). Other values were not run or never
-ended."""
+(inferred); 0x0d wrote zeros (bits 0). 0x00 and 0x40 wrote zeros (verified: pre-registered against
+"nothing written", one vector over two lines, the rest of a nonzero fill kept). 0x01, 0x46, 0x80,
+0x200 and 0x400 wrote zeros too (inferred: measured on the camera after the run, one to five jobs
+each over a dst prefilled with a nonzero byte, the job ending and every byte of the length 0).
+Other values were not run or never ended."""
 
 
 @dataclass(frozen=True)
@@ -691,16 +726,21 @@ class Engine:
             raise _Off("no rows: not measured")
         if 16 * rows * _known(r[6], "r6") > MOST_BYTES:
             raise _Off(f"{rows:#x} rows of {r[6].value:#x} lines: more than a job's time moves")
-        tier = I if rows > (2 if cmd.kind == STORE else 4) else V
+        if memory == LANE_MEMORY:
+            ran = LANE_STORE_ROWS if cmd.kind == STORE else LANE_LOAD_ROWS
+        else:
+            ran = range(1, 3 if cmd.kind == STORE else 5)
+        tier = V if rows in ran else I
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0
         if rows > 1:
             pitch, dpitch = _known(r[1], "r1"), _known(r[4], "r4")
             unit = VECTOR_BYTES if memory == LANE_MEMORY else 4
-            if pitch % unit:
+            if pitch % unit and not (cmd.kind == LOAD and _fits(cmd, HALF_VECTOR_ROWS)):
                 raise _Off(f"memory pitch {pitch:#x}: not measured")
-            if dpitch % 16 and cmd.kind == STORE:
+            off16 = dpitch % 16
+            if off16 and cmd.kind == STORE and (off16, rows) != (STORE_PITCH_OFF16, 2):
                 raise _Off(f"DRAM pitch {dpitch:#x} on a store: not measured")
             if dpitch % 16 and rows > 2:
                 # Two rows cannot tell a floored pitch from floored row addresses.
@@ -751,6 +791,10 @@ class Engine:
                 raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
             per = r2
         elif memory == LOCAL_MEMORY:
+            if _fits(cmd, LOCAL_LOAD_NEVER_ENDS):
+                why = "a local load of bytes into 32-bit words never ends (inferred)"
+                m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+                raise _Off(why)
             if r2 not in LOCAL_WIDTHS or (bits, LOCAL_WIDTHS[r2]) not in LOCAL_LOADS:
                 raise _Off(
                     f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured"
@@ -783,11 +827,13 @@ class Engine:
     def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier):
         # Each vector's only (row, v), None for one the load writes twice: the second write
         # sees the first as a race, so it ends unknown and needs no DRAM bytes.
+        # Rows at a lane pitch of half a vector (`HALF_VECTOR_ROWS`) share it: the later lands.
+        later = _fits(cmd, HALF_VECTOR_ROWS)
         once: dict[int, tuple[int, int] | None] = {}
         for k, (_, off) in enumerate(rows):
             for v in range(min(r3, LANE_VECTORS)):
                 at = (off // VECTOR_BYTES + v) % LANE_VECTORS
-                twice = at in once or v + LANE_VECTORS < r3
+                twice = (at in once and not later) or v + LANE_VECTORS < r3
                 once[at] = None if twice else (k, v)
         held = {at: Vec(UNKNOWN_VEC.lanes) for at in once}
         if not m.lanes_lost:
@@ -907,6 +953,8 @@ class Engine:
         if r5 not in STORE_FORMATS:
             raise _Off(f"store format {r5:#x}: not measured")
         bits, ftier = STORE_FORMATS[r5]
+        if _fits(cmd, NO_MEMORY_STORE):
+            return _nothing  # it ended and wrote nothing (verified)
         n = (128 // bits if bits else 0) * r6
         _, ks = _store_reach(r)
         rows, tier = self._rows(cmd, memory, ks)
@@ -1062,6 +1110,14 @@ class _Dram:
     reads: list[tuple[int, int]] = field(default_factory=list)
     writes: list[tuple[int, int]] = field(default_factory=list)
     cap: Confidence = V
+
+
+def _fits(cmd: _Command, shape: tuple[int | None, ...]) -> bool:
+    """The command's registers are `shape`'s (None: any)."""
+    return all(
+        w is None or (v is not None and v.value == w)
+        for v, w in zip(cmd.regs, shape, strict=True)
+    )
 
 
 def _overlap(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
