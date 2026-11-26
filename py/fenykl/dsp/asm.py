@@ -338,13 +338,16 @@ class Bundle:
         targets = [p.target for p in self.parts if p.target is not None]
         if len(targets) > 1:
             raise ValueError(f"two targets in one bundle: {targets}")
-        seen: dict[str, Part] = {}
+        seen: dict[str, list[Part]] = {}
         writes: dict[Reg, Port] = {}
         for p in self.parts:
             for f in p.fields:
-                if f in seen and not _completes(seen[f], p, f):
-                    raise ValueError(f"{lookup(f).label} set by {seen[f]!r} and {p!r}")
-                seen.setdefault(f, p)
+                setters = seen.setdefault(f, [])
+                if setters and (len(setters) > 1 or not _completes(setters[0], p, f)):
+                    raise ValueError(
+                        f"{lookup(f).label} set by {setters[-1]!r} and {p!r}"
+                    )
+                setters.append(p)
             if isinstance(p, Port):
                 if p.dst in writes:
                     raise ValueError(
@@ -1049,6 +1052,8 @@ def _check_units() -> None:
             if bad:
                 raise ValueError(f"{key} {name}: no operands {bad}")
             reads = HEAD_READS.get(key, {}).get(code)
+            if reads is not None and key == "s3" and code in U_TAKES:
+                reads |= {"b"}  # what U's port takes
             if reads is not None and set(unit.reads[code]) != reads:
                 raise ValueError(f"{key} {name}: the rules read {sorted(reads)}")
 
@@ -1188,7 +1193,11 @@ def _head(unit: Unit, value: int) -> Instr | None:
     if code == view.operands["op"].idle:
         return None
     reads = head_reads(unit.unit, value)
-    given = {k: view.operands[k].get(value) for k in unit.reads.get(code, ())}
+    given = {
+        k: view.operands[k].get(value)
+        for k in unit.reads.get(code, ())
+        if reads is None or k in reads
+    }
     word = view.encode(IDLE_VALUE, {"op": code, **given})
     for k, o in view.operands.items():
         if k == "op" or k in given or (reads is not None and k not in reads):

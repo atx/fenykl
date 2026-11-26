@@ -272,8 +272,9 @@ HEAD_VIEWS["s1"].decode(
 A view is per unit; which of its operands a head reads is `semantics.HEAD_READS`, derived from
 the rules (the lane operands they declare, the scalars a rule reads) and what the machine does
 with the head (X0's lane-memory address and store register, X1's transfer and divide, a lane
-shift's U, the b S3's U port takes), and `head_reads` per word, which adds the operand S0 / S1
-latch for their 0x60.. heads (S0 its a, S1 its b) and reads nothing at an idle head. A property
+shift's U), and `head_reads` per word, which adds the operand S0 / S1 latch for their 0x60..
+heads (S0 its a, S1 its b) and the b S3's U port takes where it is on, and reads nothing at an
+idle head. A property
 test drives the machine's code for every head: bits outside its reads never change what it does,
 and each operand it reads does on some input. Not known: a head without a rule, S1 0x12 (its
 scalar rule not exact) and 0x55..0x5f (open), X0 0x16..0x19 and 0x22 (no result, nothing else

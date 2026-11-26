@@ -165,8 +165,21 @@ def test_a_raw_part_completes_a_field_an_instruction_sets_in_part():
     """xor_imm's imm holds bits 2..3 of r's field: a raw r may set the other two, agreeing."""
     instr = S1.xor_imm(L1[4], imm=0x20)
     assert (instr | raw(s1r=0x4)).word()["s1r"] == 0x4
+    assert (raw(s1r=0x4) | instr).word()["s1r"] == 0x4
     with pytest.raises(ValueError, match="set by"):
         instr | raw(s1r=0x0)
+
+
+@pytest.mark.parametrize(
+    "order",
+    [(0, 1, 2), (1, 0, 2), (1, 2, 0)],
+    ids=["instr-first", "between", "instr-last"],
+)
+@pytest.mark.parametrize("second", [0x4, 0x5])
+def test_a_second_raw_on_a_completed_field_raises_in_any_order(order, second):
+    parts = (S1.xor_imm(L1[4], imm=0x20), raw(s1r=0x4), raw(s1r=second))
+    with pytest.raises(ValueError, match="set by"):
+        Bundle(tuple(parts[i] for i in order))
 
 
 def test_a_port_is_the_one_of_its_file_that_takes_the_source():

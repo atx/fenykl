@@ -1420,8 +1420,6 @@ def _s_head_reads(unit: str, head: int) -> frozenset[str] | None:
     reads |= {_SCALAR_OPERANDS.get(k, k) for k in rec.read - nibbles}
     if unit == "s3" and head in LANE_SHIFTS:
         reads.add("u")
-    if unit == "s3" and head in U_TAKES:
-        reads.add("b")
     if head in LATCHED and unit in LATCH_OPERAND:
         reads -= {"a", "b"}  # the latched operand stands in for both
     return frozenset(reads)
@@ -1439,7 +1437,7 @@ HEAD_READS = {unit: _head_reads(unit) for unit in HEAD_VIEWS}
 """The operands of its unit's view (`fields.HEAD_VIEWS`, with S2's sel and S3's lane) each head
 reads, where they are known: its rules' (`X_RULES`, `LANE_RULES`, `S_RULES`, the scalars as
 `lane_result` names them), X0's lane-memory address and store register O[o], X1's transfer and
-divide, a lane shift's U[u] and the b of an S3 head whose U port take is known. Not known, and
+divide and a lane shift's U[u]. Not known, and
 left out: a head without a rule, with an open lane rule (S1 0x55..0x5f), a scalar rule that is
 not exact or an X rule without a result and nothing else the machine does with it. The latch is
 `head_reads`'."""
@@ -1447,8 +1445,8 @@ not exact or an X rule without a result and nothing else the machine does with i
 
 def head_reads(unit: str, word: int) -> frozenset[str] | None:
     """The operands the head of `unit` in `word` reads: none for the idle head, `HEAD_READS`
-    with the operand S0 / S1 latches (`LATCHED`) where it latches it; None where not known, also
-    for an S3 head whose U port take is open under its port's 1."""
+    with the operand S0 / S1 latches (`LATCHED`) where it latches it and the b U's port takes
+    under its 1; None where not known, also for an S3 head whose U port take is open there."""
     view = HEAD_VIEWS[unit].operands["op"]
     head = view.get(word)
     if head == view.idle:
@@ -1456,8 +1454,11 @@ def head_reads(unit: str, word: int) -> frozenset[str] | None:
     reads = HEAD_READS[unit].get(head)
     if reads is None:
         return None
-    if unit == "s3" and U_PORT.get(word) == 1 and head not in (*U_TAKES, *U_NOTHING):
-        return None
+    if unit == "s3" and U_PORT.get(word) == 1:
+        if head in U_TAKES:
+            reads |= {"b"}
+        elif head not in U_NOTHING:
+            return None
     if unit in LATCH_OPERAND and head not in LATCHED:
         lane = LANE_RULES[unit].get(head)
         if unit == "s0" or lane is None or "b" in lane.reads:
