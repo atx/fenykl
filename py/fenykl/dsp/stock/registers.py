@@ -4,14 +4,35 @@ boot parameters.
 When a job starts, `REGISTER_FACTS` set the registers they cover from the job's request and the
 boot's parameters (unknown where a fact has no value for the job). They are kept apart from the
 op slot's registers (ra, rb): nothing shows the two to be one file.
+
+`machine_start` gives `Machine` the B registers a program 16 job starts with by these facts.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ..fields import Confidence
+from ..fields import PR_FILES, PR_SOURCES, Confidence, lookup
+from ..machine import M32, Carry, Sv
+from ..program import Program
+from ..semantics import PR_ENABLES
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
+
+READOUT = 16
+"""The load offset (word 68) and the count (word 73) use a register value in units of 16 bytes:
+the copy model holds an inserted op's result there as those roles use it, 16 times what the op
+computes (inferred: the scale that read as immediates and results scaled by 16 through these
+two roles, and that exact readout of own programs on the camera does not show; r2 & 0x1080
+through the count at len 0x1100 stored nothing, as a 16-byte unit predicts). The address role
+takes plain byte addresses.
+
+The values the transfers hand explain the scale. The load placement (68) and the store offset
+(76) are addresses in bytes of the lane memory's 16-bit elements, 64 per vector, value >> 6 the
+vector (`fields.LANE_MEMORY`): own values 0x1000 and 0x1800 placed the store's source at vector
+0x40 and the load at vector 0x60 (verified on the camera, pre-registered, byte-exact). For those
+two roles the model's 16 x value, taken / 32 to a multiple of 32, is the same rule: 32 source
+bytes per vector. The count (73) hands 0x40 at len 0x400, so it is in 16-byte units (inferred,
+a camera readout of the B file at the transfer words at one length)."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +70,9 @@ class RegisterFact:
     taint: Confidence
     fact: str
     value: Callable[[JobView], tuple[int, int] | None]
+    address: bool = False
+    """Read as a DRAM address (word 67): plain bytes, its low 4 bits not seen (the load floors
+    to 16 bytes); else as a count or offset, in `READOUT` units."""
 
 
 def _exact(
@@ -89,6 +113,7 @@ REGISTER_FACTS: tuple[RegisterFact, ...] = (
         V,
         "the job's src: the only register that makes word 67 load the job's src",
         _exact(lambda job: job.src),
+        address=True,
     ),
     *(
         RegisterFact(
@@ -128,14 +153,16 @@ REGISTER_FACTS: tuple[RegisterFact, ...] = (
     RegisterFact(
         21,
         V,
-        "0x606CC000 on every boot read: word 67 loads the firmware text there",
-        _const(0x606CC000),
+        "0x606CC000 on the boots read, a boot parameter: word 67 loads the firmware text there",
+        lambda job: None if job.boot.r21 is None else (job.boot.r21, job.boot.r21),
+        address=True,
     ),
     RegisterFact(
         29,
         V,
         "0x60E58B00 or 0x60E58B40, a boot parameter: word 67 loads the firmware text there",
         lambda job: None if job.boot.r29 is None else (job.boot.r29, job.boot.r29),
+        address=True,
     ),
 )
 
@@ -148,6 +175,7 @@ class BootParams:
       down (hypothesis), so -0x1C00 gives both -0xE0, while (-0x2000, -0x1C00) gives 68 -0xE0
       and 76 -0x100; both were seen, on different boots.
     - r29: word 67's load address at r29.
+    - r21: word 67's load address at r21.
     - r21_format: word 47's store format at r21, "pack10" or "zero"; it differs between boots
       with nothing else seen to differ.
     """
@@ -155,6 +183,7 @@ class BootParams:
     r14: tuple[int, int] | None = (-0x1FFF, -0x1C00)
     r29: int | None = None
     r21_format: str | None = None
+    r21: int | None = 0x606CC000
 
 
 R14_EXACT = (-0x1C00, -0x1C00)
@@ -181,3 +210,50 @@ class RegisterFile:
 
     def __setitem__(self, r: int, value: Reg | None) -> None:
         self.regs[r] = value
+
+
+def b_written(program: Program) -> frozenset[int]:
+    """The B registers that a word of `program` names at an enabled B port: what any path
+    through it may write (an enable value without a known source counts as a write)."""
+    out = set()
+    for w in program.words:
+        for enable, port in PR_ENABLES.items():
+            v = w[enable]
+            if PR_FILES[enable] != "B" or v == lookup(enable).idle:
+                continue
+            if v not in PR_SOURCES[enable] or PR_SOURCES[enable][v] is not None:
+                out.add(w[port])
+    return frozenset(out)
+
+
+def machine_start(
+    view: JobView, stock: Program, carry: Carry | None = None
+) -> dict[str, dict[int, Sv]]:
+    """The B registers that a job of program 16 (`stock`, the stock program; the job may be
+    an edit of it) starts with by `REGISTER_FACTS`, for `Machine.preset` (X1 hands
+    B[xreg]): {"B": {reg: value}}.
+
+    Only a fact on a register that no stock word writes gives the job's start value; the stock
+    program writes the others before its transfers read them, and those values are what their
+    facts describe. A register `carry` knows keeps its value (the file persists across jobs).
+    A value is the fact's over its unit (`RegisterFact.address`); an interval gives none. The
+    tier is the fact's, a hypothesis for an address: these registers are right only in the bits
+    their transfers see (word 67 floors an address to 16 bytes), the rest is power-up content
+    that differs between boots (`machine.Carry`; r21's low bits by word 47's store format)."""
+    written = b_written(stock)
+    known = carry.registers.get("B", []) if carry else []
+    out: dict[int, Sv] = {}
+    for f in REGISTER_FACTS:
+        if f.reg in written or (f.reg < len(known) and known[f.reg].value is not None):
+            continue
+        v = f.value(view)
+        if v is None or v[0] != v[1]:
+            continue
+        unit = 1 if f.address else READOUT
+        if v[0] % unit:
+            raise ValueError(
+                f"r{f.reg} = {v[0]:#x} is not a whole number of {unit}-byte units"
+            )
+        tier = H if f.address else f.taint
+        out[f.reg] = Sv(v[0] // unit & M32, tier)
+    return {"B": out}

@@ -89,7 +89,7 @@ from .model import (
     Use,
     WordClass,
 )
-from .registers import JobView, Reg, RegisterFile
+from .registers import READOUT, JobView, Reg, RegisterFile
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
@@ -97,21 +97,6 @@ ITEM = 16
 ENGINE_AFTER = 64
 """Inserted data ops right after this stock word (before 65) are the measured site: their
 operands and their results through the PR ports are modelled there only."""
-READOUT = 16
-"""The load offset (word 68) and the count (word 73) use a register value in units of 16 bytes:
-the copy model holds an inserted op's result there as those roles use it, 16 times what the op
-computes (inferred: the scale that read as immediates and results scaled by 16 through these
-two roles, and that exact readout of own programs on the camera does not show; r2 & 0x1080
-through the count at len 0x1100 stored nothing, as a 16-byte unit predicts). The address role
-takes plain byte addresses.
-
-The values the transfers hand explain the scale. The load placement (68) and the store offset
-(76) are addresses in bytes of the lane memory's 16-bit elements, 64 per vector, value >> 6 the
-vector (`fields.LANE_MEMORY`): own values 0x1000 and 0x1800 placed the store's source at vector
-0x40 and the load at vector 0x60 (verified on the camera, pre-registered, byte-exact). For those
-two roles the model's 16 x value, taken / 32 to a multiple of 32, is the same rule: 32 source
-bytes per vector. The count (73) hands 0x40 at len 0x400, so it is in 16-byte units (inferred,
-a camera readout of the B file at the transfer words at one length)."""
 ENGINE_OPERANDS = (
     (
         2,
