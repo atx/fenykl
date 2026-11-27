@@ -45,7 +45,7 @@ class Idle:
     mask: int
 
     def apply(self, stock: Word) -> Word:
-        return Word.from_int(stock.value & ~self.mask | IDLE.value & self.mask)
+        return Word(stock.value & ~self.mask | IDLE.value & self.mask)
 
 
 # The 2-bit grid pairs: idle in every stock word, and no edit measured on the camera writes them.
@@ -99,7 +99,7 @@ class FieldValue:
         return f"{f.label} = {f.literal(self.value)}"
 
     def apply(self, stock: Word) -> Word:
-        return Word.from_int(self.field.put(stock.value, self.value))
+        return Word(self.field.put(stock.value, self.value))
 
 
 @dataclass(frozen=True)

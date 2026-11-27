@@ -31,7 +31,7 @@ sits on top of all three.
 | `units.py` | the units: a strobe and the fields that change under it |
 | `word.py` | `Word`, an immutable word with views by field; `IDLE` |
 | `asm.py` | the DSL: register files, unit instructions, ports, bundles, `Bundle.of`, the helpers |
-| `program.py` | `Program`, `assemble`, `labels`, extraction of the stock programs from a firmware image |
+| `program.py` | `Program`, `assemble`, `labels` |
 | `disasm.py` | `listing` and `source` |
 | **runtime** | |
 | `semantics.py` | the datapath rules: op slot, X units, lane functions, lane memory, `UnknownSemantics` |
@@ -42,7 +42,7 @@ sits on top of all three.
 | `state.py` | `Bytes`, tri-state bytes with provenance and taint; the memory spaces |
 | `timing.py` | `estimate`: a job's minimum time on the camera |
 | **stock models** | |
-| `stock/` | `model.py` (`StockBoot`, `run_model`), `copy.py` (program 16), `resample.py`, `resample_edits.py`, `resample_window.py`, `exec.py` (program 13), `taps.py`, `commands.py`, `registers.py`, `intervals.py` |
+| `stock/` | `model.py` (`StockBoot`, `run_model`), `copy.py` (program 16), `resample.py`, `resample_edits.py`, `resample_window.py`, `exec.py` (program 13), `taps.py`, `commands.py`, `registers.py`, `intervals.py`, `items.py` (the five stock programs from a firmware image) |
 | **command line** | |
 | `cli.py` | `fenykl dsp` |
 

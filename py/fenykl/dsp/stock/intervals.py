@@ -149,7 +149,9 @@ def _result(
     return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
 
 
-def _interval(rule: OpValue, tier: Confidence, word: Word, slot: RegisterFile) -> Effect:
+def _interval(
+    rule: OpValue, tier: Confidence, word: Word, slot: RegisterFile
+) -> Effect:
     """A computing op's rule (`OpValue`) over the register intervals ra, rb read."""
     args = word.operands
     assert args is not None

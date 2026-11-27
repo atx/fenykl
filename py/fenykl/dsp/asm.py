@@ -390,7 +390,7 @@ class Bundle:
             if labels is None or self.target not in labels:
                 raise KeyError(f"label {self.target!r} is not defined")
             value = TARGET.put(value, labels[self.target])
-        return Word.from_int(value)
+        return Word(value)
 
     def __repr__(self) -> str:
         return " | ".join(map(repr, self.parts)) if self.parts else "NOP"

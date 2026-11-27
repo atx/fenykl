@@ -23,6 +23,7 @@ from fenykl.dsp.fields import (
     LANE_LOAD_LAG,
     LANE_SOURCES,
     NO_LANE,
+    OP_FIELD,
     PB_FILES,
     PB_SOURCES,
     PORTS,
@@ -41,10 +42,10 @@ from fenykl.dsp.fields import (
     lookup,
     op,
 )
-from fenykl.dsp.program import (
+from fenykl.dsp.program import Program
+from fenykl.dsp.stock.items import (
     SLOT_BYTES,
     STOCK,
-    Program,
     ProgramFormatError,
     StockProgram,
     decode_item,
@@ -63,14 +64,14 @@ from fenykl.dsp.word import IDLE, Word
     ],
 )
 def test_x_immediates_pack_into_their_fields(unit, k, parts):
-    word = Word.from_int(X_IMMEDIATES[unit].put(IDLE_VALUE, k))
+    word = Word(X_IMMEDIATES[unit].put(IDLE_VALUE, k))
     assert {key: word[key] for key in parts} == parts
     assert X_IMMEDIATES[unit].get(word.value) == k
 
 
 def test_x1_head_is_f310_312_over_f308_309():
     # The transfer form 0x1d: 7 in 310..312, 1 in 308..309.
-    word = Word.from_int(IDLE_VALUE & ~(0x1F << 308) | (7 << 310) | (1 << 308))
+    word = Word(IDLE_VALUE & ~(0x1F << 308) | (7 << 310) | (1 << 308))
     assert word["x1op"] == 0x1D
 
 
@@ -117,7 +118,7 @@ def test_stock_items_found(items):
 
 def test_words_round_trip_through_fields(items):
     # Rebuilt from the field values alone on an all-zero base, so the table must hold every bit.
-    zero = Word.from_int(0)
+    zero = Word(0)
     for item, data in items.items():
         for index, word in enumerate(decode_item(data, STOCK[item]).words):
             rebuilt = Word.from_fields(word.fields(), base=zero)
@@ -364,6 +365,11 @@ def test_program_16_control_flow(items):
     assert (45 + 5, 53 + 5) == (words[53].target, words[45].target)
 
 
+def encoded(code: int, args: Operands) -> Word:
+    """The idle word with op `code` and `args` put in by its format."""
+    return Word(FORMATS[code].encode(OP_FIELD.put(IDLE_VALUE, code), args))
+
+
 @pytest.mark.parametrize(
     "code, args, fields",
     [
@@ -397,20 +403,20 @@ def test_program_16_control_flow(items):
     ],
 )
 def test_data_op_operands_assemble_and_decode(code, args, fields):
-    word = Word.data(code, args)
+    word = encoded(code, args)
     assert word.op == code
     assert {key: word[key] for key in fields} == fields
     assert word.operands == args
 
 
 def test_an_immediate_extends_by_its_op():
-    assert Word.data(0x1A, Operands(ra=0, imm=-7)).operands.imm == -7
-    assert Word.data(0x10, Operands(ra=0, imm=-0x1000)).operands.imm == -0x1000
-    assert Word.data(0x1C, Operands(ra=0, imm=-1)).operands.imm == -1
+    assert encoded(0x1A, Operands(ra=0, imm=-7)).operands.imm == -7
+    assert encoded(0x10, Operands(ra=0, imm=-0x1000)).operands.imm == -0x1000
+    assert encoded(0x1C, Operands(ra=0, imm=-1)).operands.imm == -1
     # 0x1e, 0x1f and 0x23 zero-extend imm16 although family D sign-extends it.
-    assert Word.data(0x1E, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
-    assert Word.data(0x0B, Operands(ra=0, imm=-1)).operands.imm == -1
-    assert Word.data(0x0A, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
+    assert encoded(0x1E, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
+    assert encoded(0x0B, Operands(ra=0, imm=-1)).operands.imm == -1
+    assert encoded(0x0A, Operands(ra=0, imm=0xFFFF)).operands.imm == 0xFFFF
 
 
 @pytest.mark.parametrize(
@@ -424,12 +430,11 @@ def test_an_immediate_extends_by_its_op():
         (0x49, Operands(ra=0)),  # rb missing
         (0x1A, Operands(ra=0, rb=1, imm=0)),  # no rb in family A
         (0x49, Operands(ra=0, rb=1, imm=0)),  # no immediate in family E
-        (0x05, Operands(ra=0)),  # an op value that is no data op has no format
     ],
 )
 def test_data_op_assembly_rejects_operands_outside_the_format(code, args):
     with pytest.raises(ValueError):
-        Word.data(code, args)
+        encoded(code, args)
 
 
 def test_every_stock_data_op_fits_its_format(items):
@@ -440,7 +445,7 @@ def test_every_stock_data_op_fits_its_format(items):
             if w.op not in DATA_OPS:
                 continue
             fmt = FORMATS[w.op]
-            assert Word.data(w.op, w.operands, base=w) == w, (item, index)
+            assert Word(fmt.encode(w.value, w.operands)) == w, (item, index)
             if fmt.imm is None:
                 assert w["imm"] == 0, (item, index)
 

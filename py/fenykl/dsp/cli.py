@@ -23,8 +23,9 @@ from .fields import (
     TARGET,
     TARGET_OPS,
 )
-from .program import STOCK, Program, stock_programs
+from .program import Program
 from .semantics import Given
+from .stock.items import STOCK, stock_programs
 
 
 def _program(file: Path | None, item: int) -> Program:

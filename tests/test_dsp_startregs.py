@@ -6,9 +6,10 @@ from conftest import stock_image
 from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Carry, Sv
-from fenykl.dsp.program import Program, stock_programs
+from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.stock import commands
+from fenykl.dsp.stock.items import stock_programs
 from fenykl.dsp.stock.registers import (
     R14_BELOW,
     R14_EXACT,

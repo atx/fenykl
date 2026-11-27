@@ -7,20 +7,15 @@ Validation of assembled words (constants, allowed values) is `Word.check`.
 from collections.abc import Mapping
 
 from .fields import (
-    CONTROL_FLAG,
-    CONTROL_OPS,
     FIELDS,
     IDLE_VALUE,
     OP_FIELD,
-    TARGET,
-    TARGET_OPS,
     WORD_BITS,
     WORD_BYTES,
     Field,
     Operands,
     is_control,
     lookup,
-    op,
     operands,
     target,
 )
@@ -38,14 +33,10 @@ class Word:
         object.__setattr__(self, "value", value)
 
     @classmethod
-    def from_int(cls, value: int) -> "Word":
-        return cls(value)
-
-    @classmethod
     def from_bytes(cls, data: bytes) -> "Word":
         if len(data) != WORD_BYTES:
             raise ValueError(f"a word is {WORD_BYTES} bytes, got {len(data)}")
-        return cls.from_int(int.from_bytes(data, "little"))
+        return cls(int.from_bytes(data, "little"))
 
     @classmethod
     def from_fields(
@@ -55,32 +46,7 @@ class Word:
         value = IDLE_VALUE if base is None else base.value
         for key, v in values.items():
             value = lookup(key).put(value, v)
-        return cls.from_int(value)
-
-    @classmethod
-    def data(cls, code: int, args: Operands, base: "Word | None" = None) -> "Word":
-        """Data op `code` with operands `args` in its format; other fields keep `base`."""
-        fmt = op(code).format
-        if fmt is None:
-            raise ValueError(f"op {code:#x} has no operand format")
-        word = OP_FIELD.put(IDLE_VALUE if base is None else base.value, code)
-        return cls.from_int(fmt.encode(word, args))
-
-    @classmethod
-    def ctl(
-        cls, code: int, target: int | None = None, base: "Word | None" = None
-    ) -> "Word":
-        """Control op `code` with f229 clear and, for ops 0..3, the absolute word index `target`
-        in `TARGET`; other fields keep `base`. (`control` is the property that tests a word.)"""
-        if code not in CONTROL_OPS:
-            raise ValueError(f"op {code:#x} is no control op")
-        if (target is not None) != (code in TARGET_OPS):
-            raise ValueError(f"op {code:#x}: target {target!r}")
-        value = IDLE_VALUE if base is None else base.value
-        value = CONTROL_FLAG.put(OP_FIELD.put(value, code), 0)
-        if target is not None:
-            value = TARGET.put(value, target)
-        return cls.from_int(value)
+        return cls(value)
 
     def to_bytes(self) -> bytes:
         return self.value.to_bytes(WORD_BYTES, "little")
@@ -140,4 +106,4 @@ class Word:
         return f"Word.from_fields({{{args}}})"
 
 
-IDLE = Word.from_int(IDLE_VALUE)
+IDLE = Word(IDLE_VALUE)

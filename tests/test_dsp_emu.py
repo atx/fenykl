@@ -10,15 +10,16 @@ from pathlib import Path
 import pytest
 from conftest import CONF, stock_image
 
-from fenykl.dsp.asm import Bundle, Label, raw
+from fenykl.dsp.asm import OP, Bundle, G, Label, R, raw
 from fenykl.dsp.emu import Boot, dram_alias
-from fenykl.dsp.fields import Confidence, Operands
+from fenykl.dsp.fields import FORMATS, Confidence
 from fenykl.dsp.machine import Machine, Sv
-from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_items
+from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
 from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics, ring_length
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.copy import Copy16Model
 from fenykl.dsp.stock.intervals import RegSet, destinations, op_effect
+from fenykl.dsp.stock.items import stock_items
 from fenykl.dsp.stock.model import Status, StockBoot, run_model
 from fenykl.dsp.stock.registers import (
     MAIN_CODE,
@@ -862,16 +863,12 @@ def test_an_insert_after_the_last_word_moves_nothing():
 
 def any_operands(code: int, imm: int) -> Word:
     """Op `code` on r1 and r2 or imm, in the operand form its family takes."""
-    for args in (
-        Operands(ra=1, rb=2),
-        Operands(ra=1, imm=imm),
-        Operands(ra=1, rb=2, imm=imm),
-    ):
-        try:
-            return Word.data(code, args)
-        except ValueError:
-            continue
-    raise AssertionError(f"no operand form for op {code:#x}")
+    fmt = FORMATS[code]
+    given = {
+        "rb": G[2] if fmt.family.rb else None,
+        "imm": None if fmt.imm is None else imm,
+    }
+    return OP(code, ra=G[1], **{k: v for k, v in given.items() if v is not None}).word()
 
 
 COMPUTING = sorted(
@@ -920,7 +917,7 @@ def test_a_select_is_the_hull_of_its_inputs_at_the_measured_r_fields(r: int, tie
 
 
 def test_a_result_goes_to_its_port_registers_or_is_open():
-    const = Word.data(0x0B, Operands(ra=0, imm=1))
+    const = OP(0x0B, ra=G[0], imm=1).word()
     both = Word.from_fields(
         {"f267_268": 1, "f211_215": 5, "f272_273": 1, "f224_228": 6}, base=const
     )
@@ -961,7 +958,7 @@ def test_an_inserted_op_takes_its_semantics_tier():
         ),
         # A word load at r2, (len + 0x1f) / 16 at the engine site: not word-aligned.
         (
-            lambda: Word.data(0x1A, Operands(ra=2, imm=0)),
+            lambda: OP(0x1A, ra=G[2], imm=0).word(),
             65,
             "outside what its op semantics covers",
         ),
@@ -971,8 +968,14 @@ def test_an_inserted_op_takes_its_semantics_tier():
             "no PR port enabled: where the result goes is open",
         ),
         (lambda: stock().words[42], 12, "an inserted register transfer"),
+        # A word store of R[0] to local word r5 + 4, beside the copy's request.
+        (
+            lambda: OP(0x18, ra=G[5], imm=4, rr=R[0]).word(),
+            12,
+            "a local store, the copy's request in local memory may change",
+        ),
     ],
-    ids=["no-row", "unaligned", "no-port", "transfer"],
+    ids=["no-row", "unaligned", "no-port", "transfer", "local-store"],
 )
 def test_an_insert_without_semantics_is_unknown(word, at: int, why: str):
     program = inserted(at, word())
@@ -1014,11 +1017,11 @@ def engine(words: tuple[Word, ...], reader: int = 68, length: int = 0x1000):
 
 def d_op(code: int, ra: int, c: int) -> Word:
     """An immediate op whose constant is c as the transfers read it, imm = c / 16."""
-    return Word.data(code, Operands(ra=ra, imm=c >> 4))
+    return OP(code, ra=G[ra], imm=c >> 4).word()
 
 
 def e_op(code: int, ra: int, rb: int) -> Word:
-    return Word.data(code, Operands(ra=ra, rb=rb))
+    return OP(code, ra=G[ra], rb=G[rb]).word()
 
 
 def test_an_engine_op_sets_the_load_offset():
@@ -1054,7 +1057,7 @@ def test_an_operand_chain_feeds_a_count(gap: int):
 def test_a_mask_through_the_count_reads_in_16_byte_units():
     """r2 & 0x1080 at len 0x1100: r2 = 0x111 masks to 0, so word 73 stores nothing, as on the
     camera; read in bytes, r2 & 0x1080 would have stored 0x1000 bytes."""
-    mask = port(Word.data(0x38, Operands(ra=2, imm=0x1080)), "f267_268", 12)
+    mask = port(OP(0x38, ra=G[2], imm=0x1080).word(), "f267_268", 12)
     result, boot = engine((mask,), reader=73, length=0x1100)
     assert result.status is Status.OK
     assert bytes(boot.read(DST, 0x1100).data) == b"\xa5" * 0x1100
@@ -1068,7 +1071,7 @@ def test_a_mask_through_the_count_reads_in_16_byte_units():
             (
                 port(
                     Word.from_fields(
-                        {"f120_122": 0}, base=Word.data(0x46, Operands(ra=2, imm=1))
+                        {"f120_122": 0}, base=OP(0x46, ra=G[2], imm=1).word()
                     ),
                     "f267_268",
                     12,
@@ -1081,7 +1084,7 @@ def test_a_mask_through_the_count_reads_in_16_byte_units():
                 port(d_op(0x24, 2, 0x7FFF0), "f272_273", 13),
                 IDLE,
                 IDLE,
-                port(Word.data(0x40, Operands(ra=13, rb=13, imm=4)), "f267_268", 12),
+                port(OP(0x40, ra=G[13], rb=G[13], imm=4).word(), "f267_268", 12),
             ),
             "beyond the buffer",
         ),

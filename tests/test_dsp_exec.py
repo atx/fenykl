@@ -1,5 +1,6 @@
 import random
 from collections import Counter
+from fractions import Fraction
 from functools import cache
 
 import pytest
@@ -18,6 +19,7 @@ from fenykl.dsp.stock.exec import (
     accumulate,
     chroma_out,
     cover,
+    out_of,
     readers,
     run_window,
     weight,
@@ -46,9 +48,8 @@ def model() -> Resample13Model:
 
 
 def rne(n: int, d: int) -> int:
-    """n / d to nearest, ties to even (the law's R_d)."""
-    q, r = divmod(n, d)
-    return q + (2 * r > d or (2 * r == d and q % 2 == 1))
+    """The law's R_d: n / d to nearest, ties to even (Python's round of the exact quotient)."""
+    return round(Fraction(n, d))
 
 
 def law(c: int, taps: tuple[int, ...], p: int) -> dict[int, int]:
@@ -278,13 +279,40 @@ def test_two_writes_to_one_register_in_one_step_raise():
     assert set(got.confidence()) - {None} == {Confidence.HYPOTHESIS}
 
 
-def test_the_chroma_stage_equals_the_law_on_every_weight_and_pixel_pair():
-    for p in range(16):
-        for a in range(256):
-            for b in range(256):
-                t = (16 - p) * a + p * b
-                s = (256 - 16 * p) * a + 16 * p * b
-                assert chroma_out(t) == max(0, min(255, rne(rne(s, 4), 64))), (p, a, b)
+@pytest.mark.parametrize(
+    ("s", "byte"),
+    [
+        (128, 0),  # R4 32, R64 0.5: ties to the even 0
+        (384, 2),  # R64 1.5 -> 2
+        (640, 2),  # R64 2.5 -> 2
+        (382, 2),  # R4 95.5 -> 96, then R64 1.5 -> 2; one R256 would give 1
+        (65152, 254),  # R64 254.5 -> 254
+        (65408, 255),  # R64 255.5 -> 256, clamped
+        (70000, 255),
+        (-128, 0),  # R64 -0.5 -> 0
+        (-1000, 0),  # clamped
+    ],
+)
+def test_the_plane_0_output_stage_rounds_twice_ties_to_even_and_clamps(s, byte):
+    assert out_of(s) == byte
+
+
+@pytest.mark.parametrize(
+    ("s", "byte"),
+    [
+        (8, 0),  # R16 0.5 -> 0
+        (24, 2),  # 1.5 -> 2
+        (40, 2),  # 2.5 -> 2
+        (4080, 255),
+        (4088, 0),  # 255.5 -> 256, the low byte
+        (-8, 0),  # -0.5 -> 0
+        (-16, 0xFF),
+        (-24, 0xFE),  # -1.5 -> -2
+        (-40, 0xFE),  # -2.5 -> -2
+    ],
+)
+def test_the_chroma_output_stage_rounds_ties_to_even_and_wraps(s, byte):
+    assert chroma_out(s) == byte
 
 
 def test_a_zero_weight_term_reads_no_operand():
