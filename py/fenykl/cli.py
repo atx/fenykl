@@ -2,7 +2,6 @@
 
 import argparse
 import hashlib
-import lzma
 import sys
 from collections import Counter
 from pathlib import Path
@@ -20,6 +19,7 @@ from .firmware import (
     identify,
     load_unpacked,
     pack_firmware,
+    read_bin,
     save_unpacked,
     unpack_firmware,
 )
@@ -28,12 +28,6 @@ from .payload import PayloadError, describe, describe_shared, pack_elf
 from .plugin import BuildError, build, plugin_targets
 from .sdk import TargetError, toolchain_prefix
 from .sdk import target as sdk_target
-
-
-def read_bin(path: Path) -> bytes:
-    """Read a `.BIN`, decompressing it if it is stored as `.BIN.lzma`."""
-    data = path.read_bytes()
-    return lzma.decompress(data) if path.suffix == ".lzma" else data
 
 
 def _write(path: Path, data: bytes) -> None:

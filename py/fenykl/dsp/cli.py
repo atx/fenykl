@@ -4,7 +4,7 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from ..firmware import TARGETS
+from ..firmware import TARGETS, read_bin
 from .disasm import listing, source
 from .fields import (
     DATA_OP_CONFIDENCE,
@@ -15,6 +15,7 @@ from .fields import (
     FAMILIES,
     FIELDS,
     FORMATS,
+    IDLE_OP,
     IMM13,
     IMM16,
     MEANINGS,
@@ -27,41 +28,37 @@ from .program import STOCK, Program, stock_programs
 from .semantics import Given
 
 
-def _program(args: argparse.Namespace) -> Program:
-    from ..cli import read_bin  # the top-level cli imports this module
-
-    return stock_programs(read_bin(args.file or TARGETS["em10ii"].stock_path()))[
-        args.item
-    ]
+def _program(file: Path | None, item: int) -> Program:
+    return stock_programs(read_bin(file or TARGETS["em10ii"].stock_path()))[item]
 
 
 def cmd_disasm(args: argparse.Namespace) -> None:
     spec = STOCK[args.item]
     title = f"item {spec.item}, command {spec.cmd:#x}: {spec.fact}"
-    print(listing(_program(args), title), end="")
+    print(listing(_program(args.file, args.item), title), end="")
 
 
 def cmd_source(args: argparse.Namespace) -> None:
-    print(source(_program(args), f"ITEM{args.item}"), end="")
+    print(source(_program(args.file, args.item), f"ITEM{args.item}"), end="")
 
 
 def cmd_flow(args: argparse.Namespace) -> None:
-    from .emu import Boot, Executor, Stop
-    from .machine import Machine
+    from .emu import Boot, NoHalt, Stop
     from .stock import commands
     from .stock.copy import ITEM
-    from .stream import Engine
 
-    args.item = ITEM
-    job = commands.copy(_program(args), args.src, args.dst, args.len)
+    job = commands.copy(_program(args.file, ITEM), args.src, args.dst, args.len)
     given = dict(args.branch or ())
     branching = Given(given, fact="given on the command line") if given else None
-    boot = Boot()
-    machine = Machine(boot, None, Engine())
-    flow = Executor(boot, strict=False, branching=branching, datapath=machine).step(job)
+    try:
+        flow = Boot().run(
+            job.program, request=job.local, strict=False, branching=branching
+        ).flow
+    except NoHalt as e:
+        flow = e.flow
     print(flow.runs())
     for step in flow.steps:
-        if step.op != 0x7F:
+        if step.op != IDLE_OP:
             print(step)
     unknown = sum(s.unknown for s in flow.steps)
     # An open end's why is on its halt step, printed above.
@@ -155,9 +152,22 @@ def add_parser(commands: argparse._SubParsersAction) -> None:
         help="step the stock copy (item 16) on the datapath executor, lenient, and print the "
         "words it executes in order",
     )
-    flow.add_argument("--len", type=lambda v: int(v, 0), default=0x400)
-    flow.add_argument("--src", type=lambda v: int(v, 0), default=0xA0FCA800)
-    flow.add_argument("--dst", type=lambda v: int(v, 0), default=0xA1113600)
+    ran = "(default: that of a copy run on the camera)"
+    flow.add_argument(
+        "--len", type=lambda v: int(v, 0), default=0x400, help=f"bytes {ran}"
+    )
+    flow.add_argument(
+        "--src",
+        type=lambda v: int(v, 0),
+        default=0xA0FCA800,
+        help=f"uncached source address {ran}",
+    )
+    flow.add_argument(
+        "--dst",
+        type=lambda v: int(v, 0),
+        default=0xA1113600,
+        help=f"uncached destination address {ran}",
+    )
     flow.add_argument(
         "--branch",
         action="append",

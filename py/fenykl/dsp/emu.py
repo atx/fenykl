@@ -80,8 +80,8 @@ class Boot:
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
         self.carry: Carry | None = None
         """What the last job `run` left for the next (`machine.Carry`); None before the first
-        run and after a run that did not halt, may not have ended (`Stop.OPEN_END`), raised or
-        lapsed (`Machine.lapse`)."""
+        run and after a run that did not halt, may not have ended (`Stop.OPEN_END`), raised,
+        lapsed (`Machine.lapse`) or followed a path its branching gave below V."""
 
     def source(self, name: str, fact: str = "") -> int:
         """The id of source (name, fact). Equal sources share one id, so the list stays bounded
@@ -124,22 +124,29 @@ class Boot:
         regs: Mapping[str, Mapping[int, Preset]] | None = None,
         request: tuple[tuple[int, bytes], ...] = (),
         strict: bool = True,
+        branching: Branching | None = None,
         limit: int = STEP_LIMIT,
     ) -> Run:
         """Step `program` on a `Machine` with a fresh stream `Engine`, its registers and lane
         memory those the last run left (`carry`), then `regs` by file and index
-        (`Machine.preset`); keep what it leaves for the next run. Raises `NoHalt` for a run
+        (`Machine.preset`), its conditional control ops decided by `branching` where it decides
+        them (`Executor`); keep what it leaves for the next run. Raises `NoHalt` for a run
         that stops short of its halt; a run whose end is not known (`Stop.OPEN_END`: check
-        `run.flow.stop`) returns, its bytes as far as they are known, and leaves no carry."""
+        `run.flow.stop`) returns, its bytes as far as they are known, and leaves no carry; nor does
+        a run given a `branching` whose cap ends below V (`Machine.limit`): what it leaves
+        depends on the path given."""
         machine = Machine(self, self.carry, stream=Engine())
         machine.preset(regs or {})
         job = Job(program, request)
         self.carry = None
-        flow = Executor(self, machine, strict=strict, limit=limit).step(job)
+        executor = Executor(self, machine, strict=strict, branching=branching, limit=limit)
+        flow = executor.step(job)
         if flow.stop not in (Stop.HALT, Stop.OPEN_END):
             raise NoHalt(flow)
         carry = machine.between_jobs()
-        self.carry = None if machine.lapses or flow.stop is Stop.OPEN_END else carry
+        guessed = branching is not None and machine.cap < V
+        dropped = machine.lapses or flow.stop is Stop.OPEN_END or guessed
+        self.carry = None if dropped else carry
         timed = estimate(job, flow, machine.stream)
         return Run(job, flow, machine, timed, tuple(machine.lapses))
 

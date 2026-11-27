@@ -19,9 +19,10 @@ fact strings of the code that applies the rule. This file says how to use the pa
 
 ## Layout
 
-Three layers: encode and decode, the runtime, and the stock models. The first two are the core,
-`fenykl.dsp`, whose `__all__` is the API for own programs; they do not import the third,
-`fenykl.dsp.stock`, as `tests/test_dsp_layers.py` checks.
+Four layers: encode and decode, the runtime, the stock models and the command line. The first
+two are the core, `fenykl.dsp`, whose `__all__` is the API for own programs; they do not import the
+stock models, `fenykl.dsp.stock`, as `tests/test_dsp_layers.py` checks. The command line, `cli.py`,
+sits on top of all three.
 
 | module | contents |
 |---|---|
@@ -40,9 +41,10 @@ Three layers: encode and decode, the runtime, and the stock models. The first tw
 | `job.py` | `Job`, `Flow`, `Step`, `Stop` |
 | `state.py` | `Bytes`, tri-state bytes with provenance and taint; the memory spaces |
 | `timing.py` | `estimate`: a job's minimum time on the camera |
-| `cli.py` | `fenykl dsp` |
 | **stock models** | |
 | `stock/` | `model.py` (`StockBoot`, `run_model`), `copy.py` (program 16), `resample.py`, `resample_edits.py`, `resample_window.py`, `exec.py` (program 13), `taps.py`, `commands.py`, `registers.py`, `intervals.py` |
+| **command line** | |
+| `cli.py` | `fenykl dsp` |
 
 ## Writing programs
 
