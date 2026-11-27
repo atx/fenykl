@@ -94,6 +94,20 @@ def test_lane_loads_in_flight_together(m, heads, at, tier):
     assert m.lanes["L3"][5] == Vec(A if (len(at) - 1) % 2 else B, tier)
 
 
+@pytest.mark.parametrize(("third", "at", "tier"), [(0x1D, 2, V), (0x1C, 2, I), (0x1D, 3, I)])
+def test_a_load_off_the_chain_caps_the_loads_still_in_flight(m, third, at, tier):
+    """Loads at words 0, 1 and `at`; the first load's vector into L3[5] four words on."""
+    m.a[1] = Sv(0x40)
+    m.memory[0x40] = Vec(A)
+    load = {"f100_104": 1, "f105_109": 0, "f2_6": 0}
+    words = [w(f302_307=0x1D, f1=0, **load), w(f302_307=0x1D, f1=1, **load)]
+    words += [IDLE] * 4
+    words[at] = w(f302_307=third, f1=0, **load)
+    words[4] = w(f248_249=0, f171_174=5)
+    run(m, words)
+    assert m.lanes["L3"][5] == Vec(A, tier)
+
+
 @pytest.mark.parametrize(
     ("head", "lag"), [(0x18, 0), (0xA, 1)]
 )  # a broadcast and a shuffle
@@ -1337,19 +1351,32 @@ def test_two_divides_in_flight_land_as_alone(m, gap):
     assert m.g[5] == Sv(142, V) and m.g[6] == Sv(100, V)
 
 
-@pytest.mark.parametrize(("gaps", "tier"), [((1, 1, 1), V), ((1, 1, 1, 1), I), ((2, 1), I)])
-def test_several_divides_in_flight_are_verified_back_to_back_only(m, gaps, tier):
+@pytest.mark.parametrize(
+    ("gaps", "tiers"),
+    [
+        ((1, 1, 1), (V, V, V, V)),
+        ((3,), (V, V)),
+        ((1, 1, 1, 1), (I, I, I, I, I)),
+        ((2, 1), (I, I, I)),
+        ((1, 2), (I, I, I)),
+        ((3, 3), (V, I, I)),
+        ((4, 4), (V, I, I)),
+    ],
+)
+def test_divides_in_flight_land_as_alone_in_the_measured_chains_only(m, gaps, tiers):
+    """Each quotient into its own G register: a chain off the measured ones caps every quotient
+    still due."""
     m.b[1], m.b[2] = Sv(1000), Sv(7)
     head = {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}
     at = [0]
     for g in gaps:
         at.append(at[-1] + g)
-    words = [IDLE] * (at[-1] + 6)
-    for k in at:
-        words[k] = w(**head)
-    words[at[-1] + 4] = w(f272_273=0, f224_228=5)
-    run(m, words)
-    assert m.g[5] == Sv(142, tier)
+    words = [{} for _ in range(at[-1] + 5)]
+    for k, t in enumerate(at):
+        words[t] |= head
+        words[t + 4] |= {"f272_273": 0, "f224_228": 5 + k}
+    run(m, [w(**f) for f in words])
+    assert [m.g[5 + k] for k in range(len(at))] == [Sv(142, t) for t in tiers]
 
 
 def test_a_quotient_beside_x1_0x13s_result_is_the_or(m):

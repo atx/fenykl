@@ -1060,7 +1060,7 @@ LANE_MEMORY = (
     "vector reads the stored vector, and a store one, two or three words after a load of its "
     "vector does not change what the load delivers (verified on the camera, pre-registered); "
     "X0 0x1d loads in flight together in the measured chains land in their own port words "
-    "(`LOAD_CHAINS`). It keeps its content across jobs within a boot (verified on the "
+    "(`rules.LOAD_CHAINS`). It keeps its content across jobs within a boot (verified on the "
     "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
     "output), so "
     "a job can leave data, such as a layer's weights, for the next"
@@ -1141,17 +1141,6 @@ X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
 included); the address modulo `LANE_VECTORS` (`LANE_MEMORY`)."""
 X0_LANE_LOADS = (0x1C, 0x1D, 0x20, 0x21)
 """X0's lane memory load heads; what f69_71 does on a load is open."""
-LOAD_HEAD = 0x1D
-LOAD_CHAINS = ((1,) * 15, (2,) * 31, (3,), (4,), (1, 3, 1, 3, 1))
-"""X0 `LOAD_HEAD` loads in flight together (each issued at most `LOAD_LAG` words after the last)
-that land as each would alone, as the words between their heads, from the chain's first load on:
-each vector at its first lane port `LOAD_LAG` words after its head (verified on the camera,
-pre-registered): sixteen in consecutive words (into L3 and L2, and a matrix product's rows); up to
-32 two words apart (one vector per two words, beside and between lane stores); two three or four
-words apart (a head in the word the first load lands); pairs in consecutive words three words
-apart, six loads (a two-row convolution). A chain that begins as one of these counts (a load's
-tier is fixed as its head runs). Other loads in flight together (longer or mixed chains, the
-other load heads) were not measured: inferred."""
 X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 """The lane memory heads that add A[b], not sK, to A[a]."""
 

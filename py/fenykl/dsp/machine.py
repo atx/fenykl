@@ -29,7 +29,7 @@ new content). Buses carry values in the word they arrive in, counted in executed
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing; loads in flight
   together (issued at most four words apart) land at inferred, except X0 0x1d heads in the measured
-  chains of `fields.LOAD_CHAINS` (`Machine._loads_in_flight`);
+  chains of `rules.LOAD_CHAINS` (`Machine._chained`);
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
   word; S3's reductions in the third word after the head only.
 
@@ -62,7 +62,6 @@ Programs composed from these rules ran exact on the camera, every output byte pr
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import pairwise
 from typing import Protocol
 
 from .fields import (
@@ -78,8 +77,6 @@ from .fields import (
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
-    LOAD_CHAINS,
-    LOAD_HEAD,
     M_HELD_BESIDE_OWN,
     M_LANE_ONLY,
     M_OTHER_OPEN,
@@ -123,6 +120,7 @@ from .fields import (
 from .fields import (
     LOAD_LAG as LANE_LOAD_LAG,
 )
+from .rules import DIVIDE_CHAINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
 from .semantics import (
     IDLE_OP,
     LANE_COUNT,
@@ -416,9 +414,9 @@ class Machine:
         self.x1_due: dict[int, Sv] = {}
         """X1 0x1e's quotients on X1's result bus, by word."""
         self.load_due: dict[int, list[Vec]] = {}
-        self.load_chain: tuple[int, tuple[int, ...], bool] | None = None
-        """The last lane loads in flight together: the last one's word, the words between their
-        heads, whether they begin a verified chain (`fields.LOAD_CHAINS`)."""
+        self.chains: dict[str, tuple[int, tuple[int, ...], bool]] = {}
+        """The last ops in flight together by kind ("load", "divide"): the last one's word, the
+        words between their heads, whether they begin a measured chain (`Machine._chained`)."""
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
@@ -806,12 +804,7 @@ class Machine:
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
             quotient = _divide(a, b)
-            issued = sorted(k - DIVIDE_LAG for k in self.x1_due) + [t]
-            # Measured on the camera (pre-registered): a second divide 1..4 words after the first,
-            # and four in consecutive words, each quotient as alone; other mixes inferred.
-            if len(issued) > 4 or (
-                len(issued) > 2 and any(b - a != 1 for a, b in pairwise(issued))
-            ):
+            if not self._chained("divide", t, self.x1_due, DIVIDE_CHAINS, True):
                 self.x1_due = {k: _cap(q, I) for k, q in self.x1_due.items()}
                 quotient = _cap(quotient, I)
             self.x1_due[t + DIVIDE_LAG] = quotient
@@ -832,7 +825,13 @@ class Machine:
         self, index: int, word: Word, head: int, a: Sv, b: Sv, k: int, t: int
     ) -> None:
         by_reg = head in range(0x1E, 0x22)
-        flight = self._loads_in_flight(t, head) if head in X0_LANE_LOADS else V
+        flight = V
+        if head in X0_LANE_LOADS and not self._chained(
+            "load", t, self.load_due, LOAD_CHAINS, head == LOAD_CHAIN_HEAD
+        ):
+            for when, due in self.load_due.items():
+                self.load_due[when] = [_cap(v, I) for v in due]
+            flight = I
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
                 why = "a lane store at an unknown address"
@@ -873,24 +872,22 @@ class Machine:
             source = f"x0 {head:#x}'s store of O[{reg}]"
             self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
 
-    def _loads_in_flight(self, t: int, head: int) -> Confidence:
-        """A lane load in word t beside loads in flight (due in word t or later, a load landing in
-        the word of the next load's head included): verified while all of them, from the first
-        of the chain on, begin one of `fields.LOAD_CHAINS`; otherwise each of them still due,
-        and this one, lands at inferred."""
-        flight = [when for when in self.load_due if when >= t]
-        if not flight:
-            self.load_chain = (t, (), head == LOAD_HEAD)
-            return V
-        last, gaps, ok = self.load_chain or (t, (), False)
+    def _chained(
+        self, kind: str, t: int, due: Mapping, chains: tuple, measured: bool
+    ) -> bool:
+        """Whether an op of `kind` in word t lands as it would alone beside the ops in flight
+        (`due`: results due in word t or later, one landing in this word included): alone, or
+        while every op of the chain is `measured` and the words between their heads, from the
+        chain's first op on, begin one of `chains`. Otherwise each op in flight and this one land
+        at inferred."""
+        if not due:
+            self.chains[kind] = (t, (), measured)
+            return True
+        last, gaps, ok = self.chains[kind]
         gaps += (t - last,)
-        ok = ok and head == LOAD_HEAD and any(c[: len(gaps)] == gaps for c in LOAD_CHAINS)
-        self.load_chain = (t, gaps, ok)
-        if ok:
-            return V
-        for when in flight:
-            self.load_due[when] = [_cap(v, I) for v in self.load_due[when]]
-        return I
+        ok = ok and measured and any(c[: len(gaps)] == gaps for c in chains)
+        self.chains[kind] = (t, gaps, ok)
+        return ok
 
     # ------------------------------------------------------------------ S units
 
