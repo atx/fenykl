@@ -27,7 +27,7 @@ Own jobs of 0.4 to 7.0 ms all ended normally (`LONGEST_JOB_US`); in them a loope
 from collections import deque
 from dataclasses import dataclass
 
-from .fields import CONTROL_OPS, IDLE_OP, Confidence, lookup
+from .fields import CONTROL_OPS, IDLE_OP, M_UNITS, Confidence, lookup
 from .job import Flow, Job, Stop
 from .machine import HEAD_IDS
 from .stream import LANE_MEMORY, LOAD, LOCAL_MEMORY, STORE, Engine, Event
@@ -112,7 +112,6 @@ UNRUN = Cost(
     "a word never executed in a fetch line some word of which runs: the first-run rate "
     "(fitted: an extra line measured 0.82 of eight first runs)",
 )
-S_UNITS = ("s0", "s1", "s2", "s3")
 
 
 @dataclass(frozen=True)
@@ -334,7 +333,7 @@ def estimate(job: Job, flow: Flow, engine: Engine) -> Estimate:
         elif (
             t - before[0] not in (IDLE_PASSES if step.op == IDLE_OP else PASSES)
             or links != before[1]
-            or any(words[step.index][HEAD_IDS[u]] != _idle(u) for u in S_UNITS)
+            or any(words[step.index][HEAD_IDS[u]] != _idle(u) for u in M_UNITS)
         ):
             cost = REPEAT_I
         else:
