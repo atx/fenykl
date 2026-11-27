@@ -1061,11 +1061,17 @@ def test_nothing_on_m_behind_a_head_keeps_the_register(m, before, unit, tier):
     assert m.r[0] == Sv(0x0A5A, tier)
 
 
-@pytest.mark.parametrize(("x0", "tier"), [(False, V), (True, I)])
-def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0, tier):
+@pytest.mark.parametrize(
+    ("x0_head", "tier"),
+    [
+        ({}, V),
+        ({"f302_307": 0x13, "f105_109": 8, "f2_6": 0x1E, "f1": 0}, I),
+        ({"f302_307": 0x16}, I),  # a head without a result
+    ],
+)
+def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0_head, tier):
     m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
     m.g[12] = Sv(0x0A5A)
-    x0_head = {"f302_307": 0x13, "f105_109": 8, "f2_6": 0x1E, "f1": 0} if x0 else {}
     read = w(f276=0, f274_275=1, f272_273=2, f224_228=12, **x0_head)
     run(m, [w(**S1_AND), IDLE, read])
     assert m.g[12] == Sv(0x0A5A, tier)

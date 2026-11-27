@@ -566,12 +566,11 @@ class Machine:
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
             # M; with nothing on M the kept register measured beside `X0_BESIDE_KEPT` only).
-            beside = (word[HEAD_IDS["x0"]], self._heads_at(t)) == X0_BESIDE_KEPT
-            x0bus = (
-                Kept(min(m.tier, V if beside else I))
-                if x0 is not None and isinstance(m, Kept)
-                else m
-            )
+            x0_head = word[HEAD_IDS["x0"]]
+            x0bus = m
+            if isinstance(m, Kept) and x0_head != lookup(HEAD_IDS["x0"]).idle:
+                beside = (x0_head, self._heads_at(t)) == X0_BESIDE_KEPT
+                x0bus = Kept(min(m.tier, V if beside else I))
         else:
             x0bus = UNKNOWN if x0 is None else x0
         x1bus = self._x1_bus(word[HEAD_IDS["x1"]], x1, t)
