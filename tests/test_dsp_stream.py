@@ -1,5 +1,7 @@
 """The stream engine on synthetic values: grammar, loads, stores, timing, going off script."""
 
+from dataclasses import replace
+
 import pytest
 
 from fenykl.dsp import stream
@@ -957,6 +959,20 @@ def test_a_wait_right_after_a_register_or_store_key_joins_the_outstanding_load()
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), stream.LOAD, WAIT])
 
 
+@pytest.mark.parametrize(
+    ("before", "tier"),
+    [
+        ([*lanes(0, 1, r6=2), *load(0, SRC, 0)], V),  # measured
+        ([*lanes(0, 1, r6=2), *load(0, SRC, 0), *load(0, SRC, 0x40)], I),  # two outstanding
+        ([*lanes(0, 2, r6=4), *load(0, SRC, 0)], I),  # a two-vector load
+    ],
+)
+def test_a_wait_in_a_group_is_verified_only_after_the_load_run(before, tier):
+    m, e = machine(bytes(range(64))), stream.Engine()
+    drive(m, e, [*before, *lanes(1, 1, r6=2), key(1, 2), WAIT, 0x20])
+    assert e.cap == tier
+
+
 def copied(e: stream.Engine, values: list, data: bytes = bytes(range(32))) -> Bytes:
     """dst after a load of one vector of `data` on channel 0, then `values`."""
     m = machine(data)
@@ -975,6 +991,14 @@ def test_a_register_key_with_bit_8_keeps_a_register_handed_its_own_value(channel
     got = copied(e, [*lanes(channel, 1, r6=2), odd, value, *store(channel, 0, DST), WAIT])
     assert bytes(got.data) == bytes(range(32)) and got.weakest() == tier
     assert not e.off
+
+
+def test_a_register_key_with_bit_8_after_another_history_caps_the_job_at_inferred():
+    """Measured after one load and its 0x1d only."""
+    m, e = machine(bytes(range(32))), stream.Engine()
+    odd = key(1, 2) | stream.REGISTER_KEY_BIT8
+    drive(m, e, [*lanes(1, 1, r6=2), odd, 0x20, *store(1, 0, DST), WAIT])
+    assert e.cap == I and not e.off
 
 
 def test_a_register_key_with_bit_8_and_another_value_leaves_the_register_unknown():
@@ -999,14 +1023,26 @@ def test_a_block_key_with_bit_10_programs_as_without_it(block_key, regs, tier):
     assert m.memory[0] == Vec(tuple(range(32)), tier) and not e.off
 
 
-def test_a_block_key_with_bit_9_writes_no_register_and_the_load_moves_nothing():
-    """Measured as run: the load's vector kept what it held and the job went on."""
+@pytest.mark.parametrize(("vector", "tier"), [(0x100, V), (0, I)])
+def test_a_block_key_with_bit_9_writes_no_register_and_the_load_moves_nothing(vector, tier):
+    """Measured as run into vector 0x100: that vector kept what it held and the job went on;
+    the rest of the lane and local memory, or the vector of a load elsewhere, inferred."""
     held = Vec(tuple(range(100, 132)))
     m, e = machine(bytes(range(32))), stream.Engine()
-    m.memory[0] = held
-    drive(m, e, [0x220, *stream.BLOCK_KEY_RUN, *load(0, SRC, 0), WAIT])
-    assert m.memory[0] == held and e.regs[0] == [None] * 8
+    m.memory[vector] = held
+    m.memory[0x300] = held
+    m.boot.local.write(LOCAL_BASE, Bytes.of(bytes(4), m.boot.source("own", "own"), V))
+    drive(m, e, [0x220, *stream.BLOCK_KEY_RUN, *load(0, SRC, vector * 64), WAIT])
+    assert m.memory[vector] == replace(held, tier=tier) and e.regs[0] == [None] * 8
+    assert m.memory[0x300].tier == I and m.boot.local.read(LOCAL_BASE, 4).weakest() == I
     assert e.cap == V and not e.off and not e.outstanding
+
+
+def test_only_the_first_load_on_a_channel_dropped_by_bit_9_moves_nothing_at_verified():
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [0x220, *stream.BLOCK_KEY_RUN, *load(0, SRC, 0x4000), WAIT])
+    drive(m, e, [*load(0, SRC, 0x4000), WAIT])
+    assert e.cap == I and not e.dropped
 
 
 @pytest.mark.parametrize(
@@ -1023,19 +1059,18 @@ def test_a_block_key_with_bit_9_outside_the_run_caps_the_job_at_inferred(before)
 
 
 @pytest.mark.parametrize(
-    ("mid", "inferred"),
+    "mid",
     [
-        ([key(1, 2), WAIT, 0x20], False),
-        ([1 << 6 | stream.STORE, WAIT, 0, DST], False),
-        ([key(2, 2), WAIT, 0x20], True),
+        [*lanes(1, 1, r6=2), key(1, 2), WAIT, 0x20],  # measured
+        [*lanes(1, 1, r6=2), 1 << 6 | stream.STORE, WAIT, 0, DST],  # measured
+        [key(2, 2), WAIT, 0x20],
     ],
 )
-def test_a_wait_right_after_a_register_or_store_key_with_none_outstanding_never_ends(mid, inferred):
-    """Measured after channel 1's r2 key and store key (the job timed out); other keys inferred."""
+def test_a_wait_right_after_a_register_or_store_key_with_none_outstanding_never_ends(mid):
     m = machine(bytes(32))
     with pytest.raises(UnknownSemantics, match="no command outstanding never ends") as raised:
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *mid])
-    assert ("(inferred)" in str(raised.value)) == inferred
+    assert raised.value.index == len(lanes(0, 1)) + 3 + mid.index(WAIT) + 1
 
 
 def test_a_store_on_a_channel_dropped_by_bit_9_keeps_the_job_at_inferred():
@@ -1048,8 +1083,8 @@ def test_a_store_on_a_channel_dropped_by_bit_9_keeps_the_job_at_inferred():
 @pytest.mark.parametrize(
     ("values", "match"),
     [
-        ([key(1, 2), WAIT, 0x20], "grammar was lost"),  # no command handed yet
-        ([1 << 6 | stream.STORE, WAIT, 0, DST], "inside a command"),  # no command handed yet
+        ([key(1, 2), WAIT, 0x20], "handed no command: not measured"),
+        ([1 << 6 | stream.STORE, WAIT, 0, DST], "handed no command: not measured"),
         (  # at a store's second value
             [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, 1 << 6 | stream.STORE, 0, WAIT],
             "inside a command",
@@ -1061,6 +1096,13 @@ def test_a_wait_inside_a_group_outside_the_run_does_not_predict_never_ending(val
     with pytest.raises(UnknownSemantics, match=match) as raised:
         drive(m, stream.Engine(), [*values, *lanes(0, 1, r6=2)])
     assert "never ends" not in str(raised.value)
+
+def test_a_lenient_wait_right_after_a_key_in_a_job_that_handed_no_command_goes_on():
+    m, e = lenient_machine()
+    drive(m, e, [key(1, 2), WAIT, 0x20])
+    assert len(m.lapses) == 1 and "not measured" in m.lapses[0]
+    assert e.regs[1][2].value == 0x20 and not e.lost and not e.off
+
 
 def test_a_lenient_wait_right_after_a_key_with_none_outstanding_goes_on_with_the_group():
     m, e = lenient_machine()

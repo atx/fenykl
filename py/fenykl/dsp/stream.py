@@ -75,7 +75,7 @@ measured and goes off script.
 Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
 a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
 no command outstanding never returns once the job has handed one (also right after a register or
-store key, `NEVER_JOINS_RUN`); in a job that has handed none
+store key, `KEY_WAITS_RUN`); in a job that has handed none
 it was not measured (it raises `UnknownSemantics`); commands still outstanding at the job's end
 complete (verified for a store, inferred for a load). Of commands handed back to back before any
 0x1d (32-byte loads) the first 19 ran in one job (measured); the rest wait in the engine and run
@@ -259,22 +259,33 @@ and what it moved before the abort, are not known."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
 REGISTER_KEY_BIT8 = 0x100
+ONE_VECTOR = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
+"""The registers of the odd keys' runs: one row of one vector of bytes, pitches 0."""
+KEY_RUN_LOAD = (LOAD, ONE_VECTOR)
+"""The one command before the keys of `REGISTER_KEY_RUN` and `KEY_WAITS_RUN` ran, as `Event`
+(kind, registers): a one-vector byte load on channel 0 into vector 0x100."""
+JOINED = (None, ())
+"""A 0x1d in a job's history, as `Event` (kind, registers)."""
 REGISTER_KEY_RUN = (0x1161, 0x20)
 """A register key with bit 8 set takes one value and the grammar stays aligned: channel 1 r2's
-key 0x1161 handed r2's own value 0x20 before a one-vector byte store, which copied (verified,
+key 0x1161 handed r2's own value 0x20, after `KEY_RUN_LOAD` and its 0x1d with channel 1
+programmed `ONE_VECTOR`, before a one-vector byte store of that vector, which copied (verified,
 pre-registered against the key dropped and the grammar shifted; one job). Whether the value was
 written or ignored was not separated: a value equal to the register's keeps it, another leaves the
-register unknown. Other keys and values with bit 8 cap the job at inferred."""
+register unknown. Other keys, values or histories with bit 8 cap the job at inferred."""
 BLOCK_KEY_BIT9 = 0x200
 BLOCK_KEY_BIT10 = 0x400
-BLOCK_KEY_RUN = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
-"""Block keys with bit 9 or bit 10 set, as run with these values on channel 0, before a load and
-its 0x1d in a job that handed channel 0 nothing else (verified, pre-registered against each
+BLOCK_KEY_RUN = ONE_VECTOR
+BLOCK_KEY_LOAD_TO = 0x4000
+"""Block keys with bit 9 or bit 10 set, as run with these values on channel 0 as the job's first
+values, before a load into vector 0x100 and its 0x1d (verified, pre-registered against each
 other and against never ending; one job each): 0x420 programmed the channel as 0x20 does (bit 10
-ignored: the load copied); after 0x220 the load moved nothing (its vector kept what it held) and
-the job ended. Read as: the 0x220 block takes eight values and writes no register (inferred), and
-a load on a channel with no register handed moves nothing (verified there). Other keys and values
-with these bits cap the job at inferred."""
+ignored: the load copied); after 0x220 the load moved nothing (its vector kept what it held, read
+back through a byte store; nothing else was read) and the job ended. Read as: the 0x220 block
+takes eight values and writes no register (inferred), and the first load on a channel with no
+register handed moves nothing (verified for its vector there; the rest of the lane and local
+memory it could reach at most inferred). Other keys, values or histories with these bits cap the
+job at inferred."""
 ODD_KEY_BITS = {
     REGISTER_KEY: (REGISTER_KEY_BIT8,),
     BLOCK_KEY: (BLOCK_KEY_BIT9, BLOCK_KEY_BIT10),
@@ -282,11 +293,13 @@ ODD_KEY_BITS = {
 }
 """By each kind's field bits, the one bit outside them a key of that kind ran with; any other bit
 outside the fields, or two of them, loses the grammar."""
-NEVER_JOINS_RUN = (0x1061, 1 << 6 | STORE)
-"""Keys (channel 1 r2's register key, channel 1's store key) after which a 0x1d, handed with no
-command outstanding after a load and its 0x1d, never returned: the job timed out with dst
-untouched (verified, pre-registered; one job each). After other register and store keys this is
-inferred."""
+KEY_WAITS_RUN = (0x1061, 1 << 6 | STORE)
+"""Keys (channel 1 r2's register key, channel 1's store key, channel 1 programmed `ONE_VECTOR`)
+right after which a 0x1d ran: with `KEY_RUN_LOAD` outstanding it waited for the load and the
+group went on (verified, one job each); after that load and its 0x1d it never returned, the job
+timing out with dst untouched (verified, pre-registered; one job each). After other register and
+store keys or histories the wait is inferred, and so is never ending: a 0x1d with none
+outstanding never ends anywhere else once a command was handed."""
 
 LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12, 0x0C: 10, 0x09: 14}
 """r5 on a load: bits per DRAM element, by value (verified on the camera; a 32-bit element's low
@@ -528,8 +541,8 @@ class Engine:
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); before the first it was not measured."""
     dropped: set[int] = field(default_factory=set)
-    """Channels programmed only by a 0x220 block as `BLOCK_KEY_RUN` ran: a plain load on one with
-    no register handed moves nothing (verified)."""
+    """Channels programmed only by a 0x220 block as `BLOCK_KEY_RUN` ran: the first plain load on
+    one with no register handed moves nothing (verified for its vector)."""
     off: str = ""
     """Why the engine went off script; empty while it follows the measured model."""
     lost: bool = False
@@ -557,8 +570,8 @@ class Engine:
         if self.lost:
             return
         if head == 0x1D:
-            self.events.append(Event(t))
             self._wait(m, index, where)
+            self.events.append(Event(t))
         elif self.key is None:
             self._key(m, value, where)
         else:
@@ -659,7 +672,8 @@ class Engine:
             reg = v >> 11 & 7
             value = _weaker(values[0], key.tier)
             if v & REGISTER_KEY_BIT8:
-                if (v, value.value) != REGISTER_KEY_RUN:
+                ran = (v, value.value) == REGISTER_KEY_RUN
+                if not (ran and self._after(channel, KEY_RUN_LOAD, JOINED)):
                     self.cap = min(self.cap, I)  # the grammar's alignment inferred
                 now = self.regs[channel][reg]
                 if now is None or now.value is None or now.value != value.value:
@@ -668,7 +682,8 @@ class Engine:
                     value = Sv(now.value, min(now.tier, value.tier))
             self.regs[channel][reg] = value
         elif v & 0x21 == 0x20:
-            ran = tuple(x.value for x in values) == BLOCK_KEY_RUN and channel == 0
+            ran = tuple(x.value for x in values) == BLOCK_KEY_RUN
+            ran = ran and channel == 0 and self.count == REGISTERS + 1  # the first values
             if v & (BLOCK_KEY_BIT9 | BLOCK_KEY_BIT10) and not ran:
                 self.cap = min(self.cap, I)
             if v & BLOCK_KEY_BIT9:
@@ -698,15 +713,16 @@ class Engine:
             self._pop(m, self.cap)
             return
         if self.key is not None:
-            if self._at_join() and self.commands:
+            if self._at_join():
+                # Lenient: as if it returned, and the group goes on (`KEY_WAITS_RUN`).
                 why = (
                     "a 0x1d right after a register or store key with no command "
                     "outstanding never ends"
+                    if self.commands
+                    else "a 0x1d right after a key in a job that handed no command: not measured"
                 )
-                if self.key.value not in NEVER_JOINS_RUN:
-                    why += " (inferred)"
                 m.lapse(index, "x1 0x1d", f"{where}: {why}")
-                return  # lenient: as if it returned, and the group goes on
+                return
             if self.key.value & 0x20 == 0:
                 m.lapse(index, "x1 0x1d", f"{where}: a 0x1d inside a command's values")
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
@@ -730,10 +746,15 @@ class Engine:
     def _joins_in_group(self) -> bool:
         if not self.outstanding or not self._at_join():
             return False
-        one = [q for _, q, f in self.held if f is self.outstanding[0]]
-        if len(self.outstanding) != 1 or one != [1]:
-            self.cap = min(self.cap, I)  # measured beside one one-vector byte load only
+        if self.key.value not in KEY_WAITS_RUN or not self._after(1, KEY_RUN_LOAD):
+            self.cap = min(self.cap, I)  # the wait in a group as measured only
         return True
+
+    def _after(self, channel: int, *history: tuple) -> bool:
+        """The job's commands and 0x1d so far are `history`, with `channel` programmed
+        `ONE_VECTOR` (the histories the odd keys ran in)."""
+        regs = tuple(None if r is None else r.value for r in self.regs[channel])
+        return regs == ONE_VECTOR and tuple((e.kind, e.regs) for e in self.events) == history
 
     def _go_off(self, m: Machine, why: str, lost: bool = False) -> None:
         if not self.off:
@@ -807,7 +828,9 @@ class Engine:
             return
         dropped = cmd.channel in self.dropped and all(r is None for r in cmd.regs)
         if dropped and cmd.plain and cmd.kind == LOAD:
-            return  # nothing moves (`BLOCK_KEY_RUN`)
+            self.dropped.discard(cmd.channel)
+            self._dropped_load(m, cmd)
+            return
         if any(r is None for r in cmd.regs):
             self._moves_nothing(m, cmd)
             return
@@ -898,6 +921,17 @@ class Engine:
             m.boot.local.write(LOCAL_BASE + to, out)
 
         return complete
+
+    @staticmethod
+    def _dropped_load(m: Machine, cmd: _Command) -> None:
+        """The load after a 0x220 block (`BLOCK_KEY_RUN`) moves nothing: its vector keeps its
+        tier where it ran, the rest of the lane and local memory is capped at inferred."""
+        local = m.boot.local.read(LOCAL_BASE, LOCAL_BYTES)
+        m.boot.local.write(LOCAL_BASE, local.capped(I))
+        kept = cmd.to.value // VECTOR_BYTES if cmd.to.value == BLOCK_KEY_LOAD_TO else None
+        for at, vec in m.memory.items():
+            if at != kept:
+                m.memory[at] = replace(vec, tier=min(vec.tier, I))
 
     def _moves_nothing(self, m: Machine, cmd: _Command) -> None:
         """A register not handed: nothing moves (inferred). What the command could reach, which
