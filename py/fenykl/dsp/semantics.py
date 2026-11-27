@@ -1366,6 +1366,7 @@ def u_take(head: int) -> range | None:
         return range(0)
     return U_TAKES.get(head)
 
+
 _X_IMMEDIATE_READS = {
     "x0": (*range(8), *range(0x12, 0x15), *range(0x1A, 0x1E)),
     "x1": (*range(8), *range(0x12, 0x15)),

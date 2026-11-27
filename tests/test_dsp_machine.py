@@ -1607,7 +1607,7 @@ def test_the_trace_follows_a_load_of_an_unwritten_vector():
 
 
 ALONE_HEAD = {"s0": "f278_284", "s1": "f285_291"}
-"""The head fields of the units with `fields.ALONE_ZEROS`."""
+"""The head fields of the units with `rules.ALONE_ZEROS`."""
 SENT = Vec((0x0A5A,) * 32)
 ZEROS_0_15 = Vec((0,) * 16 + (None,) * 16)
 
