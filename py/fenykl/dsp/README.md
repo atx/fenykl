@@ -297,8 +297,8 @@ whose read set is not known shows every operand that differs.
 
 `fenykl.dsp.stock` models the copy (program 16, cmd 0xF) and the resampler (program 13,
 cmd 0xC). No stock word is part of this code: each model is built at runtime from the user's
-firmware image, steps its words on the datapath where the facts cover them and takes the
-outcomes measured on the camera for the rest. A `StockBoot` is a `Boot` with the state the
+firmware image and the outcomes measured on the camera; the copy's model also steps its words on
+the datapath to find where a job halts. The resampler's model decodes no word. A `StockBoot` is a `Boot` with the state the
 models keep across jobs; `run_model(boot, model, job)` runs a job by its model.
 
 ```python

@@ -5,7 +5,7 @@ from fenykl.dsp.emu import NoHalt
 from fenykl.dsp.job import Stop
 from fenykl.dsp.semantics import Given
 
-H, V = Confidence.HYPOTHESIS, Confidence.VERIFIED
+H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 
 def _branch_on_an_unknown_register():
@@ -22,7 +22,7 @@ def test_a_run_needs_its_undecided_branch_given():
     assert e.value.flow.stop is Stop.UNDECIDED
 
 
-@pytest.mark.parametrize("tier, carried", [(H, False), (V, True)])
+@pytest.mark.parametrize("tier, carried", [(H, False), (I, False), (V, True)])
 def test_a_run_on_a_given_path_below_v_leaves_no_carry(tier, carried):
     boot = Boot()
     run = boot.run(_branch_on_an_unknown_register(), branching=Given({0: True}, tier))
