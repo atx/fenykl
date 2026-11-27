@@ -284,8 +284,42 @@ LANE_UNIT = {
     S1_RESULT: "s1",
     S2_LOW: "s2",
     S2_RESULT: "s2",
+    S2_HIGH: "s2",
     S3_RESULT: "s3",
 }
+"""The unit whose bus each lane port source takes."""
+OWN_RULES = frozenset(
+    {IDLE_OP, 0x08, 0x0B, 0x38, 0x44, 0x46, 0x47, 0x48, 0x49, *LOADS, *STORES}
+)
+"""The data ops without an `OpValue` rule that `Machine._op_slot` runs by its own rule."""
+
+
+def _check_rules() -> None:
+    """Every value of the X heads, the scalar ports' enables and O's source but the idle one,
+    every lane port source and every data op with semantics has a rule here."""
+
+    def values(name: str) -> set[int]:
+        f = lookup(name)
+        return set(range(1 << f.width)) - {f.idle}
+
+    gaps = [
+        *(f"{u} {h:#x}" for u in ("x0", "x1") for h in values(HEAD_IDS[u]) - set(X_RULES[u])),
+        *(f"{e} {v}" for e in PR_ENABLES for v in values(e) - set(PR_SOURCES[e])),
+        *(f"{e} {v}" for e in PB_FILES for v in values(e) - set(PB_SOURCES[e])),
+        *(f"f252_254 {v}" for v in values("f252_254") - {*STORE_SOURCES, *STORE_NOTHING}),
+        *(
+            text
+            for rows in (*LANE_SOURCES.values(), STORE_SOURCES)
+            for text, _ in rows.values()
+            if text != LANE_LOAD and text not in LANE_UNIT
+        ),
+        *(f"op {c:#x}" for c, s in OP_SEMANTICS.items() if s.rule is None and c not in OWN_RULES),
+    ]
+    if gaps:
+        raise ValueError(f"no machine rule for {', '.join(gaps)}")
+
+
+_check_rules()
 
 
 @dataclass
@@ -639,11 +673,7 @@ class Machine:
             return Sv(None, tier)
         if code == 0x38:
             return Sv(ra.value & c & M32, tier)
-        if code in (0x44, 0x46, 0x47):
-            return self._ring(index, word, code, ra, rb, c, tier)
-        raise UnknownSemantics(
-            index, op(code).name, [(OP_FIELD, code)], "no exact rule"
-        )
+        return self._ring(index, word, code, ra, rb, c, tier)
 
     def _select(self, word: Word, ra: Sv, rb: Sv, tier: Confidence) -> Sv:
         """Op 0x08: ra where R[f120_122] is 0, else rb (measured on the camera by exact readout:
@@ -793,8 +823,6 @@ class Machine:
             self.x1_due[t + DIVIDE_LAG] = quotient
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
-        if head not in X_RULES[unit]:
-            raise UnknownSemantics(index, f"{unit} {head:#x}", [], "no rule")
         rule = X_RULES[unit][head]
         if rule.value is None:
             return None
@@ -1287,7 +1315,7 @@ class Machine:
         def put(file: str, reg: int, value, source: str) -> None:
             key = (file, reg)
             if self.trace is not None:
-                unit = LANE_UNIT.get(source, "s2" if source == S2_HIGH else source)
+                unit = LANE_UNIT.get(source, source)
                 why = self.why_due.get(t, {}).get(unit, "")
                 self._note(index, f"{file}[{reg}]", source, value, why)
             if key in sources:
@@ -1328,8 +1356,6 @@ class Machine:
             v = word[enable]
             if v == lookup(enable).idle:
                 continue
-            if v not in PR_SOURCES[enable]:
-                raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PR_SOURCES[enable][v]
             if src is not None:
                 put(PR_FILES[enable], word[reg_id], scalar[src], src)
@@ -1337,8 +1363,6 @@ class Machine:
             v = word[enable]
             if v == lookup(enable).idle:
                 continue
-            if v not in PB_SOURCES[enable]:
-                raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PB_SOURCES[enable][v]
             if src is not None:
                 put(file, word[PORTS[enable]], scalar[src], src)
@@ -1355,17 +1379,11 @@ class Machine:
         if v in STORE_NOTHING:
             kept[("O", word["f179_181"])] = V
         elif v != lookup("f252_254").idle:
-            if v not in STORE_SOURCES:
-                raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
             text, tier = STORE_SOURCES[v]
             put("O", word["f179_181"], _cap(self._lane_source(text, t), tier), text)
-        u = word["f232_233"]
-        if u == 1:
-            # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
-            if self._u_write is not None:
-                put("U", *self._u_write, "S3's U port")
-        elif u != lookup("f232_233").idle and u not in (0, 2):
-            raise UnknownSemantics(index, "f232_233", [], f"enable {u}")
+        # U's port writes under 1 only; with no S3 head (or one of U_NOTHING) nothing (verified).
+        if word["f232_233"] == 1 and self._u_write is not None:
+            put("U", *self._u_write, "S3's U port")
         self._u_write = None
         for (file, reg), tier in kept.items():
             if (file, reg) not in writes:
@@ -1378,9 +1396,7 @@ class Machine:
             if len(due) > 1:
                 self._why(t, LANE_LOAD, "two lane loads arrive in one word")
             return NOTHING if not due else due[0] if len(due) == 1 else UNKNOWN_VEC
-        unit = LANE_UNIT.get(text, "s2" if text == S2_HIGH else None)
-        if unit is None:
-            raise ValueError(text)
+        unit = LANE_UNIT[text]
         alone = self._alone_read(unit, t, port)
         if alone is not None:
             return alone
