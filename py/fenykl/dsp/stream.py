@@ -429,8 +429,11 @@ ROWS_LOAD_BESIDE = Ran((1, 0x1000, 0x20, 0x40, 0x800, 0x10, 0x80, 3), LOAD, 0x40
 LOCAL_LOAD_BESIDE = Ran((2, 0, 4, 0x200, 0, 0x10, 0x80, 1), LOAD, 0x1000)
 """Loads beside which own lane words outside their vectors were measured on the camera: a 3-row
 byte load of 0x40 vectors per row into vector 0x100, and a local-memory byte load of 0x800 bytes to
-local offset 0x1000 (which writes no lane vector). While each was outstanding, an X0 store into a vector outside it, and lane reads of
-such a vector, gave the bytes as alone (verified, pre-registered; one job each)."""
+local offset 0x1000 (which writes no lane vector). While each was outstanding, an X0 store into a
+vector outside it, and lane reads of such a vector, gave the bytes as alone (verified,
+pre-registered; one job each)."""
+LANE_BESIDE = (BYTE_ROW_BESIDE, *HALF_ROWS_BESIDE, ROWS_LOAD_BESIDE)
+"""The lane-memory commands beside which own words outside their vectors are verified."""
 QUEUE_SHAPES = tuple(
     Ran((1, None, 0x20, n, None, 0x10, 2 * n, 1), None) for n in (1, 0x80)
 )
@@ -653,30 +656,26 @@ class Engine:
     def _span(self, cmd: _Command) -> tuple[frozenset[int], Confidence] | None:
         """The lane vectors a lane-memory load, store or fill writes or reads, as the command
         does (a load r3 per row, a store its elements' vectors per row, a fill r3), and the tier
-        of words beside it elsewhere: verified for a plain (kind 0 / 6) one-row byte command at
-        r2 0x20, the 16-bit commands of `HALF_ROWS_BESIDE` and the loads of `ROWS_LOAD_BESIDE`,
-        inferred for other shapes; no vectors at verified for the local load of
-        `LOCAL_LOAD_BESIDE`; None for other memory."""
+        of words beside it elsewhere: verified beside the shapes of `BYTE_ROW_BESIDE`,
+        `HALF_ROWS_BESIDE` and `ROWS_LOAD_BESIDE`, inferred beside other shapes; no vectors at
+        verified for `LOCAL_LOAD_BESIDE`; None for other memory."""
         r = cmd.regs
         if r[0].value != LANE_MEMORY:
-            if _ran(cmd, LOCAL_LOAD_BESIDE):
-                return frozenset(), V
-            return None
+            return (frozenset(), V) if _ran(cmd, LOCAL_LOAD_BESIDE) else None
         if cmd.kind == FILL:
             base = cmd.to.value // VECTOR_BYTES
             return frozenset((base + v) % LANE_VECTORS for v in range(r[3].value)), I
-        ks = None
         if cmd.kind == STORE:
             ks = _store_reach(r)[1]
             if len(ks) < r[7].value:
                 return None  # the rows not written last read vectors too
-        rows, _ = self._rows(cmd, LANE_MEMORY, ks)
-        if cmd.kind == STORE:
             bits, _ = STORE_FORMATS[r[5].value]
             per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
         else:
+            ks = None
             # A load at r3 0 that ran (`ZERO_LOADS`) spans the vectors a full count fills.
             per = r[3].value or -(-r[5].value * r[6].value // r[2].value)
+        rows, _ = self._rows(cmd, LANE_MEMORY, ks)
         starts = [off // VECTOR_BYTES for _, off in rows]
         vectors = frozenset(
             (s + v) % LANE_VECTORS
@@ -686,8 +685,7 @@ class Engine:
         last = max((s + per - 1 for s in starts if per), default=0)
         if last >= LANE_VECTORS:
             return vectors, I  # a wrap is only inferred
-        beside = (BYTE_ROW_BESIDE, *HALF_ROWS_BESIDE, ROWS_LOAD_BESIDE)
-        return vectors, V if _ran(cmd, *beside) else I
+        return vectors, V if _ran(cmd, *LANE_BESIDE) else I
 
     def finish(self, m: Machine) -> None:
         """The job ends: the commands still outstanding complete (inferred for loads: only a
@@ -1074,60 +1072,54 @@ class Engine:
         """Checks the load, makes its destination unknown and returns its completion."""
         r = cmd.regs
         memory = _known(r[0], "r0")
-        r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
+        _, _, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
         skip, skip_tier = 0, V
         if r5 >> 8 and r5 & 0xFF == 0x10 and _fits(cmd.values, LOAD_SKIP_SHAPE):
             skip, skip_tier = r5 >> 8, V if _ran(cmd, *LOAD_SKIPS_RUN) else I
             r5 &= 0xFF
         if r5 not in LOAD_FORMATS or skip and skip >= r5 * r6:
             raise _Off(f"load format {r5 | skip << 8:#x}: not measured")
-        bits = LOAD_FORMATS[r5]
-        n = r5 * r6
         rows, tier = self._rows(cmd, memory)
         tier = min([tier, self.cap, cmd.tier, self._behind(rows, 16 * r6, False)])
         tier = min([tier, skip_tier, *(x.tier for x in r)])
         if r5 in PACKED_LOADS and not _ran(cmd, PACKED_LOADS[r5]):
             tier = min(tier, I)
         if memory == LANE_MEMORY:
-            if r2 not in LANE_UNITS:
-                raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
-            per = r2
-        elif memory == LOCAL_MEMORY:
-            if _fits(cmd.values, LOCAL_LOAD_NEVER_ENDS):
-                why = "a local load of bytes into 32-bit words never ends (inferred)"
-                m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
-                raise _Off(why)
-            if r2 not in LOCAL_WIDTHS or (bits, LOCAL_WIDTHS[r2]) not in LOCAL_LOADS:
-                raise _Off(
-                    f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured"
-                )
-            per = r2
-        else:
-            raise _Off(f"r0 {memory:#x}: not measured")
-        needed = -(-n // per)
-        if memory == LANE_MEMORY and r3 and not r6:
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
-            return self._lane_load(m, cmd, rows, bits, 0, r2, r3, tier)
-        seen = _found(cmd, ZERO_LOADS)
-        if seen is not None:
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
-            return self._zero_load(m, rows[0][1], seen, needed)
-        if not r3 or not r6:
-            raise _Off(f"a {_side(memory)} load at r3 {r3}, r6 {r6}: not measured")
-        if r3 > needed:
-            why = f"a load of {r3} units for {needed} never ends"
+            return self._lane_load(m, cmd, rows, r5, tier, skip)
+        if memory == LOCAL_MEMORY:
+            return self._local_load(m, cmd, rows, r5, tier)
+        raise _Off(f"r0 {memory:#x}: not measured")
+
+    def _ends(self, m: Machine, cmd: _Command, units: int, needed: int) -> None:
+        """A load of `units` (r3) units of which its elements fill `needed` ends; raises if not
+        measured or never ending."""
+        r6 = cmd.regs[6].value
+        if not units or not r6:
+            memory = _side(cmd.regs[0].value)
+            raise _Off(f"a {memory} load at r3 {units}, r6 {r6}: not measured")
+        if units > needed:
+            why = f"a load of {units} units for {needed} never ends"
             m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
             raise _Off(why)
-        if memory == LANE_MEMORY:
-            if r2 != 0x10 or r5 not in ZERO_FORMATS or r3 != needed:
-                tier = min(tier, LANE_UNITS[r2])
-            return self._lane_load(m, cmd, rows, bits, r6, r2, r3, tier, skip)
-        width = LOCAL_WIDTHS[r2]
-        if not ((bits, width) == (16, 32) and _ran(cmd, LOCAL_LOAD_WIDENED)):
-            tier = min(tier, LOCAL_LOADS[(bits, width)])
-        return self._local_load(m, cmd, rows, bits, r6, width, r2, r3, tier)
 
-    def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier, skip=0):
+    def _lane_load(self, m, cmd, rows, fmt, tier, skip):
+        """A lane-memory load of format `fmt` (r5 without the skip bits): its checks, and the
+        completion."""
+        r2, r3, r6 = (cmd.regs[i].value for i in (2, 3, 6))
+        if r2 not in LANE_UNITS:
+            raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
+        bits, lines = LOAD_FORMATS[fmt], r6
+        needed = -(-fmt * r6 // r2)
+        seen = _found(cmd, ZERO_LOADS)
+        if r3 and not r6:
+            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+        elif seen is not None:
+            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+            return self._zero_load(m, rows[0][1], seen, needed)
+        else:
+            self._ends(m, cmd, r3, needed)
+            if r2 != 0x10 or fmt not in ZERO_FORMATS or r3 != needed:
+                tier = min(tier, LANE_UNITS[r2])
         # Each vector's last write (row, v), and the vectors written again: by a later row or
         # past the last vector. The last write lands, verified in the shapes measured
         # (`HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`, `WRAPS`), else inferred.
@@ -1245,7 +1237,20 @@ class Engine:
         data = m.boot.dram.read(dram_alias(dram) + 16 * first, 16 * n)
         return first * per, _unpack(data, bits, n)
 
-    def _local_load(self, m, cmd, rows, bits, lines, width, r2, r3, tier):
+    def _local_load(self, m, cmd, rows, fmt, tier):
+        """A local-memory load of format `fmt`: its checks, and the completion."""
+        r2, r3, lines = (cmd.regs[i].value for i in (2, 3, 6))
+        bits = LOAD_FORMATS[fmt]
+        if _fits(cmd.values, LOCAL_LOAD_NEVER_ENDS):
+            why = "a local load of bytes into 32-bit words never ends (inferred)"
+            m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+            raise _Off(why)
+        width = LOCAL_WIDTHS.get(r2)
+        if (bits, width) not in LOCAL_LOADS:
+            raise _Off(f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured")
+        self._ends(m, cmd, r3, -(-fmt * lines // r2))
+        if not ((bits, width) == (16, 32) and _ran(cmd, LOCAL_LOAD_WIDENED)):
+            tier = min(tier, LOCAL_LOADS[(bits, width)])
         size = 4 * r3
         src = m.boot.source("stream load in flight", f"{cmd.where}")
         floored = _floored(cmd, rows)
@@ -1306,9 +1311,7 @@ class Engine:
         rows, tier = self._rows(cmd, memory, ks)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
         if len(ks) < r[7].value and not _ran(cmd, STORE_SAME_ROWS):
-            tier = min(
-                tier, I
-            )  # rows that rewrite one address: the last lands (inferred)
+            tier = min(tier, I)  # rows that rewrite one address: the last lands (inferred)
         tier = min(tier, self._behind(rows, 16 * r6, True))
         zeros = memory == LANE_MEMORY and r2 != 0x20
         if memory == LANE_MEMORY:
@@ -1316,20 +1319,19 @@ class Engine:
                 raise _Off(f"r2 {r2:#x} on a lane-memory store: not measured")
             if zeros and not _ran(cmd, *LANE_STORE_ZEROS):
                 tier = min(tier, I)  # zeros, as at the r2 values measured
+            if not r3 and n:
+                self.cap = min(self.cap, I)  # it ended, writing nothing (inferred)
+                return _nothing
+            if _ran(cmd, *ZERO_STORES):
+                self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+                self._kept(m, rows[0][0], r2 * r3 * bits // 8)
+                return _nothing
         elif memory == LOCAL_MEMORY:
             if (r2, r5) not in LOCAL_STORES:
                 raise _Off(f"a local store at r2 {r2:#x}, r5 {r5:#x}: not measured")
-            tier = min(tier, LOCAL_STORES[(r2, r5)])
+            tier = min(tier, LOCAL_STORES[(r2, r5)], _floored(cmd, rows))
         else:
             raise _Off(f"r0 {memory:#x}: not measured")
-        if memory == LANE_MEMORY and not r3 and n:
-            # It ended on the camera, writing nothing (inferred).
-            self.cap = min(self.cap, I)
-            return _nothing
-        if _ran(cmd, *ZERO_STORES):
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
-            self._kept(m, rows[0][0], r2 * r3 * bits // 8)
-            return _nothing
         if not r3 or not r6:
             raise _Off(f"a {_side(memory)} store at r3 {r3}, r6 {r6}: not measured")
         if r2 * r3 < n:
@@ -1338,18 +1340,11 @@ class Engine:
             raise _Off(why)
         if memory == LOCAL_MEMORY:
             nb = 4 // r2
-            tier = min(tier, _floored(cmd, rows))
             rows = [(dram, self._local_offset(off, n * nb)) for dram, off in rows]
-        if memory == LANE_MEMORY and not m.lanes_lost:
+        elif not m.lanes_lost:
             per = -(-n // LANE_COUNT)
-            self._land_loads(
-                m,
-                {
-                    (off // VECTOR_BYTES + v) % LANE_VECTORS
-                    for _, off in rows
-                    for v in range(per)
-                },
-            )
+            starts = {off // VECTOR_BYTES for _, off in rows}
+            self._land_loads(m, {(s + v) % LANE_VECTORS for s in starts for v in range(per)})
         src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
         taken = []
         for dram, off in rows:
