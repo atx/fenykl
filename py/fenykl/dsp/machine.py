@@ -92,8 +92,6 @@ from .fields import (
     STORE_SOURCES,
     STREAM_SELECT,
     TRANSFER_HEADS,
-    U_NOTHING,
-    U_TAKES,
     X0_LANE_BY_REGISTER,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
@@ -154,11 +152,13 @@ from .semantics import (
     lane_address,
     lane_result,
     lane_tier,
+    latches,
     product_high,
     ring_length,
     ring_step,
     s32,
     s_result,
+    u_take,
     x_result,
 )
 from .state import LOCAL_BASE, Bytes, Space, SparseSpace
@@ -1022,11 +1022,10 @@ class Machine:
         word: Word,
         t: int,
     ) -> None:
-        if unit in LATCH_OPERAND:
-            if head in LATCHED:
-                a = b = self.latched[unit]
-            else:
-                self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
+        if unit in LATCH_OPERAND and head in LATCHED:
+            a = b = self.latched[unit]
+        elif latches(unit, head):
+            self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
         rule = LANE_RULES[unit].get(head)
         zeros = self._alone_zeros(unit, head, word, t)
         if rule is None:
@@ -1185,27 +1184,24 @@ class Machine:
         return out, min(tier, u.tier)
 
     def _latch(self, unit: str, head: int, operand: Vec) -> None:
-        """What a head of S0 / S1 leaves for the unit's 0x60.. heads (`LATCHED`)."""
-        rule = LANE_RULES[unit].get(head)
-        if rule is None and head not in S_RULES[unit]:
+        """What a head of S0 / S1 that latches leaves for the unit's 0x60.. heads (`LATCHED`)."""
+        if head not in LANE_RULES[unit] and head not in S_RULES[unit]:
             self.latched[unit] = Vec(UNKNOWN_VEC.lanes, H)
-            return
-        if unit == "s1" and rule is not None and "b" not in rule.reads:
             return
         tier = V if head in LATCH_MEASURED[unit] else I
         self.latched[unit] = Vec(operand.lanes, min(operand.tier, tier))
 
     def _u_port(self, index: int, head: int, b: Vec, word: Word) -> None:
         reg = word["f141_144"]
-        if head in U_NOTHING:
-            self._u_write = None
-            return
-        take = U_TAKES.get(head)
+        take = u_take(head)
         if take is None:
             self._u_write = (
                 reg,
                 Vec(UNKNOWN_VEC.lanes, H),
             )  # what U takes here is open
+            return
+        if not take:
+            self._u_write = None
             return
         lanes = (*(b.lanes[k] for k in take), *(None,) * (LANE_COUNT - 4))
         self._u_write = (reg, Vec(lanes, b.tier))

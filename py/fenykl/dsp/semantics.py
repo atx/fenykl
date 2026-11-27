@@ -1348,6 +1348,24 @@ LANE_SHIFTS = (0x1B, 0x1C, 0x22)
 U_PORT = lookup("f232_233")
 """U's port, which takes what the S3 head beside it saves under 1 (`fields.U_TAKES`)."""
 
+
+def latches(unit: str, head: int) -> bool:
+    """Whether S0 / S1 head `head` latches its unit's operand for the `LATCHED` heads: every
+    other S0 head, and every other S1 head but one whose lane rule reads a only (S1 0x39 kept
+    the latch, measured)."""
+    if unit not in LATCH_OPERAND or head in LATCHED:
+        return False
+    lane = LANE_RULES[unit].get(head)
+    return unit == "s0" or lane is None or "b" in lane.reads
+
+
+def u_take(head: int) -> range | None:
+    """The lanes of b U's port takes beside S3 head `head` under its 1 (`fields.U_TAKES`): none
+    beside a head of `fields.U_NOTHING`, None where open."""
+    if head in U_NOTHING:
+        return range(0)
+    return U_TAKES.get(head)
+
 _X_IMMEDIATE_READS = {
     "x0": (*range(8), *range(0x12, 0x15), *range(0x1A, 0x1E)),
     "x1": (*range(8), *range(0x12, 0x15)),
@@ -1465,14 +1483,13 @@ def head_reads(unit: str, word: int) -> frozenset[str] | None:
     if reads is None:
         return None
     if unit == "s3" and U_PORT.get(word) == 1:
-        if head in U_TAKES:
-            reads |= {"b"}
-        elif head not in U_NOTHING:
+        take = u_take(head)
+        if take is None:
             return None
-    if unit in LATCH_OPERAND and head not in LATCHED:
-        lane = LANE_RULES[unit].get(head)
-        if unit == "s0" or lane is None or "b" in lane.reads:
-            reads |= {LATCH_OPERAND[unit]}
+        if take:
+            reads |= {"b"}
+    if latches(unit, head):
+        reads |= {LATCH_OPERAND[unit]}
     return reads
 
 
