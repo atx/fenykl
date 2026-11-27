@@ -707,6 +707,13 @@ def test_two_loads_to_one_vector_and_a_store_behind_a_load_run_in_order():
         assert bytes(got.data) == data[32 * (r3 - 1) : 32 * r3] and got.weakest() == tier
 
 
+def test_a_store_of_an_unwritten_vector_leaves_an_unrelated_load_outstanding():
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(1, 1, r6=2), *store(1, 5 * 64, DST)])
+    assert m.memory[0].lanes == (None,) * 32 and len(e.outstanding) == 2
+    assert e.outstanding[0] is not stream._nothing
+
+
 def test_a_store_row_wraps_at_the_top_of_dram():
     m, e = machine(bytes(range(32))), stream.Engine()
     top = 0x80000000 + DRAM_BYTES - 16

@@ -301,7 +301,8 @@ or one lane vector, they ran in the order handed (verified, pre-registered again
 one job each): a load after a store read the stored bytes, a store after a load did not reach it,
 the later of two stores to one address won, two loads to one vector (on two channels and on one)
 left the later's bytes, and a store of the last vector an outstanding load writes stored the
-load's bytes. Other shapes keep the order at inferred."""
+load's bytes. Each ran with the later command of one vector and the earlier of one or 0x80: V
+in those roles only, other shapes and roles keep the order at inferred."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -405,11 +406,11 @@ class Engine:
     bounded (a local-memory command, one that moves nothing, the engine off script)."""
     drams: list["_Dram"] = field(default_factory=list)
     """Per outstanding command the DRAM it reads and writes (`_behind`)."""
-    held: list[tuple[dict[int, Vec], bool, Callable[[Machine, Confidence], None]]] = field(
+    held: list[tuple[dict[int, Vec], int, Callable[[Machine, Confidence], None]]] = field(
         default_factory=list
     )
-    """Per outstanding lane-memory load the vectors it holds (unknown until it lands), whether
-    it is of `QUEUE_SHAPES`, and its completion."""
+    """Per outstanding lane-memory load the vectors it holds (unknown until it lands), its
+    vectors if it is of `QUEUE_SHAPES` (else 0), and its completion."""
     commands: int = 0
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); before the first it was not measured."""
@@ -579,7 +580,12 @@ class Engine:
         if self.key is None or self.group or not self.outstanding:
             return False
         v = self.key.value
-        return v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)
+        if not (v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)):
+            return False
+        one = [q for _, q, f in self.held if f is self.outstanding[0]]
+        if len(self.outstanding) != 1 or one != [1]:
+            self.cap = min(self.cap, I)  # measured beside one one-vector byte load only
+        return True
 
     def _go_off(self, m: Machine, why: str, lost: bool = False) -> None:
         if not self.off:
@@ -648,8 +654,7 @@ class Engine:
         self.commands += 1
         self.outstanding.append(_nothing)
         self.spans.append(None)
-        queue = cmd.kind in (LOAD, STORE) and any(_fits(cmd, s) for s in QUEUE_SHAPES)
-        self.drams.append(_Dram(queue=queue))
+        self.drams.append(_Dram(queue=_queue(cmd) if cmd.kind in (LOAD, STORE) else 0))
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
@@ -797,12 +802,12 @@ class Engine:
         for one DRAM range."""
         mine = [(dram_alias(dram), n) for dram, _ in rows]
         tier = V
-        queue = self.drams[-1].queue
+        later = self.drams[-1].queue == 1  # measured as the later command: one vector only
         for d in self.drams[:-1]:
             if _overlap(d.writes, mine):
-                tier = min(tier, V if queue and d.queue and _inside(d.writes, mine) else I)
+                tier = min(tier, V if later and d.queue and _inside(d.writes, mine) else I)
             if store and _overlap(d.reads, mine):
-                d.cap = min(d.cap, V if queue and d.queue and _inside(d.reads, mine) else I)
+                d.cap = min(d.cap, V if later and d.queue and _inside(d.reads, mine) else I)
         if store:
             self.drams[-1].writes = mine
         else:
@@ -877,9 +882,9 @@ class Engine:
                 at = (off // VECTOR_BYTES + v) % LANE_VECTORS
                 twice = (at in once and not later) or v + LANE_VECTORS < r3
                 once[at] = None if twice else (k, v)
-        queue = any(_fits(cmd, s) for s in QUEUE_SHAPES)
+        queue = _queue(cmd)
         # Vectors an earlier outstanding load holds: this one lands after it, in queue order.
-        behind = {at: q for h, q, _ in self.held for at in once if m.memory.get(at) is h.get(at)}
+        behind = {at: q for h, q, _ in self.held for at in once if _holds(m, h, at)}
         held = {at: Vec(UNKNOWN_VEC.lanes) for at in once}
         if not m.lanes_lost:
             m.memory.update(held)
@@ -916,7 +921,7 @@ class Engine:
                 lanes = tuple(None if x is None else x & 0xFFFF for x, _ in chunk)
                 t = min([tier, cap, wrap, *(t for x, t in chunk if x is not None)])
                 if at in behind:
-                    t = min(t, V if queue and behind[at] else I)
+                    t = min(t, V if queue == 1 and behind[at] == 1 else I)
                 # A vector written while the load ran raced it: not known.
                 racing = m.memory.get(at) is not held[at]
                 m.memory[at] = UNKNOWN_VEC if racing else Vec(lanes, t)
@@ -925,14 +930,14 @@ class Engine:
         return complete
 
     def _held(self, m: Machine, at: int) -> bool:
-        return any(m.memory.get(at) is h.get(at) for h, _, _ in self.held)
+        return any(_holds(m, h, at) for h, _, _ in self.held)
 
     def _land_loads(self, m: Machine, vectors: set[int]) -> None:
         """A store handed after a load that writes vectors it reads lands that load first."""
         for h, q, complete in list(self.held):
-            if not any(m.memory.get(at) is h.get(at) for at in vectors):
+            if not any(_holds(m, h, at) for at in vectors):
                 continue
-            ordered = V if q and self.drams[-1].queue else I
+            ordered = V if q and self.drams[-1].queue == 1 else I
             complete(m, min(self.cap, ordered))
             k = next(i for i, f in enumerate(self.outstanding) if f is complete)
             self.outstanding[k] = _nothing
@@ -1190,8 +1195,18 @@ class _Dram:
     reads: list[tuple[int, int]] = field(default_factory=list)
     writes: list[tuple[int, int]] = field(default_factory=list)
     cap: Confidence = V
-    queue: bool = False
-    """The command is of `QUEUE_SHAPES`."""
+    queue: int = 0
+    """The command's vectors if it is of `QUEUE_SHAPES`, else 0."""
+
+
+def _queue(cmd: _Command) -> int:
+    """The command's vectors if it is of `QUEUE_SHAPES`, else 0."""
+    return next((s[3] for s in QUEUE_SHAPES if _fits(cmd, s)), 0)
+
+
+def _holds(m: Machine, held: dict[int, Vec], at: int) -> bool:
+    """Vector `at` still holds what an outstanding load put there."""
+    return at in held and m.memory.get(at) is held[at]
 
 
 def _inside(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
