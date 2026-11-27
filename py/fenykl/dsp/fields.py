@@ -44,6 +44,7 @@ import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
+from itertools import combinations
 
 WORD_BITS = 320
 WORD_BYTES = WORD_BITS // 8
@@ -1058,8 +1059,8 @@ LANE_MEMORY = (
     "or three words later the new content; a load one or two words after a store to the same "
     "vector reads the stored vector, and a store one, two or three words after a load of its "
     "vector does not change what the load delivers (verified on the camera, pre-registered); "
-    "up to four X0 0x1d loads in consecutive words land in consecutive port words "
-    "(`LOAD_RUN`). It keeps its content across jobs within a boot (verified on the "
+    "X0 0x1d loads in flight together in the measured chains land in their own port words "
+    "(`LOAD_CHAINS`). It keeps its content across jobs within a boot (verified on the "
     "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
     "output), so "
     "a job can leave data, such as a layer's weights, for the next"
@@ -1140,14 +1141,17 @@ X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
 included); the address modulo `LANE_VECTORS` (`LANE_MEMORY`)."""
 X0_LANE_LOADS = (0x1C, 0x1D, 0x20, 0x21)
 """X0's lane memory load heads; what f69_71 does on a load is open."""
-LOAD_RUN = (0x1D, 4)
-"""Lane loads in flight together that land as each would alone: up to this many heads of this
-value in consecutive words, each vector at its first lane port `LOAD_LAG` words after its head
-(verified on the camera, pre-registered: three in consecutive words into V and W in a 250-pass
-convolution loop, exact over six jobs; four in consecutive words into W and V, then L1 twice, 32
-lanes each; four into L0 in a max-pool loop, 29 vectors exact). Other loads in flight together
-(two to four words apart, a load head in the word an earlier load lands, longer runs, the other
-load heads, loads between stores) were not measured: inferred."""
+LOAD_HEAD = 0x1D
+LOAD_CHAINS = ((1,) * 15, (2,) * 31, (3,), (4,), (1, 3, 1, 3, 1))
+"""X0 `LOAD_HEAD` loads in flight together (each issued at most `LOAD_LAG` words after the last)
+that land as each would alone, as the words between their heads, from the chain's first load on:
+each vector at its first lane port `LOAD_LAG` words after its head (verified on the camera,
+pre-registered): sixteen in consecutive words (into L3 and L2, and a matrix product's rows); up to
+32 two words apart (one vector per two words, beside and between lane stores); two three or four
+words apart (a head in the word the first load lands); pairs in consecutive words three words
+apart, six loads (a two-row convolution). A chain that begins as one of these counts (a load's
+tier is fixed as its head runs). Other loads in flight together (longer or mixed chains, the
+other load heads) were not measured: inferred."""
 X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 """The lane memory heads that add A[b], not sK, to A[a]."""
 
@@ -1751,6 +1755,60 @@ M_OTHER_OPEN = {
 """S heads beside which M under another unit's f274_275, in the head's word and the next, was
 not read; beside every other head it was, and nothing was on M there (verified on the camera,
 pre-registered)."""
+_LANE_ONLY = (("s0", 0x0), ("s1", 0x0), ("s2", 0x8), ("s3", 0x19))
+_OWN_WORD = (("s1", 0x54), ("s2", 0xE), ("s3", 0x24))
+_HELD_PAIR = (("s0", 0x32), ("s1", 0x45))
+_UNITS = ("s0", "s1", "s2", "s3")
+
+
+def _lane_only_cells(heads: tuple[tuple[str, int], ...]) -> frozenset[tuple[int, str]]:
+    """Every unit in the heads' word and the next, but S2 / S3 one word after their own head."""
+    later = {u for u, _ in heads} & {"s2", "s3"}
+    return frozenset((at, u) for at in (0, 1) for u in _UNITS if not (at == 1 and u in later))
+
+
+M_LANE_ONLY = frozenset(_LANE_ONLY)
+M_TOGETHER: dict[frozenset[tuple[str, int]], frozenset[tuple[int, str]]] = {
+    **{frozenset(p): _lane_only_cells(p) for p in combinations(_LANE_ONLY, 2)},
+    frozenset(_LANE_ONLY): _lane_only_cells(_LANE_ONLY),
+    **{
+        frozenset({o, q}): frozenset({(0, o[0]), (0, q[0])})
+        for o in _OWN_WORD
+        for q in _LANE_ONLY
+        if q[0] != o[0]
+    },
+    frozenset({("s2", 0xE), ("s3", 0x24)}): frozenset({(0, "s0"), (0, "s1")}),
+    frozenset({("s1", 0x54), ("s3", 0x24)}): frozenset({(0, "s0"), (0, "s2")}),
+    frozenset(_HELD_PAIR): frozenset((1, u) for u in _UNITS),
+}
+"""Several S units' heads in one word, and the M reads measured beside them on the camera
+(pre-registered, a fresh sentinel per read) as (words after the head, unit under f274_275):
+under a unit with no result there nothing was on M; under a unit with an own-word or held result,
+that result alone. Lane-only heads (S0 0x0 lag 1, S1 0x0, S2 0x8, S3 0x19) in pairs and all four,
+in their word and the next under every unit, but S2 / S3 one word after their own head there
+(nothing was on M, not registered: inferred); an own-word head beside another unit's lane-only
+head, in its word under the two units; two own-word heads, in their word under the other units;
+S0 0x32 and S1 0x45 (both held), one word later under every unit."""
+M_HELD_BESIDE_OWN = frozenset(
+    (frozenset({h}), frozenset({o})) for h in _HELD_PAIR for o in (("s2", 0xE), ("s3", 0x24))
+)
+"""(the heads of a word, those of the next) where M under the first word's unit in the next word
+was measured on the camera (pre-registered): its held result alone, not the other unit's
+own-word result. Beside other heads a held result is on M alone at inferred."""
+S2_NEXT = frozenset(
+    {
+        (frozenset({("s2", 0xC)}), frozenset()),
+        (frozenset({("s2", 0x1)}), frozenset()),
+        (frozenset({("s2", 0xC)}), frozenset({("s2", 0xC)})),
+    }
+)
+"""(the heads of a word, those of the next) where M under S2 in the next word was measured on the
+camera (pre-registered): after S2 0xc or S2 0x1 and a word with no S head nothing, after S2 0xc
+and S2 0xc the second extract alone."""
+X0_BESIDE_KEPT = (0x13, frozenset({("s0", 0x0)}))
+"""An X0 head and the S heads of its word beside which nothing on M kept the register M's port
+names (measured on the camera, pre-registered, under every f274_275). Beside other X0 heads the
+kept register is inferred."""
 S_NEXT_VALUES = {
     "s1": frozenset({0x13, 0x1A, 0x1B, 0x14, 0x15, 0x1D, 0x1E, 0x16, 0x17, 0x1F, 0x20})
 }

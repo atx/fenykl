@@ -119,6 +119,10 @@ REGISTERS = 8
 FILL = 8
 """Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits, or under r0 2 the
 local words at "to" with copies of "from"'s low r2-wide element (no DRAM side)."""
+HALF_ROWS_BESIDE = frozenset({(LOAD, 0x10, 0x40), (LOAD, 0x40, 0x100), (STORE, 0x10, 0x40)})
+"""One-row 16-bit lane-memory commands (r2 0x20, r5 0x08) as (kind, r3, r6) beside which lane
+loads and stores of own words outside the command's vectors gave the pre-registered bytes on the
+camera (verified: 1 and 4 KiB loads, a 1 KiB store)."""
 KIND_AS = {
     2: LOAD,
     3: NOTHING_MOVES,
@@ -432,8 +436,9 @@ class Engine:
         """Own words beside an outstanding command meet the engine at work (hypothesis), unless
         `vector` lies outside every outstanding command's lane-memory vectors: lane loads and
         stores on one bank while a byte load of one row into the other and a byte store of one
-        row from it were outstanding gave the pre-registered bytes on the camera (verified for
-        those shapes); beside any other lane-memory shape outside its vectors inferred."""
+        row from it, or a 16-bit command of `HALF_ROWS_BESIDE`, were outstanding gave the
+        pre-registered bytes on the camera (verified for those shapes); beside any other
+        lane-memory shape outside its vectors inferred."""
         if not self.outstanding:
             return self.cap
         if vector is None or any(s is None or vector in s[0] for s in self.spans):
@@ -450,7 +455,8 @@ class Engine:
         """The lane vectors a lane-memory load, store or fill writes or reads, as the command
         does (a load r3 per row, a store its elements' vectors per row, a fill r3), and the tier
         of words beside it elsewhere: verified for a plain (kind 0 / 6) one-row byte command at
-        r2 0x20, inferred for other shapes; None for other memory."""
+        r2 0x20 and the 16-bit commands of `HALF_ROWS_BESIDE`, inferred for other shapes; None
+        for other memory."""
         r = cmd.regs
         if r[0].value != LANE_MEMORY:
             return None
@@ -483,7 +489,15 @@ class Engine:
             and r[5].value == 0x10
             and last < LANE_VECTORS  # a wrap is only inferred
         )
-        return vectors, V if byte_row else I
+        half_row = (
+            plain
+            and r[7].value == 1
+            and r[2].value == 0x20
+            and r[5].value == 0x08
+            and (cmd.kind, r[3].value, r[6].value) in HALF_ROWS_BESIDE
+            and last < LANE_VECTORS
+        )
+        return vectors, V if byte_row or half_row else I
 
     def finish(self, m: Machine) -> None:
         """The job ends: the commands still outstanding complete (inferred for loads: only a

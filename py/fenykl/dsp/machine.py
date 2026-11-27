@@ -28,8 +28,8 @@ new content). Buses carry values in the word they arrive in, counted in executed
   one unit are OR-ed on its bus (verified on the camera in S0, S1, S2 and S3);
 - a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing; loads in flight
-  together (issued fewer than four words apart) land at inferred, except a run of X0 0x1d heads in
-  consecutive words no longer than `fields.LOAD_RUN` (`Machine._loads_in_flight`);
+  together (issued at most four words apart) land at inferred, except X0 0x1d heads in the measured
+  chains of `fields.LOAD_CHAINS` (`Machine._loads_in_flight`);
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
   word; S3's reductions in the third word after the head only.
 
@@ -62,6 +62,7 @@ Programs composed from these rules ran exact on the camera, every output byte pr
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Protocol
 
 from .fields import (
@@ -77,7 +78,12 @@ from .fields import (
     LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
+    LOAD_CHAINS,
+    LOAD_HEAD,
+    M_HELD_BESIDE_OWN,
+    M_LANE_ONLY,
     M_OTHER_OPEN,
+    M_TOGETHER,
     M_UNITS,
     OP_FIELD,
     PB_FILES,
@@ -90,6 +96,7 @@ from .fields import (
     S2_HIGH,
     S2_HIGH_HALVES,
     S2_LOW,
+    S2_NEXT,
     S2_RESULT,
     S3_RESULT,
     S_IMMEDIATES,
@@ -104,7 +111,7 @@ from .fields import (
     U_TAKES,
     WAIT_HEAD,
     WAIT_NOTHING,
-    LOAD_RUN,
+    X0_BESIDE_KEPT,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
     X_IMMEDIATES,
@@ -206,6 +213,13 @@ def _cap(x, tier: Confidence):
     if isinstance(x, Kept):
         return Kept(tier)
     return Sv(x.value, tier) if isinstance(x, Sv) else Vec(x.lanes, tier)
+
+
+def _or_bus(quotient: Sv, x1: Sv, head: int) -> Sv:
+    """A quotient and an X1 head's own result on X1's bus in one word: OR-ed."""
+    if quotient.value is None or x1.value is None:
+        return Sv(None, min(quotient.tier, x1.tier))
+    return Sv(quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I))
 
 
 def _unknown(file: str) -> Sv | Vec:
@@ -402,9 +416,9 @@ class Machine:
         self.x1_due: dict[int, Sv] = {}
         """X1 0x1e's quotients on X1's result bus, by word."""
         self.load_due: dict[int, list[Vec]] = {}
-        self.load_run: tuple[int, int, bool] | None = None
-        """The last lane loads in consecutive words: first word, last word, whether they form a
-        verified run (`fields.LOAD_RUN`)."""
+        self.load_chain: tuple[int, tuple[int, ...], bool] | None = None
+        """The last lane loads in flight together: the last one's word, the words between their
+        heads, whether they begin a verified chain (`fields.LOAD_CHAINS`)."""
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
@@ -414,6 +428,8 @@ class Machine:
         """The word of the last S head run."""
         self.head_values: set[tuple[str, int]] = set()
         """The (unit, head) pairs that ran in that word."""
+        self.prev_heads: tuple[int | None, frozenset[tuple[str, int]]] = (None, frozenset())
+        """The word with S heads before that one and its (unit, head) pairs."""
         self.heads_run: dict[tuple[str, int], int] = {}
         """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
         self.wedging_runs = 0
@@ -550,16 +566,20 @@ class Machine:
                     self.lapse(index, "s0 0x4f", WEDGING_S0_WHY)
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
-            # M; with nothing on M beside an X0 head the kept register is not measured).
+            # M; with nothing on M the kept register measured beside `X0_BESIDE_KEPT` only).
+            beside = (word[HEAD_IDS["x0"]], self._heads_at(t)) == X0_BESIDE_KEPT
             x0bus = (
-                Kept(min(m.tier, I)) if x0 is not None and isinstance(m, Kept) else m
+                Kept(min(m.tier, V if beside else I))
+                if x0 is not None and isinstance(m, Kept)
+                else m
             )
         else:
             x0bus = UNKNOWN if x0 is None else x0
         quotient = self.x1_due.get(t)
         if quotient is not None:
-            # A divide's quotient beside an X1 head with a result of its own: not measured.
-            x1bus = quotient if x1 is None else Sv(None, min(quotient.tier, x1.tier))
+            # A quotient beside an X1 head's own result: the OR (measured on the camera beside X1
+            # 0x13 with an immediate, two words; other heads inferred).
+            x1bus = quotient if x1 is None else _or_bus(quotient, x1, word[HEAD_IDS["x1"]])
         elif x1 is None and word[HEAD_IDS["x1"]] == DIVIDE_HEAD:
             x1bus = NOTHING  # a divide drives nothing in its own word (verified)
         else:
@@ -786,8 +806,12 @@ class Machine:
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
             quotient = _divide(a, b)
-            if self.x1_due:
-                # Another divide in flight: only lone ones were measured.
+            issued = sorted(k - DIVIDE_LAG for k in self.x1_due) + [t]
+            # Measured on the camera (pre-registered): a second divide 1..4 words after the first,
+            # and four in consecutive words, each quotient as alone; other mixes inferred.
+            if len(issued) > 4 or (
+                len(issued) > 2 and any(b - a != 1 for a, b in pairwise(issued))
+            ):
                 self.x1_due = {k: _cap(q, I) for k, q in self.x1_due.items()}
                 quotient = _cap(quotient, I)
             self.x1_due[t + DIVIDE_LAG] = quotient
@@ -851,16 +875,17 @@ class Machine:
 
     def _loads_in_flight(self, t: int, head: int) -> Confidence:
         """A lane load in word t beside loads in flight (due in word t or later, a load landing in
-        the word of the next load's head included): verified while all of them form one run of
-        `fields.LOAD_RUN`; otherwise each of them still due, and this one, lands at inferred."""
-        run_head, run_max = LOAD_RUN
+        the word of the next load's head included): verified while all of them, from the first
+        of the chain on, begin one of `fields.LOAD_CHAINS`; otherwise each of them still due,
+        and this one, lands at inferred."""
         flight = [when for when in self.load_due if when >= t]
         if not flight:
-            self.load_run = (t, t, head == run_head)
+            self.load_chain = (t, (), head == LOAD_HEAD)
             return V
-        first, last, ok = self.load_run or (t, t, False)
-        ok = ok and last == t - 1 and head == run_head and t - first < run_max
-        self.load_run = (first, t, ok)
+        last, gaps, ok = self.load_chain or (t, (), False)
+        gaps += (t - last,)
+        ok = ok and head == LOAD_HEAD and any(c[: len(gaps)] == gaps for c in LOAD_CHAINS)
+        self.load_chain = (t, gaps, ok)
         if ok:
             return V
         for when in flight:
@@ -883,6 +908,7 @@ class Machine:
             if unit != "s3":
                 self.heads_run[unit, head] = self.heads_run.get((unit, head), 0) + 1
             if self.last_head != t:
+                self.prev_heads = (self.last_head, frozenset(self.head_values))
                 self.head_values = set()
             self.head_values.add((unit, head))
             self.last_head = t
@@ -1165,13 +1191,25 @@ class Machine:
         fresh = next((v for w, v in reversed(self.reductions) if w == t), None)
         if fresh is not None:
             held["s3"] = fresh
-        # A reduction is on M under 3 beside another unit's held result (verified).
-        others = any(u != sel for u in held if u != "s3")
+        # A reduction is on M under 3 beside another unit's held result (verified); beside the
+        # heads of `M_TOGETHER` each held result is on M under its own unit alone (measured).
+        others = any(u != sel for u in held if u != "s3") and not (
+            self.last_head == t - 1 and self._together(sel, t)
+        )
         tier = I if others and not (sel == "s3" and fresh is not None) else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
         before = self.open_next.get(t, {}).get(sel)
-        if before is not None and not (
+        # S2 0xc's extract and S2 0x1's product are not on M one word later: `S2_NEXT`.
+        s2_next = sel == "s2" and (self._heads_at(t - 1), self._heads_at(t)) in S2_NEXT
+        # Lane-only heads of several units: nothing on M one word later (inferred where not
+        # measured, `M_TOGETHER`).
+        lane_only = (
+            self.last_head == t - 1
+            and frozenset(self.head_values) in M_TOGETHER
+            and self.head_values <= M_LANE_ONLY
+        )
+        if before is not None and not s2_next and not lane_only and not (
             sel == "s3" and sel in own and _own_word("s3", before)
         ):
             # One word after a head whose result there is open (S3's extracts in consecutive
@@ -1184,12 +1222,16 @@ class Machine:
                 return _cap(h, tier)
             # Another unit's held result is not on M here (verified one word after its head).
             return Kept(V if self._quiet(sel, t) else I)
-        if len(own) > 1 and sel not in own:
+        if len(own) > 1 and sel not in own and not self._quiet(sel, t):
             self.lapse(index, "m", f"own-word results of {sorted(own)}, M under {sel}")
             return UNKNOWN
         if sel not in own:
-            # A lone own-word result under another unit's f274_275 is not on M (verified).
-            return Kept(V if self._quiet(sel, t) else I) if h is None else Sv(None, H)
+            # Another unit's own-word result is not on M (verified): nothing, or the sel unit's
+            # held result alone (measured in the forms of `M_HELD_BESIDE_OWN`, else inferred).
+            if h is None:
+                return Kept(V if self._quiet(sel, t) else I)
+            beside = (self._heads_at(t - 1), self._heads_at(t)) in M_HELD_BESIDE_OWN
+            return _cap(h, tier if beside else I)
         v = own[sel]
         if sel == "s3":
             if fresh is None:
@@ -1218,10 +1260,24 @@ class Machine:
         if t - self.last_head >= 2:
             return True
         if len({u for u, _ in self.head_values}) > 1:
-            return False
+            return self._together(sel, t)
         return not any(
             u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in self.head_values
         )
+
+    def _together(self, sel: str, t: int) -> bool:
+        """Whether M under `sel` in word t was measured beside the last word's heads of several
+        units (`M_TOGETHER`)."""
+        if self.last_head is None:
+            return False
+        cells = M_TOGETHER.get(frozenset(self.head_values), frozenset())
+        return (t - self.last_head, sel) in cells
+
+    def _heads_at(self, t: int) -> frozenset[tuple[str, int]]:
+        """The (unit, head) pairs that ran in word t, for the last two words with S heads."""
+        if self.last_head == t:
+            return frozenset(self.head_values)
+        return self.prev_heads[1] if self.prev_heads[0] == t else frozenset()
 
     # ------------------------------------------------------------------ ports
 
@@ -1230,6 +1286,7 @@ class Machine:
     ) -> dict[tuple[str, int], object]:
         writes: dict[tuple[str, int], object] = {}
         kept: dict[tuple[str, int], Confidence] = {}
+        sources: dict[tuple[str, int], str] = {}
 
         def put(file: str, reg: int, value, source: str) -> None:
             if self.trace is not None:
@@ -1242,9 +1299,17 @@ class Machine:
                 kept[(file, reg)] = value.tier
                 return
             if (file, reg) in writes:
-                self.lapse(index, "ports", f"two ports write {file}[{reg}]")
-                value = _unknown(file)
+                # Both ports of a lane file on one register: the first port's value (measured on
+                # the camera in L0, L1, L2 and L3, lanes 0..3, first port S0 0x41's b, second S3
+                # 0x19's copy; other sources inferred).
+                if file not in LANE_FILES:
+                    self.lapse(index, "ports", f"two ports write {file}[{reg}]")
+                    writes[(file, reg)] = _unknown(file)
+                elif (sources[(file, reg)], source) != (S0_RESULT, S3_RESULT):
+                    writes[(file, reg)] = _cap(writes[(file, reg)], I)
+                return
             writes[(file, reg)] = value
+            sources[(file, reg)] = source
 
         scalar = {"X0's result": x0bus, "X1's result": x1, ALU_BUS: bus}
         for enable, reg_id in PR_ENABLES.items():
@@ -1311,6 +1376,13 @@ class Machine:
         if not due:
             return NOTHING
         if text == S2_HIGH:
+            now = [h for u, h in self._heads_at(t) if u == "s2"]
+            timed = bool(now) and LANE_LAG["s2"].get(now[0]) == (0, V)
+            if len(due) == 2 and due[0][1] is not None and due[1][1] is None and timed:
+                # A product's high half beside a timed lag-0 S2 head without one: the high half
+                # (measured on the camera beside S2 0x8 / 0xd moves of lanes whose high half, if
+                # the move drove one, was zero: inferred).
+                return _cap(due[0][1], I)
             if len(due) > 1:
                 self._why(t, "s2", "two S2 high halves in one word")
                 return Vec(
