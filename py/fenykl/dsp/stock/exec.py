@@ -59,11 +59,6 @@ class TapBytes:
     fmt: str
 
 
-def coef(k: int) -> TapBytes:
-    """c_k of the line's phase."""
-    return TapBytes(2 * k, "<h")
-
-
 @dataclass(frozen=True)
 class PhaseWeight:
     """p, the line's phase in 16ths, or 16 - p (`complement`): the chroma weights."""

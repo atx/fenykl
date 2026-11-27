@@ -212,7 +212,7 @@ class RegisterFile:
         self.regs[r] = value
 
 
-def b_written(program: Program) -> frozenset[int]:
+def _b_written(program: Program) -> frozenset[int]:
     """The B registers that a word of `program` names at an enabled B port: what any path
     through it may write (an enable value without a known source counts as a write)."""
     out = set()
@@ -240,7 +240,7 @@ def machine_start(
     tier is the fact's, a hypothesis for an address: these registers are right only in the bits
     their transfers see (word 67 floors an address to 16 bytes), the rest is power-up content
     that differs between boots (`machine.Carry`; r21's low bits by word 47's store format)."""
-    written = b_written(stock)
+    written = _b_written(stock)
     known = carry.registers.get("B", []) if carry else []
     out: dict[int, Sv] = {}
     for f in REGISTER_FACTS:

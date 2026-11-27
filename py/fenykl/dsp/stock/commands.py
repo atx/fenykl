@@ -27,8 +27,6 @@ def copy(program: Program, src: int, dst: int, length: int) -> Job:
     return Job(program, ((0, struct.pack("<III", src, dst, length)),))
 
 
-TAPS_ADDRESS = 0xA324BC00
-"""Where the setup reads the taps: the constant block of program 13's item."""
 TAP_WORDS = 32
 RESAMPLE_TAPS, RESAMPLE_REQUEST = 0x00, 0x742 * 4
 """Local offsets of the tap words and of the six request words."""
