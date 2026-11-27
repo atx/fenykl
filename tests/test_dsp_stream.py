@@ -885,11 +885,14 @@ def copied(e: stream.Engine, values: list, data: bytes = bytes(range(32))) -> By
     return m.boot.read(DST, 32)
 
 
-@pytest.mark.parametrize(("channel", "value", "tier"), [(1, 0x20, V), (2, 0x20, I)])
-def test_a_register_key_with_bit_8_keeps_a_register_handed_its_own_value(channel, value, tier):
-    """0x1161 := 0x20 over r2 0x20 before a store copied (measured); on another channel inferred."""
+@pytest.mark.parametrize(
+    ("channel", "reg", "value", "tier"), [(1, 2, 0x20, V), (2, 2, 0x20, I), (1, 1, 0, I)]
+)
+def test_a_register_key_with_bit_8_keeps_a_register_handed_its_own_value(channel, reg, value, tier):
+    """0x1161 := 0x20 over r2 0x20 before a store copied (measured); another channel or register
+    inferred."""
     e = stream.Engine()
-    odd = key(channel, 2) | stream.REGISTER_KEY_BIT8
+    odd = key(channel, reg) | stream.REGISTER_KEY_BIT8
     got = copied(e, [*lanes(channel, 1, r6=2), odd, value, *store(channel, 0, DST), WAIT])
     assert bytes(got.data) == bytes(range(32)) and got.weakest() == tier
     assert not e.off

@@ -250,8 +250,8 @@ REGISTER_KEY_RUN = (0x1161, 0x20)
 """A register key with bit 8 set takes one value and the grammar stays aligned: channel 1 r2's
 key 0x1161 handed r2's own value 0x20 before a one-vector byte store, which copied (verified,
 pre-registered against the key dropped and the grammar shifted; one job). Whether the value was
-written or ignored was not separated: a value equal to the register's keeps it (verified for this
-key and value, else inferred), another leaves the register unknown."""
+written or ignored was not separated: a value equal to the register's keeps it, another leaves the
+register unknown. Other keys and values with bit 8 cap the job at inferred."""
 BLOCK_KEY_BIT9 = 0x200
 BLOCK_KEY_BIT10 = 0x400
 BLOCK_KEY_RUN = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
@@ -261,7 +261,7 @@ other and against never ending; one job each): 0x420 programmed the channel as 0
 ignored: the load copied); after 0x220 the load moved nothing (its vector kept what it held) and
 the job ended. Read as: the 0x220 block takes eight values and writes no register (inferred), and
 a load on a channel with no register handed moves nothing (verified there). Other keys and values
-with these bits keep the reading at inferred."""
+with these bits cap the job at inferred."""
 ODD_KEY_BITS = {
     REGISTER_KEY: (REGISTER_KEY_BIT8,),
     BLOCK_KEY: (BLOCK_KEY_BIT9, BLOCK_KEY_BIT10),
@@ -648,23 +648,25 @@ class Engine:
             reg = v >> 11 & 7
             value = _weaker(values[0], key.tier)
             if v & REGISTER_KEY_BIT8:
+                if (v, value.value) != REGISTER_KEY_RUN:
+                    self.cap = min(self.cap, I)  # the grammar's alignment inferred
                 now = self.regs[channel][reg]
                 if now is None or now.value is None or now.value != value.value:
                     value = Sv(None)  # written or ignored: not separated
                 else:
-                    ran = (v, value.value) == REGISTER_KEY_RUN
-                    value = Sv(now.value, min(now.tier, value.tier, V if ran else I))
+                    value = Sv(now.value, min(now.tier, value.tier))
             self.regs[channel][reg] = value
         elif v & 0x21 == 0x20:
             ran = tuple(x.value for x in values) == BLOCK_KEY_RUN and channel == 0
+            if v & (BLOCK_KEY_BIT9 | BLOCK_KEY_BIT10) and not ran:
+                self.cap = min(self.cap, I)
             if v & BLOCK_KEY_BIT9:
                 if ran and all(r is None for r in self.regs[channel]):
                     self.dropped.add(channel)
                 else:
-                    self.cap = min(self.cap, I)
+                    self.cap = min(self.cap, I)  # a channel programmed before: not run
                 return
-            tier = I if v & BLOCK_KEY_BIT10 and not ran else key.tier
-            self.regs[channel][:] = [_weaker(x, tier) for x in values]
+            self.regs[channel][:] = [_weaker(x, key.tier) for x in values]
         else:
             regs = list(self.regs[channel])
             tier = min(key.tier, values[0].tier, values[1].tier)
