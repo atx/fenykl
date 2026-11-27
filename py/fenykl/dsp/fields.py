@@ -159,7 +159,6 @@ GRID_PAIR = (
 )
 
 
-
 # The register groups that differ between program 0x10's words 308..458 and 802..952.
 KERNEL_REMAPPED = (110, 115, 123, 128, 211, 216, 224)
 
@@ -615,7 +614,6 @@ SCALAR_READS: dict[str, tuple[int, str, str]] = {
 """The S heads that return a scalar register: (head value, file, the nibble naming the register),
 the result file[nibble] (on the camera by exact readout, through the M strobe and port f272_273
 = 2, and S3's also against f263_264's three sources; verified, pre-registered)."""
-
 
 
 LANE_FILES: dict[str, tuple[str, str, str]] = {
@@ -1537,11 +1535,24 @@ def _lane_ports() -> Iterator[tuple[str, Confidence]]:
     for lo, hi, owned, _ in B_PORTS:
         enable = _fid(lo, hi)
         if enable in LANE_SOURCES:
-            yield _fid(owned, owned + 3), min(t for _, t in LANE_SOURCES[enable].values())
+            yield (
+                _fid(owned, owned + 3),
+                min(t for _, t in LANE_SOURCES[enable].values()),
+            )
 
 
 NIBBLES: dict[str, Confidence] = {
-    **{n: V for n in ("f182_185", "f186_189", "f190_193", "f194_197", "f198_201", "f202_205")},
+    **{
+        n: V
+        for n in (
+            "f182_185",
+            "f186_189",
+            "f190_193",
+            "f194_197",
+            "f198_201",
+            "f202_205",
+        )
+    },
     **dict(_lane_ports()),
     **{n: V for n in ("f179_181", "f141_144")},
     **{n: V for n in (_fid(lo, hi) for lo, hi in GRID_A if (lo, hi) != (35, 36))},
@@ -1655,6 +1666,7 @@ def _grid_b(lo: int, hi: int) -> Field:
         f"later firmware versions of the same family ({_owned(p)})"
     )
     return _nibble(lo, hi, Kind.ROUTE, "pb", fact)
+
 
 FIELDS: tuple[Field, ...] = (
     Field(0, 0, Kind.IMM, "s1", 0, V, _only("f285_291 and f49_52 are")),
@@ -1786,7 +1798,6 @@ FIELDS: tuple[Field, ...] = (
         name="op",
     ),
 )
-
 
 
 NAMES = {
