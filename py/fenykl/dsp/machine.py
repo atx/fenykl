@@ -218,7 +218,9 @@ def _or_bus(quotient: Sv, x1: Sv, head: int) -> Sv:
     X1 0x13 only."""
     if quotient.value is None or x1.value is None:
         return Sv(None, min(quotient.tier, x1.tier))
-    return Sv(quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I))
+    return Sv(
+        quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I)
+    )
 
 
 def _unknown(file: str) -> Sv | Vec:
@@ -296,17 +298,28 @@ def _check_rules() -> None:
         return set(range(1 << f.width)) - {f.idle}
 
     gaps = [
-        *(f"{u} {h:#x}" for u in ("x0", "x1") for h in values(HEAD_IDS[u]) - set(X_RULES[u])),
+        *(
+            f"{u} {h:#x}"
+            for u in ("x0", "x1")
+            for h in values(HEAD_IDS[u]) - set(X_RULES[u])
+        ),
         *(f"{e} {v}" for e in PR_ENABLES for v in values(e) - set(PR_SOURCES[e])),
         *(f"{e} {v}" for e in PB_FILES for v in values(e) - set(PB_SOURCES[e])),
-        *(f"f252_254 {v}" for v in values("f252_254") - {*STORE_SOURCES, *STORE_NOTHING}),
+        *(
+            f"f252_254 {v}"
+            for v in values("f252_254") - {*STORE_SOURCES, *STORE_NOTHING}
+        ),
         *(
             text
             for rows in (*LANE_SOURCES.values(), STORE_SOURCES)
             for text, _ in rows.values()
             if text != LANE_LOAD and text not in LANE_UNIT
         ),
-        *(f"op {c:#x}" for c, s in OP_SEMANTICS.items() if s.rule is None and c not in OWN_RULES),
+        *(
+            f"op {c:#x}"
+            for c, s in OP_SEMANTICS.items()
+            if s.rule is None and c not in OWN_RULES
+        ),
     ]
     if gaps:
         raise ValueError(f"no machine rule for {', '.join(gaps)}")
@@ -454,7 +467,10 @@ class Machine:
         """The word of the last S head run."""
         self.head_values: set[tuple[str, int]] = set()
         """The (unit, head) pairs that ran in that word."""
-        self.prev_heads: tuple[int | None, frozenset[tuple[str, int]]] = (None, frozenset())
+        self.prev_heads: tuple[int | None, frozenset[tuple[str, int]]] = (
+            None,
+            frozenset(),
+        )
         """The word with S heads before that one and its (unit, head) pairs."""
         self.heads_run: dict[tuple[str, int], int] = {}
         """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
@@ -682,7 +698,14 @@ class Machine:
         return Sv(pick.value, min(tier, x.tier, pick.tier))
 
     def _ring(
-        self, index: int, word: Word, code: int, ra: Sv, rb: Sv | None, c: int, tier: Confidence
+        self,
+        index: int,
+        word: Word,
+        code: int,
+        ra: Sv,
+        rb: Sv | None,
+        c: int,
+        tier: Confidence,
     ) -> Sv:
         """The ring pointer step (`semantics.OP_SEMANTICS` 0x44 / 0x46 / 0x47)."""
         if code == 0x44:
@@ -692,7 +715,9 @@ class Machine:
             step = Sv(None if step.value is None else s32(step.value), step.tier)
         length, ltier = (rb.value, V) if code == 0x47 else ring_length(c)
         if length is None and code != 0x47:
-            self.lapse(index, op(code).name, f"ring length of imm13 {c:#x}: not measured")
+            self.lapse(
+                index, op(code).name, f"ring length of imm13 {c:#x}: not measured"
+            )
         if step.value is None or length is None:
             return Sv(None, tier)
         s = ring_step(ra.value + step.value, length)
@@ -1224,8 +1249,11 @@ class Machine:
             and frozenset(self.head_values) in M_TOGETHER
             and self.head_values <= M_LANE_ONLY
         )
-        if before is not None and not s2_next and not lane_only and not (
-            sel == "s3" and sel in own and _own_word("s3", before)
+        if (
+            before is not None
+            and not s2_next
+            and not lane_only
+            and not (sel == "s3" and sel in own and _own_word("s3", before))
         ):
             # One word after a head whose result there is open (S3's extracts in consecutive
             # words each read their own lane: measured), M is not known: a value not fitted is
@@ -1331,7 +1359,10 @@ class Machine:
                 key in writes
                 and carries
                 and (sources[key], source) == (S0_RESULT, S3_RESULT)
-                and all(len(due.get(u, ())) == 1 and (u, h) in heads for u, h in FIRST_PORT_WINS)
+                and all(
+                    len(due.get(u, ())) == 1 and (u, h) in heads
+                    for u, h in FIRST_PORT_WINS
+                )
             ):
                 return
             if key not in writes and carries:

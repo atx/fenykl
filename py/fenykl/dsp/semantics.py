@@ -259,9 +259,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     },
     0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})"),
     0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})"),
-    0x37: OpSemantics(
-        V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c)
-    ),
+    0x37: OpSemantics(V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c)),
     0x0A: OpSemantics(
         V,
         "ra | (imm16 << 16) (verified on the camera by exact readout, pre-registered)",
@@ -294,8 +292,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     ),
     0x47: OpSemantics(
         V,
-        "the ring pointer step as 0x46's with L = rb "
-        f"({EXACT})",
+        f"the ring pointer step as 0x46's with L = rb ({EXACT})",
     ),
     0x08: OpSemantics(
         V,
@@ -1172,7 +1169,9 @@ def _mask_ab(f: Callable[[int, int], bool]) -> ScalarValue:
 
 def _mask_b(f: Callable[[int, Scalars], bool]) -> ScalarValue:
     """Bit k from f(lane k of b, scalars)."""
-    return ScalarValue("b", lambda a, b, c: _bits(f(y, c) for y in _known_lanes(b, "b")))
+    return ScalarValue(
+        "b", lambda a, b, c: _bits(f(y, c) for y in _known_lanes(b, "b"))
+    )
 
 
 def _carry_mask(carry_in: bool) -> ScalarValue:

@@ -94,7 +94,9 @@ def test_lane_loads_in_flight_together(m, heads, at, tier):
     assert m.lanes["L3"][5] == Vec(A if (len(at) - 1) % 2 else B, tier)
 
 
-@pytest.mark.parametrize(("third", "at", "tier"), [(0x1D, 2, V), (0x1C, 2, I), (0x1D, 3, I)])
+@pytest.mark.parametrize(
+    ("third", "at", "tier"), [(0x1D, 2, V), (0x1C, 2, I), (0x1D, 3, I)]
+)
 def test_a_load_off_the_chain_caps_the_loads_still_in_flight(m, third, at, tier):
     """Loads at words 0, 1 and `at`; the first load's vector into L3[5] four words on."""
     m.a[1] = Sv(0x40)
@@ -143,7 +145,8 @@ def test_s3_0x6_gives_zeros_one_word_after_its_head_only(m, at):
 
 
 @pytest.mark.parametrize(
-    ("file", "port"), [("L3", {"f248_249": 1, "f171_174": 9}), ("L2", {"f244_245": 1, "f163_166": 9})]
+    ("file", "port"),
+    [("L3", {"f248_249": 1, "f171_174": 9}), ("L2", {"f244_245": 1, "f163_166": 9})],
 )
 @pytest.mark.parametrize("at", [0, 1, 2])
 def test_s0_0x52_keeps_the_port_register_beside_its_scalar_result(m, file, port, at):
@@ -161,7 +164,14 @@ def test_a_lag_1_s0_head_reaches_the_port_in_an_s0_0x52_word(m):
     m.lanes["L0"][1] = Vec(A)
     m.lanes["L0"][2] = Vec(B)
     add = {"f278_284": 0x20, "f37_40": 1, "f41_44": 2}
-    s0 = {"f278_284": 0x52, "f37_40": 1, "f41_44": 2, "f76_79": 5, "f248_249": 1, "f171_174": 9}
+    s0 = {
+        "f278_284": 0x52,
+        "f37_40": 1,
+        "f41_44": 2,
+        "f76_79": 5,
+        "f248_249": 1,
+        "f171_174": 9,
+    }
     run(m, [w(**add), w(**s0)])
     assert m.lanes["L3"][9].lanes == tuple((x + y) & 0xFFFF for x, y in zip(A, B))
 
@@ -512,7 +522,9 @@ def op_word(
         (0x37, 3, None, 0x30, Sv(0x37, I)),
     ],
 )
-def test_an_ops_result_takes_the_tier_of_the_registers_it_reads(m, code, ra, rb, imm, want):
+def test_an_ops_result_takes_the_tier_of_the_registers_it_reads(
+    m, code, ra, rb, imm, want
+):
     m.g[1], m.g[3] = Sv(5), Sv(7, I)
     run(m, [op_word(code, ra, rb, imm, f270_271=1, f221_223=0)])
     assert m.r[0] == want
@@ -1086,7 +1098,9 @@ def test_nothing_on_m_behind_a_head_keeps_the_register(m, before, unit, tier):
         ({"f302_307": 0x16}, I),  # a head without a result
     ],
 )
-def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(m, x0_head, tier):
+def test_nothing_on_m_beside_an_active_x0_head_keeps_x0s_port_at_inferred(
+    m, x0_head, tier
+):
     m.lanes["L1"][1], m.lanes["L1"][2] = Vec(A), Vec(B)
     m.g[12] = Sv(0x0A5A)
     read = w(f276=0, f274_275=1, f272_273=2, f224_228=12, **x0_head)
@@ -1107,9 +1121,17 @@ def test_nothing_on_m_beside_x0_0x13_and_s0_0x0_keeps_x0s_port(m, s0, tier):
 SENTINEL = Sv(0x0A5A)
 UNIT_HEADS = {"s0": "f278_284", "s1": "f285_291", "s2": "f292_295", "s3": "f296_301"}
 OPERANDS = {
-    "f37_40": 1, "f41_44": 2, "f45_48": 1, "f49_52": 2,
-    "f53_56": 1, "f57_60": 2, "f61_64": 1, "f65_68": 2,
-    "f84_87": 3, "f88_91": 4, "f96_99": 13,
+    "f37_40": 1,
+    "f41_44": 2,
+    "f45_48": 1,
+    "f49_52": 2,
+    "f53_56": 1,
+    "f57_60": 2,
+    "f61_64": 1,
+    "f65_68": 2,
+    "f84_87": 3,
+    "f88_91": 4,
+    "f96_99": 13,
 }
 """Each unit's a and b at register 1 and 2 of its lane file; S1 0x54's, S2 0xe's and S3 0x24's
 own-word results F1[3], F2[4], F3[13]."""
@@ -1162,7 +1184,9 @@ def test_nothing_on_m_beside_several_units_heads(pairs, at, sel, tier):
         (("s0", 0x22), ("s2", 0xE), I),  # another held head
     ],
 )
-def test_a_held_result_beside_another_units_own_word_result_is_on_m_alone(held, beside, tier):
+def test_a_held_result_beside_another_units_own_word_result_is_on_m_alone(
+    held, beside, tier
+):
     sel = int(held[0][1])
     alone = m_read([heads(held)], 1, sel)
     assert alone.value is not None and alone.tier == V
@@ -1171,10 +1195,18 @@ def test_a_held_result_beside_another_units_own_word_result_is_on_m_alone(held, 
 
 @pytest.mark.parametrize(("s0", "tier"), [(0x32, V), (0x22, I)])
 def test_two_held_results_in_one_word_each_under_its_unit(s0, tier):
-    swapped = {"f45_48": 2, "f49_52": 1}  # S1's a < b on every lane: its mask is not zero
-    alone, s1 = m_read([heads(("s0", s0))], 1, 0), m_read([heads(("s1", 0x45)) | swapped], 1, 1)
+    swapped = {
+        "f45_48": 2,
+        "f49_52": 1,
+    }  # S1's a < b on every lane: its mask is not zero
+    alone, s1 = (
+        m_read([heads(("s0", s0))], 1, 0),
+        m_read([heads(("s1", 0x45)) | swapped], 1, 1),
+    )
     assert alone.tier == s1.tier == V and alone.value | s1.value != alone.value
-    assert m_read([heads(("s0", s0), ("s1", 0x45)) | swapped], 1, 0) == Sv(alone.value, tier)
+    assert m_read([heads(("s0", s0), ("s1", 0x45)) | swapped], 1, 0) == Sv(
+        alone.value, tier
+    )
 
 
 EXTRACT_A = {"f292_295": 0xC, "f53_56": 1, "f57_60": 2, "f88_91": 3}
@@ -1254,7 +1286,8 @@ def test_s2s_high_half_by_a_negative_t_is_verified(head):
 
 # Measured on the camera: a at t 0; b at 1, 0xfe85, 0x10000 and 0xffffffff (a zero low half is not enough).
 @pytest.mark.parametrize(
-    ("t", "want"), [(0, A), (1, B), (0xFE85, B), (0x10000, B), (0xFFFFFFFF, B), (None, None)]
+    ("t", "want"),
+    [(0, A), (1, B), (0xFE85, B), (0x10000, B), (0xFFFFFFFF, B), (None, None)],
 )
 def test_s2_0x8_moves_a_where_t_is_0_else_b(t, want):
     m = Machine(Boot())
@@ -1410,9 +1443,15 @@ X1_K = {"f115_119": K >> 8, "f9_14": K >> 2 & 63, "f7_8": K & 3}
     ("beside", "want"),
     [
         ({}, Sv(142, V)),
-        ({"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}, Sv(142, V)),  # another divide
+        (
+            {"f308_312": 0x1E, "f110_114": 1, "f115_119": 2},
+            Sv(142, V),
+        ),  # another divide
         ({"f308_312": 0x13, **X1_K}, Sv(142 | K, V)),  # zK
-        ({"f308_312": 0x03, "f110_114": 4, **X1_K}, Sv(142 | 0x100 + K, I)),  # B[4] + zK
+        (
+            {"f308_312": 0x03, "f110_114": 4, **X1_K},
+            Sv(142 | 0x100 + K, I),
+        ),  # B[4] + zK
         ({"f308_312": 0x03, "f110_114": 5, **X1_K}, Sv(None, V)),  # B[5] unknown
         ({"f308_312": 0x1C, "f110_114": 0, "f115_119": 4}, Sv(142, I)),  # a transfer
     ],
@@ -1450,9 +1489,24 @@ S3_COPY = {"f296_301": 0x19, "f61_64": 2}  # lag 0
     ("before", "heads", "second", "tier"),
     [
         ({}, S0_MOVE | S3_COPY, S3_PORT, V),  # the measured form
-        ({}, S0_MOVE | {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}, {"f238_239": 2, "f151_154": 8}, I),
-        ({"f278_284": 0x0, "f37_40": 1, "f41_44": 2}, S3_COPY, S3_PORT, I),  # S0 0x0 at lag 1
-        ({"f278_284": 0x0, "f37_40": 1, "f41_44": 2}, S0_MOVE | S3_COPY, S3_PORT, I),  # two S0 results
+        (
+            {},
+            S0_MOVE | {"f285_291": 0x03, "f45_48": 1, "f49_52": 2},
+            {"f238_239": 2, "f151_154": 8},
+            I,
+        ),
+        (
+            {"f278_284": 0x0, "f37_40": 1, "f41_44": 2},
+            S3_COPY,
+            S3_PORT,
+            I,
+        ),  # S0 0x0 at lag 1
+        (
+            {"f278_284": 0x0, "f37_40": 1, "f41_44": 2},
+            S0_MOVE | S3_COPY,
+            S3_PORT,
+            I,
+        ),  # two S0 results
     ],
 )
 def test_two_ports_on_one_lane_register_the_first_wins(before, heads, second, tier):
