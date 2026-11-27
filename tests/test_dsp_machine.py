@@ -2141,3 +2141,19 @@ def test_what_u_takes_beside_an_s3_head_whose_take_is_open_is_a_hypothesis(
         assert got == Vec((*B[:4], *(None,) * 28))
     else:
         assert got == Vec((None,) * 32, H)
+
+
+def test_nothing_at_the_other_lag_on_the_run_whose_zeros_were_read_is_inferred(m):
+    """S0 0x54's zeros were read on its second run, one word after the head."""
+    alone_operands(m)
+    h = alone_head("s0", 0x54)
+    run(m, [w(**h, **alone_port("s0", 8)), IDLE, IDLE, w(**h, **alone_port("s0", 9))])
+    assert (m.lanes["L3"][8], m.lanes["L3"][9]) == (SENT, Vec(SENT.lanes, I))
+
+
+def test_a_kept_register_beside_a_second_port_is_inferred(m):
+    """The first port keeps L3[8] (nothing at the run's other lag); the second takes nothing."""
+    alone_operands(m)
+    h = alone_head("s0", 0x54)
+    run(m, [w(**h, **alone_port("s0", 8), **l3_port(8, 0))])
+    assert m.lanes["L3"][8] == Vec(SENT.lanes, I)
