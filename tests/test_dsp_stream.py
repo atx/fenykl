@@ -831,6 +831,61 @@ def test_two_loads_to_one_vector_and_a_store_behind_a_load_run_in_order():
         assert bytes(got.data) == data[32 * (r3 - 1) : 32 * r3] and got.weakest() == tier
 
 
+@pytest.mark.parametrize(
+    ("vector", "to", "tier"),
+    [
+        (0x7F, DST, V),  # the load's last vector: measured
+        (0x40, DST, I),  # another of its vectors
+        (0x7F, SRC + 0x10, I),  # a store over DRAM the load reads, not as measured
+    ],
+)
+def test_a_store_lands_an_outstanding_load_first(vector, to, tier):
+    """A one-vector store of a vector an outstanding 0x80-vector load writes."""
+    m, e = machine(bytes(range(256)) * 16), stream.Engine()
+    drive(m, e, [*lanes(0, 0x80, r6=0x100), *load(0, SRC, 0), *lanes(1, 1, r6=2)])
+    drive(m, e, [*store(1, vector * 64, to), WAIT, WAIT])
+    assert m.memory[vector].tier == tier and not e.off
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "tier"),
+    [
+        ((0x80, 0), (1, 0x7F), V),  # a load of the last 32 bytes stored: measured
+        ((0x80, 0), (1, 0x40), I),  # other bytes of the store
+        ((1, 0), (1, 0), V),
+        ((2, 0), (1, 0), I),  # the first of two vectors
+    ],
+)
+def test_a_load_behind_an_outstanding_store_is_verified_only_as_measured(first, second, tier):
+    """(vectors, from) of a store to dst, then of a load from dst into vector 0x200."""
+    (n, frm), (k, at) = first, second
+    m, e = machine(bytes(range(256)) * 16), stream.Engine()
+    drive(m, e, [*lanes(0, n, r6=2 * n), *load(0, SRC, 0), WAIT, *lanes(1, k, r6=2 * k)])
+    drive(m, e, [*store(0, frm, DST), *load(1, DST + 32 * at, 0x200 * 64), WAIT, WAIT])
+    assert m.memory[0x200].tier == tier and not e.off
+
+
+@pytest.mark.parametrize(("r3", "tier"), [(1, V), (0x80, I)])
+def test_a_store_over_the_bytes_an_outstanding_load_reads_is_verified_after_one_vector(r3, tier):
+    """A load of r3 vectors from dst, then a one-vector store to its last 32 bytes: the load reads
+    what dst held (measured after a one-vector load)."""
+    m, e = machine(bytes(range(32))), stream.Engine()
+    m.boot.put(DST, bytes(32 * r3), "dst")
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0x200 * 64), WAIT])
+    drive(m, e, [*lanes(1, r3, r6=2 * r3), *load(1, DST, 0), *lanes(2, 1, r6=2)])
+    drive(m, e, [*store(2, 0x200 * 64, DST + 32 * (r3 - 1)), WAIT, WAIT])
+    assert m.memory[r3 - 1].lanes == (0,) * 32 and m.memory[r3 - 1].tier == tier
+
+
+@pytest.mark.parametrize(("r3", "tier"), [(1, V), (2, I)])
+def test_a_later_load_to_one_vector_lands_verified_behind_a_one_vector_load(r3, tier):
+    data = bytes(range(128))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, 0), *lanes(2, 1, r6=2)])
+    drive(m, e, [*load(2, SRC + 64, 0), WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(64, 96)) and m.memory[0].tier == tier
+
+
 def test_a_store_of_an_unwritten_vector_leaves_an_unrelated_load_outstanding():
     m, e = machine(bytes(64)), stream.Engine()
     drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(1, 1, r6=2), *store(1, 5 * 64, DST)])
@@ -1222,6 +1277,7 @@ def test_words_beside_the_measured_rows_and_local_loads_are_verified():
     other = block(0, 2, 0, 4, 0x100, 0, 0x10, 0x40, 1)
     for values, tier in (
         ([*rows, *load(0, SRC, 0x100 * 64)], V),
+        ([*rows, *load(0, SRC, (LANE_VECTORS - 0x40) * 64)], I),  # its rows wrap
         ([*loc, *load(0, SRC, 0x1000)], V),
         ([*other, *load(0, SRC, 0x1000)], H),
     ):

@@ -377,11 +377,12 @@ such a vector, gave the bytes as alone (verified, pre-registered; one job each).
 QUEUE_SHAPES = tuple((1, None, 0x20, n, None, 0x10, 2 * n, 1) for n in (1, 0x80))
 """One-row byte loads and stores of one and of 0x80 vectors. Handed back to back on one DRAM range
 or one lane vector, they ran in the order handed (verified, pre-registered against the reverse;
-one job each): a load after a store read the stored bytes, a store after a load did not reach it,
-the later of two stores to one address won, two loads to one vector (on two channels and on one)
-left the later's bytes, and a store of the last vector an outstanding load writes stored the
-load's bytes. Each ran with the later command of one vector and the earlier of one or 0x80: V
-in those roles only, other shapes and roles keep the order at inferred."""
+one job each): a load of the last 32 bytes a store wrote read the stored bytes (after a store of
+one and of 0x80 vectors), a store to the bytes a one-vector load read did not reach it, the later
+of two one-vector stores to one address won, two one-vector loads to one vector (on two channels
+and on one) left the later's bytes, and a one-vector store of the last vector an outstanding load
+writes stored the load's bytes. V in those roles only; other shapes, overlaps and roles keep the
+order at inferred."""
 LANE_STORE_ZEROS = frozenset({(0x10, 2, 2), (0x200, 1, 2)})
 """A plain one-row lane-memory store of bytes (r5 0x10) at r2 other than 0x20, by the (r2, r3, r6)
 that ran: it wrote zeros over its 32 bytes (verified, pre-registered against the bytes at r2 0x20,
@@ -619,7 +620,12 @@ class Engine:
             and (cmd.kind, r[3].value, r[6].value) in HALF_ROWS_BESIDE
             and last < LANE_VECTORS
         )
-        rows_beside = plain and cmd.kind != STORE and _fits(cmd, ROWS_LOAD_BESIDE)
+        rows_beside = (
+            plain
+            and cmd.kind != STORE
+            and _fits(cmd, ROWS_LOAD_BESIDE)
+            and last < LANE_VECTORS
+        )
         return vectors, V if byte_row or half_row or rows_beside else I
 
     def finish(self, m: Machine) -> None:
@@ -951,9 +957,11 @@ class Engine:
         later = self.drams[-1].queue == 1  # measured as the later command: one vector only
         for d in self.drams[:-1]:
             if _overlap(d.writes, mine):
-                tier = min(tier, V if later and d.queue and _inside(d.writes, mine) else I)
+                tier = min(tier, V if later and d.queue and _last_row(d.writes, mine) else I)
             if store and _overlap(d.reads, mine):
-                d.cap = min(d.cap, V if later and d.queue and _inside(d.reads, mine) else I)
+                # Measured behind a one-vector load only.
+                ran = later and d.queue == 1 and _last_row(d.reads, mine)
+                d.cap = min(d.cap, V if ran else I)
         if store:
             self.drams[-1].writes = mine
         else:
@@ -1096,13 +1104,15 @@ class Engine:
         return any(_holds(m, h, at) for h, _, _ in self.held)
 
     def _land_loads(self, m: Machine, vectors: set[int]) -> None:
-        """A store handed after a load that writes vectors it reads lands that load first."""
+        """A store handed after a load that writes vectors it reads lands that load first, at
+        verified only as `QUEUE_SHAPES` ran: a one-vector store of the load's last vector."""
         for h, q, complete in list(self.held):
             if not any(_holds(m, h, at) for at in vectors):
                 continue
-            ordered = V if q and self.drams[-1].queue == 1 else I
-            complete(m, min(self.cap, ordered))
             k = next(i for i, f in enumerate(self.outstanding) if f is complete)
+            # A load of `QUEUE_SHAPES` is one row: its last vector is the last one it holds.
+            ordered = q and self.drams[-1].queue == 1 and vectors == {list(h)[-1]}
+            complete(m, min(self.cap, self.drams[k].cap, V if ordered else I))
             self.outstanding[k] = _nothing
 
     @staticmethod
@@ -1386,12 +1396,9 @@ def _holds(m: Machine, held: dict[int, Vec], at: int) -> bool:
     return at in held and m.memory.get(at) is held[at]
 
 
-def _inside(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
-    """Every row of `ys` lies in a row of `xs`, a whole number of vectors of bytes from its start
-    (the overlaps `QUEUE_SHAPES` measured)."""
-    return all(
-        any(b <= a and a + n <= b + k and (a - b) % 32 == 0 for b, k in xs) for a, n in ys
-    )
+def _last_row(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
+    """`ys` is the last 32 bytes of `xs`'s one row (the overlaps `QUEUE_SHAPES` measured)."""
+    return len(xs) == 1 and ys == [(xs[0][0] + xs[0][1] - 32, 32)]
 
 
 def _floored(cmd: _Command, rows: list[tuple[int, int]]) -> Confidence:
