@@ -1,9 +1,9 @@
 """Program 16, the stock copy (command 0xF): its model, built from the stock program at runtime.
 
-The driver passes src, dst and len in DSP local memory words 0..2. No word of the program is
-decoded; what is known comes from camera runs that replaced a word by the idle word ("idled") or
-swept one of its fields (the register field 115..119, word 60's f76_79), and is stated here by word
-index:
+The driver passes src, dst and len in DSP local memory words 0..2. The model's rows take the
+undecoded stock words as opaque: what is known of them comes from camera runs that replaced a word
+by the idle word ("idled") or swept one of its fields (the register field 115..119, word 60's
+f76_79), and is stated here by word index:
 
 - `_PARTS`: what the job does without each undecoded stock word;
 - `_CHANNELS`: the register-transfer words, grouped by their register context, and the role of
@@ -15,9 +15,10 @@ covers a job's words from it: each undecoded stock word is the row of its stock 
 register transfers are X1's semantic at any index, matched by their signature, with the
 register contexts and the register group B and route values of the stock transfers as the
 reference. A job with words inserted into the stock program is covered by content (`align`,
-`Copy16Model.cover_job`). No stock word is part of this code. The model resolves a job's trace
-into its one load and one store (`resolve`) and applies
-them to the boot (`apply`):
+`Copy16Model.cover_job`). A job with a halt off the stock one is stepped on a decoded
+`machine.Machine` (`Copy16Model._halt`). No stock word's bits are part of this code: edits are
+stated against the stock value read at runtime. The model resolves a job's trace into its one
+load and one store (`resolve`) and applies them to the boot (`apply`):
 
     load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
     store:  dst[i] = format(buffer)[i + o76] for i in [0, n73); dst[n73, len) not written
@@ -152,9 +153,9 @@ _PARTS: dict[int, Part] = {
     27: Part(
         "load address (hypothesis)",
         Outcome.DATA_UNKNOWN,
-        "idled, dst gets foreign data; its target moved from 79 to 32, its own fall-through, "
-        "copies: the target bits have no other effect",
-        flips={"imm": {79 ^ 32: Outcome.OK}},
+        "idled, dst gets foreign data; its target moved to 32, its own fall-through, copies: "
+        "the target bits have no other effect",
+        targets={32: Outcome.OK},
     ),
     28: Part(
         "completion",
@@ -171,11 +172,11 @@ _PARTS: dict[int, Part] = {
         "guard",
         Outcome.TIMEOUT,
         f"{_COMPLETION} with dst not written; its register field is don't-care (copies at all "
-        "31 values); its target moved from 58 to 50, the loop's top: dst is written, then the "
+        "31 values); its target moved to 50, the loop's top: dst is written, then the "
         "job times out (the target is live, so 45 is taken in a copy); moved to 51: the job "
         "times out with dst not written (whether 51 is reached as an index is open)",
         operand={r: Outcome.OK for r in range(31)},
-        flips={"imm": {58 ^ 50: Outcome.STORE_TIMEOUT, 58 ^ 51: Outcome.TIMEOUT}},
+        targets={50: Outcome.STORE_TIMEOUT, 51: Outcome.TIMEOUT},
     ),
     58: Part(
         "fixed-content load address",
@@ -367,7 +368,7 @@ _CHANNELS: tuple[Channel, ...] = (
             Role(
                 "stream",
                 72,
-                "only its stock r8 copies; timeout or dst not written elsewhere; -5 at r1",
+                "only its stock register copies; timeout or dst not written elsewhere; -5 at r1",
                 _except(
                     _table(
                         Outcome.NO_STORE,
@@ -405,7 +406,7 @@ _CHANNELS: tuple[Channel, ...] = (
             Role(
                 "stream",
                 77,
-                "only its stock r2 copies; dst not written at every other value",
+                "only its stock register copies; dst not written at every other value",
                 _table(Outcome.NO_STORE, ok=(2,)),
             ),
         ),
@@ -429,7 +430,7 @@ or with 47 on 8 too, never ended (measured on the camera, one run each)."""
 
 # Word 47's formats by register; r21's is a boot parameter. The format is the register's value,
 # the number of elements per 16-byte line (4, 8, 9, 10 and 12 each verified on the camera against
-# alternatives written before the run, 1024..2048 16-bit elements each): 0x10, the stock r6's,
+# alternatives written before the run, 1024..2048 16-bit elements each): 0x10, the stock one,
 # each element's low byte; 0x0c each line 12 elements' low 10 bits, packed (the bit order, least
 # significant first, the last byte 0, fitted after the run: inferred); 0x0a each line 10
 # elements' low 12 bits, so packed; 0x09 each line 9 elements' low 14 bits, least significant
@@ -586,7 +587,11 @@ def _opaque_classes(
             raise ValueError(f"stock words {at} are equal but have different parts")
         operands = frozenset(
             lookup(k).id
-            for k in (*((part.operand_field,) if part.operand else ()), *part.flips)
+            for k in (
+                *((part.operand_field,) if part.operand else ()),
+                *part.flips,
+                *(("imm",) if part.targets else ()),
+            )
         )
         word = words[at[0]]
         match = {f.id: f.get(word.value) for f in FIELDS if f.id not in operands}
@@ -619,9 +624,12 @@ LOOP_GROUP = frozenset({28, GUARD, *LOOP})
 
 
 def _edit(stock: Word, word: Word) -> str:
-    """An edit of a stock word: "idle", or the fields it flips against the stock value."""
+    """An edit of a stock word: "idle", a control word's new target, or the fields it flips
+    against the stock value."""
     if word == IDLE:
         return "idle"
+    if stock.control and _key(word) == _key(stock):
+        return f"target {word.target}"
     return ", ".join(
         f"{f.label} ^ {f.get(word.value) ^ f.get(stock.value):#x}"
         for f in FIELDS
@@ -671,7 +679,7 @@ _LOOP_ENTRIES: dict[frozenset[tuple[int, str]], tuple[Outcome, str]] = {
         Outcome.NO_STORE,
         "45 and 53 idled: the job ends through the done path, so idle 45's timeout needs 53",
     ),
-    frozenset({(GUARD, f"imm ^ {58 ^ 50:#x}"), (53, "idle")}): (
+    frozenset({(GUARD, "target 50"), (53, "idle")}): (
         Outcome.STORE_TIMEOUT,
         "45's target moved to 50 and 53 idled: as with 53 stock, 53 not its cause",
     ),
@@ -1195,6 +1203,9 @@ class Copy16Model:
         if part.operand is not None and f is lookup(part.operand_field):
             o = part.operand.get(value)
             at = f"r{value}" if f.kind is Kind.REG else f"{f.label}={value:#x}"
+        elif part.targets and f is lookup("imm"):
+            o = part.targets.get(value)
+            at = f"target {value}"
         else:
             flipped = value ^ stock[f.id]
             flips = {lookup(k).id: t for k, t in part.flips.items()}
@@ -1478,7 +1489,7 @@ class Copy16Model:
 
 _STOCK_PATH = {27: False, 45: True}
 """The decisions of the copy's two forward branches as the camera runs show them: 27 (to the
-return 79) not taken (inferred: the store words after it act) and 45 (over the loop 50..57)
+return) not taken (inferred: the store words after it act) and 45 (over the loop 50..57)
 taken (inferred, strong: idling its delay slots 46..49 times the job out, idling 50..57 has no
 effect, moving its target to 50 changes the copy into a timeout, and a halt at 50 with 51..57
 idled has no effect in an aligned copy and with each of src, dst, len, src + len, dst + len and

@@ -511,6 +511,13 @@ def flipped(at: int, key: str, bits: int, base: Program | None = None) -> Progra
     return Program(tuple(words))
 
 
+def retargeted(at: int, target: int, base: Program | None = None) -> Program:
+    """`base` (default the stock copy) with control word `at`'s target moved to `target`."""
+    words = list((base or stock()).words)
+    words[at] = Word.from_fields({"imm": target}, base=words[at])
+    return Program(tuple(words))
+
+
 def without(program: Program, *at: int) -> Program:
     words = list(program.words)
     for i in at:
@@ -519,14 +526,12 @@ def without(program: Program, *at: int) -> Program:
 
 
 RAMP = bytes(range(256)) * 4
-# 45's target 58 moved to the loop's top 50, or to 51.
-TARGET_50, TARGET_51 = 58 ^ 50, 58 ^ 51
 
 
 TIMEOUTS = {
-    "to-50": (lambda: flipped(45, "imm", TARGET_50), True),
-    "to-50-idle-53": (lambda: without(flipped(45, "imm", TARGET_50), 53), True),
-    "to-51": (lambda: flipped(45, "imm", TARGET_51), False),
+    "to-50": (lambda: retargeted(45, 50), True),
+    "to-50-idle-53": (lambda: without(retargeted(45, 50), 53), True),
+    "to-51": (lambda: retargeted(45, 51), False),
     "idle-45": (lambda: idled(45), False),
     "idle-28": (lambda: idled(28), True),
     "idle-28-53": (lambda: idled(28, 53), True),
@@ -551,7 +556,7 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
     assert result.taint is Confidence.INFERRED  # two edits
     # The loop's words were measured with the loop skipped: other pairs are open.
     for program in (
-        without(flipped(45, "imm", TARGET_50), 50),
+        without(retargeted(45, 50), 50),
         idled(45, 56),
         idled(28, 51),
     ):
@@ -563,13 +568,13 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
 
 
 def test_operand_edits_are_measured_one_field_at_a_time():
-    # 27's target moved from 79 to its own fall-through.
-    result, dst = copy(StockBoot(), flipped(27, "imm", 79 ^ 32), RAMP)
+    # 27's target moved to its own fall-through.
+    result, dst = copy(StockBoot(), retargeted(27, 32), RAMP)
     assert result.status is Status.OK and bytes(dst.data) == RAMP
     with pytest.raises(UnknownSemantics, match="word 45: no semantics for f15_22"):
         copy(StockBoot(), flipped(45, "imm", 0x10), RAMP)
     with pytest.raises(UnknownSemantics, match="two fields of one word"):
-        copy(StockBoot(), flipped(45, "xreg", 1, flipped(45, "imm", TARGET_50)), RAMP)
+        copy(StockBoot(), flipped(45, "xreg", 1, retargeted(45, 50)), RAMP)
 
 
 @pytest.mark.parametrize(
@@ -589,7 +594,7 @@ def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
     boot.put(dst, b"\xa5" * length, "prefill")
     result = run_model(boot, model(), commands.copy(marker, src, dst, length))
     assert result.status is Status.OK and bytes(boot.read(dst, length).data) == data
-    result, dst = copy(StockBoot(), flipped(45, "imm", TARGET_50, marker), RAMP)
+    result, dst = copy(StockBoot(), retargeted(45, 50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None
     assert bytes(dst.data) == b"\xa5" * LEN
 
@@ -614,7 +619,7 @@ def halted(at: int, base: Program | None = None) -> Program:
         (lambda: halted(52, idled(28)), LEN, "after a loop word"),
         # 45 to the loop's top: the store at 56 is handed before the halt at 57.
         (
-            lambda: halted(57, flipped(45, "imm", TARGET_50)),
+            lambda: halted(57, retargeted(45, 50)),
             LEN,
             "after the stream started",
         ),

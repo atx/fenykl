@@ -169,6 +169,8 @@ class Part:
     flips: Mapping[str, Mapping[int, Outcome]] = field(default_factory=dict)
     """Outcomes of edits of one field, by field and by the bits flipped against the stock
     value (so that no stock value is part of the code)."""
+    targets: Mapping[int, Outcome] = field(default_factory=dict)
+    """Outcomes of a control word's target moved, by the new target (its imm)."""
     seen: tuple[int, ...] = (KIB,)
     """The job lengths at which `missing` and `operand` were seen on the camera [verified];
     at other lengths they are inferred."""
