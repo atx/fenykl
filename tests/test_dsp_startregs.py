@@ -3,7 +3,7 @@ from functools import cache
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp.emu import Boot, back_firmware
+from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Carry, Sv
 from fenykl.dsp.program import Program, stock_programs
@@ -14,6 +14,7 @@ from fenykl.dsp.stock.registers import (
     R14_EXACT,
     BootParams,
     JobView,
+    back_firmware,
     machine_start,
 )
 from fenykl.dsp.word import Word

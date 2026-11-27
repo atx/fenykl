@@ -1,5 +1,6 @@
 import base64
 import json
+import random
 import struct
 import warnings
 from dataclasses import replace
@@ -7,29 +8,38 @@ from functools import cache
 from pathlib import Path
 
 import pytest
-from conftest import stock_image
+from conftest import CONF, stock_image
 
 from fenykl.dsp.asm import Bundle, Label, raw
-from fenykl.dsp.emu import MAIN_CODE, Boot, back_firmware, dram_alias
+from fenykl.dsp.emu import Boot, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.job import Stop
-from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
-from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics
+from fenykl.dsp.machine import Machine, Sv
+from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_items
+from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics, ring_length
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.copy import Copy16Model
-from fenykl.dsp.stock.intervals import RegSet, destinations
-from fenykl.dsp.stock.model import Mode, Sequencer, Status, StockBoot, run_model
-from fenykl.dsp.stock.registers import R14_BELOW, R14_EXACT, BootParams, JobView
+from fenykl.dsp.stock.intervals import RegSet, destinations, op_effect
+from fenykl.dsp.stock.model import Status, StockBoot, run_model
+from fenykl.dsp.stock.registers import (
+    MAIN_CODE,
+    R14_BELOW,
+    R14_EXACT,
+    BootParams,
+    Reg,
+    RegisterFile,
+    back_firmware,
+)
 from fenykl.dsp.word import IDLE, Word
+from fenykl.firmware import unpack_firmware
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
 SRC_AREA = 0xA0FCA800
-"""The base of the bench harness's src area, which its patterns are indexed from."""
+"""The base of the src area of the camera runs, which their patterns are indexed from."""
 K = 0x9E3779B1
 
 
 def pattern(kind: str, seed: int, src: int, n: int) -> bytes:
-    """The bench harness's src patterns: u32 words by byte offset from SRC_AREA."""
+    """The src patterns of the camera runs: u32 words by byte offset from SRC_AREA."""
 
     def word(o: int) -> int:
         match kind:
@@ -92,7 +102,6 @@ SEGMENT_KEYS = {
     "firmware": {"at", "end", "kind", "address"},
     "unknown": {"at", "end", "kind"},
 }
-CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
 # Per job: the weakest taint of the known checked dst bytes ("-" none known or no dst checked,
 # "." job not checked), then the result's taint, by stock.model's confidence rule: a copy is at
@@ -151,7 +160,7 @@ def check_keys(vector: dict) -> list[str]:
     return bad
 
 
-def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
+def run_vector(vector: dict) -> list[str]:
     """Replays the vector's jobs; returns its mismatches, empty when every check holds."""
     bad = check_keys(vector)
     boot = boot_of(vector["boot"])
@@ -177,7 +186,6 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
             boot,
             model(),
             commands.copy(edited(job["edits"]), job["src"], job["dst"], job["len"]),
-            sequencer=Sequencer(mode),
         )
         status = result.status
         if CONF[taint[1]] is not result.taint:
@@ -234,27 +242,48 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
     return bad
 
 
-@pytest.mark.parametrize("mode", list(Mode), ids=lambda m: m.value)
 @pytest.mark.parametrize("path", sorted(VECTORS.glob("*.json")), ids=lambda p: p.stem)
-def test_camera_vector(path: Path, mode: Mode):
+def test_camera_vector(path: Path):
     vector = json.loads(path.read_text())
     assert vector["name"] == path.stem
-    assert run_vector(vector, mode) == [], vector["fact"]
+    assert run_vector(vector) == [], vector["fact"]
 
 
 def test_every_vector_has_its_taints():
     assert sorted(TAINTS) == sorted(p.stem for p in VECTORS.glob("*.json"))
 
 
+def test_the_vectors_hold_no_firmware_bytes():
+    # No 16-byte window of the firmware's unpacked blocks or program items at a 16-byte offset
+    # is in a vector's dst bytes, so no run of 31 or more firmware bytes is (windows of fewer than 4 distinct byte values
+    # left out: zero runs with a stray byte, which the patterns hold too).
+    windows = set()
+    for path in VECTORS.glob("*.json"):
+        for job in json.loads(path.read_text())["jobs"]:
+            for seg in job.get("expect", {}).get("dst", []):
+                if "data" not in seg:
+                    continue
+                blob = base64.b64decode(seg["data"])
+                windows |= {
+                    blob[o : o + 16]
+                    for o in range(len(blob) - 15)
+                    if len(set(blob[o : o + 16])) >= 4
+                }
+    image = stock_image("em10ii")
+    bodies = [b.body for b in unpack_firmware(image).blocks]
+    bodies += stock_items(image).values()
+    for body in bodies:
+        assert not any(
+            body[o : o + 16] in windows for o in range(0, len(body) - 15, 16)
+        )
+
+
 SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 
 
 def copy(boot: StockBoot, program: Program, data: bytes, strict: bool = True):
-    boot.put(SRC, data, "src")
-    boot.put(DST, b"\xa5" * LEN, "prefill")
-    result = run_model(
-        boot, model(), commands.copy(program, SRC, DST, LEN), strict=strict
-    )
+    """`run` of `data`; (result, dst bytes)."""
+    result, boot = run(program, strict=strict, boot=boot, data=data)
     return result, boot.read(DST, LEN)
 
 
@@ -383,9 +412,17 @@ def test_a_counted_transfer_before_the_return_stalls_the_job():
     assert any("unset stream slot" in why for why in result.why)
 
 
-def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
+def run(
+    program: Program,
+    length: int = LEN,
+    strict: bool = True,
+    boot: StockBoot | None = None,
+    data: bytes | None = None,
+):
+    """The copy job of `length` bytes of `data` (default a byte ramp) from SRC onto a prefilled
+    dst; (result, boot)."""
     boot = boot or StockBoot()
-    boot.put(SRC, bytes(range(256)) * (length // 256), "src")
+    boot.put(SRC, bytes(range(256)) * (length // 256) if data is None else data, "src")
     boot.put(DST, b"\xa5" * length, "prefill")
     job = commands.copy(program, SRC, DST, length)
     result = run_model(boot, model(), job, strict=strict)
@@ -487,21 +524,29 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
         run(Program(tuple(words)))
 
 
-def test_a_halt_flow_off_script_ends_open():
-    """The stepped flow stops at its open end, not raising; `_halt` refuses it after."""
-    words = list(idled(45).words)
-    words[52] = words[5]
-    job = commands.copy(Program(tuple(words)), SRC, DST, LEN)
-    view = JobView(SRC, DST, LEN, BootParams(R14_BELOW))
-    flow, machine = Copy16Model._halt_flow(job, view)
-    assert flow.stop is Stop.OPEN_END and machine.stream.off
-    assert machine.stream.off in flow.why
+def test_a_branch_the_machine_cannot_decide_takes_the_stock_path():
+    """Idling word 15 leaves r7 unknown at the branch 27: the stock path (not taken) leads to a
+    halt at 35, a hypothesis; taken, the job would return at 79 without reaching it."""
+    result, boot = run(halted(35, idled(15)))
+    assert result.why == [
+        "op 7 at word 35 halts the job before the stream: dst not written"
+    ]
+    assert result.status is Status.OK and result.stored is None
+    assert result.taint is Confidence.HYPOTHESIS
+    assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
 
 
 def flipped(at: int, key: str, bits: int, base: Program | None = None) -> Program:
     """`base` (default the stock copy) with `bits` of field `key` of word `at` flipped."""
     words = list((base or stock()).words)
     words[at] = Word.from_fields({key: words[at][key] ^ bits}, base=words[at])
+    return Program(tuple(words))
+
+
+def retargeted(at: int, target: int, base: Program | None = None) -> Program:
+    """`base` (default the stock copy) with control word `at`'s target moved to `target`."""
+    words = list((base or stock()).words)
+    words[at] = Word.from_fields({"imm": target}, base=words[at])
     return Program(tuple(words))
 
 
@@ -513,14 +558,12 @@ def without(program: Program, *at: int) -> Program:
 
 
 RAMP = bytes(range(256)) * 4
-# 45's target 58 moved to the loop's top 50, or to 51.
-TARGET_50, TARGET_51 = 58 ^ 50, 58 ^ 51
 
 
 TIMEOUTS = {
-    "to-50": (lambda: flipped(45, "imm", TARGET_50), True),
-    "to-50-idle-53": (lambda: without(flipped(45, "imm", TARGET_50), 53), True),
-    "to-51": (lambda: flipped(45, "imm", TARGET_51), False),
+    "to-50": (lambda: retargeted(45, 50), True),
+    "to-50-idle-53": (lambda: without(retargeted(45, 50), 53), True),
+    "to-51": (lambda: retargeted(45, 51), False),
     "idle-45": (lambda: idled(45), False),
     "idle-28": (lambda: idled(28), True),
     "idle-28-53": (lambda: idled(28, 53), True),
@@ -545,7 +588,7 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
     assert result.taint is Confidence.INFERRED  # two edits
     # The loop's words were measured with the loop skipped: other pairs are open.
     for program in (
-        without(flipped(45, "imm", TARGET_50), 50),
+        without(retargeted(45, 50), 50),
         idled(45, 56),
         idled(28, 51),
     ):
@@ -557,13 +600,13 @@ def test_the_loop_words_need_the_guard_unless_both_are_idle():
 
 
 def test_operand_edits_are_measured_one_field_at_a_time():
-    # 27's target moved from 79 to its own fall-through.
-    result, dst = copy(StockBoot(), flipped(27, "imm", 79 ^ 32), RAMP)
+    # 27's target moved to its own fall-through.
+    result, dst = copy(StockBoot(), retargeted(27, 32), RAMP)
     assert result.status is Status.OK and bytes(dst.data) == RAMP
     with pytest.raises(UnknownSemantics, match="word 45: no semantics for f15_22"):
         copy(StockBoot(), flipped(45, "imm", 0x10), RAMP)
     with pytest.raises(UnknownSemantics, match="two fields of one word"):
-        copy(StockBoot(), flipped(45, "xreg", 1, flipped(45, "imm", TARGET_50)), RAMP)
+        copy(StockBoot(), flipped(45, "xreg", 1, retargeted(45, 50)), RAMP)
 
 
 @pytest.mark.parametrize(
@@ -583,7 +626,7 @@ def test_a_halt_at_the_loop_top_acts_only_when_the_guard_goes_there(
     boot.put(dst, b"\xa5" * length, "prefill")
     result = run_model(boot, model(), commands.copy(marker, src, dst, length))
     assert result.status is Status.OK and bytes(boot.read(dst, length).data) == data
-    result, dst = copy(StockBoot(), flipped(45, "imm", TARGET_50, marker), RAMP)
+    result, dst = copy(StockBoot(), retargeted(45, 50, marker), RAMP)
     assert result.status is Status.OK and result.stored is None
     assert bytes(dst.data) == b"\xa5" * LEN
 
@@ -608,7 +651,7 @@ def halted(at: int, base: Program | None = None) -> Program:
         (lambda: halted(52, idled(28)), LEN, "after a loop word"),
         # 45 to the loop's top: the store at 56 is handed before the halt at 57.
         (
-            lambda: halted(57, flipped(45, "imm", TARGET_50)),
+            lambda: halted(57, retargeted(45, 50)),
             LEN,
             "after the stream started",
         ),
@@ -638,20 +681,29 @@ def test_route_nibbles_must_hold_the_stock_values():
 
 
 @pytest.mark.parametrize(
-    "order",
-    [list(range(19, -1, -1)), [*range(1, 20), 0], [1, 0, *range(2, 20)]],
+    "order, stores",
+    [
+        (list(range(19, -1, -1)), False),
+        ([*range(1, 20), 0], False),
+        ([1, 0, *range(2, 20)], True),
+    ],
     ids=["reversed", "rotated", "swapped"],
 )
-def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int]):
+def test_reordered_prologue_words_are_at_most_hypothesis(
+    order: list[int], stores: bool
+):
     words = stock().words
     program = Program((*(words[i] for i in order), *words[20:]))
-    try:
-        result, boot = run(program)
-    except UnknownSemantics:
-        return
-    assert result.taint is Confidence.HYPOTHESIS
+    with pytest.raises(UnknownSemantics, match="word 0: no semantics"):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert result.status is Status.OK and result.taint is Confidence.HYPOTHESIS
+    assert (result.stored is not None) is stores
     dst = boot.read(DST, LEN)
-    assert dst.weakest() is Confidence.HYPOTHESIS or bytes(dst.data) == b"\xa5" * LEN
+    if stores:
+        assert dst.weakest() is Confidence.HYPOTHESIS
+    else:
+        assert bytes(dst.data) == b"\xa5" * LEN
 
 
 def test_a_stock_word_at_another_index_is_no_row():
@@ -808,15 +860,74 @@ def test_an_insert_after_the_last_word_moves_nothing():
     assert boot.read(DST, LEN).taint == base.read(DST, LEN).taint
 
 
+def any_operands(code: int, imm: int) -> Word:
+    """Op `code` on r1 and r2 or imm, in the operand form its family takes."""
+    for args in (
+        Operands(ra=1, rb=2),
+        Operands(ra=1, imm=imm),
+        Operands(ra=1, rb=2, imm=imm),
+    ):
+        try:
+            return Word.data(code, args)
+        except ValueError:
+            continue
+    raise AssertionError(f"no operand form for op {code:#x}")
+
+
+COMPUTING = sorted(
+    {c for c, s in OP_SEMANTICS.items() if s.rule is not None} | {0x0B, 0x38, 0x44}
+)
+RING_IMMS = [x for x in range(0x200) if ring_length(x)[0] is not None]
+
+
+@pytest.mark.parametrize("code", COMPUTING, ids=hex)
+def test_an_op_over_exact_intervals_is_what_the_machine_computes(code: int):
+    """Where the interval evaluation gives a value, it and its tier are the machine's."""
+    rng = random.Random(code)
+    for _ in range(20):
+        a, b = rng.randrange(-0x800, 0x800), rng.randrange(-0x800, 0x800)
+        imm = rng.choice(RING_IMMS) if code == 0x44 else rng.randrange(32)
+        word = Word.from_fields(
+            {"f272_273": 1, "f224_228": 5}, base=any_operands(code, imm)
+        )
+        m = Machine(Boot())
+        m.g[1], m.g[2] = Sv(a & 0xFFFFFFFF), Sv(b & 0xFFFFFFFF)
+        m.execute(0, word, 0)
+        regs = RegisterFile()
+        regs[1] = Reg(a, a, Confidence.VERIFIED, "a")
+        regs[2] = Reg(b, b, Confidence.VERIFIED, "b")
+        effect = op_effect(OP_SEMANTICS[code], word, regs)
+        assert effect is not None and effect.computes
+        if effect.result is None:
+            continue
+        got = Sv(effect.result.lo & 0xFFFFFFFF, effect.result.taint)
+        assert got == m.g[5], (a, b, imm)
+
+
+@pytest.mark.parametrize(
+    "r, tier", [(0, Confidence.VERIFIED), (1, Confidence.INFERRED)]
+)
+def test_a_select_is_the_hull_of_its_inputs_at_the_measured_r_fields(r: int, tier):
+    """With the R file not modelled, 0x08 gives the hull of ra and rb; verified at an f120_122
+    measured with R both 0 and not, inferred at the others (as the machine has it)."""
+    word = Word.from_fields({"f120_122": r}, base=e_op(0x08, 1, 2))
+    regs = RegisterFile()
+    regs[1] = Reg(3, 5, Confidence.VERIFIED, "a")
+    regs[2] = Reg(9, 9, Confidence.VERIFIED, "b")
+    effect = op_effect(OP_SEMANTICS[0x08], word, regs)
+    assert effect is not None and effect.result is not None
+    assert (effect.result.lo, effect.result.hi, effect.result.taint) == (3, 9, tier)
+
+
 def test_a_result_goes_to_its_port_registers_or_is_open():
     const = Word.data(0x0B, Operands(ra=0, imm=1))
     both = Word.from_fields(
         {"f267_268": 1, "f211_215": 5, "f272_273": 1, "f224_228": 6}, base=const
     )
-    assert destinations(both) == ([(RegSet.XREG, 5, 4), (RegSet.OPERAND, 6, 3)], "")
+    assert destinations(both) == ([(RegSet.XREG, 5), (RegSet.OPERAND, 6)], "")
     # A port that writes nothing (f267_268 = 2) is no destination, open or not.
     idle = Word.from_fields({"f267_268": 2, "f211_215": 5}, base=both)
-    assert destinations(idle) == ([(RegSet.OPERAND, 6, 3)], "")
+    assert destinations(idle) == ([(RegSet.OPERAND, 6)], "")
     assert destinations(const)[1] == "no PR port enabled: where the result goes is open"
     other = Word.from_fields({"f272_273": 2, "f224_228": 4}, base=const)
     assert destinations(other) == ([], "where the result goes under f272_273=2 is open")
@@ -844,27 +955,27 @@ def test_an_inserted_op_takes_its_semantics_tier():
     "word, at, why",
     [
         (
-            Word.from_fields({"f313_319": 0x4A}, base=IDLE),
+            lambda: Word.from_fields({"f313_319": 0x4A}, base=IDLE),
             12,
             "op4a has no op semantics",
         ),
         # A word load at r2, (len + 0x1f) / 16 at the engine site: not word-aligned.
         (
-            Word.data(0x1A, Operands(ra=2, imm=0)),
+            lambda: Word.data(0x1A, Operands(ra=2, imm=0)),
             65,
             "outside what its op semantics covers",
         ),
         (
-            Word.from_fields({"f313_319": 0x38}, base=IDLE),
+            lambda: Word.from_fields({"f313_319": 0x38}, base=IDLE),
             12,
             "no PR port enabled: where the result goes is open",
         ),
-        (stock().words[42], 12, "an inserted register transfer"),
+        (lambda: stock().words[42], 12, "an inserted register transfer"),
     ],
     ids=["no-row", "unaligned", "no-port", "transfer"],
 )
-def test_an_insert_without_semantics_is_unknown(word: Word, at: int, why: str):
-    program = inserted(at, word)
+def test_an_insert_without_semantics_is_unknown(word, at: int, why: str):
+    program = inserted(at, word())
     with pytest.raises(UnknownSemantics, match=f"word {at}: .*{why}"):
         run(program)
     result, boot = run(program, strict=False)
@@ -922,13 +1033,14 @@ def test_an_engine_op_sets_the_load_offset():
     assert dst.weakest() is Confidence.HYPOTHESIS  # stock words off their indices
 
 
-def test_an_operand_chain_feeds_a_count():
-    """min(r2, 4) = 4 into r13 through port 272, read three words on by a compare through
-    port 267 into r12: true is 1, so word 73 stores 16 bytes."""
+@pytest.mark.parametrize("gap", [0, 2])
+def test_an_operand_chain_feeds_a_count(gap: int):
+    """min(r2, 4) = 4 into r13 through port 272, read `gap` + 1 words on by a compare through
+    port 267 into r12: true is 1, so word 73 stores 16 bytes. A port write is read from the
+    next word on."""
     words = (
         port(d_op(0x25, 2, 0x40), "f272_273", 13),
-        IDLE,
-        IDLE,
+        *(IDLE,) * gap,
         port(e_op(0x31, 13, 13), "f267_268", 12),
     )
     result, boot = engine(words, reader=73)
@@ -951,15 +1063,6 @@ def test_a_mask_through_the_count_reads_in_16_byte_units():
 @pytest.mark.parametrize(
     "words, why",
     [
-        # Read two words after the write: the latency is not met.
-        (
-            (
-                port(d_op(0x25, 2, 0x40), "f272_273", 13),
-                IDLE,
-                port(e_op(0x31, 13, 13), "f267_268", 12),
-            ),
-            "a value the model does not know",
-        ),
         ((port(d_op(0x25, 2, -0x400), "f267_268", 12),), "a negative value"),
         (
             (
@@ -983,7 +1086,7 @@ def test_a_mask_through_the_count_reads_in_16_byte_units():
             "beyond the buffer",
         ),
     ],
-    ids=["latency", "negative", "hidden-r", "beyond"],
+    ids=["negative", "hidden-r", "beyond"],
 )
 def test_an_engine_value_the_load_cannot_place_is_unknown(words, why):
     with pytest.raises(UnknownSemantics, match=why):

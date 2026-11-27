@@ -5,10 +5,10 @@ from functools import cache
 from pathlib import Path
 
 import pytest
-from conftest import stock_image
+from conftest import CONF, stock_image
 from test_dsp_exec import rne
 
-from fenykl.dsp.fields import Confidence
+from fenykl.dsp.fields import Confidence, lookup
 from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.stock import commands, resample_edits
@@ -32,9 +32,8 @@ from fenykl.dsp.word import IDLE
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp" / "resample"
 SRC, DST, TABLE = 0xA0FEAC00, 0xA1112000, 0xA0FE2800
-"""The bench harness's buffers; the source image has 0x400 context bytes on each side."""
+"""The buffers of the camera runs; the source image has 0x400 context bytes on each side."""
 CTX = 0x400
-CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
 # Per job: the weakest taint of the dst bytes the job wrote, then the result's taint. The law is
 # at most inferred; u0 held into [-16, 16) at b 2 and plane 0's line 1 at H 1 are hypotheses.
@@ -488,9 +487,20 @@ def bits(*ranges: tuple[int, int]) -> int:
     return sum(((1 << (hi - lo + 1)) - 1) << lo for lo, hi in ranges)
 
 
-def test_the_edit_kinds_are_the_bench_harness_encoding():
-    # The harness sets the op bits to 1; the idle word holds 1 in every one of them.
-    op = bits((265, 268), (272, 273), (302, 319))
+def test_the_edit_kinds_are_the_encoding_measured_on_the_camera():
+    # The op bits are the PR enables 265, 267 and 272 and the control fields; the idle word
+    # holds 1 in every one of them.
+    op = sum(
+        lookup(k).span
+        for k in (
+            "f265_266",
+            "f267_268",
+            "f272_273",
+            "f302_307",
+            "f308_312",
+            "f313_319",
+        )
+    )
     assert OP_IDLE.mask == op
     for w in model().program.words:
         assert OP_IDLE.apply(w).value == w.value | op
@@ -529,6 +539,28 @@ def test_a_field_value_edit_is_scored_on_its_classes_only():
     # Another value is no measured edit.
     with pytest.raises(UnknownSemantics, match="word 437"):
         predict(m, taps, FLAT, TABLE13, edits=[(437, FieldValue("f211_215", 9))])
+
+
+def test_facts_of_one_edited_word_merge_and_must_agree():
+    program = model().program
+    rename = FieldValue("f211_215", 4)
+    planes = (resample_edits.STOCK,) * 3
+    flat = Fact(rename, (437,), {resample_edits.FLAT: planes}, "flat")
+    vary = Fact(rename, (437,), {resample_edits.VARY: planes}, "vary")
+    merged = Resample13Model(program, (flat, vary)).edits[
+        437, rename.apply(program.words[437]).value
+    ]
+    assert set(merged.planes) == {resample_edits.FLAT, resample_edits.VARY}
+    assert merged.fact == "flat; vary"
+    changed = (resample_edits.Changed("other"),) * 3
+    other = Fact(rename, (437,), {resample_edits.FLAT: changed}, "")
+    with pytest.raises(ValueError, match="word 437: facts of one edited word disagree"):
+        Resample13Model(program, (flat, other))
+    own = FieldValue("f211_215", program.words[437]["f211_215"])
+    with pytest.raises(ValueError, match="word 437: .* leaves it unchanged"):
+        Resample13Model(
+            program, (Fact(own, (437,), {resample_edits.FLAT: planes}, ""),)
+        )
 
 
 def test_an_edited_tap_read_loads_another_coefficient():
@@ -608,3 +640,15 @@ def test_words_439_to_442s_s2_operands_select_their_taps_line_and_coefficient():
         assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], (at, edit)
         assert not any(got.dst.known[:1024])
         assert got.dst.data[1024:] == stock.dst.data[1024:]
+
+
+def test_a_job_refuses_what_its_setup_cannot_pass():
+    program = Program((IDLE,), constants=bytes(4 * commands.TAP_WORDS))
+    with pytest.raises(ValueError, match="dst -0x10 is not a u32"):
+        commands.copy(program, SRC, -0x10, 0x400)
+    with pytest.raises(ValueError, match="127 tap bytes, the setup copies 128"):
+        commands.resample(Program((IDLE,), bytes(127)), SRC, DST, TABLE, 64, 64, 16)
+    with pytest.raises(ValueError, match="table 0x100000000 is not a u32"):
+        commands.resample(program, SRC, DST, 1 << 32, 64, 64, 16)
+    with pytest.raises(ValueError, match="width 0x10000 is not a u16"):
+        commands.resample(program, SRC, DST, TABLE, 64, 0x10000, 16)

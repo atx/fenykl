@@ -169,6 +169,8 @@ class Part:
     flips: Mapping[str, Mapping[int, Outcome]] = field(default_factory=dict)
     """Outcomes of edits of one field, by field and by the bits flipped against the stock
     value (so that no stock value is part of the code)."""
+    targets: Mapping[int, Outcome] = field(default_factory=dict)
+    """Outcomes of a control word's target moved, by the new target (its imm)."""
     seen: tuple[int, ...] = (KIB,)
     """The job lengths at which `missing` and `operand` were seen on the camera [verified];
     at other lengths they are inferred."""
@@ -248,93 +250,67 @@ class Channel:
     """Word indices at which a counted transfer of the channel stalls the job (inferred)."""
 
 
-class Mode(Enum):
-    POINTER = "pointer"
-    POSITION = "position"
+def assign_roles(
+    channels: Sequence[Channel], transfers: dict[str, list[Transfer]]
+) -> tuple[list[tuple[Role, Transfer, Confidence]], list[tuple[str, Confidence]]]:
+    """The hidden sequencer's assignment of the register transfers to their roles: (role,
+    transfer, assignment taint) per filled slot, and why the job stalls, with the confidence:
+    each unset slot (hypothesis) and each counted transfer at a stall index (inferred).
 
+    Each channel has a slot pointer; a transfer with X1 head 0x1c takes the slot at the pointer
+    and advances it, so roles follow the order of the transfers (inferred). Idling a transfer
+    leaves its channel's last slot unset, and an unset slot stalls the job; this reproduces the
+    camera: every idled counted transfer of 42..49 and 66..77 times out, while 74 and 78 (head
+    0x1d) have no effect. The pointers start at slot 0 with every job. On the camera the roles
+    followed the counted transfers when they moved: the count one index later (exchanged with
+    the holding word 74, also at another register), and 75..77 one index earlier as a block,
+    with a holding word after them (one run each, verified on the camera); a role fixed to its
+    stock word index does not explain these runs. A counted transfer at a channel's `stalls`
+    index stalls the job: program 16's word 78, the word before the return 79, where exchanging
+    77 with the holding word 78 times the job out (verified on the camera, two boots). Why 78
+    fails is open: too late for the stream, a restriction of that index alone, or a window per
+    role that lets a role move one index early and the count one late but not 77 one late
+    (hypothesis, not separated by the runs so far). A transfer off its stock index is still
+    assigned at hypothesis taint.
 
-class Sequencer:
-    """Hidden state that gives the register transfers their roles.
-
-    POINTER (the default): each channel has a slot pointer; a transfer with X1 head 0x1c takes
-    the slot at the pointer and advances it, so roles follow the order of the transfers
-    (inferred). Idling a transfer leaves its channel's last slot unset, and an unset slot stalls
-    the job; this reproduces the camera: every idled counted transfer of 42..49 and 66..77 times
-    out, while 74 and 78 (head 0x1d) have no effect. The pointers start at slot 0 with every
-    job. On the camera the roles followed the counted transfers when they moved: the count one
-    index later (exchanged with the holding word 74, also at another register), and 75..77 one
-    index earlier as a block, with a holding word after them (one run each, verified on the
-    camera). A counted transfer at a channel's `stalls` index stalls the job: program 16's word
-    78, the word before the return 79, where exchanging 77 with the holding word 78 times the job
-    out (verified on the camera, two boots). Why 78 fails is open: too late for the stream, a
-    restriction of that index alone, or a window per role that lets a role move one index early
-    and the count one late but not 77 one late (hypothesis, not separated by the runs so far). A
-    transfer off its stock index is still assigned at hypothesis taint.
-
-    POSITION (the comparison mode): the role is the stock word index's role; a transfer at
-    another index has none. Both give the same results on the field sweeps and idled words; the
-    moved transfers above refute it for the count and for 75..77.
+    A channel that stalls has its filled slots left out: what the shifted transfers would do
+    there is not modelled.
     """
-
-    def __init__(self, mode: Mode = Mode.POINTER) -> None:
-        self.mode = mode
-
-    def assign(
-        self, channels: Sequence[Channel], transfers: dict[str, list[Transfer]]
-    ) -> tuple[list[tuple[Role, Transfer, Confidence]], list[tuple[str, Confidence]]]:
-        """(role, transfer, assignment taint) per filled slot, and why the job stalls, with
-        the confidence: each unset slot (hypothesis) and each counted transfer at a stall index
-        (inferred).
-
-        A channel that stalls has its filled slots left out: what the shifted transfers would do
-        there is not modelled.
-        """
-        by_name = {c.name: c for c in channels}
-        by_channel: dict[str, list[tuple[Role, Transfer, Confidence]]] = {
-            c.name: [] for c in channels
-        }
-        if self.mode is Mode.POINTER:
-            for name, slots in transfers.items():
-                roles = by_name[name].roles
-                if len(slots) > len(roles):
-                    extra = ", ".join(str(t.index) for t in slots[len(roles) :])
-                    raise UnknownSemantics(
-                        slots[len(roles)].index,
-                        "transfer",
-                        [],
-                        f"{name}: no slot for words {extra}",
-                    )
-                for role, t in zip(roles, slots):
-                    by_channel[name].append((role, t, V if t.index == role.word else H))
-        else:
-            stock = {r.word: (c.name, r) for c in channels for r in c.roles}
-            for slots in transfers.values():
-                for t in slots:
-                    if t.index not in stock:
-                        raise UnknownSemantics(
-                            t.index, "transfer", [], "no role at this index"
-                        )
-                    name, role = stock[t.index]
-                    by_channel[name].append((role, t, V))
-        filled, stalls = [], []
-        for c in channels:
-            have = {role.word for role, _, _ in by_channel[c.name]}
-            why = [
-                (f"unset {c.name} slot {k} ({role.name}, stock word {role.word})", H)
-                for k, role in enumerate(c.roles)
-                if role.word not in have
-            ]
-            if not c.needed:
-                why = []
-            why += [
-                (f"{c.name}: a counted transfer at word {t.index}", I)
-                for t in transfers.get(c.name, [])
-                if t.index in c.stalls
-            ]
-            stalls += why
-            if not why:
-                filled += by_channel[c.name]
-        return filled, stalls
+    by_name = {c.name: c for c in channels}
+    by_channel: dict[str, list[tuple[Role, Transfer, Confidence]]] = {
+        c.name: [] for c in channels
+    }
+    for name, slots in transfers.items():
+        roles = by_name[name].roles
+        if len(slots) > len(roles):
+            extra = ", ".join(str(t.index) for t in slots[len(roles) :])
+            raise UnknownSemantics(
+                slots[len(roles)].index,
+                "transfer",
+                [],
+                f"{name}: no slot for words {extra}",
+            )
+        for role, t in zip(roles, slots):
+            by_channel[name].append((role, t, V if t.index == role.word else H))
+    filled, stalls = [], []
+    for c in channels:
+        have = {role.word for role, _, _ in by_channel[c.name]}
+        why = [
+            (f"unset {c.name} slot {k} ({role.name}, stock word {role.word})", H)
+            for k, role in enumerate(c.roles)
+            if role.word not in have
+        ]
+        if not c.needed:
+            why = []
+        why += [
+            (f"{c.name}: a counted transfer at word {t.index}", I)
+            for t in transfers.get(c.name, [])
+            if t.index in c.stalls
+        ]
+        stalls += why
+        if not why:
+            filled += by_channel[c.name]
+    return filled, stalls
 
 
 # -- the boot state of the models and running a job by its model
@@ -405,7 +381,6 @@ class ModelRun:
     boot: StockBoot
     strict: bool
     """False: fields without semantics are ignored, and taint."""
-    sequencer: Sequencer
 
 
 class Model(Protocol):
@@ -426,11 +401,10 @@ def run_model(
     job: Job,
     *,
     strict: bool = True,
-    sequencer: Sequencer | None = None,
 ) -> JobResult:
     """Run `job` on `boot` by `model`: the job's setup, the model's cover of its words, then the
     model applies the trace to the boot."""
     boot.setup(job)
-    run = ModelRun(boot, strict, sequencer or Sequencer())
+    run = ModelRun(boot, strict)
     trace = Trace()
     return model.apply(run, model.cover_job(run, job, trace), trace)
