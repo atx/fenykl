@@ -152,12 +152,7 @@ on the camera in two runs, the second pre-registered)."""
 
 HALT_OP = 7
 
-PASSIVE_BEHIND_HALT: dict[tuple[int, int], Confidence] = {
-    (HALT_OP, 0): V,
-    (3, 1): V,
-    (4, 1): V,
-    (HALT_OP, 2): V,
-}
+PASSIVE_BEHIND_HALT = frozenset({(HALT_OP, 0), (3, 1), (4, 1), (HALT_OP, 2)})
 """Control words in the tail behind a halt that change nothing, by (op, position 0..2): a halt
 first, an op 3 or op 4 second, not taken (verified on the camera, each with no jump pending);
 a halt third, a jump target's own (verified on the camera, pre-registered)."""
@@ -329,9 +324,10 @@ class Executor:
                 steps.append(self._lapsed(step, lapses))
                 i = fetched(i + 1)
                 continue
-            passive = PASSIVE_BEHIND_HALT.get((word.op, n))
             # Measured with no jump pending, but for the third word's halt (on a target).
-            if passive is None or (jumps and n != HALT_TAIL - 1):
+            if (word.op, n) not in PASSIVE_BEHIND_HALT or (
+                jumps and n != HALT_TAIL - 1
+            ):
                 why = "a control op behind a halt"
                 self.datapath.lapse(i, op(word.op).name, why)
                 self.datapath.forget_job(why)  # the rest of the tail runs unstepped
@@ -345,7 +341,7 @@ class Executor:
                 False,
                 word.operands,
                 note="behind a halt: not taken",
-                confidence=min(passive, self.datapath.cap),
+                confidence=self.datapath.cap,
             )
             steps.append(self._lapsed(step, lapses))
             i = fetched(i + 1)

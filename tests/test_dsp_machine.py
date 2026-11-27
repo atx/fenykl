@@ -664,6 +664,9 @@ def test_a_register_form_store_and_load_address_by_rb(m):
     assert m.g[12] == Sv(0xFFFFAABB)
 
 
+HALT_WORD = Word.from_fields({"f313_319": 7}, base=IDLE)
+
+
 def control(code: int, target: int | None = None, **fields: int) -> Word:
     return Word.from_fields(
         {"f120_122": 0, **fields}, base=Word.ctl(code, target, base=IDLE)
@@ -1046,6 +1049,32 @@ def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
         [halt, inc(16), control(4, f128_132=20), inc(16), inc(16)], g16=0, g20=0
     )
     assert m.g[16] == Sv(2)
+
+
+@pytest.mark.parametrize(
+    ("tail", "passive"),
+    [
+        ([HALT_WORD], True),
+        ([IDLE, control(3, 9)], True),
+        ([IDLE, control(4, f128_132=20)], True),
+        ([IDLE, IDLE, HALT_WORD], True),
+        ([control(3, 9)], False),  # an op 3 first
+        ([IDLE, HALT_WORD], False),  # a halt second
+        ([IDLE, IDLE, control(4, f128_132=20)], False),  # an op 4 third
+    ],
+)
+def test_only_the_measured_control_words_behind_a_halt_are_passive(tail, passive):
+    boot = Boot()
+    m = Machine(boot)
+    m.g[20] = Sv(0)
+    job = Job(Program((HALT_WORD, *tail, *[IDLE] * 3)), ())
+    if not passive:
+        with pytest.raises(UnknownSemantics, match="a control op behind a halt"):
+            Executor(boot, datapath=m).step(job)
+        return
+    flow = Executor(boot, datapath=m).step(job)
+    behind = [s for s in flow.steps if s.note == "behind a halt: not taken"]
+    assert len(behind) == 1 and behind[0].confidence is V
 
 
 def test_m_under_s0_in_an_s3_heads_own_word_is_quiet(m):
