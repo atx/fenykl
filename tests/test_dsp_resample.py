@@ -8,7 +8,7 @@ import pytest
 from conftest import stock_image
 from test_dsp_exec import rne
 
-from fenykl.dsp.fields import Confidence
+from fenykl.dsp.fields import Confidence, lookup
 from fenykl.dsp.program import STOCK, Program, stock_items
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.stock import commands, resample_edits
@@ -32,7 +32,7 @@ from fenykl.dsp.word import IDLE
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp" / "resample"
 SRC, DST, TABLE = 0xA0FEAC00, 0xA1112000, 0xA0FE2800
-"""The bench harness's buffers; the source image has 0x400 context bytes on each side."""
+"""The buffers of the camera runs; the source image has 0x400 context bytes on each side."""
 CTX = 0x400
 CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
@@ -488,9 +488,13 @@ def bits(*ranges: tuple[int, int]) -> int:
     return sum(((1 << (hi - lo + 1)) - 1) << lo for lo, hi in ranges)
 
 
-def test_the_edit_kinds_are_the_bench_harness_encoding():
-    # The harness sets the op bits to 1; the idle word holds 1 in every one of them.
-    op = bits((265, 268), (272, 273), (302, 319))
+def test_the_edit_kinds_are_the_encoding_measured_on_the_camera():
+    # The op bits are the PR enables 265, 267 and 272 and the control fields; the idle word
+    # holds 1 in every one of them.
+    op = sum(
+        lookup(k).span
+        for k in ("f265_266", "f267_268", "f272_273", "f302_307", "f308_312", "f313_319")
+    )
     assert OP_IDLE.mask == op
     for w in model().program.words:
         assert OP_IDLE.apply(w).value == w.value | op

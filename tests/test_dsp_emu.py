@@ -31,12 +31,12 @@ from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
 SRC_AREA = 0xA0FCA800
-"""The base of the bench harness's src area, which its patterns are indexed from."""
+"""The base of the src area of the camera runs, which their patterns are indexed from."""
 K = 0x9E3779B1
 
 
 def pattern(kind: str, seed: int, src: int, n: int) -> bytes:
-    """The bench harness's src patterns: u32 words by byte offset from SRC_AREA."""
+    """The src patterns of the camera runs: u32 words by byte offset from SRC_AREA."""
 
     def word(o: int) -> int:
         match kind:

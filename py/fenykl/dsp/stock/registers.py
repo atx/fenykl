@@ -153,14 +153,16 @@ REGISTER_FACTS: tuple[RegisterFact, ...] = (
     RegisterFact(
         21,
         V,
-        "0x606CC000 on the boots read, a boot parameter: word 67 loads the firmware text there",
+        "0x606CC000, the value the boot leaves in r21 (a boot parameter): word 67 loads the "
+        "firmware text there",
         lambda job: None if job.boot.r21 is None else (job.boot.r21, job.boot.r21),
         address=True,
     ),
     RegisterFact(
         29,
         V,
-        "0x60E58B00 or 0x60E58B40, a boot parameter: word 67 loads the firmware text there",
+        "0x60E58B00 or 0x60E58B40, the value the boot leaves in r29 (a boot parameter): word 67 "
+        "loads the firmware text there",
         lambda job: None if job.boot.r29 is None else (job.boot.r29, job.boot.r29),
         address=True,
     ),
@@ -174,8 +176,8 @@ class BootParams:
     - r14: the interval of r14. Word 68 truncates r14 / 32 towards zero and word 76 rounds it
       down (hypothesis), so -0x1C00 gives both -0xE0, while (-0x2000, -0x1C00) gives 68 -0xE0
       and 76 -0x100; both were seen, on different boots.
-    - r29: word 67's load address at r29.
-    - r21: word 67's load address at r21.
+    - r29: word 67's load address at r29, the value the boot leaves there.
+    - r21: word 67's load address at r21, the value the boot leaves there.
     - r21_format: word 47's store format at r21, "pack10" or "zero"; it differs between boots
       with nothing else seen to differ.
     """

@@ -48,7 +48,7 @@ class Idle:
         return Word.from_int(stock.value & ~self.mask | IDLE.value & self.mask)
 
 
-# The 2-bit grid pairs: idle in every stock word, and the bench harness never writes them.
+# The 2-bit grid pairs: idle in every stock word, and no edit measured on the camera writes them.
 GRID_PAIRS = ((35, 36), (145, 146))
 
 
@@ -207,7 +207,7 @@ SUBSTITUTED = Changed(
     "the substitute is known"
 )
 PER_BOOT = Changed(
-    "reads per-lane state that no lab job writes and that differs between boots; not known"
+    "reads per-lane state that no job measured on the camera writes and that differs between boots; not known"
 )
 
 
