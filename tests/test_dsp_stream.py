@@ -360,11 +360,12 @@ def test_other_lane_pitches_off_whole_vectors_go_off_script(r7, to):
     assert "memory pitch" in e.off
 
 
-def test_a_store_under_r0_0x40_writes_nothing():
+@pytest.mark.parametrize("r0", [0x00, 0x10, 0x40])
+def test_a_store_under_r0_without_memory_writes_nothing(r0):
     m, e = machine(), stream.Engine()
     m.memory[0] = Vec(tuple(range(1, 33)))
     m.boot.put(DST, b"\xa5" * 32, "prefill")
-    drive(m, e, [*block(0, 0x40, 0, 0x20, 1, 0, 0x10, 2, 1), *store(0, 0, DST), WAIT])
+    drive(m, e, [*block(0, r0, 0, 0x20, 1, 0, 0x10, 2, 1), *store(0, 0, DST), WAIT])
     got = m.boot.read(DST, 32)
     assert bytes(got.data) == b"\xa5" * 32 and all(got.known)
     assert not e.off and not e.outstanding
@@ -414,12 +415,12 @@ def test_a_vector_written_while_the_load_runs_is_unknown():
 
 
 def test_a_load_reads_dram_before_a_store_handed_after_it():
-    """In the order handed; on one DRAM range that order was not measured (inferred)."""
+    """In the order handed, measured for one-vector byte commands on one DRAM range (verified)."""
     m, e = machine(bytes(range(64))), stream.Engine()
     m.memory[5] = Vec(tuple(range(100, 132)))
     drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *store(0, 5 * 64, SRC)])
     drive(m, e, [WAIT, WAIT])
-    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == I
+    assert m.memory[0].lanes == tuple(range(32)) and m.memory[0].tier == V
 
 
 def test_a_load_reads_what_a_store_handed_before_it_wrote():
@@ -427,7 +428,7 @@ def test_a_load_reads_what_a_store_handed_before_it_wrote():
     m.memory[5] = Vec(tuple(range(100, 132)))
     drive(m, e, [*lanes(0, 1, r6=2), *store(0, 5 * 64, SRC), *load(0, SRC, 0)])
     drive(m, e, [WAIT, WAIT])
-    assert m.memory[0].lanes == tuple(range(100, 132)) and m.memory[0].tier == I
+    assert m.memory[0].lanes == tuple(range(100, 132)) and m.memory[0].tier == V
 
 
 def test_a_lane_source_rewritten_while_the_store_is_queued_is_inferred():
@@ -438,6 +439,21 @@ def test_a_lane_source_rewritten_while_the_store_is_queued_is_inferred():
     drive(m, e, [WAIT])
     got = m.boot.read(DST, 32)
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+
+
+def test_a_rewritten_vector_of_a_longer_store_is_unknown():
+    """Measured on the camera: a store of 0x80 vectors took an X0 store into its last vector
+    made after its hand. With more than one vector, the rewritten one's bytes are unknown;
+    the others stay as of the hand (inferred)."""
+    m, e = machine(), stream.Engine()
+    m.memory[0] = Vec(tuple(range(32)))
+    m.memory[1] = Vec(tuple(range(32, 64)))
+    drive(m, e, [*lanes(0, 2, r6=4), *store(0, 0, DST)])
+    m.memory[1] = Vec((0,) * 32)
+    drive(m, e, [WAIT])
+    got = m.boot.read(DST, 64)
+    assert all(got.known[:32]) and set(got.taint[:32]) == {I}
+    assert not any(got.known[32:])
 
 
 def test_a_local_source_rewritten_while_the_store_is_queued_is_inferred():
@@ -660,8 +676,9 @@ def test_store_rows_at_one_address_write_it_once_the_last_row():
 
 
 def test_dram_behind_an_outstanding_store_is_inferred():
-    """A load of DRAM a store still outstanding writes, and a second store over it, run in order
-    at inferred; a load of other DRAM beside them stays verified."""
+    """A load of DRAM a store still outstanding writes, from half a vector into it, runs in order
+    at inferred; a second one-vector store over the first at verified (that overlap measured);
+    a load of other DRAM beside them stays verified."""
     data = bytes(range(64))
     m, e = machine(data), stream.Engine()
     drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT, *lanes(1, 1, r6=2)])
@@ -671,7 +688,30 @@ def test_dram_behind_an_outstanding_store_is_inferred():
     assert m.memory[0x10].tier == I
     assert m.memory[0x12].tier == V
     got = m.boot.read(DST, 32)
-    assert bytes(got.data) == data[32:] and set(got.taint) == {I}
+    assert bytes(got.data) == data[32:] and set(got.taint) == {V}
+
+
+def test_two_loads_to_one_vector_and_a_store_behind_a_load_run_in_order():
+    """One-vector byte loads to one vector: the later lands (verified); a store of the vector an
+    outstanding load writes stores the load's bytes (verified); with a two-vector load inferred."""
+    data = bytes(range(128))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(2, 1, r6=2), *load(2, SRC + 64, 0)])
+    drive(m, e, [WAIT, WAIT])
+    assert m.memory[0].lanes == tuple(range(64, 96)) and m.memory[0].tier == V
+    for r3, tier in ((1, V), (2, I)):
+        m, e = machine(data), stream.Engine()
+        drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, 0), *lanes(1, 1, r6=2)])
+        drive(m, e, [*store(1, (r3 - 1) * 64, DST), WAIT, WAIT])
+        got = m.boot.read(DST, 32)
+        assert bytes(got.data) == data[32 * (r3 - 1) : 32 * r3] and got.weakest() == tier
+
+
+def test_a_store_of_an_unwritten_vector_leaves_an_unrelated_load_outstanding():
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(1, 1, r6=2), *store(1, 5 * 64, DST)])
+    assert m.memory[0].lanes == (None,) * 32 and len(e.outstanding) == 2
+    assert e.outstanding[0] is not stream._nothing
 
 
 def test_a_store_row_wraps_at_the_top_of_dram():
@@ -707,6 +747,23 @@ def test_a_wait_inside_a_commands_values_raises():
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="inside a command"):
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), stream.LOAD, SRC, WAIT])
+
+
+def test_a_wait_right_after_a_register_or_store_key_joins_the_outstanding_load():
+    """With a load outstanding, the 0x1d waits for it and the key's values follow (measured
+    after a register key and after a store's key); after a load's key it still raises."""
+    for mid in (
+        [key(1, 2), WAIT, 0x20, 1 << 6 | stream.STORE, 0, DST],
+        [*lanes(1, 1, r6=2), 1 << 6 | stream.STORE, WAIT, 0, DST],
+    ):
+        m, e = machine(bytes(range(32))), stream.Engine()
+        drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), *lanes(1, 1, r6=2), *mid, WAIT])
+        got = m.boot.read(DST, 32)
+        assert bytes(got.data) == bytes(range(32)) and got.weakest() == V
+        assert not e.off and not e.outstanding
+    m = machine(bytes(64))
+    with pytest.raises(UnknownSemantics, match="inside a command"):
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), stream.LOAD, WAIT])
 
 
 @pytest.mark.parametrize(
@@ -917,6 +974,22 @@ def test_words_beside_a_one_row_16_bit_store_keep_their_tier_in_the_measured_siz
     m, e = machine(bytes(range(256)) * 4), stream.Engine()
     drive(m, e, [*lanes(0, r3, r5=8, r6=r6), *load(0, SRC, 0), WAIT, *store(0, 0, DST)])
     assert e.lane_tier(0) == H and e.lane_tier(0x40) == tier
+
+
+def test_words_beside_the_measured_rows_and_local_loads_are_verified():
+    """A 3-row byte load of 0x40 vectors per row and a local byte load of 0x800 bytes: outside
+    their vectors verified (measured beside each); another local shape leaves a hypothesis."""
+    rows = block(0, 1, 0x1000, 0x20, 0x40, 0x800, 0x10, 0x80, 3)
+    loc = block(0, 2, 0, 4, 0x200, 0, 0x10, 0x80, 1)
+    other = block(0, 2, 0, 4, 0x100, 0, 0x10, 0x40, 1)
+    for values, tier in (
+        ([*rows, *load(0, SRC, 0x100 * 64)], V),
+        ([*loc, *load(0, SRC, 0x1000)], V),
+        ([*other, *load(0, SRC, 0x1000)], H),
+    ):
+        m, e = machine(bytes(0x3000)), stream.Engine()
+        drive(m, e, values)
+        assert e.lane_tier(0x300) == tier
 
 
 def test_kind_4_rows_on_channel_1_store_as_run():
