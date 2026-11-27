@@ -13,7 +13,6 @@ from conftest import stock_image
 from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import MAIN_CODE, Boot, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
-from fenykl.dsp.job import Stop
 from fenykl.dsp.machine import Machine, Sv
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
 from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics, ring_length
@@ -25,7 +24,6 @@ from fenykl.dsp.stock.registers import (
     R14_BELOW,
     R14_EXACT,
     BootParams,
-    JobView,
     Reg,
     RegisterFile,
 )
@@ -494,15 +492,16 @@ def test_a_halt_before_the_stream_ends_the_job_with_dst_unwritten():
         run(Program(tuple(words)))
 
 
-def test_a_halt_flow_off_script_ends_open():
-    """The stepped flow stops at its open end, not raising; `_halt` refuses it after."""
-    words = list(idled(45).words)
-    words[52] = words[5]
-    job = commands.copy(Program(tuple(words)), SRC, DST, LEN)
-    view = JobView(SRC, DST, LEN, BootParams(R14_BELOW))
-    flow, machine = Copy16Model._halt_flow(job, view)
-    assert flow.stop is Stop.OPEN_END and machine.stream.off
-    assert machine.stream.off in flow.why
+def test_a_branch_the_machine_cannot_decide_takes_the_stock_path():
+    """Idling word 15 leaves r7 unknown at the branch 27: the stock path (not taken) leads to a
+    halt at 35, a hypothesis; taken, the job would return at 79 without reaching it."""
+    result, boot = run(halted(35, idled(15)))
+    assert result.why == [
+        "op 7 at word 35 halts the job before the stream: dst not written"
+    ]
+    assert result.status is Status.OK and result.stored is None
+    assert result.taint is Confidence.HYPOTHESIS
+    assert bytes(boot.read(DST, LEN).data) == b"\xa5" * LEN
 
 
 def flipped(at: int, key: str, bits: int, base: Program | None = None) -> Program:

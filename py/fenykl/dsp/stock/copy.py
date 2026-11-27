@@ -1008,7 +1008,7 @@ class Copy16Model:
         """Resolve the job and apply its one load and one store to the boot."""
         boot = run.boot
         view = start_copy(boot)
-        halted = self._halt(job, trace, view)
+        halted = self._halt(job, trace)
         if halted is not None:
             return halted
         late = boot.regs
@@ -1019,7 +1019,7 @@ class Copy16Model:
         plan = self.resolve(trace, boot.regs, view, job.program.words, late)
         return self._apply(boot, plan, trace, view)
 
-    def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
+    def _halt(self, job: Job, trace: Trace) -> JobResult | None:
         """The result of a job that an op 7 off the stock halt ends before the stream:
         status 0, dst not written (word 5 in place of 11 on the camera [verified], at any
         length; elsewhere inferred, or weaker through the path to it); None when no such
@@ -1035,7 +1035,7 @@ class Copy16Model:
         words = job.program.words
         if all(w.op != HALT_OP or i in stock for i, w in enumerate(words)):
             return None
-        flow, machine = self._halt_flow(job, view)
+        flow, machine = self._halt_flow(job)
         h = next(k for k, s in enumerate(flow.steps) if s.op == HALT_OP)
         at = flow.steps[h].index
         if at in stock:
@@ -1081,7 +1081,7 @@ class Copy16Model:
         return result
 
     @staticmethod
-    def _halt_flow(job: Job, view: JobView) -> tuple[Flow, Machine]:
+    def _halt_flow(job: Job) -> tuple[Flow, Machine]:
         """The job stepped on a lenient `Machine`, which decides the branches; where it cannot,
         `_STOCK_PATH` decides, a hypothesis from there on. Raises where neither does."""
         given: dict[int, bool] = {}
