@@ -12,7 +12,6 @@ the datapath's own (`Branching`). `X_RULES` are the functions of the two X units
 operands each head reads, from the rules and what the machine does with a head.
 """
 
-import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -89,17 +88,13 @@ Value = Callable[..., int | None]
 class OpValue:
     """A computing op's rule: f(ra, rb) (`form` "rb", a family E op; f120_122 has no effect on
     it) or f(ra, c) (`form` "c", c the immediate as its format decodes it, sign- or
-    zero-extended). `exact` gives the 32-bit result on exact operands (None where the rule is
-    open)."""
+    zero-extended), reading the registers of `reads` ("a" ra, "b" rb). `exact` gives the 32-bit
+    result on exact operands (None where the rule is open)."""
 
     text: str
     f: Callable[[int, int], int | None]
-    tier: Confidence
     form: str
-
-    @property
-    def reads_ra(self) -> bool:
-        return re.search(r"\bra\b", self.text) is not None
+    reads: str
 
     def exact(self, ra: int, rb: int | None, c: int | None) -> int | None:
         second = rb if self.form == "rb" else c
@@ -109,14 +104,14 @@ class OpValue:
         return None if v is None else _u32(v)
 
 
-def _e(text: str, f: Callable[[int, int], int | None], tier: Confidence = V) -> OpValue:
+def _e(text: str, f: Callable[[int, int], int | None], reads: str = "ab") -> OpValue:
     """A family E op on (ra, rb)."""
-    return OpValue(text, f, tier, "rb")
+    return OpValue(text, f, "rb", reads)
 
 
-def _imm(text: str, f: Callable[[int, int], int | None], tier: Confidence) -> OpValue:
+def _imm(text: str, f: Callable[[int, int], int | None]) -> OpValue:
     """An op on ra and c."""
-    return OpValue(text, f, tier, "c")
+    return OpValue(text, f, "c", "a")
 
 
 def _u32(v: int) -> int:
@@ -267,27 +262,27 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})"),
     0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})"),
     0x37: OpSemantics(
-        V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c, V)
+        V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c)
     ),
     0x0A: OpSemantics(
         V,
         "ra | (imm16 << 16) (verified on the camera by exact readout, pre-registered)",
-        _imm("ra | (c << 16)", lambda a, c: a | c << 16, V),
+        _imm("ra | (c << 16)", lambda a, c: a | c << 16),
     ),
     0x3E: OpSemantics(
         V,
         "ra >> imm5, arithmetic; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra >> c", lambda a, c: _s32(a) >> c, V),
+        _imm("ra >> c", lambda a, c: _s32(a) >> c),
     ),
     0x3F: OpSemantics(
         V,
         "ra >> imm5, logical; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra >>> c", lambda a, c: _u32(a) >> c, V),
+        _imm("ra >>> c", lambda a, c: _u32(a) >> c),
     ),
     0x40: OpSemantics(
         V,
         "ra << imm5; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra << c", lambda a, c: a << c, V),
+        _imm("ra << c", lambda a, c: a << c),
     ),
     0x44: OpSemantics(
         V,
@@ -315,19 +310,19 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x09: OpSemantics(
         V,
         f"rb ({_EXACT_RULE}; R[f120_122] 0 or not gave rb, measured on the camera)",
-        _e("rb", lambda a, b: b),
+        _e("rb", lambda a, b: b, "b"),
     ),
     0x32: OpSemantics(
         V,
         "abs(rb) (verified on the camera by exact readout, pre-registered)",
-        _e("abs(rb)", lambda a, b: abs(_s32(b)), V),
+        _e("abs(rb)", lambda a, b: abs(_s32(b)), "b"),
     ),
     0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
     0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
     0x34: OpSemantics(V, f"ra - rb ({_EXACT_RULE})", _e("ra - rb", lambda a, b: a - b)),
     0x35: OpSemantics(V, f"ra + rb ({_EXACT_RULE})", _e("ra + rb", lambda a, b: a + b)),
-    0x33: OpSemantics(V, f"-rb ({_EXACT_RULE})", _e("-rb", lambda a, b: -b)),
-    0x3D: OpSemantics(V, f"~ra ({_EXACT_RULE})", _e("~ra", lambda a, b: ~a)),
+    0x33: OpSemantics(V, f"-rb ({_EXACT_RULE})", _e("-rb", lambda a, b: -b, "b")),
+    0x3D: OpSemantics(V, f"~ra ({_EXACT_RULE})", _e("~ra", lambda a, b: ~a, "a")),
     0x2F: OpSemantics(
         V, f"min(ra, rb) signed ({_EXACT_RULE})", _e("min(ra, rb)", _min)
     ),
@@ -337,7 +332,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x2C: OpSemantics(
         V,
         "max(ra, rb) unsigned (verified on the camera by exact readout, pre-registered)",
-        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, V),
+        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b),
     ),
     0x28: OpSemantics(
         V,
@@ -377,7 +372,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x42: OpSemantics(
         V,
         "ra >> (rb & 31), logical (verified on the camera by exact readout, pre-registered)",
-        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), V),
+        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31)),
     ),
     0x43: OpSemantics(
         V,
@@ -387,82 +382,82 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x1E: OpSemantics(
         V,
         "ra - imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
-        _imm("ra - c", lambda a, c: a - c, V),
+        _imm("ra - c", lambda a, c: a - c),
     ),
     0x1F: OpSemantics(
         V,
         "ra + imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
-        _imm("ra + c", lambda a, c: a + c, V),
+        _imm("ra + c", lambda a, c: a + c),
     ),
     0x36: OpSemantics(
         V,
         f"ra ^ c, c = imm16 sign-extended ({EXACT})",
-        _imm("ra ^ c", lambda a, c: a ^ c, V),
+        _imm("ra ^ c", lambda a, c: a ^ c),
     ),
     0x24: OpSemantics(
         V,
         f"max(ra, c) signed, c = imm16 sign-extended ({EXACT})",
-        _imm("max(ra, c)", _max, V),
+        _imm("max(ra, c)", _max),
     ),
     0x25: OpSemantics(
         V,
         f"min(ra, c) signed, c = imm16 sign-extended ({EXACT})",
-        _imm("min(ra, c)", _min, V),
+        _imm("min(ra, c)", _min),
     ),
     0x1C: OpSemantics(
         V,
         f"1 if ra != c, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra != c", lambda a, c: _flag(_u32(a) != _u32(c)), V),
+        _imm("ra != c", lambda a, c: _flag(_u32(a) != _u32(c))),
     ),
     0x1D: OpSemantics(
         V,
         f"1 if ra == c, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra == c", lambda a, c: _flag(_u32(a) == _u32(c)), V),
+        _imm("ra == c", lambda a, c: _flag(_u32(a) == _u32(c))),
     ),
     0x20: OpSemantics(
         V,
         f"1 if ra <= c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra <= c", lambda a, c: _flag(_s32(a) <= c), V),
+        _imm("ra <= c", lambda a, c: _flag(_s32(a) <= c)),
     ),
     0x21: OpSemantics(
         V,
         f"1 if ra < c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
+        _imm("ra < c", lambda a, c: _flag(_s32(a) < c)),
     ),
     0x22: OpSemantics(
         V,
         f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN_IMM})",
-        OpValue("ra <=u c", lambda a, c: _flag(_u32(a) <= c), V, "c"),
+        _imm("ra <=u c", lambda a, c: _flag(_u32(a) <= c)),
     ),
     0x26: OpSemantics(
         V,
         f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_IMM})",
-        OpValue("maxu(ra, c)", lambda a, c: max(_u32(a), c), V, "c"),
+        _imm("maxu(ra, c)", lambda a, c: max(_u32(a), c)),
     ),
     0x27: OpSemantics(
         V,
         f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_IMM})",
-        OpValue("minu(ra, c)", lambda a, c: min(_u32(a), c), V, "c"),
+        _imm("minu(ra, c)", lambda a, c: min(_u32(a), c)),
     ),
     0x2D: OpSemantics(
         V,
         f"min(ra, rb) unsigned ({_UNSEEN})",
-        _e("minu(ra, rb)", lambda a, b: min(_u32(a), _u32(b)), V),
+        _e("minu(ra, rb)", lambda a, b: min(_u32(a), _u32(b))),
     ),
-    0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b, V)),
+    0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b)),
     0x3B: OpSemantics(
-        V, f"ra & ~rb ({_UNSEEN_PAIRS})", _e("ra & ~rb", lambda a, b: a & ~b, V)
+        V, f"ra & ~rb ({_UNSEEN_PAIRS})", _e("ra & ~rb", lambda a, b: a & ~b)
     ),
     0x45: OpSemantics(
         V,
         "the ring pointer step as 0x44's with s = zext(ra) + 1 and L = rb, all 32 bits of rb "
         f"({_UNSEEN})",
-        _e("ring step ra + 1, L rb", lambda a, b: ring_step(_u32(a) + 1, _u32(b)), V),
+        _e("ring step ra + 1, L rb", lambda a, b: ring_step(_u32(a) + 1, _u32(b))),
     ),
     0x23: OpSemantics(
         V,
         "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
-        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), V),
+        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c)),
     ),
     0x49: OpSemantics(
         V,

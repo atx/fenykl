@@ -629,8 +629,7 @@ class Machine:
             return self._select(word, ra, rb, sem.confidence)
         if sem.rule is not None:
             rule = sem.rule
-            ins = [ra] if rule.reads_ra else []
-            ins += [rb] if rule.form == "rb" else []
+            ins = [v for name, v in (("a", ra), ("b", rb)) if name in rule.reads]
             tier = min([sem.confidence, *(v.tier for v in ins)])
             if any(v.value is None for v in ins):
                 return Sv(None, tier)

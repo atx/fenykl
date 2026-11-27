@@ -501,6 +501,23 @@ def op_word(
     )
 
 
+@pytest.mark.parametrize(
+    ("code", "ra", "rb", "imm", "want"),
+    [
+        (0x35, 1, 2, None, Sv(None, V)),  # ra + rb, rb unknown
+        (0x35, 1, 3, None, Sv(12, I)),  # rb inferred
+        (0x33, 2, 3, None, Sv(-7 & 0xFFFFFFFF, I)),  # -rb: ra not read
+        (0x3D, 1, 2, None, Sv(~5 & 0xFFFFFFFF, V)),  # ~ra: rb not read
+        (0x37, 1, None, 0x30, Sv(0x35, V)),  # ra | c
+        (0x37, 3, None, 0x30, Sv(0x37, I)),
+    ],
+)
+def test_an_ops_result_takes_the_tier_of_the_registers_it_reads(m, code, ra, rb, imm, want):
+    m.g[1], m.g[3] = Sv(5), Sv(7, I)
+    run(m, [op_word(code, ra, rb, imm, f270_271=1, f221_223=0)])
+    assert m.r[0] == want
+
+
 def test_an_op_reads_the_old_value_of_a_register_another_source_writes(m):
     m.g[12], m.g[13] = Sv(0x1000), Sv(1)
     x0_imm = {
