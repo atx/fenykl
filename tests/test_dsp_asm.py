@@ -44,7 +44,7 @@ from fenykl.dsp.asm import (
     wait,
 )
 from fenykl.dsp.disasm import listing, source
-from fenykl.dsp.fields import FIELDS, OP_FIELD, Confidence, Operands
+from fenykl.dsp.fields import FIELDS, OP_FIELD, TARGET, Confidence
 from fenykl.dsp.program import (
     AssemblyError,
     HypothesisFieldWarning,
@@ -109,7 +109,7 @@ def test_a_kernel_word_decodes_to_its_instructions():
     )
     assert decoded.word() == word
     # A field no part expresses, here a register held under an idle head, stays raw.
-    held = Word.data(0x0B, Operands(ra=31, imm=5), base=Word.from_fields({"xreg": 3}))
+    held = (OP(0x0B, ra=G[31], imm=5) | raw(xreg=3)).word()
     parts = Bundle.of(held).parts
     assert repr(parts[0]) == "OP.li(5)" and parts[-1] == Raw({"f115_119": 3})
 
@@ -346,7 +346,7 @@ def test_listing_names_ops_targets_and_delay_slots():
     # where its delay slots end; a return shows f128_132, which is no target there.
     call = Word.from_fields({"f1": 1, "imm": 0xA3, "f128_132": 5, "ctl_n": 0, "op": 3})
     ret = Word.from_fields({"f128_132": 1, "ctl_n": 0, "op": 4})
-    data = Word.data(0x1F, Operands(ra=2, imm=0xC))
+    data = OP(0x1F, ra=G[2], imm=0xC).word()
     assert (call.target, call.control, ret.target, ret.control, data.control) == (
         0x5A3,
         True,
@@ -414,12 +414,10 @@ def test_dsl_source_rebuilds_every_code_and_random_words():
 def test_listing_shows_data_ops_in_their_format():
     # Operands replace their fields; a slot field outside the format (imm in a register form,
     # f120_122 as an R register) stays a field.
-    shift = Word.data(0x3F, Operands(ra=2, rb=2, imm=5))
-    signed = Word.data(
-        0x0C, Operands(ra=3, imm=-7), base=Word.from_fields({"f120_122": 1})
-    )
-    wide = Word.data(0x0B, Operands(ra=1, imm=0x2468))
-    reg = Word.data(0x49, Operands(ra=1, rb=2), base=Word.from_fields({"imm": 4}))
+    shift = OP(0x3F, ra=G[2], rb=G[2], imm=5).word()
+    signed = (OP(0x0C, ra=G[3], imm=-7) | raw(f120_122=1)).word()
+    wide = OP(0x0B, ra=G[1], imm=0x2468).word()
+    reg = (OP(0x49, ra=G[1], rb=G[2]) | raw(imm=4)).word()
     text = listing(Program((shift, IDLE, signed, IDLE, wide, IDLE, reg)))
     body = [line.strip() for line in text.splitlines() if not line.startswith(";")]
     assert body[::2] == [
@@ -451,13 +449,11 @@ def build(stmts: list, origin: int = 0) -> Program:
         return assemble(stmts, origin=origin)
 
 
-def test_word_ctl_holds_its_target_in_imm_and_f128_132():
-    base = Word.from_fields({"f1": 1})
-    assert Word.ctl(3, 0x5A3, base) == (OP.jump(0x5A3) | raw(f1=1)).word()
-    assert Word.ctl(4) == OP.ret().word()
-    for bad in ((4, 10), (3, None), (7, None)):
-        with pytest.raises(ValueError):
-            Word.ctl(*bad)
+def test_a_control_op_takes_a_target_exactly_when_it_jumps():
+    with pytest.raises(ValueError, match="op 0x4: target 10"):
+        OP(4, to=10)
+    with pytest.raises(ValueError, match="op 0x3: target None"):
+        OP(3)
 
 
 def test_relocation_moves_every_label_target_and_nothing_else():
@@ -472,7 +468,7 @@ def test_relocation_moves_every_label_target_and_nothing_else():
             assert a == b
             continue
         assert b.target == a.target + 40
-        assert Word.ctl(b.op, a.target, b) == a
+        assert Word(TARGET.put(b.value, a.target)) == a
 
 
 def test_undefined_and_duplicate_labels_raise():
@@ -508,7 +504,7 @@ def test_call_return_check_reports_a_return_past_the_end():
     program = build(labelled())
     assert call_return_errors(program) == []
     # 3 returns to 8, the last word; 5 to 10, past the end.
-    call = Word.ctl(3, 0)
+    call = OP.jump(0).word()
     short = Program((*[IDLE] * 3, call, IDLE, call, *[IDLE] * 3))
     assert call_return_errors(short) == [
         "op 3 at word 5 returns to 10, past the end (9 words)"

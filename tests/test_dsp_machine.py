@@ -9,7 +9,7 @@ from functools import cache
 import pytest
 from conftest import stock_image
 
-from fenykl.dsp import NOP, OP, assemble, hand
+from fenykl.dsp import NOP, OP, G, assemble, hand
 from fenykl.dsp.asm import VIEWS
 from fenykl.dsp.emu import HALT_OP, LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import LANE_VECTORS, Composite, Confidence, Operands
@@ -239,16 +239,14 @@ def test_a_counted_loop_stores_through_r():
     def data(
         code: int, ra: int, rb: int | None = None, imm: int | None = None, **ports: int
     ) -> Word:
-        return Word.from_fields(
-            ports, base=Word.data(code, Operands(ra, rb, imm), base=IDLE)
-        )
+        return Word.from_fields(ports, base=op_word(code, ra, rb, imm))
 
     li = data(0x0B, 31, imm=3, f272_273=1, f224_228=2)
     zero = data(0x0B, 31, imm=0, f272_273=1, f224_228=3)
     add = data(0x1F, 3, imm=5, f272_273=1, f224_228=3)
     end = Word.from_fields(
         {"ra": 2, "f120_122": 0, "f272_273": 1, "f224_228": 2},
-        base=Word.ctl(0, 2, base=IDLE),
+        base=OP.loop(to=2).word(),
     )
     to_r = data(0x09, 31, 3, f270_271=1, f221_223=0)
     store = data(0x18, 31, imm=0x10, f120_122=0)
@@ -506,9 +504,10 @@ def test_another_units_held_mask_is_not_on_m(m):
 def op_word(
     code: int, ra: int, rb: int | None = None, imm: int | None = None, **fields: int
 ) -> Word:
-    return Word.from_fields(
-        fields, base=Word.data(code, Operands(ra, rb, imm), base=IDLE)
-    )
+    """Op `code` on G[ra], G[rb] and imm, those its format takes, with `fields`."""
+    given = {"rb": None if rb is None else G[rb], "imm": imm}
+    instr = OP(code, ra=G[ra], **{k: v for k, v in given.items() if v is not None})
+    return Word.from_fields(fields, base=instr.word())
 
 
 @pytest.mark.parametrize(
@@ -601,7 +600,7 @@ def test_an_arrival_reaches_a_control_word(m, code, target, load, want):
     m.g[5], m.g[11], m.g[9] = Sv(0), Sv(7), Sv(0x123)
     ctl = Word.from_fields(
         {"ra": 11, "f120_122": 0, "f272_273": 1, "f224_228": 12},
-        base=Word.ctl(code, target, base=IDLE),
+        base=OP(code, to=target).word(),
     )
     before = (
         [op_word(0x1A, 5, imm=0x40), IDLE, IDLE] if load else [op_word(0x49, 11, 9)]
@@ -666,7 +665,7 @@ def test_a_register_form_store_and_load_address_by_rb(m):
 
 def control(code: int, target: int | None = None, **fields: int) -> Word:
     return Word.from_fields(
-        {"f120_122": 0, **fields}, base=Word.ctl(code, target, base=IDLE)
+        {"f120_122": 0, **fields}, base=OP(code, to=target).word()
     )
 
 
@@ -924,7 +923,7 @@ def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
 def test_the_machine_refuses_a_control_word_with_f120_122_low_bits():
     boot = Boot()
     job = Job(
-        Program((Word.ctl(3, 1, base=IDLE), IDLE)), ()
+        Program((OP.jump(1).word(), IDLE)), ()
     )  # the idle word's f120_122 is 7
     with pytest.raises(UnknownSemantics, match="f120_122 bits 0..1"):
         Executor(boot, datapath=Machine(boot)).step(job)

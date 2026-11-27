@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from fenykl.dsp import stream, timing
+from fenykl.dsp.asm import OP
 from fenykl.dsp.emu import Boot
 from fenykl.dsp.fields import Confidence
 from fenykl.dsp.machine import Sv
@@ -113,7 +114,7 @@ def loop(slots: int, head: bool = False, counter: Sv = THREE) -> Estimate:
     )
     end = Word.from_fields(
         {"ra": 2, "f120_122": 0, "f272_273": 1, "f224_228": 2},
-        base=Word.ctl(0, 0, base=IDLE),
+        base=OP.loop(to=0).word(),
     )
     body = [first, *[IDLE] * slots, end, IDLE, IDLE, IDLE, IDLE]
     return run([], body=body, g={2: counter})
@@ -303,7 +304,7 @@ def test_words_branched_over_cost_only_inside_a_fetch_line_that_runs():
 
     def over(target: int) -> Estimate:
         br = Word.from_fields(
-            {"ra": 2, "f120_122": 0}, base=Word.ctl(2, target, base=IDLE)
+            {"ra": 2, "f120_122": 0}, base=OP.bnz(to=target).word()
         )
         body = [br, *[IDLE] * (target - 1), *[IDLE] * 8]
         return run([], body=body, g={2: Sv(1)})
