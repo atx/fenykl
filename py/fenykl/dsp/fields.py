@@ -1805,13 +1805,6 @@ S2_NEXT = frozenset(
 """(the heads of a word, those of the next) where M under S2 in the next word was measured on the
 camera (pre-registered): after S2 0xc or S2 0x1 and a word with no S head nothing, after S2 0xc
 and S2 0xc the second extract alone."""
-S2_HIGH_BESIDE = frozenset(
-    (frozenset({("s2", 0x2)}), frozenset({("s2", h)})) for h in (0x8, 0xD)
-)
-"""(the heads of a word, those of the next) where S2's high port in the next word, beside the
-lag-0 head's own result, took the product's high half (measured on the camera, pre-registered,
-against its OR with the moved lanes; an OR with a zero high half of the move would give the same
-value). Beside other lag-0 S2 heads without a high half: the product's high half, inferred."""
 X0_BESIDE_KEPT = (0x13, frozenset({("s0", 0x0)}))
 """An X0 head and the S heads of its word beside which nothing on M kept the register M's port
 names (measured on the camera, pre-registered, under every f274_275). Beside other X0 heads the

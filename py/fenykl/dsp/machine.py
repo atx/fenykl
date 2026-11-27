@@ -94,7 +94,6 @@ from .fields import (
     S0_RESULT,
     S1_RESULT,
     S2_HIGH,
-    S2_HIGH_BESIDE,
     S2_HIGH_HALVES,
     S2_LOW,
     S2_NEXT,
@@ -1381,9 +1380,9 @@ class Machine:
             timed = bool(now) and LANE_LAG["s2"].get(now[0]) == (0, V)
             if len(due) == 2 and due[0][1] is not None and due[1][1] is None and timed:
                 # A product's high half beside a timed lag-0 S2 head without one: the high half
-                # (measured in the forms of `S2_HIGH_BESIDE`, else inferred).
-                beside = (self._heads_at(t - 1), self._heads_at(t)) in S2_HIGH_BESIDE
-                return _cap(due[0][1], V if beside else I)
+                # (measured on the camera beside S2 0x8 / 0xd moves of lanes whose high half, if
+                # the move drove one, was zero: inferred).
+                return _cap(due[0][1], I)
             if len(due) > 1:
                 self._why(t, "s2", "two S2 high halves in one word")
                 return Vec(

@@ -1134,9 +1134,10 @@ def test_a_held_result_beside_another_units_own_word_result_is_on_m_alone(held, 
 
 @pytest.mark.parametrize(("s0", "tier"), [(0x32, V), (0x22, I)])
 def test_two_held_results_in_one_word_each_under_its_unit(s0, tier):
-    alone = m_read([heads(("s0", s0))], 1, 0)
-    assert alone.value is not None and alone.tier == V
-    assert m_read([heads(("s0", s0), ("s1", 0x45))], 1, 0) == Sv(alone.value, tier)
+    swapped = {"f45_48": 2, "f49_52": 1}  # S1's a < b on every lane: its mask is not zero
+    alone, s1 = m_read([heads(("s0", s0))], 1, 0), m_read([heads(("s1", 0x45)) | swapped], 1, 1)
+    assert alone.tier == s1.tier == V and alone.value | s1.value != alone.value
+    assert m_read([heads(("s0", s0), ("s1", 0x45)) | swapped], 1, 0) == Sv(alone.value, tier)
 
 
 EXTRACT_A = {"f292_295": 0xC, "f53_56": 1, "f57_60": 2, "f88_91": 3}
@@ -1399,11 +1400,11 @@ def l1_high(beside: dict[str, int]) -> Vec:
     return m.lanes["L1"][8]
 
 
-@pytest.mark.parametrize(("head", "tier"), [(0x8, V), (0xD, V), (0x9, I)])
-def test_a_products_high_half_beside_a_lag_0_s2_head(head, tier):
+@pytest.mark.parametrize("head", [0x8, 0xD, 0x9])
+def test_a_products_high_half_beside_a_lag_0_s2_head_is_inferred(head):
     alone = l1_high({})
     assert None not in alone.lanes and alone.tier == V
-    assert l1_high({"f292_295": head}) == Vec(alone.lanes, tier)
+    assert l1_high({"f292_295": head}) == Vec(alone.lanes, I)
 
 
 @pytest.mark.parametrize(
