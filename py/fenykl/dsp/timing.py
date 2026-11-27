@@ -50,61 +50,45 @@ of 1 ms before it aborts the job, so keep a job below this."""
 class Cost:
     us: float
     tier: Confidence
-    fact: str
 
 
-JOB = Cost(
-    97.9,
-    I,
-    "the job's fixed cost, the interrupt and callback path: the 101 us intercept of loops of "
-    "512 to 2048 passes against their pass counts (verified on the camera, in a pre-registered "
-    "range of 95 to 115 us) less the first runs of those jobs' 42 words (2.7 us at `FIRST`) and "
-    "their unrun line words (0.4 us at `UNRUN`), fitted; all-idle straight runs of 152 to 1900 "
-    "words on five later boots put the intercept at 94.6 to 97.0 us (a fit of two boots held, "
-    "registered, on a third), within the 3 to 5 us scatter of a boot's minima: one constant, "
-    "about 2 us high for straight runs",
-)
-REPEAT = Cost(
-    0.0052,
-    V,
-    "a word executed again, in a loop: 5.2 ns, registered at 5.2 +- 0.1 ns and held on the "
-    "camera in idle passes of 9, 16, 18, 36, 106, 256 and 1024 words (5.15 to 5.25 ns, the pass "
-    "time 5.19 ns per word + 1.3 ns per pass) and in 18-word passes of S-head, X0, mixed and idle "
-    "words (5.15 to 5.26 ns); a boot before gave 5.10 to 5.24 ns at the same lengths and classes, "
-    "and the first figure, 5.37 ns from 16-word idle passes on one boot, lies inside the 4.9 to "
-    "5.6 ns first registered; scalar local loads, X1's divide, X0 lane-memory loads and taken "
-    "branches with their delay slots cost the same within 1.5 ns (verified on the camera, in loop "
-    "passes of 9 to 106 words closed by ops 0..2); idle words in passes that jump 1088 words "
-    "away and back by op 2 or op 3 likewise (no loop buffer and no cache smaller than 1024 words; "
-    "passes of exactly 2000 words 5.24 ns from four totals, pre-registered); passes of 1536 and "
-    "1800 words (4.9 and 5.7 ns) and a 900-word straight run repeated after 900 other words (at "
-    "the repeat rate within the jitter) were measured outside their registered windows, so those "
-    "distances repeat at `REPEAT_I`; in passes of 107 to 1024 words and of 2000 only idle words "
-    "were timed, so other words there repeat at `REPEAT_I`; S3 reductions likewise (fitted)",
-)
-REPEAT_I = Cost(
-    REPEAT.us,
-    I,
-    "a word executed again outside the measured passes (a pass under 9 words, over 106 for a "
-    "word that is not idle, other than 9 to 1024 or exactly 2000 for an idle word, or "
-    "with an op 4 since the word's last run), or with an S unit's head: S3 reductions "
-    "fitted at the idle word's cost, other S heads not timed (inferred: no measured class costs "
-    "more than an idle word)",
-)
+JOB = Cost(97.9, I)
+"""The job's fixed cost, the interrupt and callback path: the 101 us intercept of loops of 512 to
+2048 passes against their pass counts (verified on the camera, in a pre-registered range of 95 to
+115 us) less the first runs of those jobs' 42 words (2.7 us at `FIRST`) and their unrun line words
+(0.4 us at `UNRUN`), fitted; all-idle straight runs of 152 to 1900 words on five later boots put the
+intercept at 94.6 to 97.0 us (a fit of two boots held, registered, on a third), within the 3 to 5 us
+scatter of a boot's minima: one constant, about 2 us high for straight runs."""
+REPEAT = Cost(0.0052, V)
+"""A word executed again, in a loop: 5.2 ns, registered at 5.2 +- 0.1 ns and held on the camera in
+idle passes of 9, 16, 18, 36, 106, 256 and 1024 words (5.15 to 5.25 ns, the pass time 5.19 ns per
+word + 1.3 ns per pass) and in 18-word passes of S-head, X0, mixed and idle words (5.15 to 5.26 ns);
+a boot before gave 5.10 to 5.24 ns at the same lengths and classes, and the first figure, 5.37 ns
+from 16-word idle passes on one boot, lies inside the 4.9 to 5.6 ns first registered; scalar local
+loads, X1's divide, X0 lane-memory loads and taken branches with their delay slots cost the same
+within 1.5 ns (verified on the camera, in loop passes of 9 to 106 words closed by ops 0..2); idle
+words in passes that jump 1088 words away and back by op 2 or op 3 likewise (no loop buffer and no
+cache smaller than 1024 words; passes of exactly 2000 words 5.24 ns from four totals,
+pre-registered); passes of 1536 and 1800 words (4.9 and 5.7 ns) and a 900-word straight run repeated
+after 900 other words (at the repeat rate within the jitter) were measured outside their registered
+windows, so those distances repeat at `REPEAT_I`; in passes of 107 to 1024 words and of 2000 only
+idle words were timed, so other words there repeat at `REPEAT_I`; S3 reductions likewise (fitted)."""
+REPEAT_I = Cost(REPEAT.us, I)
+"""A word executed again outside the measured passes (a pass under 9 words, over 106 for a word that
+is not idle, other than 9 to 1024 or exactly 2000 for an idle word, or with an op 4 since the word's
+last run), or with an S unit's head: S3 reductions fitted at the idle word's cost, other S heads not
+timed (inferred: no measured class costs more than an idle word)."""
 PASSES = range(9, 107)
 """Executed words between two runs of a word in the loops timed on the camera, any word class."""
 IDLE_PASSES = frozenset(range(9, 1025)) | {2000}
 """Likewise for idle words: passes of 9 to 1024 words and of exactly 2000."""
-FIRST = Cost(
-    0.064,
-    I,
-    "a word's first execution: 64 ns, the slope over straight-line jobs of 200 to 1000 idle "
-    "words (fitted; earlier runs of 0 to 1900 words gave 62 to 70 ns, all within a "
-    "pre-registered 50 to 75 ns; runs of 152 to 1900 words on five later boots 58 to 62 ns, "
-    "a fit of two of them held, registered, on a third); words of ALU ops cost the same as idle words (verified on "
-    "the camera); paid when the word runs, not for the image's length: a word branched over "
-    "costs nothing unless it shares a fetch line with a word that runs (`LINE`)",
-)
+FIRST = Cost(0.064, I)
+"""A word's first execution: 64 ns, the slope over straight-line jobs of 200 to 1000 idle words
+(fitted; earlier runs of 0 to 1900 words gave 62 to 70 ns, all within a pre-registered 50 to 75 ns;
+runs of 152 to 1900 words on five later boots 58 to 62 ns, a fit of two of them held, registered, on
+a third); words of ALU ops cost the same as idle words (verified on the camera); paid when the word
+runs, not for the image's length: a word branched over costs nothing unless it shares a fetch line
+with a word that runs (`LINE`)."""
 LINE = 8
 """Words per fetch line, aligned to image indices that are multiples of 8: the words of a
 line that runs but that the job never executes cost `UNRUN` each (inferred: chains of
@@ -112,12 +96,9 @@ line that runs but that the job never executes cost `UNRUN` each (inferred: chai
 block at offsets 4 and 12, pre-registered as one of the line sizes named; blocks every 10
 and 12 words fit the line within a word per block; every 24 and 64 words they cost 2 to 5
 words per block more than the lines predict, unexplained)."""
-UNRUN = Cost(
-    0.064,
-    I,
-    "a word never executed in a fetch line some word of which runs: the first-run rate "
-    "(fitted: an extra line measured 0.82 of eight first runs)",
-)
+UNRUN = Cost(0.064, I)
+"""A word never executed in a fetch line some word of which runs: the first-run rate (fitted: an
+extra line measured 0.82 of eight first runs)."""
 
 
 @dataclass(frozen=True)
@@ -132,85 +113,47 @@ class Rate:
     per_kib: float
     per_command: float
     kib: tuple[float, float]
-    fact: str
     tier: Confidence = I
     r1: int = 0
     r4: int = 0
 
 
-LANE_LOAD = Rate(
-    0.442,
-    0.2,
-    (1, 16),
-    "byte loads into the lane memory: 0.91, 1.72 and 7.38 us at 1, 4 and 16 KiB, fitted "
-    "(about 2.2 KiB per us); the line's times registered at 1 to 16 KiB on a later boot held within "
-    "10 % + 0.15 us at 1, 2, 8 and 16 KiB (0.72, 1.13, 3.82, 6.75 us) but not at 4 KiB (1.49 us, "
-    "below, its shorter loop 33 us long; 1.75 and 1.89 us on two more boots, inside); registered "
-    "again at 1, 2, 4, 8 and 16 KiB on one further boot, all five held (0.72, 1.18, 1.79, 3.38, "
-    "6.44 us)",
-    V,
-)
-LANE_STORE = Rate(
-    0.4872,
-    0.119,
-    (0.5, 16),
-    "byte stores from the lane memory: a line fitted, weighted by relative error, over ten earlier "
-    "times (0.74, 2.14, 7.19 us at 1, 4, 16 KiB on one boot; 0.54, 1.04, 2.13, 4.19, 7.94 us at 1, "
-    "2, 4, 8, 16 KiB on a second; 4.07, 8.25 us at 8, 16 KiB on a third), then registered at 0.5 to "
-    "16 KiB on a fourth boot, where all six sizes held within 10 % + 0.15 us (0.30, 0.59, 1.11, "
-    "2.02, 3.79, 8.07 us; three repeats per pass count); the earlier line, 0.427 us per KiB + 0.3, "
-    "missed there at 0.5 and 16 KiB",
-    V,
-)
-LANE_STORE12 = Rate(
-    0.4208,
-    0.084,
-    (1, 16),
-    "12-bit stores from the lane memory (r3 = ceil(10 r6 / 32) vectors): 0.50, 1.77 and 6.82 us "
-    "at 1, 4 and 16 KiB of DRAM, each within its registered window around the byte store's "
-    "rate, fitted; the fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (0.97, "
-    "3.29 us)",
-    V,
-)
-LANE_LOAD16 = Rate(
-    0.4665,
-    0.139,
-    (1, 16),
-    "16-bit loads into the lane memory (r3 = r6 / 4 vectors): 0.71, 1.88 and 7.63 us at 1, 4 "
-    "and 16 KiB of DRAM, each within its registered window around the byte load's rate, fitted; "
-    "the fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (1.13, 3.63 us)",
-    V,
-)
-LANE_STORE16 = Rate(
-    0.4326,
-    0.055,
-    (0.0625, 16),
-    "16-bit stores from the lane memory (r3 = r6 / 4 vectors): 0.11, 0.20, 0.48, 1.68 and 7.00 "
-    "us at 64 B, 192 B, 1, 4 and 16 KiB of DRAM, each within its registered window around the "
-    "byte store's rate, fitted; the fit's times registered at 512 B and 8 KiB held within 10 % + "
-    "0.15 us (0.26, 3.07 us)",
-    V,
-)
-LOCAL_LOAD32 = Rate(
-    1.3293,
-    0.377,
-    (0.25, 4),
-    "32-bit loads into local memory at r2 = 1 (one element per word): 0.69, 1.39, 1.71 and 5.69 "
-    "us at 0.25, 0.75, 1 and 4 KiB of DRAM, fitted; the 0.25 KiB time lies above its registered "
-    "window (the byte local load's rate per KiB, which holds at the other sizes); the fit's "
-    "times registered at 0.5 and 2 KiB held within 10 % + 0.15 us (1.02, 3.04 us; inferred: "
-    "the 0.25 KiB time missed its window)",
-)
-LOCAL_LOAD = Rate(
-    1.3499,
-    0.312,
-    (0.25, 4),
-    "byte loads into local memory at r2 = 4: 0.67, 1.65, 2.99 and 5.72 us at 0.25, 1, 2 and 4 "
-    "KiB of DRAM, fitted (about 0.75 KiB per us, a third of the lane memory's rate, plus a "
-    "per-command part that puts 0.25 KiB above the per-KiB rate's window); the fit's times "
-    "registered at 0.5 and 3 KiB held within 10 % + 0.15 us (0.99, 4.24 us; inferred: the "
-    "0.25 KiB time missed its window)",
-)
+LANE_LOAD = Rate(0.442, 0.2, (1, 16), V)
+"""Byte loads into the lane memory: 0.91, 1.72 and 7.38 us at 1, 4 and 16 KiB, fitted (about 2.2 KiB
+per us); the line's times registered at 1 to 16 KiB on a later boot held within 10 % + 0.15 us at 1,
+2, 8 and 16 KiB (0.72, 1.13, 3.82, 6.75 us) but not at 4 KiB (1.49 us, below, its shorter loop 33 us
+long; 1.75 and 1.89 us on two more boots, inside); registered again at 1, 2, 4, 8 and 16 KiB on one
+further boot, all five held (0.72, 1.18, 1.79, 3.38, 6.44 us)."""
+LANE_STORE = Rate(0.4872, 0.119, (0.5, 16), V)
+"""Byte stores from the lane memory: a line fitted, weighted by relative error, over ten earlier
+times (0.74, 2.14, 7.19 us at 1, 4, 16 KiB on one boot; 0.54, 1.04, 2.13, 4.19, 7.94 us at 1, 2, 4,
+8, 16 KiB on a second; 4.07, 8.25 us at 8, 16 KiB on a third), then registered at 0.5 to 16 KiB on a
+fourth boot, where all six sizes held within 10 % + 0.15 us (0.30, 0.59, 1.11, 2.02, 3.79, 8.07 us;
+three repeats per pass count); the earlier line, 0.427 us per KiB + 0.3, missed there at 0.5 and 16
+KiB."""
+LANE_STORE12 = Rate(0.4208, 0.084, (1, 16), V)
+"""12-bit stores from the lane memory (r3 = ceil(10 r6 / 32) vectors): 0.50, 1.77 and 6.82 us at 1,
+4 and 16 KiB of DRAM, each within its registered window around the byte store's rate, fitted; the
+fit's times registered at 2 and 8 KiB held within 10 % + 0.15 us (0.97, 3.29 us)."""
+LANE_LOAD16 = Rate(0.4665, 0.139, (1, 16), V)
+"""16-bit loads into the lane memory (r3 = r6 / 4 vectors): 0.71, 1.88 and 7.63 us at 1, 4 and 16
+KiB of DRAM, each within its registered window around the byte load's rate, fitted; the fit's times
+registered at 2 and 8 KiB held within 10 % + 0.15 us (1.13, 3.63 us)."""
+LANE_STORE16 = Rate(0.4326, 0.055, (0.0625, 16), V)
+"""16-bit stores from the lane memory (r3 = r6 / 4 vectors): 0.11, 0.20, 0.48, 1.68 and 7.00 us at
+64 B, 192 B, 1, 4 and 16 KiB of DRAM, each within its registered window around the byte store's
+rate, fitted; the fit's times registered at 512 B and 8 KiB held within 10 % + 0.15 us (0.26, 3.07
+us)."""
+LOCAL_LOAD32 = Rate(1.3293, 0.377, (0.25, 4))
+"""32-bit loads into local memory at r2 = 1 (one element per word): 0.69, 1.39, 1.71 and 5.69 us at
+0.25, 0.75, 1 and 4 KiB of DRAM, fitted; the 0.25 KiB time lies above its registered window (the
+byte local load's rate per KiB, which holds at the other sizes); the fit's times registered at 0.5
+and 2 KiB held within 10 % + 0.15 us (1.02, 3.04 us; inferred: the 0.25 KiB time missed its window)."""
+LOCAL_LOAD = Rate(1.3499, 0.312, (0.25, 4))
+"""Byte loads into local memory at r2 = 4: 0.67, 1.65, 2.99 and 5.72 us at 0.25, 1, 2 and 4 KiB of
+DRAM, fitted (about 0.75 KiB per us, a third of the lane memory's rate, plus a per-command part that
+puts 0.25 KiB above the per-KiB rate's window); the fit's times registered at 0.5 and 3 KiB held
+within 10 % + 0.15 us (0.99, 4.24 us; inferred: the 0.25 KiB time missed its window)."""
 RATES: dict[tuple[int, int, int, int], Rate] = {
     (LOAD, LANE_MEMORY, 0x20, 0x10): LANE_LOAD,
     (STORE, LANE_MEMORY, 0x20, 0x10): LANE_STORE,
