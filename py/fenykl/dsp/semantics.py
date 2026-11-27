@@ -38,6 +38,7 @@ from .fields import (
     Field,
     lookup,
 )
+from .rules import TIES_MET
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
@@ -158,11 +159,6 @@ def ring_length(imm13: int) -> tuple[int | None, Confidence]:
     if imm13 & 0x100:
         return imm13 & 0x1FF, I
     return imm13 & 0xFF, V
-
-
-SELECT_MEASURED = frozenset({0, 3, 5, 6, 7})
-"""The f120_122 values at which op 0x08's select on R[f120_122] was measured with R both 0 and
-not (verified on the camera by exact readout); at the others it is inferred."""
 
 
 def ring_step(s: int, length: int) -> int:
@@ -1053,11 +1049,6 @@ def _lane_rules(unit: str) -> dict[int, LaneRule]:
 
 LANE_RULES = {unit: _lane_rules(unit) for unit in LANE_FUNCTIONS}
 """The S units' lane functions by head value, each with its tier (`fields.LANE_FUNCTIONS`)."""
-
-
-TIES_MET = range(1, 4)
-"""The counts at which S1's rounding shifts by imm & 15 met ties to even; at the others a tie
-lane is inferred (`fields.TIES_AT_10`)."""
 
 
 def _ties_by_imm(a: Sequence[int], b: Sequence[int], c: Scalars) -> Confidence:

@@ -10,6 +10,7 @@ from enum import Enum
 from itertools import product
 
 from ..fields import IDLE_OP, PR_SOURCES, Confidence, lookup
+from ..rules import SELECT_MEASURED
 from ..semantics import (
     LOCAL_BYTES,
     LOCAL_LOADS,
@@ -18,7 +19,6 @@ from ..semantics import (
     LOCAL_STORES_RB,
     LOCAL_UNITS,
     PR_ENABLES,
-    SELECT_MEASURED,
     OpSemantics,
     OpValue,
     Value,

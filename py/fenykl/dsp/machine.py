@@ -65,10 +65,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .fields import (
-    ALONE_PORTS,
-    ALONE_SELECTS,
-    ALONE_ZERO_LANES,
-    ALONE_ZEROS,
     ALU_BUS,
     DIVIDE_HEAD,
     DIVIDE_LAG,
@@ -78,10 +74,6 @@ from .fields import (
     LANE_LOAD,
     LANE_LOAD_LAG,
     LANE_SOURCES,
-    M_HELD_BESIDE_OWN,
-    M_LANE_ONLY,
-    M_OTHER_OPEN,
-    M_TOGETHER,
     M_UNITS,
     OP_FIELD,
     PB_FILES,
@@ -94,22 +86,14 @@ from .fields import (
     S2_HIGH,
     S2_HIGH_HALVES,
     S2_LOW,
-    S2_NEXT,
     S2_RESULT,
     S3_RESULT,
     S_IMMEDIATES,
-    S_NEXT_NONE,
-    S_NEXT_VALUES,
-    S_OWN_OPEN,
-    STORE_NOTHING,
     STORE_SOURCES,
     STREAM_SELECT,
     TRANSFER_HEADS,
     U_NOTHING,
     U_TAKES,
-    WAIT_HEAD,
-    WAIT_NOTHING,
-    X0_BESIDE_KEPT,
     X0_LANE_BY_REGISTER,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
@@ -119,7 +103,33 @@ from .fields import (
     lookup,
     op,
 )
-from .rules import DIVIDE_CHAINS, FIRST_PORT_WINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
+from .rules import (
+    ALONE_PORTS,
+    ALONE_SELECTS,
+    ALONE_ZERO_LANES,
+    ALONE_ZEROS,
+    DIVIDE_CHAINS,
+    FIRST_PORT_WINS,
+    LATCH_MEASURED,
+    LOAD_CHAIN_HEAD,
+    LOAD_CHAINS,
+    M_HELD_BESIDE_OWN,
+    M_LANE_ONLY,
+    M_OTHER_OPEN,
+    M_TOGETHER,
+    S2_NEXT,
+    S_NEXT_NONE,
+    S_NEXT_VALUES,
+    S_OWN_OPEN,
+    SELECT_MEASURED,
+    STORE_NOTHING,
+    WAIT_HEAD,
+    WAIT_NOTHING,
+    WEDGING_S0,
+    WEDGING_S0_AT,
+    WEDGING_S0_WHY,
+    X0_BESIDE_KEPT,
+)
 from .semantics import (
     IDLE_OP,
     LANE_COUNT,
@@ -137,7 +147,6 @@ from .semantics import (
     OP_SEMANTICS,
     PR_ENABLES,
     S_RULES,
-    SELECT_MEASURED,
     X_RULES,
     Branch,
     UnknownInput,
@@ -247,24 +256,6 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
-WEDGING_S0 = 0x4F
-WEDGING_S0_AT = 3
-"""The count of `WEDGING_S0` words under M's strobe and port 272 / 2 at which a job lapses."""
-WEDGING_S0_WHY = (
-    "a third S0 0x4f word under M's strobe with port 272 / 2 in the job: three or four such "
-    "words (nibbles 1..3, G12 written) wedged the camera's job, each as a fresh boot's first "
-    "job after a stock copy, so the boot's earlier jobs are not needed; one alone (four "
-    "settings, either port form) and two (four pairs, adjacent or not) ran; each of three "
-    "triples wedged (verified in one frame; other frames and settings inferred)"
-)
-"""The S0 head whose words, under M's strobe and with port 272 / 2, never let a job end on the
-camera from the third such word in a job; one or two ran, each writing nothing through the port."""
-LATCH_MEASURED = {
-    "s0": frozenset({0x05, 0x20, 0x41}),
-    "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
-}
-"""Heads whose read was latched on the camera; other heads latch at inferred. S1 0x39, which
-reads a only, kept S1's latch (measured)."""
 LANE_PORT_FILE = {enable: lane_file(enable) for enable in LANE_SOURCES}
 """The lane file each lane port writes: its register nibble lies 110 bits above the file's nibble."""
 S_OPERANDS = {
