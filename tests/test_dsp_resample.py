@@ -612,3 +612,15 @@ def test_words_439_to_442s_s2_operands_select_their_taps_line_and_coefficient():
         assert [c for _, c in got.result.edits] == [Confidence.VERIFIED], (at, edit)
         assert not any(got.dst.known[:1024])
         assert got.dst.data[1024:] == stock.dst.data[1024:]
+
+
+def test_a_job_refuses_what_its_setup_cannot_pass():
+    program = Program((IDLE,), constants=bytes(4 * commands.TAP_WORDS))
+    with pytest.raises(ValueError, match="dst -0x10 is not a u32"):
+        commands.copy(program, SRC, -0x10, 0x400)
+    with pytest.raises(ValueError, match="127 tap bytes, the setup copies 128"):
+        commands.resample(Program((IDLE,), bytes(127)), SRC, DST, TABLE, 64, 64, 16)
+    with pytest.raises(ValueError, match="table 0x100000000 is not a u32"):
+        commands.resample(program, SRC, DST, 1 << 32, 64, 64, 16)
+    with pytest.raises(ValueError, match="width 0x10000 is not a u16"):
+        commands.resample(program, SRC, DST, TABLE, 64, 0x10000, 16)
