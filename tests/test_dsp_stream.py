@@ -146,6 +146,31 @@ def test_local_memory_both_ways():
     assert not m.memory
 
 
+@pytest.mark.parametrize(
+    ("off", "words", "lines", "kinds", "tier"),
+    [
+        (0x202, 8, 2, (0, 6), V),
+        (0x201, 8, 2, (0, 6), I),
+        (0x202, 4, 1, (0, 6), I),
+        (0x202, 8, 2, (2, 4), I),
+    ],
+)
+def test_a_local_offset_within_a_word_floors_to_the_word(off, words, lines, kinds, tier):
+    """Measured for a 32-byte load and a store (kinds 0 and 6) 2 bytes into a word; other
+    offsets, sizes and kinds inferred."""
+    data = bytes(range(0x40, 0x80))
+    n = 4 * words
+    m, e = machine(data), stream.Engine()
+    regs = block(0, 2, 0, 4, words, 0, 0x10, lines, 1)
+    drive(m, e, [*regs, kinds[0], SRC, off, WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x200, n)
+    assert bytes(got.data) == data[:n] and got.weakest() == tier
+    m.boot.local.write(LOCAL_BASE + 0x200, Bytes.of(bytes(range(n)), 0))
+    drive(m, e, [kinds[1], off, DST, WAIT])
+    got = m.boot.read(DST, n)
+    assert bytes(got.data) == bytes(range(n)) and got.weakest() == tier
+
+
 def test_bytes_into_16_bit_local_elements_are_zero_extended():
     data = bytes(range(0x80, 0x90))
     m, e = machine(data), stream.Engine()
@@ -351,6 +376,19 @@ def test_two_rows_at_half_a_vector_share_it_and_the_later_lands():
     drive(m, e, [*lanes(0, 1, r6=2, r7=2, r1=0x20, r4=0x100), *load(0, SRC, 0), WAIT])
     assert m.memory[0].lanes == tuple(data[0x100:0x120]) and m.memory[0].tier == V
     assert m.memory[1].lanes == (7,) * 32
+
+
+@pytest.mark.parametrize(
+    ("r4", "r7", "tier"), [(0x100, 2, V), (0x200, 2, I), (0x100, 3, I)]
+)
+def test_load_rows_at_lane_pitch_0_land_the_last_row(r4, r7, tier):
+    """Measured with two rows 0x100 apart in DRAM: row 1 lands."""
+    data = bytes(range(256)) * 3
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2, r7=r7, r4=r4), *load(0, SRC, 0), WAIT])
+    last = r4 * (r7 - 1)
+    assert m.memory[0].lanes == tuple(data[last : last + 32])
+    assert m.memory[0].tier == tier
 
 
 @pytest.mark.parametrize(("r7", "to"), [(3, 0), (2, 0x20)])
@@ -614,6 +652,26 @@ def test_a_local_fill_raced_by_a_write_leaves_those_bytes_unknown():
     assert list(got.known) == [1] * 4 + [0] * 4 + [1] * 8
 
 
+@pytest.mark.parametrize(
+    ("r2", "r3", "r6", "tier"),
+    [(0x10, 2, 2, V), (0x200, 1, 2, V), (0x10, 4, 4, I), (0x200, 2, 4, I)],
+)
+def test_a_lane_store_at_r2_0x10_or_0x200_writes_zeros(r2, r3, r6, tier):
+    """Measured in one shape each (32 bytes); other shapes inferred."""
+    m, e = machine(bytes(range(1, 129))), stream.Engine()
+    regs = block(0, 1, 0, r2, r3, 0, 0x10, r6, 1)
+    drive(m, e, [*lanes(0, 4, r6=8), *load(0, SRC, 0), WAIT, *regs, *store(0, 0, DST), WAIT])
+    got = m.boot.read(DST, 16 * r6)
+    assert bytes(got.data) == bytes(16 * r6) and got.weakest() == tier
+
+
+def test_a_lane_store_at_another_r2_goes_off_script():
+    m, e = machine(bytes(64)), stream.Engine()
+    regs = block(0, 1, 0, 0x40, 1, 0, 0x10, 2, 1)
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *regs, *store(0, 0, DST), WAIT])
+    assert "r2 0x40 on a lane-memory store" in e.off
+
+
 def test_a_store_of_vectors_nothing_wrote_is_listed():
     m, e = machine(), stream.Engine()
     m.memory[0] = Vec((7,) * 32, V)
@@ -658,17 +716,21 @@ def test_a_store_to_an_unknown_address_raises():
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN)])
 
 
-def test_store_rows_at_one_address_write_it_once_the_last_row():
-    """At DRAM pitch 0 every row rewrites the first: of two rows, each from the next vector, the
-    last one's vector lands."""
-    data = bytes(range(64))
+@pytest.mark.parametrize(("r7", "tier"), [(2, V), (3, I)])
+def test_store_rows_at_one_address_write_it_once_the_last_row(r7, tier):
+    """At DRAM pitch 0 every row rewrites the first: of rows each from the next vector, the last
+    one's vector lands (measured at two rows)."""
+    data = bytes(range(96))
     m, e = machine(data), stream.Engine()
-    store_rows = lanes(0, 1, r6=2, r7=2, r1=0x40)
-    drive(m, e, [*lanes(0, 2, r6=4), *load(0, SRC, 0), WAIT, *store_rows])
+    store_rows = lanes(0, 1, r6=2, r7=r7, r1=0x40)
+    drive(m, e, [*lanes(0, 3, r6=6), *load(0, SRC, 0), WAIT, *store_rows])
     drive(m, e, [*store(0, 0, DST), WAIT])
     got = m.boot.read(DST, 32)
-    assert bytes(got.data) == data[32:]
-    assert set(got.taint) == {I}  # which row lands was not measured
+    assert bytes(got.data) == data[32 * (r7 - 1) : 32 * r7]
+    assert set(got.taint) == {tier}
+
+
+def test_store_rows_of_no_elements_at_pitch_0_go_off_script_for_the_count():
     m, e = machine(), stream.Engine()
     # Rows of no elements reach no DRAM: off script for the count, not raising for the reach.
     drive(m, e, [*lanes(0, 1, r6=0, r7=0xFFFFFFFF), *store(0, 0, DST), WAIT])
@@ -1032,17 +1094,22 @@ def test_store_rows_past_two_are_verified_only_as_run(r3, r6, r7, tier):
     assert m.boot.read(DST, 32).weakest() == tier
 
 
-def test_a_load_that_wraps_onto_its_own_vectors_leaves_them_unknown():
-    """LANE_VECTORS + 2 vectors from vector 0: the second writes of 0 and 1 race the first."""
-    data = bytes(range(256)) * (LANE_VECTORS // 8 + 1)
-    m, e = machine(data), stream.Engine()
+@pytest.mark.parametrize(("start", "tier"), [(0x100, V), (0, I)])
+def test_a_load_that_wraps_onto_its_own_vectors_lands_the_second_write(start, tier):
+    """LANE_VECTORS + 2 vectors: the second writes of the first two vectors replace the first
+    (measured from vector 0x100); the other wrapped vectors are inferred."""
     r3 = LANE_VECTORS + 2
-    drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, 0), WAIT])
-    assert m.memory[0].lanes == m.memory[1].lanes == (None,) * 32
-    assert m.memory[2].lanes == tuple(data[64:96])
-    assert m.memory[LANE_VECTORS - 1].lanes == tuple(
-        data[32 * LANE_VECTORS - 32 : 32 * LANE_VECTORS]
-    )
+    data = bytes((i + i // 0x8000) & 0xFF for i in range(32 * r3))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, start * 64), WAIT])
+    for v in (0, 1):
+        got = m.memory[start + v]
+        assert got.lanes == tuple(data[0x8000 + 32 * v : 0x8020 + 32 * v])
+        assert got.tier == tier
+    assert m.memory[start + 2].lanes == tuple(data[64:96])
+    assert m.memory[start + 2].tier == V
+    # From vector 0x100 the wrap writes vectors 0..0xff too, not read back.
+    assert m.memory[0xFF].tier == (I if start else V)
 
 
 def test_a_load_of_2_to_the_27_vectors_goes_off_script():
@@ -1066,6 +1133,17 @@ def test_store_rows_past_a_jobs_time_go_off_script():
     drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *lanes(0, 1, r6=1, r7=rows)])
     drive(m, e, [*store(0, 0, DST), WAIT])
     assert not e.off
+
+
+@pytest.mark.parametrize(("r3", "tier"), [(2, V), (3, I)])
+def test_a_load_past_the_last_vector_wraps_to_vector_0(r3, tier):
+    """Measured with two vectors from the last one; other wraps inferred."""
+    data = bytes(range(96))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, r3, r6=2 * r3), *load(0, SRC, (LANE_VECTORS + 1 - r3) * 64), WAIT])
+    assert m.memory[0].lanes == tuple(data[32 * (r3 - 1) : 32 * r3])
+    assert m.memory[0].tier == tier
+    assert m.memory[LANE_VECTORS - 1].tier == V
 
 
 def test_a_plain_load_that_wraps_keeps_at_most_inferred_beside_it():

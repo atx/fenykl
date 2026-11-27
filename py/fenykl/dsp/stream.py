@@ -32,8 +32,9 @@ inferred):
   under r0 0x00, 0x10 or 0x40 writes nothing (`NO_MEMORY`);
 - r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
   (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
-  count that ends the load, `ZERO_FORMATS`, inferred otherwise); local memory 4 bytes or 2
-  16-bit elements per 32-bit word (little-endian);
+  count that ends the load, `ZERO_FORMATS`, inferred otherwise; 0x10 and 0x200 write zeros on a
+  store, `LANE_STORE_ZEROS`); local memory 4 bytes or 2 16-bit elements per 32-bit word
+  (little-endian);
 - r3 units per row (vectors, or 32-bit words);
 - r1 the pitch between rows on the memory side in bytes (64 per vector);
 - r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
@@ -46,9 +47,12 @@ Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch hand
 0xfffffe00 steps back; verified on loads) and memory offset + k r1. A row's DRAM address is
 floored to 16 bytes (a load's pitch of 0x208 steps 0x200, verified; a store's of 0x108 at two rows
 steps 0x100, verified, other store pitches off 16 bytes not run), a lane-memory offset to its
-vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap inferred). Of the lane
+vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap verified in `WRAPS`,
+else inferred), a local-memory offset to its word (`LOCAL_OFFSET_FLOORED`). Of the lane
 pitches that are not whole vectors only `HALF_VECTOR_ROWS` ran: both rows write one vector, and
-the later row lands (verified). A load row
+the later row lands (verified). Where a load's rows or its wrap write a vector again, or a store's
+rows one DRAM address, the last write lands (verified in `HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`,
+`WRAPS`, `STORE_SAME_ROWS`, else inferred). A load row
 fills r3 units from its n = r5 r6 elements; with more units than ceil(n / r2) the transfer never
 ends, with fewer it fills r3 units and ends (verified). Lane memory: element i goes to lane
 i % 32 of vector i / 32, its low 16 bits, the lanes beyond n 0 (verified). Local memory: element
@@ -282,6 +286,26 @@ HALF_VECTOR_ROWS = (1, 0x20, 0x20, 1, None, 0x10, 2, 2)
 """A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes from a vector-aligned
 offset: row 1's offset floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
 pre-registered: one job, each row from its own DRAM line pair)."""
+SAME_VECTOR_ROWS = (1, 0, 0x20, 1, 0x100, 0x10, 2, 2)
+"""A plain lane-memory load of two rows of one vector at lane pitch 0 (both into one vector) from
+DRAM rows 0x100 apart: row 1's elements land (verified, pre-registered against row 0's; one job).
+Other loads whose rows write one vector again leave the last row's elements at inferred."""
+WRAPS: dict[tuple[tuple[int, ...], int], range] = {
+    ((1, 0, 0x20, 2, 0, 0x10, 4, 1), LANE_VECTORS - 1): range(1, 2),
+    ((1, 0, 0x20, LANE_VECTORS + 2, 0, 0x10, 2 * LANE_VECTORS + 4, 1), 0x100): range(
+        LANE_VECTORS, LANE_VECTORS + 2
+    ),
+}
+"""Plain one-row byte loads (registers, first vector) whose wrap past the last lane vector was read
+back, by the load's vectors v seen: two vectors from the last vector, the second landing in vector
+0, and `LANE_VECTORS` + 2 from vector 0x100, whose last two vectors rewrote 0x100 and 0x101 and
+replaced the first writes there (verified, pre-registered against stopping at the top and against
+the first write staying; one job each). Other wrapped vectors (that load's vectors 0..0xff among
+them) are inferred, and so is the last write of a vector a load writes more than once."""
+STORE_SAME_ROWS = (1, 0x40, 0x20, 1, 0, 0x10, 2, 2)
+"""A lane-memory store of two rows of one vector each (lane pitch one vector) at DRAM pitch 0: row
+1's vector lands (verified, pre-registered against row 0's; one job). Other store rows that rewrite
+one address leave the last row's bytes at inferred."""
 NO_MEMORY = (0x00, 0x10, 0x40)
 NO_MEMORY_STORE = (None, None, 0x20, 1, None, 0x10, 2, 1)
 """A store under r0 0x00, 0x10 or 0x40 in this shape (one row of one vector of bytes) ended and
@@ -307,6 +331,16 @@ the later of two stores to one address won, two loads to one vector (on two chan
 left the later's bytes, and a store of the last vector an outstanding load writes stored the
 load's bytes. Each ran with the later command of one vector and the earlier of one or 0x80: V
 in those roles only, other shapes and roles keep the order at inferred."""
+LANE_STORE_ZEROS = frozenset({(0x10, 2, 2), (0x200, 1, 2)})
+"""A plain one-row lane-memory store of bytes (r5 0x10) at r2 other than 0x20, by the (r2, r3, r6)
+that ran: it wrote zeros over its 32 bytes (verified, pre-registered against the bytes at r2 0x20,
+16 lanes of each vector and nothing written; one job each). Other shapes at r2 0x10 or 0x200 write
+zeros at inferred; other r2 values were not measured."""
+LOCAL_OFFSET_FLOORED = 2
+"""A plain local-memory load and a store of 32 bytes as bytes (`LOCAL_SHAPE`) at an offset this
+many bytes into a word ran at the word: the load wrote from the word's start, the store read from
+it (verified, pre-registered against the byte offset; one job each). Other offsets within a word,
+shapes or kinds are floored at inferred."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
 """r2 on local memory: the element width in bits."""
 LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
@@ -380,6 +414,8 @@ class _Command:
     wrap_tier: Confidence = I
     """The tier of a lane-memory offset counted modulo `fields.LANE_VECTORS` (inferred, unless
     the kind ran so)."""
+    plain: bool = True
+    """Handed as kind 0 / 6 (not a kind run as them, `KIND_AS`)."""
 
 
 def _known(v: Sv | None, what: str) -> int:
@@ -654,7 +690,7 @@ class Engine:
             if form == WRAPPED:
                 cmd = replace(cmd, wrap_tier=tier)
             self.cap = min(self.cap, tier)
-            cmd = replace(cmd, kind=KIND_AS[cmd.kind])
+            cmd = replace(cmd, kind=KIND_AS[cmd.kind], plain=False)
         if cmd.kind not in (LOAD, NOTHING_MOVES, STORE, FILL):
             self._unmeasured(m, cmd, f"command kind {cmd.kind:#x}")
             return
@@ -828,8 +864,8 @@ class Engine:
         return tier
 
     def _local_offset(self, off: int, n: int) -> int:
-        if off % 4:
-            raise _Off(f"local offset {off:#x} within a word: not measured")
+        """`off` floored to its word (`LOCAL_OFFSET_FLOORED`)."""
+        off &= ~3
         if off < 0 or off + n > LOCAL_BYTES:
             raise _Off(f"local bytes {off:#x}..{off + n:#x}: not measured")
         return off
@@ -885,27 +921,34 @@ class Engine:
         return self._local_load(m, cmd, rows, bits, r6, width, r2, r3, tier)
 
     def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier):
-        # Each vector's only (row, v), None for one the load writes twice: the second write
-        # sees the first as a race, so it ends unknown and needs no DRAM bytes.
-        # Rows at a lane pitch of half a vector (`HALF_VECTOR_ROWS`) share it: the later lands.
-        later = _fits(cmd, HALF_VECTOR_ROWS)
-        once: dict[int, tuple[int, int] | None] = {}
+        # Each vector's last write (row, v), and the vectors written again: by a later row or
+        # past the last vector. The last write lands, verified in the shapes measured
+        # (`HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`, `WRAPS`), else inferred.
+        last: dict[int, tuple[int, int]] = {}
+        again: set[int] = set()
+        first = max(0, r3 - LANE_VECTORS)
         for k, (_, off) in enumerate(rows):
-            for v in range(min(r3, LANE_VECTORS)):
-                at = (off // VECTOR_BYTES + v) % LANE_VECTORS
-                twice = (at in once and not later) or v + LANE_VECTORS < r3
-                once[at] = None if twice else (k, v)
+            base = off // VECTOR_BYTES
+            again.update((base + v) % LANE_VECTORS for v in range(min(first, LANE_VECTORS)))
+            for v in range(first, r3):
+                at = (base + v) % LANE_VECTORS
+                if at in last:
+                    again.add(at)
+                last[at] = (k, v)
+        shape = tuple(x.value for x in cmd.regs)
+        start = rows[0][1] // VECTOR_BYTES
+        seen = WRAPS.get((shape, start), range(0)) if cmd.plain else range(0)
+        rows_seen = _fits(cmd, HALF_VECTOR_ROWS) or (cmd.plain and _fits(cmd, SAME_VECTOR_ROWS))
         queue = _queue(cmd)
         # Vectors an earlier outstanding load holds: this one lands after it, in queue order.
-        behind = {at: q for h, q, _ in self.held for at in once if _holds(m, h, at)}
-        held = {at: Vec(UNKNOWN_VEC.lanes) for at in once}
+        behind = {at: q for h, q, _ in self.held for at in last if _holds(m, h, at)}
+        held = {at: Vec(UNKNOWN_VEC.lanes) for at in last}
         if not m.lanes_lost:
             m.memory.update(held)
         # The queue runs in order: a store handed later writes DRAM after this load read it.
         wanted: list[list[int]] = [[] for _ in rows]
-        for kv in once.values():
-            if kv is not None:
-                wanted[kv[0]].append(kv[1])
+        for k, v in last.values():
+            wanted[k].append(v)
         sources = [
             self._lane_elements(m, dram, bits, lines, vectors)
             for (dram, _), vectors in zip(rows, wanted, strict=True)
@@ -915,16 +958,19 @@ class Engine:
             self.held = [x for x in self.held if x[2] is not complete]
             if m.lanes_lost:
                 return
-            for at, kv in once.items():
+            for at, (k, v) in last.items():
                 if m.memory.get(at) is not held[at] and self._held(m, at):
                     continue  # a later load holds it and lands after this one
                 # What a load of no lines writes was not seen.
-                if kv is None or not lines:
+                if not lines:
                     m.memory[at] = UNKNOWN_VEC
                     continue
-                k, v = kv
                 base = rows[k][1] // VECTOR_BYTES
                 wrap = cmd.wrap_tier if base + v >= LANE_VECTORS else V
+                if v in seen:
+                    wrap = V
+                elif at in again and not rows_seen:
+                    wrap = min(wrap, I)
                 first, elements = sources[k]
                 e = v * LANE_COUNT - first
                 chunk = elements[e : e + LANE_COUNT]
@@ -993,8 +1039,8 @@ class Engine:
     def _local_load(self, m, cmd, rows, bits, lines, width, r2, r3, tier):
         size = 4 * r3
         src = m.boot.source("stream load in flight", f"{cmd.where}")
-        for _, off in rows:
-            self._local_offset(off, size)
+        tier = min(tier, _floored(cmd, rows))
+        rows = [(dram, self._local_offset(off, size)) for dram, off in rows]
         for _, off in rows:
             m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, src))
         loaded = m.boot.source(
@@ -1041,12 +1087,16 @@ class Engine:
         _, ks = _store_reach(r)
         rows, tier = self._rows(cmd, memory, ks)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
-        if len(ks) < r[7].value:
-            tier = min(tier, I)  # rows that rewrite one address: not measured which lands
+        if len(ks) < r[7].value and not (cmd.plain and _fits(cmd, STORE_SAME_ROWS)):
+            tier = min(tier, I)  # rows that rewrite one address: the last lands (inferred)
         tier = min(tier, self._behind(rows, 16 * r6, True))
+        zeros = memory == LANE_MEMORY and r2 != 0x20
         if memory == LANE_MEMORY:
-            if r2 != 0x20:
+            if zeros and r2 not in {z[0] for z in LANE_STORE_ZEROS}:
                 raise _Off(f"r2 {r2:#x} on a lane-memory store: not measured")
+            ran = (r2, r3, r6) in LANE_STORE_ZEROS and r5 == 0x10 and r[7].value == 1
+            if zeros and not (cmd.plain and ran):
+                tier = min(tier, I)  # zeros, as at the r2 values measured
         elif memory == LOCAL_MEMORY:
             if (r2, r5) not in LOCAL_STORES:
                 raise _Off(f"a local store at r2 {r2:#x}, r5 {r5:#x}: not measured")
@@ -1070,8 +1120,8 @@ class Engine:
             raise _Off(why)
         if memory == LOCAL_MEMORY:
             nb = 4 // r2
-            for _, off in rows:
-                self._local_offset(off, n * nb)
+            tier = min(tier, _floored(cmd, rows))
+            rows = [(dram, self._local_offset(off, n * nb)) for dram, off in rows]
         if memory == LANE_MEMORY and not m.lanes_lost:
             per = -(-n // LANE_COUNT)
             self._land_loads(m, {(off // VECTOR_BYTES + v) % LANE_VECTORS for _, off in rows for v in range(per)})
@@ -1093,7 +1143,7 @@ class Engine:
                     ]
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
-            out = pack(src, bits, 16 * r6, element, tier, width)
+            out = pack(src, 0 if zeros else bits, 16 * r6, element, tier, width)
             _write_dram(m, dram, out)
             self.stored.append((dram, 16 * r6))
 
@@ -1228,6 +1278,15 @@ def _inside(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
     return all(
         any(b <= a and a + n <= b + k and (a - b) % 32 == 0 for b, k in xs) for a, n in ys
     )
+
+
+def _floored(cmd: _Command, rows: list[tuple[int, int]]) -> Confidence:
+    """The tier of local-memory rows at offsets floored to their word (`LOCAL_OFFSET_FLOORED`)."""
+    within = {off % 4 for _, off in rows} - {0}
+    if not within:
+        return V
+    ran = cmd.plain and _fits(cmd, LOCAL_SHAPE) and within == {LOCAL_OFFSET_FLOORED}
+    return V if ran else I
 
 
 def _fits(cmd: _Command, shape: tuple[int | None, ...]) -> bool:
