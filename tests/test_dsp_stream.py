@@ -710,6 +710,30 @@ def test_kind_4_stores_as_kind_6_at_inferred():
     )
     got = m.boot.read(DST, 32)
     assert bytes(got.data) == bytes(range(32)) and set(got.taint) == {I}
+    assert e.cap == I  # the job, as the shape ran: one job
+
+
+@pytest.mark.parametrize(
+    ("r3", "r4", "r6", "r7", "tier"),
+    [
+        (0x10, 0x400, 4, 3, V),  # the resampler's store, measured
+        (0x10, 0x400, 4, 1, I),
+        (0xC, 0x100, 3, 3, I),
+        (0x8, 0x200, 2, 3, I),  # another width and pitch
+    ],
+)
+def test_kind_4_stores_local_rows_at_the_resamplers_pitch(r3, r4, r6, r7, tier):
+    """Rows of r3 local words at local pitch 0x490 to DRAM pitch r4: verified in the shape
+    measured, inferred in the shapes each run once or not run."""
+    m, e = machine(), stream.Engine()
+    n = 4 * r3
+    for k in range(r7):
+        m.boot.local.write(LOCAL_BASE + k * 0x490, Bytes.of(bytes([k + 1]) * n, 0))
+    regs = block(1, 2, 0x490, 4, r3, r4, 0x10, r6, r7)
+    drive(m, e, [*regs, 1 << 6 | 0x04, 0, DST, WAIT])
+    for k in range(r7):
+        got = m.boot.read(DST + k * r4, 16 * r6)
+        assert bytes(got.data) == bytes([k + 1]) * 16 * r6 and got.weakest() == tier
 
 
 @pytest.mark.parametrize("kind", [2, 3, 4, 5, 7, 8])
@@ -753,6 +777,32 @@ def test_kind_8_fills_r3_vectors_with_the_low_16_bits_of_from(r3, r5, r6):
         assert m.memory[v].lanes == (0xB800,) * 32 and m.memory[v].tier == V
     assert DST_V + 5 + r3 not in m.memory
     assert bytes(m.boot.read(DST, 32).data) == bytes(32)
+
+
+def test_words_beside_an_outstanding_fill_are_inferred():
+    m, e = machine(), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), 0x08, 0x1234, DST])
+    assert e.lane_tier(DST_V) == H and e.lane_tier(DST_V + 0x80) == I
+
+
+@pytest.mark.parametrize(("r7", "tier"), [(2, V), (3, I)])
+def test_load_rows_at_a_dram_pitch_off_16_bytes_floor_each_row(r7, tier):
+    """Two rows cannot tell a floored pitch from floored row addresses: more rows inferred."""
+    data = bytes(range(256)) * 3
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2, r7=r7, r1=0x40, r4=0x108), *load(0, SRC, 0), WAIT])
+    assert m.memory[1].lanes == tuple(data[0x100:0x120]) and m.memory[1].tier == tier
+
+
+def test_a_store_reads_vectors_past_the_last_wrapped_at_inferred():
+    m, e = machine(), stream.Engine()
+    m.memory[LANE_VECTORS - 1] = Vec(tuple(range(32)))
+    m.memory[0] = Vec(tuple(range(32, 64)))
+    last = (LANE_VECTORS - 1) * 64
+    drive(m, e, [*lanes(0, 2, r6=4), *store(0, last, DST), WAIT])
+    got = m.boot.read(DST, 64)
+    assert bytes(got.data) == bytes(range(64))
+    assert set(got.taint[:32]) == {V} and set(got.taint[32:]) == {I}
 
 
 def local_fill(r2: int, r3: int, r6: int, channel: int = 0) -> list[int]:
@@ -1746,3 +1796,63 @@ def test_a_lenient_queue_past_the_depth_goes_on_at_hypothesis():
     drive(m, e, [*lanes(0, 1, r6=2), *loads, *[WAIT] * (stream.DEPTH + 1)])
     assert len(m.lapses) == 1 and "more than 44 commands" in m.lapses[0]
     assert not e.outstanding and m.memory[stream.DEPTH] == Vec((0,) * 32, H)
+
+
+@pytest.mark.parametrize(
+    "values, why",
+    [
+        ([*block(0, 1, 0, 0x40, 1, 0, 0x10, 2, 1), *load(0, SRC, 0)], "r2 0x40 on a lane"),
+        ([*block(0, 2, 0, 4, 8, 0, 0x08, 2, 1), *store(0, 0, DST)], "a local store at r2"),
+        ([*block(0, 3, 0, 0x20, 1, 0, 0x10, 2, 1), *store(0, 0, DST)], "r0 0x3"),
+    ],
+)
+def test_a_command_not_measured_takes_the_engine_off_script(values, why):
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, [*values, WAIT])
+    assert why in e.off and not e.lost and m.lanes_lost
+
+
+def test_a_command_of_no_rows_cannot_be_bounded():
+    with pytest.raises(UnknownSemantics, match="no rows"):
+        drive(machine(), stream.Engine(), [*lanes(0, 1, r6=2, r7=0), *load(0, SRC, 0)])
+
+
+def test_an_unknown_key_loses_the_grammar_and_spoils_the_jobs_stores():
+    """What later commands store is not known, so neither is what this job stored."""
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *store(0, 0, DST), WAIT])
+    assert all(m.boot.read(DST, 32).known)
+    drive(m, e, [UNKNOWN])
+    assert "unknown key" in e.off and e.lost and not any(m.boot.read(DST, 32).known)
+
+
+def test_a_wait_among_a_blocks_values_loses_the_grammar():
+    m, e = machine(), stream.Engine()
+    drive(m, e, [0x20, 1, 0, WAIT])
+    assert "inside a group" in e.off and e.lost
+
+
+@pytest.mark.parametrize(
+    "values, why",
+    [
+        ([*lanes(0, 1, r6=2), 0x02, SRC, 0x400, WAIT], "not wrapped as where it ran"),
+        ([*lanes(0, 1, r6=2), 0x08, 1, DST + 2, WAIT], "not vector-aligned"),
+    ],
+)
+def test_a_lenient_kind_outside_its_offset_form_forgets_every_memory(values, why):
+    m, e = lenient_machine()
+    drive(m, e, values)
+    assert why in m.lapses[0] and e.off and forgotten(m)
+
+
+@pytest.mark.parametrize(
+    "values, why",
+    [
+        ([*local_fill(4, 3, 2, channel=1), 1 << 6 | 0x08, 0x21, 0x400], "on channel 1"),
+        ([*block(0, 2, 0, 1, 8, 0, 0x10, 2, 1), *load(0, SRC, 0)], "never ends"),
+    ],
+)
+def test_a_lenient_local_command_not_measured_goes_off_script(values, why):
+    m, e = lenient_machine()
+    drive(m, e, [*values, WAIT])
+    assert why in m.lapses[0] and why in e.off and not e.lost
