@@ -127,7 +127,6 @@ from .state import DRAM_BYTES, LOCAL_BASE, Bytes, dram_alias
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 
-
 @dataclass(frozen=True)
 class Ran:
     """A command shape run on the camera, handed as kind 0 / 6: its registers 0..7 (None: any),
@@ -142,7 +141,9 @@ REGISTERS = 8
 FILL = 8
 """Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits, or under r0 2 the
 local words at "to" with copies of "from"'s low r2-wide element (no DRAM side)."""
-HALF_ROWS_BESIDE = frozenset({(LOAD, 0x10, 0x40), (LOAD, 0x40, 0x100), (STORE, 0x10, 0x40)})
+HALF_ROWS_BESIDE = frozenset(
+    {(LOAD, 0x10, 0x40), (LOAD, 0x40, 0x100), (STORE, 0x10, 0x40)}
+)
 """One-row 16-bit lane-memory commands (r2 0x20, r5 0x08) as (kind, r3, r6) beside which lane
 loads and stores of own words outside the command's vectors gave the pre-registered bytes on the
 camera (verified: 1 and 4 KiB loads, a 1 KiB store)."""
@@ -301,7 +302,14 @@ timing out with dst untouched (verified, pre-registered; one job each). After ot
 store keys or histories the wait is inferred, and so is never ending: a 0x1d with none
 outstanding never ends anywhere else once a command was handed."""
 
-LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12, 0x0C: 10, 0x09: 14}
+LOAD_FORMATS: dict[int, int] = {
+    0x10: 8,
+    0x08: 16,
+    0x04: 32,
+    0x0A: 12,
+    0x0C: 10,
+    0x09: 14,
+}
 """r5 on a load: bits per DRAM element, by value (verified on the camera; a 32-bit element's low
 16 bits reach a lane; 10- and 14-bit elements only in `PACKED_LOADS`). Other values were not
 measured."""
@@ -314,7 +322,9 @@ into vector 0x100: each lane took its element unpacked least significant first, 
 them (verified, pre-registered; one job each). These formats in other shapes or vectors are
 inferred."""
 LOAD_SKIP_SHAPE = (1, None, 0x20, 1, None, None, 2, 1)
-LOAD_SKIPS_RUN = tuple(Ran((1, None, 0x20, 1, None, r5, 2, 1), at=0x4000) for r5 in (0x810, 0x110))
+LOAD_SKIPS_RUN = tuple(
+    Ran((1, None, 0x20, 1, None, r5, 2, 1), at=0x4000) for r5 in (0x810, 0x110)
+)
 """r5 bits 8 and up on a lane-memory load of bytes (r5 & 0xff 0x10): the row's first r5 >> 8
 elements are skipped, the rest land from lane 0 and the lanes past them are 0 (the row still ends
 with its r6 lines). Measured on the camera: a plain one-vector load at r5 0x810 put the row's
@@ -403,7 +413,9 @@ LOCAL_LOAD_BESIDE = Ran((2, 0, 4, 0x200, 0, 0x10, 0x80, 1))
 byte load of 0x40 vectors per row, and a local-memory byte load of 0x800 bytes (which writes no
 lane vector). While each was outstanding, an X0 store into a vector outside it, and lane reads of
 such a vector, gave the bytes as alone (verified, pre-registered; one job each)."""
-QUEUE_SHAPES = tuple(Ran((1, None, 0x20, n, None, 0x10, 2 * n, 1), None) for n in (1, 0x80))
+QUEUE_SHAPES = tuple(
+    Ran((1, None, 0x20, n, None, 0x10, 2 * n, 1), None) for n in (1, 0x80)
+)
 """One-row byte loads and stores of one and of 0x80 vectors. Handed back to back on one DRAM range
 or one lane vector, they ran in the order handed (verified, pre-registered against the reverse;
 one job each): a load of the last 32 bytes a store wrote read the stored bytes (after a store of
@@ -535,8 +547,8 @@ class Engine:
     bounded (a local-memory command, one that moves nothing, the engine off script)."""
     drams: list["_Dram"] = field(default_factory=list)
     """Per outstanding command the DRAM it reads and writes (`_behind`)."""
-    held: list[tuple[dict[int, Vec], int, Callable[[Machine, Confidence], None]]] = field(
-        default_factory=list
+    held: list[tuple[dict[int, Vec], int, Callable[[Machine, Confidence], None]]] = (
+        field(default_factory=list)
     )
     """Per outstanding lane-memory load the vectors it holds (unknown until it lands), its
     vectors if it is of `QUEUE_SHAPES` (else 0), and its completion."""
@@ -686,7 +698,9 @@ class Engine:
             self.regs[channel][reg] = value
         elif v & 0x21 == 0x20:
             ran = tuple(x.value for x in values) == BLOCK_KEY_RUN
-            ran = ran and channel == 0 and self.count == REGISTERS + 1  # the first values
+            ran = (
+                ran and channel == 0 and self.count == REGISTERS + 1
+            )  # the first values
             if v & (BLOCK_KEY_BIT9 | BLOCK_KEY_BIT10) and not ran:
                 self.cap = min(self.cap, I)
             if v & BLOCK_KEY_BIT9:
@@ -701,7 +715,14 @@ class Engine:
             tier = min(key.tier, values[0].tier, values[1].tier)
             kind = v & 0x3F
             cmd = _Command(
-                channel, kind, regs, values[0], values[1], tier, where, index,
+                channel,
+                kind,
+                regs,
+                values[0],
+                values[1],
+                tier,
+                where,
+                index,
                 plain=kind in (LOAD, STORE),
             )
             known = tuple(None if r is None else r.value for r in regs)
@@ -757,7 +778,10 @@ class Engine:
         """The job's commands and 0x1d so far are `history`, with `channel` programmed
         `ONE_VECTOR` (the histories the odd keys ran in)."""
         regs = tuple(None if r is None else r.value for r in self.regs[channel])
-        return regs == ONE_VECTOR and tuple((e.kind, e.regs) for e in self.events) == history
+        return (
+            regs == ONE_VECTOR
+            and tuple((e.kind, e.regs) for e in self.events) == history
+        )
 
     def _go_off(self, m: Machine, why: str, lost: bool = False) -> None:
         if not self.off:
@@ -931,7 +955,9 @@ class Engine:
         tier where it ran, the rest of the lane and local memory is capped at inferred."""
         local = m.boot.local.read(LOCAL_BASE, LOCAL_BYTES)
         m.boot.local.write(LOCAL_BASE, local.capped(I))
-        kept = cmd.to.value // VECTOR_BYTES if cmd.to.value == BLOCK_KEY_LOAD_TO else None
+        kept = (
+            cmd.to.value // VECTOR_BYTES if cmd.to.value == BLOCK_KEY_LOAD_TO else None
+        )
         for at, vec in m.memory.items():
             if at != kept:
                 m.memory[at] = replace(vec, tier=min(vec.tier, I))
@@ -959,7 +985,9 @@ class Engine:
         if rows < 1:
             raise _Off("no rows: not measured")
         if 16 * rows * _known(r[6], "r6") > MOST_BYTES:
-            raise _Off(f"{rows:#x} rows of {r[6].value:#x} lines: more than a job's time moves")
+            raise _Off(
+                f"{rows:#x} rows of {r[6].value:#x} lines: more than a job's time moves"
+            )
         store = cmd.kind == STORE
         lane_rows = LANE_STORE_ROWS if store else LANE_LOAD_ROWS
         lane = memory == LANE_MEMORY and rows in lane_rows and _fits(cmd, ROW_SHAPE)
@@ -973,7 +1001,11 @@ class Engine:
             half = _ran(cmd, HALF_VECTOR_ROWS)
             if pitch % unit and not (half and mem % VECTOR_BYTES == 0):
                 raise _Off(f"memory pitch {pitch:#x}: not measured")
-            if dpitch % 16 and cmd.kind == STORE and (dpitch, rows) != (STORE_PITCH_OFF16, 2):
+            if (
+                dpitch % 16
+                and cmd.kind == STORE
+                and (dpitch, rows) != (STORE_PITCH_OFF16, 2)
+            ):
                 raise _Off(f"DRAM pitch {dpitch:#x} on a store: not measured")
             if dpitch % 16 and rows > 2:
                 # Two rows cannot tell a floored pitch from floored row addresses.
@@ -989,10 +1021,14 @@ class Engine:
         for one DRAM range."""
         mine = [(dram_alias(dram), n) for dram, _ in rows]
         tier = V
-        later = self.drams[-1].queue == 1  # measured as the later command: one vector only
+        later = (
+            self.drams[-1].queue == 1
+        )  # measured as the later command: one vector only
         for d in self.drams[:-1]:
             if _overlap(d.writes, mine):
-                tier = min(tier, V if later and d.queue and _last_row(d.writes, mine) else I)
+                tier = min(
+                    tier, V if later and d.queue and _last_row(d.writes, mine) else I
+                )
             if store and _overlap(d.reads, mine):
                 # Measured behind a one-vector load only.
                 ran = later and d.queue == 1 and _last_row(d.reads, mine)
@@ -1077,7 +1113,9 @@ class Engine:
         first = max(0, r3 - LANE_VECTORS)
         for k, (_, off) in enumerate(rows):
             base = off // VECTOR_BYTES
-            again.update((base + v) % LANE_VECTORS for v in range(min(first, LANE_VECTORS)))
+            again.update(
+                (base + v) % LANE_VECTORS for v in range(min(first, LANE_VECTORS))
+            )
             for v in range(first, r3):
                 at = (base + v) % LANE_VECTORS
                 if at in last:
@@ -1245,7 +1283,9 @@ class Engine:
         rows, tier = self._rows(cmd, memory, ks)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
         if len(ks) < r[7].value and not _ran(cmd, STORE_SAME_ROWS):
-            tier = min(tier, I)  # rows that rewrite one address: the last lands (inferred)
+            tier = min(
+                tier, I
+            )  # rows that rewrite one address: the last lands (inferred)
         tier = min(tier, self._behind(rows, 16 * r6, True))
         zeros = memory == LANE_MEMORY and r2 != 0x20
         if memory == LANE_MEMORY:
@@ -1281,7 +1321,14 @@ class Engine:
             rows = [(dram, self._local_offset(off, n * nb)) for dram, off in rows]
         if memory == LANE_MEMORY and not m.lanes_lost:
             per = -(-n // LANE_COUNT)
-            self._land_loads(m, {(off // VECTOR_BYTES + v) % LANE_VECTORS for _, off in rows for v in range(per)})
+            self._land_loads(
+                m,
+                {
+                    (off // VECTOR_BYTES + v) % LANE_VECTORS
+                    for _, off in rows
+                    for v in range(per)
+                },
+            )
         src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
         taken = []
         for dram, off in rows:
