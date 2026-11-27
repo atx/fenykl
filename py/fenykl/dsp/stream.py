@@ -1,113 +1,36 @@
 """The stream engine as the datapath executor drives it: the values X1's head 0x1c hands it, the
-channel registers they program, and the loads and stores between DRAM and the DSP's memories.
+channel registers they program, and the loads and stores between DRAM and the DSP's lane and local
+memories.
 
-The engine sees the values handed and nothing else of the program: which words hand them does not
-matter (verified on the camera). X1 0x1c hands B[f115_119] (read before the word's ports write);
-X1 0x1d hands nothing and waits for one command (below); both with register a 0
-(`fields.STREAM_SELECT`, which `Machine` checks).
+What it models. The engine sees the values handed and nothing else of the program (which words
+hand them does not matter, verified on the camera; the heads: `fields.TRANSFERS`). The values form
+groups, each starting with a key v (verified): with `fields.STREAM_BLOCK` and bit 0 set, register
+v >> 11 & 7 of channel v >> `fields.STREAM_CHANNEL_SHIFT` & 3 takes the next value; with the block
+bit alone the next eight values are the channel's r0..r7; without it v hands a command of kind
+v & 0x3f on the channel, followed by "from" and "to". Kind 0 loads, 6 stores, 1 moves nothing; the
+other kinds run as one of them or fill, each only in the shapes it ran in (`KIND_AS`,
+`KIND_SHAPES`). The registers: r0 the DSP-side memory, r1 its row pitch in bytes, r2 elements per
+unit (vector or 32-bit word), r3 units per row, r4 the DRAM row pitch, r5 the DRAM element format,
+r6 16-byte DRAM lines per row, r7 rows; they do not survive from one job to the next. A command
+starts when its last value is handed and runs beside the sequencer, up to `DEPTH` outstanding, in
+the order handed; a 0x1d waits for the oldest one. A load's destination is unknown from its hand
+until it lands; a store takes its source as of its hand.
 
-Grammar (verified): the values form groups, each starting with a key v.
+The tier basis. Every rule is tied to what ran on the camera. A constant holds each measured shape
+(`Ran`: the registers, the kind handed and, where the rule rests on few jobs, the memory-side
+offset), its docstring says what was measured; a command of that shape is verified, a near miss
+inferred. DRAM addresses are free: the acceptance kernels ran at other DRAM addresses than the
+measurement jobs, and every verified byte they wrote matched the camera.
 
-- v & 0x21 == 0x21: one register, channel v >> 6 & 3, register v >> 11 & 7; the next value is
-  written to it.
-- v & 0x21 == 0x20: a block, the next eight values are registers 0..7 of channel v >> 6 & 3.
-- v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
-  load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
-  offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
-  (inferred: what follows it is capped at inferred). Kinds 2 and 4 load and store as 0 and 6,
-  kinds 3 and 5 move nothing as 1, kind 8 fills (under r0 1 r3 lane-memory vectors from the one
-  "to" names, every lane "from"'s low 16 bits; under r0 2 r3 local words from "to", each filled
-  with copies of "from"'s low r2-wide element: `LOCAL_FILLS`; no DRAM read or written), each only
-  in the shapes it ran in (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
-  `UnknownSemantics`.
-
-A key with bits set outside these fields was not measured, but for one bit per kind
-(`ODD_KEY_BITS`): a register key with bit 8 takes its value (`REGISTER_KEY_RUN`), a block key with
-bit 10 programs as without it and one with bit 9 writes no register (`BLOCK_KEY_RUN`).
-
-Channel registers (four channels of eight; they do not survive from one job to the next: a
-command on a channel with a register not handed in this job moves nothing and completes,
-inferred: the lane memory, DRAM after a store and local memory after a load are then capped at
-inferred):
-
-- r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways); a store
-  under r0 0x00, 0x10 or 0x40 writes nothing (`NO_MEMORY`);
-- r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
-  (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
-  count that ends the load, `ZERO_FORMATS`, inferred otherwise; 0x10 and 0x200 write zeros on a
-  store, `LANE_STORE_ZEROS`); local memory 4 bytes or 2 16-bit elements per 32-bit word
-  (little-endian);
-- r3 units per row (vectors, or 32-bit words);
-- r1 the pitch between rows on the memory side in bytes (64 per vector);
-- r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
-  line's remaining bits 0 (`LOAD_FORMATS`, `PACKED_LOADS`, `STORE_FORMATS`); on a load of bytes,
-  bits 8 and up skip that many of the row's first elements (`LOAD_SKIP_SHAPE`: verified at
-  two values in one shape, else inferred);
-- r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
-  `LANE_LOAD_ROWS`, `LANE_STORE_ROWS`, local memory loads at up to 4 rows and stores at up to 2;
-  other counts inferred).
-
-Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch handed as
-0xfffffe00 steps back; verified on loads) and memory offset + k r1. A row's DRAM address is
-floored to 16 bytes (a load's pitch of 0x208 steps 0x200, verified; a store's of 0x108 at two rows
-steps 0x100, verified, other store pitches off 16 bytes not run), a lane-memory offset to its
-vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap verified in `WRAPS`,
-else inferred), a local-memory offset to its word (`LOCAL_FLOORED`). Of the lane
-pitches that are not whole vectors only `HALF_VECTOR_ROWS` ran: both rows write one vector, and
-the later row lands (verified). Where a load's rows or its wrap write a vector again, or a store's
-rows one DRAM address, the last write lands (verified in `HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`,
-`WRAPS`, `STORE_SAME_ROWS`, else inferred). A load row
-fills r3 units from its n = r5 r6 elements; with more units than ceil(n / r2) the transfer never
-ends, with fewer it fills r3 units and ends (verified). Lane memory: element i goes to lane
-i % 32 of vector i / 32, its low 16 bits, the lanes beyond n 0 (verified). Local memory: element
-i goes to element i, zero-extended or truncated to the memory's width (`LOCAL_LOADS`). A store
-row takes its n elements in the same order, truncated to the DRAM width (`LOCAL_STORES`); with
-fewer than n elements on the memory side (r2 r3 < n) it never ends (verified).
-
-Zero counts: a lane-memory load of r3 units with r6 0 ended (inferred, three jobs; what it writes
-was not seen, so its vectors are unknown), a lane-memory load with r3 0 ended in the shapes of
-`ZERO_LOADS` (inferred; the vectors read back after it unchanged, the rest of its footprint
-unknown), a lane-memory store with r3 0 of n > 0 elements ended and wrote nothing (inferred,
-five jobs), and a lane-memory store with r6 0 ended and wrote nothing in the shapes of
-`ZERO_STORES` (inferred). Every other load or store with r3 or r6 0, on either memory, was not
-measured and goes off script.
-
-Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
-a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
-no command outstanding never returns once the job has handed one (also right after a register or
-store key, `KEY_WAITS_RUN`); in a job that has handed none
-it was not measured (it raises `UnknownSemantics`); commands still outstanding at the job's end
-complete (verified for a store, inferred for a load). Of commands handed back to back before any
-0x1d (32-byte loads) the first 19 ran in one job (measured); the rest wait in the engine and run
-as 0x1d's free room: 32 loads handed, then 32 0x1d, all returned (verified) and the loads read
-back had landed (measured); with no 0x1d the 20th to 32nd had not run 8 us later (measured). So
-a 0x1d counts the commands handed, run or held (inferred). A command of kind 2 counted for a
-0x1d in one job (measured: a load joined, then kind 2, then a 0x1d that returned) and in another
-loaded 32 bytes from its "from" into the vector its "to" names, as kind 0 does (measured; the
-vector its "from" names kept its content). The emulator queues the held commands as the engine
-does, up to `DEPTH` outstanding; handing past it wedges the job, so more raises. The 19 running
-at once change only when a held load lands, not what it writes. The emulator never predicts a
-racing read: a load's destination is unknown from its hand until its 0x1d or the job's end
-(`finish`), a load takes its DRAM source as of the hand (a store handed after it runs after it),
-a store takes its source as of the hand and writes DRAM at once (where the source is rewritten
-before the store completes, inferred for a store of one vector and unknown for the rewritten
-vectors of a longer store: one of 0x80 vectors took the new bytes, measured), the order of
-commands on one DRAM range while one of them is outstanding is inferred, and the lane memory read
-while any command is outstanding is a hypothesis, but outside every outstanding command's
-vectors: there verified beside the shapes `Engine.lane_tier` names, inferred beside other
-lane-memory shapes.
-
-What was not measured takes the engine off script (so does a command that moves more DRAM bytes
-than a job's time allows, `MOST_BYTES`): the lane memory is unknown for the rest of the job, what
-later commands write is unknown (`off` says why), and so is whether the job ends: a command it
-holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at its halt
-(`Machine.open_end`). A command whose destination cannot be bounded (among them a store whose rows
-write more than the DRAM alias space), a value handed after the grammar is lost and a 0x1d among a
-command's values (but right after a register or store key with a command outstanding: it waits
-and the group goes on, `Engine._joins_in_group`) raise `UnknownSemantics`, as do kinds and shapes
-not run and a job that never ends or wedges; on a lenient machine they lapse instead (`Machine.lapse`): a command that never ends
-goes off script, a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d
-that never returns or was not measured and a queue past `DEPTH` go on as if they had returned."""
+What is open. A kind, shape or key bit not measured takes the engine off script (`off` says why):
+the lane memory is unknown for the rest of the job, so is what later commands write, and since a
+command it holds may never complete, the job's flow stops at `job.Stop.OPEN_END`, not at its halt
+(`Machine.open_end`). So does a command that moves more DRAM bytes than a job's time allows
+(`MOST_BYTES`). A destination that cannot be bounded, a value after the grammar is lost, a 0x1d
+among a command's values and a job that never ends or wedges raise `UnknownSemantics`; on a
+lenient machine they lapse instead (`Machine.lapse`). Own words beside an outstanding command meet
+the engine at work: a hypothesis inside its vectors, verified outside them beside `LANE_BESIDE`
+only, inferred beside other shapes. A racing read is never predicted."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -264,7 +187,11 @@ DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
 (measured, 44 again beside the wedges below); 45 and 46 wedged the job on two boots and 48
 twice, also with only 44 0x1d after them, so the depth is 44 and handing past it kills the job
-(measured). More than `DEPTH` raises `UnknownSemantics`."""
+(measured). More than `DEPTH` raises `UnknownSemantics`. Of 32-byte loads handed back to back
+the first 19 ran at once (measured); the rest waited in the engine and ran as 0x1d freed room
+(32 loads, then 32 0x1d: all returned and every load landed, verified; with no 0x1d the 20th to
+32nd had not run 8 us later, measured), so a 0x1d counts the commands handed, run or held
+(inferred)."""
 MOST_BYTES = 32 << 20
 """DRAM bytes a command may move and still be known to end: at the fastest rate timed (0.42 us per
 KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware aborts the job
@@ -1001,8 +928,10 @@ class Engine:
     def _rows(
         self, cmd: _Command, memory: int, ks: range | None = None
     ) -> tuple[list[tuple[int, int]], Confidence]:
-        """Each row's (DRAM address, memory offset), the DRAM address floored to 16 bytes, and
-        the rows' tier; of the rows `ks` only (default all)."""
+        """Each row's (DRAM address, memory offset), and the rows' tier; of the rows `ks` only
+        (default all). Row k runs at DRAM address + k r4, 32-bit wrapping, floored to 16 bytes
+        (verified on loads: a pitch of 0xfffffe00 steps back, one of 0x208 steps 0x200), and
+        at memory offset + k r1."""
         r = cmd.regs
         rows = _known(r[7], "r7")
         if rows < 1:
@@ -1093,8 +1022,9 @@ class Engine:
         raise _Off(f"r0 {memory:#x}: not measured")
 
     def _ends(self, m: Machine, cmd: _Command, units: int, needed: int) -> None:
-        """A load of `units` (r3) units of which its elements fill `needed` ends; raises if not
-        measured or never ending."""
+        """A load of `units` (r3) units of which its elements fill `needed`: with fewer it fills
+        its units and ends, with more it never ends (verified); raises for that and for a count
+        of 0 not measured."""
         r6 = cmd.regs[6].value
         if not units or not r6:
             memory = _side(cmd.regs[0].value)
@@ -1106,7 +1036,8 @@ class Engine:
 
     def _lane_load(self, m, cmd, rows, fmt, tier, skip):
         """A lane-memory load of format `fmt` (r5 without the skip bits): its checks, and the
-        completion."""
+        completion. Element i of a row goes to lane i % 32 of vector i / 32, its low 16 bits, the
+        lanes past the row's elements 0 (verified)."""
         r2, r3, r6 = (cmd.regs[i].value for i in (2, 3, 6))
         if r2 not in LANE_UNITS:
             raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
@@ -1114,7 +1045,8 @@ class Engine:
         needed = -(-fmt * r6 // r2)
         seen = _found(cmd, ZERO_LOADS)
         if r3 and not r6:
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+            # It ended on the camera (inferred, three jobs); what it writes was not seen.
+            self.cap = min(self.cap, I)
         elif seen is not None:
             self.cap = min(self.cap, I)  # it ended on the camera (inferred)
             return self._zero_load(m, rows[0][1], seen, needed)
@@ -1322,7 +1254,8 @@ class Engine:
             if zeros and not _ran(cmd, *LANE_STORE_ZEROS):
                 tier = min(tier, I)  # zeros, as at the r2 values measured
             if not r3 and n:
-                self.cap = min(self.cap, I)  # it ended, writing nothing (inferred)
+                # It ended on the camera and wrote nothing (inferred, five jobs).
+                self.cap = min(self.cap, I)
                 return _nothing
             if _ran(cmd, *ZERO_STORES):
                 self.cap = min(self.cap, I)  # it ended on the camera (inferred)
