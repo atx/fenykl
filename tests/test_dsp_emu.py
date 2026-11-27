@@ -251,6 +251,27 @@ def test_every_vector_has_its_taints():
     assert sorted(TAINTS) == sorted(p.stem for p in VECTORS.glob("*.json"))
 
 
+def test_the_vectors_hold_no_firmware_bytes():
+    # No 16-byte window of the stock image at a 16-byte offset is in a vector's dst bytes, so
+    # no run of 31 or more firmware bytes is (windows of fewer than 4 distinct byte values
+    # left out: zero runs with a stray byte, which the patterns hold too).
+    windows = set()
+    for path in VECTORS.glob("*.json"):
+        for job in json.loads(path.read_text())["jobs"]:
+            for seg in job.get("expect", {}).get("dst", []):
+                if "data" not in seg:
+                    continue
+                blob = base64.b64decode(seg["data"])
+                windows |= {
+                    blob[o : o + 16]
+                    for o in range(len(blob) - 15)
+                    if len(set(blob[o : o + 16])) >= 4
+                }
+    image = stock_image("em10ii")
+    hits = [o for o in range(0, len(image) - 15, 16) if image[o : o + 16] in windows]
+    assert hits == []
+
+
 SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 
 
