@@ -22,6 +22,12 @@ worked example in `tests/test_dsp_kernel_example.py`.
 
 Own jobs of 0.4 to 7.0 ms all ended normally (`LONGEST_JOB_US`); in them a looped word cost
 5.21 ns at 64-word passes, plus about 105 us per job (fitted).
+
+What the estimate rests on: the repeat cost (`REPEAT`) and the lane-memory byte and 16-bit
+rates and the 12-bit store rate are verified; the job's fixed cost, the first-run and fetch-line
+costs, the local-memory rates and how transfers overlap the words are fitted (inferred). The
+tests check the arithmetic on synthetic jobs; none pins an estimate to a time measured on the
+camera.
 """
 
 from collections import deque
@@ -221,14 +227,12 @@ QUEUE = 16
 """Commands handed and not yet waited for whose times are known: 16 ran with no 0x1d (verified);
 past 19 the engine holds commands until a 0x1d frees room, up to its depth (`stream.DEPTH`);
 how long held commands take was not timed."""
-OVERLAP = (
-    "the stream engine: one for all channels, its commands run one after another from their "
-    "hand-off (two 8 KiB loads on two channels took about as long as one 16 KiB load: fitted); "
-    "a 0x1d waits for what the words since its command did not hide (idle words between an "
-    "8 KiB load and its 0x1d hid it: fitted)"
-)
 OVERLAP_TIER = I
-"""`OVERLAP`'s tier: the waits are at most it and their commands' rates' (`Rate.tier`)."""
+"""The stream engine is one for all channels, its commands run one after another from their
+hand-off (two 8 KiB loads on two channels took about as long as one 16 KiB load: fitted), and a
+0x1d waits for what the words since its command did not hide (idle words between an 8 KiB load
+and its 0x1d hid it: fitted). The waits are at most this tier and their commands' rates'
+(`Rate.tier`)."""
 
 
 class Unmeasured(Exception):

@@ -252,8 +252,8 @@ assert r.lapses and r.estimate.us is None
 `Boot.read(addr, n)` returns `Bytes`: per byte its value (`data`), whether it is known
 (`known`), its tier (`taint`) and its provenance (`src`, an index into `Boot.sources`, and
 `off`, the offset in that source). An unknown byte's source says why it is unknown. `weakest()`
-gives the weakest tier of the known bytes, `ranges(known)` the runs of known or unknown bytes,
-`segments()` the runs that continue one source. Registers are `Sv` scalars and lane registers
+gives the weakest tier of the known bytes, `ranges(known)` the runs of known or unknown bytes.
+Registers are `Sv` scalars and lane registers
 `Vec` vectors of `semantics.LANE_COUNT` (32) lanes, with None where not known, each with its
 tier. The emulator never guesses: a value no fact gives is unknown.
 
