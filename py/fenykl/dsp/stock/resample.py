@@ -394,7 +394,7 @@ class Resample13Model:
                 )
             )
         else:
-            self._hold(boot, req, entries, taps, px, full)
+            self._hold(boot, req, identity, taps, px, full)
         return result
 
     def cover_job(self, run: ModelRun, job: Job, trace: Trace) -> Job:
@@ -674,7 +674,7 @@ class Resample13Model:
         self,
         boot: StockBoot,
         req: Request,
-        entries: list[tuple[int, int] | None],
+        identity: bool,
         taps: tuple[tuple[int, ...], ...] | None,
         px: _Pixels,
         full: int,
@@ -682,7 +682,7 @@ class Resample13Model:
         """The held line pairs after the job: source lines H - 2 and H - 1 of the full blocks.
 
         Inferred only where source and output lines are the same (an H 16 identity table with
-        a unit phase-0 kernel), since the camera has not told them apart."""
+        a unit phase-0 kernel, `identity` the table), since the camera has not told them apart."""
         h = req.height
         if h < 2:
             boot.lines.forget(
@@ -691,7 +691,6 @@ class Resample13Model:
                 )
             )
             return
-        identity = h == HELD and all(e == (i << 16, ONE) for i, e in enumerate(entries))
         for c in range(PLANES):
             unit = c != 0 or (taps is not None and _unit(taps[0]))
             taint = I if identity and unit else H
