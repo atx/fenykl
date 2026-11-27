@@ -97,6 +97,53 @@ def test_a_12_bit_load_zero_fills_the_last_vector():
     assert m.memory[3].lanes == (*elements[64:], *[0] * 6)
 
 
+def packed(elements: list[int], bits: int, per: int) -> bytes:
+    lines = range(0, len(elements), per)
+    return b"".join(
+        sum(x << bits * k for k, x in enumerate(elements[j : j + per])).to_bytes(16, "little")
+        for j in lines
+    )
+
+
+@pytest.mark.parametrize(
+    ("r5", "bits", "r6", "tier"),
+    [(0x0C, 10, 3, V), (0x09, 14, 4, V), (0x0C, 10, 6, I), (0x09, 14, 8, I)],
+)
+def test_10_and_14_bit_loads_unpack_verified_in_the_shape_run(r5, bits, r6, tier):
+    """One vector from 3 lines of 10-bit or 4 of 14-bit elements as run; from twice the lines
+    inferred."""
+    elements = [(0x2A5 + 97 * i) & (1 << bits) - 1 for i in range(r5 * r6)]
+    m, e = machine(packed(elements, bits, r5)), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r5=r5, r6=r6), *load(0, SRC, 0), WAIT])
+    assert m.memory[0] == Vec(tuple(elements[:32]), tier)
+    assert not e.off
+
+
+@pytest.mark.parametrize(("r5", "skip", "tier"), [(0x810, 8, V), (0x110, 1, V), (0x410, 4, I)])
+def test_load_format_bits_above_0xff_skip_the_rows_first_bytes(r5, skip, tier):
+    """Bytes skip.. land from lane 0, the lanes past the row's 32 bytes 0: verified at 0x810 and
+    0x110 in the shape run, another offset inferred."""
+    data = bytes(range(0x40, 0x60))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*block(0, 1, 0, 0x20, 1, 0, r5, 2, 1), *load(0, SRC, 0), WAIT])
+    assert m.memory[0] == Vec((*data[skip:], *[0] * skip), tier)
+    assert not e.off
+
+
+@pytest.mark.parametrize(
+    "regs",
+    [
+        (1, 0, 0x20, 1, 0, 0x808, 4, 1),  # 16-bit elements: element and byte offsets alike
+        (1, 0, 0x20, 2, 0, 0x810, 4, 1),  # two vectors
+        (2, 0, 4, 8, 0, 0x810, 2, 1),  # local memory
+    ],
+)
+def test_load_format_bits_above_0xff_outside_the_shape_run_go_off_script(regs):
+    m, e = machine(bytes(64)), stream.Engine()
+    drive(m, e, [*block(0, *regs), *load(0, SRC, 0), WAIT])
+    assert "load format" in e.off and "not measured" in e.off
+
+
 def test_rows_step_by_their_pitches():
     data = bytes(range(256)) * 4
     m, e = machine(data), stream.Engine()
@@ -829,6 +876,93 @@ def test_a_wait_right_after_a_register_or_store_key_joins_the_outstanding_load()
     m = machine(bytes(64))
     with pytest.raises(UnknownSemantics, match="inside a command"):
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), stream.LOAD, WAIT])
+
+
+def copied(e: stream.Engine, values: list, data: bytes = bytes(range(32))) -> Bytes:
+    """dst after a load of one vector of `data` on channel 0, then `values`."""
+    m = machine(data)
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *values])
+    return m.boot.read(DST, 32)
+
+
+@pytest.mark.parametrize(("channel", "value", "tier"), [(1, 0x20, V), (2, 0x20, I)])
+def test_a_register_key_with_bit_8_keeps_a_register_handed_its_own_value(channel, value, tier):
+    """0x1161 := 0x20 over r2 0x20 before a store copied (measured); on another channel inferred."""
+    e = stream.Engine()
+    odd = key(channel, 2) | stream.REGISTER_KEY_BIT8
+    got = copied(e, [*lanes(channel, 1, r6=2), odd, value, *store(channel, 0, DST), WAIT])
+    assert bytes(got.data) == bytes(range(32)) and got.weakest() == tier
+    assert not e.off
+
+
+def test_a_register_key_with_bit_8_and_another_value_leaves_the_register_unknown():
+    e = stream.Engine()
+    odd = key(1, 2) | stream.REGISTER_KEY_BIT8
+    got = copied(e, [*lanes(1, 1, r6=2), odd, 0x10, *store(1, 0, DST), WAIT])
+    assert "r2 unknown" in e.off and not e.lost and not any(got.known)
+
+
+@pytest.mark.parametrize(
+    ("block_key", "regs", "tier"),
+    [
+        (0x420, stream.BLOCK_KEY_RUN, V),
+        (0x460, stream.BLOCK_KEY_RUN, I),  # channel 1
+        (0x420, (1, 0, 0x20, 1, 0x40, 0x10, 2, 1), I),  # another r4
+    ],
+)
+def test_a_block_key_with_bit_10_programs_as_without_it(block_key, regs, tier):
+    channel = block_key >> 6 & 3
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [block_key, *regs, *load(channel, SRC, 0), WAIT])
+    assert m.memory[0] == Vec(tuple(range(32)), tier) and not e.off
+
+
+def test_a_block_key_with_bit_9_writes_no_register_and_the_load_moves_nothing():
+    """Measured as run: the load's vector kept what it held and the job went on."""
+    held = Vec(tuple(range(100, 132)))
+    m, e = machine(bytes(range(32))), stream.Engine()
+    m.memory[0] = held
+    drive(m, e, [0x220, *stream.BLOCK_KEY_RUN, *load(0, SRC, 0), WAIT])
+    assert m.memory[0] == held and e.regs[0] == [None] * 8
+    assert e.cap == V and not e.off and not e.outstanding
+
+
+@pytest.mark.parametrize(
+    "before",
+    [[], lanes(0, 1, r6=2)],  # other values; the channel programmed before the block
+)
+def test_a_block_key_with_bit_9_outside_the_run_caps_the_job_at_inferred(before):
+    m, e = machine(bytes(range(32))), stream.Engine()
+    values = (1, 0, 0x20, 1, 0x40, 0x10, 2, 1) if not before else stream.BLOCK_KEY_RUN
+    drive(m, e, [*before, 0x220, *values, *load(0, SRC, 0), WAIT])
+    assert e.cap == I and not e.off
+    if before:
+        assert m.memory[0] == Vec(tuple(range(32)), I)  # its registers kept
+
+
+@pytest.mark.parametrize(
+    ("mid", "inferred"),
+    [
+        ([key(1, 2), WAIT, 0x20], False),
+        ([1 << 6 | stream.STORE, WAIT, 0, DST], False),
+        ([key(2, 2), WAIT, 0x20], True),
+    ],
+)
+def test_a_wait_right_after_a_register_or_store_key_with_none_outstanding_never_ends(mid, inferred):
+    """Measured after channel 1's r2 key and store key (the job timed out); other keys inferred."""
+    m = machine(bytes(32))
+    with pytest.raises(UnknownSemantics, match="no command outstanding never ends") as raised:
+        drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *mid])
+    assert ("(inferred)" in str(raised.value)) == inferred
+
+
+def test_a_lenient_wait_right_after_a_key_with_none_outstanding_goes_on_with_the_group():
+    m, e = lenient_machine()
+    data = [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *lanes(1, 1, r6=2)]
+    drive(m, e, [*data, 1 << 6 | stream.STORE, WAIT, 0, DST, WAIT])
+    assert len(m.lapses) == 1 and "never ends" in m.lapses[0]
+    got = m.boot.read(DST, 32)
+    assert all(got.known) and got.weakest() == H and not e.off
 
 
 @pytest.mark.parametrize(
