@@ -21,7 +21,9 @@ Grammar (verified): the values form groups, each starting with a key v.
   in the shapes it ran in (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
   `UnknownSemantics`.
 
-A key with bits set outside these fields was not measured.
+A key with bits set outside these fields was not measured, but for one bit per kind
+(`ODD_KEY_BITS`): a register key with bit 8 takes its value (`REGISTER_KEY_RUN`), a block key with
+bit 10 programs as without it and one with bit 9 writes no register (`BLOCK_KEY_RUN`).
 
 Channel registers (four channels of eight; they do not survive from one job to the next: a
 command on a channel with a register not handed in this job moves nothing and completes,
@@ -38,7 +40,9 @@ inferred):
 - r3 units per row (vectors, or 32-bit words);
 - r1 the pitch between rows on the memory side in bytes (64 per vector);
 - r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
-  line's remaining bits 0 (`LOAD_FORMATS`, `STORE_FORMATS`);
+  line's remaining bits 0 (`LOAD_FORMATS`, `PACKED_LOADS`, `STORE_FORMATS`); on a load of bytes,
+  bits 8 and up skip that many of the row's first elements (`LOAD_SKIP_SHAPE`: verified at
+  two values in one shape, else inferred);
 - r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
   `LANE_LOAD_ROWS`, `LANE_STORE_ROWS`, local memory loads at up to 4 rows and stores at up to 2;
   other counts inferred).
@@ -70,7 +74,8 @@ measured and goes off script.
 
 Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
 a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
-no command outstanding never returns once the job has handed one; in a job that has handed none
+no command outstanding never returns once the job has handed one (also right after a register or
+store key, `NEVER_JOINS_RUN`); in a job that has handed none
 it was not measured (it raises `UnknownSemantics`); commands still outstanding at the job's end
 complete (verified for a store, inferred for a load). Of commands handed back to back before any
 0x1d (32-byte loads) the first 19 ran in one job (measured); the rest wait in the engine and run
@@ -241,10 +246,56 @@ KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware
 and what it moved before the abort, are not known."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
+REGISTER_KEY_BIT8 = 0x100
+REGISTER_KEY_RUN = (0x1161, 0x20)
+"""A register key with bit 8 set takes one value and the grammar stays aligned: channel 1 r2's
+key 0x1161 handed r2's own value 0x20 before a one-vector byte store, which copied (verified,
+pre-registered against the key dropped and the grammar shifted; one job). Whether the value was
+written or ignored was not separated: a value equal to the register's keeps it, another leaves the
+register unknown. Other keys and values with bit 8 cap the job at inferred."""
+BLOCK_KEY_BIT9 = 0x200
+BLOCK_KEY_BIT10 = 0x400
+BLOCK_KEY_RUN = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
+"""Block keys with bit 9 or bit 10 set, as run with these values on channel 0, before a load and
+its 0x1d in a job that handed channel 0 nothing else (verified, pre-registered against each
+other and against never ending; one job each): 0x420 programmed the channel as 0x20 does (bit 10
+ignored: the load copied); after 0x220 the load moved nothing (its vector kept what it held) and
+the job ended. Read as: the 0x220 block takes eight values and writes no register (inferred), and
+a load on a channel with no register handed moves nothing (verified there). Other keys and values
+with these bits cap the job at inferred."""
+ODD_KEY_BITS = {
+    REGISTER_KEY: (REGISTER_KEY_BIT8,),
+    BLOCK_KEY: (BLOCK_KEY_BIT9, BLOCK_KEY_BIT10),
+    COMMAND_KEY: (),
+}
+"""By each kind's field bits, the one bit outside them a key of that kind ran with; any other bit
+outside the fields, or two of them, loses the grammar."""
+NEVER_JOINS_RUN = (0x1061, 1 << 6 | STORE)
+"""Keys (channel 1 r2's register key, channel 1's store key) after which a 0x1d, handed with no
+command outstanding after a load and its 0x1d, never returned: the job timed out with dst
+untouched (verified, pre-registered; one job each). After other register and store keys this is
+inferred."""
 
-LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12}
+LOAD_FORMATS: dict[int, int] = {0x10: 8, 0x08: 16, 0x04: 32, 0x0A: 12, 0x0C: 10, 0x09: 14}
 """r5 on a load: bits per DRAM element, by value (verified on the camera; a 32-bit element's low
-16 bits reach a lane). Other values were not measured."""
+16 bits reach a lane; 10- and 14-bit elements only in `PACKED_LOADS`). Other values were not
+measured."""
+PACKED_LOADS: dict[int, tuple[int | None, ...]] = {
+    0x0C: (1, None, 0x20, 1, None, 0x0C, 3, 1),
+    0x09: (1, None, 0x20, 1, None, 0x09, 4, 1),
+}
+"""Plain lane-memory loads of 10-bit (r5 0x0c, 3 lines) and 14-bit (r5 0x09, 4 lines) elements
+into one vector: each lane took its element unpacked least significant first, as a store packs
+them (verified, pre-registered; one job each). These formats in other shapes are inferred."""
+LOAD_SKIPS_RUN = (0x810, 0x110)
+LOAD_SKIP_SHAPE = (1, None, 0x20, 1, None, None, 2, 1)
+"""r5 bits 8 and up on a lane-memory load of bytes (r5 & 0xff 0x10): the row's first r5 >> 8
+elements are skipped, the rest land from lane 0 and the lanes past them are 0 (the row still ends
+with its r6 lines). Measured on the camera: a plain one-vector load at r5 0x810 put the row's
+bytes 8..31 into lanes 0..23 and zeros into 24..31, at r5 0x110 bytes 1..31 and one zero (verified
+in this shape, pre-registered against the bits dropped and never ending; one job each). Other
+offsets in this shape are inferred; other formats (element and byte offsets not separated) and
+shapes were not measured."""
 LANE_UNITS: dict[int, Confidence] = {0x20: V, 0x10: I}
 """r2 on a lane-memory load: 0x20 one element per lane (verified), 0x10 writes zeros into
 every lane (inferred, but see `ZERO_FORMATS`)."""
@@ -349,10 +400,17 @@ LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
     (16, 8): V,
     (16, 16): V,
     (32, 32): V,
+    (16, 32): I,
 }
 """(DRAM element bits, local element bits) measured on a local-memory load (verified): bytes to
 bytes, bytes zero-extended to 16 bits, 16-bit elements truncated to their low byte, 16-bit and
-32-bit elements unchanged. Other pairs were not measured."""
+32-bit elements unchanged, 16-bit elements zero-extended to 32 bits (verified in
+`LOCAL_LOAD_WIDENED` only). Other pairs were not measured."""
+LOCAL_LOAD_WIDENED = (2, None, 1, 8, None, 0x08, 2, 1)
+"""A plain local-memory load of 16-bit elements into eight 32-bit words (r2 1, r5 0x08, one row)
+ended, and each word held its element zero-extended (verified, pre-registered against the
+elements packed two to a word; one job). 16-bit elements into 32-bit words in other shapes are
+inferred."""
 LOCAL_STORES: dict[tuple[int, int], Confidence] = {
     (4, 0x10): V,
     (2, 0x10): V,
@@ -454,6 +512,9 @@ class Engine:
     commands: int = 0
     """The commands handed in this job. A 0x1d with none outstanding never ends after one
     (verified); before the first it was not measured."""
+    dropped: set[int] = field(default_factory=set)
+    """Channels programmed only by a 0x220 block as `BLOCK_KEY_RUN` ran: a plain load on one with
+    no register handed moves nothing (verified)."""
     off: str = ""
     """Why the engine went off script; empty while it follows the measured model."""
     lost: bool = False
@@ -580,7 +641,8 @@ class Engine:
             allowed, need = BLOCK_KEY, REGISTERS
         else:
             allowed, need = COMMAND_KEY, 2
-        if v & ~allowed:
+        odd = v & ~allowed
+        if odd and odd not in ODD_KEY_BITS[allowed]:
             self._go_off(m, f"{where} key {v:#x}: bits outside its fields", lost=True)
             return
         self.key, self.need = key, need
@@ -591,8 +653,27 @@ class Engine:
         v = key.value
         channel = v >> 6 & 3
         if v & 0x21 == 0x21:
-            self.regs[channel][v >> 11 & 7] = _weaker(values[0], key.tier)
+            reg = v >> 11 & 7
+            value = _weaker(values[0], key.tier)
+            if v & REGISTER_KEY_BIT8:
+                if (v, value.value) != REGISTER_KEY_RUN:
+                    self.cap = min(self.cap, I)  # the grammar's alignment inferred
+                now = self.regs[channel][reg]
+                if now is None or now.value is None or now.value != value.value:
+                    value = Sv(None)  # written or ignored: not separated
+                else:
+                    value = Sv(now.value, min(now.tier, value.tier))
+            self.regs[channel][reg] = value
         elif v & 0x21 == 0x20:
+            ran = tuple(x.value for x in values) == BLOCK_KEY_RUN and channel == 0
+            if v & (BLOCK_KEY_BIT9 | BLOCK_KEY_BIT10) and not ran:
+                self.cap = min(self.cap, I)
+            if v & BLOCK_KEY_BIT9:
+                if ran and all(r is None for r in self.regs[channel]):
+                    self.dropped.add(channel)
+                else:
+                    self.cap = min(self.cap, I)  # a channel programmed before: not run
+                return
             self.regs[channel][:] = [_weaker(x, key.tier) for x in values]
         else:
             regs = list(self.regs[channel])
@@ -612,6 +693,15 @@ class Engine:
             self._pop(m, self.cap)
             return
         if self.key is not None:
+            if self._at_join() and self.commands:
+                why = (
+                    "a 0x1d right after a register or store key with no command "
+                    "outstanding never ends"
+                )
+                if self.key.value not in NEVER_JOINS_RUN:
+                    why += " (inferred)"
+                m.lapse(index, "x1 0x1d", f"{where}: {why}")
+                return  # lenient: as if it returned, and the group goes on
             if self.key.value & 0x20 == 0:
                 m.lapse(index, "x1 0x1d", f"{where}: a 0x1d inside a command's values")
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
@@ -625,11 +715,15 @@ class Engine:
         else:
             m.lapse(index, "x1 0x1d", "a 0x1d with no command outstanding never ends")
 
-    def _joins_in_group(self) -> bool:
-        if self.key is None or self.group or not self.outstanding:
+    def _at_join(self) -> bool:
+        """The next value is a register key's or a store key's first."""
+        if self.key is None or self.group:
             return False
         v = self.key.value
-        if not (v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)):
+        return v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)
+
+    def _joins_in_group(self) -> bool:
+        if not self.outstanding or not self._at_join():
             return False
         one = [q for _, q, f in self.held if f is self.outstanding[0]]
         if len(self.outstanding) != 1 or one != [1]:
@@ -707,6 +801,9 @@ class Engine:
         if cmd.kind == NOTHING_MOVES:
             self.cap = min(self.cap, I)  # that a 0x1d counts it is inferred
             return
+        dropped = cmd.channel in self.dropped and all(r is None for r in cmd.regs)
+        if dropped and plain and cmd.kind == LOAD:
+            return  # nothing moves (`BLOCK_KEY_RUN`)
         if any(r is None for r in cmd.regs):
             self._moves_nothing(m, cmd)
             return
@@ -875,13 +972,19 @@ class Engine:
         r = cmd.regs
         memory = _known(r[0], "r0")
         r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
-        if r5 not in LOAD_FORMATS:
-            raise _Off(f"load format {r5:#x}: not measured")
+        skip, skip_tier = 0, V
+        if r5 >> 8 and r5 & 0xFF == 0x10 and _fits(cmd, LOAD_SKIP_SHAPE):
+            skip, skip_tier = r5 >> 8, V if cmd.plain and r5 in LOAD_SKIPS_RUN else I
+            r5 &= 0xFF
+        if r5 not in LOAD_FORMATS or skip and skip >= r5 * r6:
+            raise _Off(f"load format {r5 | skip << 8:#x}: not measured")
         bits = LOAD_FORMATS[r5]
         n = r5 * r6
         rows, tier = self._rows(cmd, memory)
         tier = min([tier, self.cap, cmd.tier, self._behind(rows, 16 * r6, False)])
-        tier = min([tier, *(x.tier for x in r)])
+        tier = min([tier, skip_tier, *(x.tier for x in r)])
+        if r5 in PACKED_LOADS and not (cmd.plain and _fits(cmd, PACKED_LOADS[r5])):
+            tier = min(tier, I)
         if memory == LANE_MEMORY:
             if r2 not in LANE_UNITS:
                 raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
@@ -915,12 +1018,13 @@ class Engine:
         if memory == LANE_MEMORY:
             if r2 != 0x10 or r5 not in ZERO_FORMATS or r3 != needed:
                 tier = min(tier, LANE_UNITS[r2])
-            return self._lane_load(m, cmd, rows, bits, r6, r2, r3, tier)
+            return self._lane_load(m, cmd, rows, bits, r6, r2, r3, tier, skip)
         width = LOCAL_WIDTHS[r2]
-        tier = min(tier, LOCAL_LOADS[(bits, width)])
+        if not ((bits, width) == (16, 32) and cmd.plain and _fits(cmd, LOCAL_LOAD_WIDENED)):
+            tier = min(tier, LOCAL_LOADS[(bits, width)])
         return self._local_load(m, cmd, rows, bits, r6, width, r2, r3, tier)
 
-    def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier):
+    def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier, skip=0):
         # Each vector's last write (row, v), and the vectors written again: by a later row or
         # past the last vector. The last write lands, verified in the shapes measured
         # (`HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`, `WRAPS`), else inferred.
@@ -972,7 +1076,7 @@ class Engine:
                 elif at in again and not rows_seen:
                     wrap = min(wrap, I)
                 first, elements = sources[k]
-                e = v * LANE_COUNT - first
+                e = v * LANE_COUNT - first + skip
                 chunk = elements[e : e + LANE_COUNT]
                 chunk += [(0, V)] * (LANE_COUNT - len(chunk))
                 if r2 != 0x20:
