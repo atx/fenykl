@@ -61,9 +61,7 @@ class Ran:
     kind: int | None = LOAD
     at: int | None = None
 
-    def matches(
-        self, kind: int, regs: tuple[int | None, ...], at: int | None
-    ) -> bool:
+    def matches(self, kind: int, regs: tuple[int | None, ...], at: int | None) -> bool:
         """A command handed as `kind`, with register values `regs`, at memory-side offset `at`."""
         if kind not in ((LOAD, STORE) if self.kind is None else (self.kind,)):
             return False
@@ -292,7 +290,8 @@ the whole footprint; two at r6 0x100: its first 32 vectors, the other 96 read ba
 no known origin, so they are unknown). Inferred: the jobs idled a whole program word, not the
 count alone."""
 ZERO_STORES = tuple(
-    Ran((1, None, 0x20, r3, None, 0x10, 0, 1), STORE) for r3 in (0, 0x20, 0x80, 0x88, 0x200)
+    Ran((1, None, 0x20, r3, None, 0x10, 0, 1), STORE)
+    for r3 in (0, 0x20, 0x80, 0x88, 0x200)
 )
 """A plain lane-memory store with r6 0 (one row) in the shapes that ran. Measured on the camera,
 29 jobs, each with this store as its only one, at dst: every job ended, dst read back as its fill
@@ -328,7 +327,9 @@ SAME_VECTOR_ROWS = Ran((1, 0, 0x20, 1, 0x100, 0x10, 2, 2), LOAD, 0x4000)
 DRAM rows 0x100 apart: row 1's elements land (verified, pre-registered against row 0's; one job).
 Other loads whose rows write one vector again leave the last row's elements at inferred."""
 WRAPS: dict[Ran, range] = {
-    Ran((1, 0, 0x20, 2, 0, 0x10, 4, 1), LOAD, (LANE_VECTORS - 1) * VECTOR_BYTES): range(1, 2),
+    Ran((1, 0, 0x20, 2, 0, 0x10, 4, 1), LOAD, (LANE_VECTORS - 1) * VECTOR_BYTES): range(
+        1, 2
+    ),
     Ran(
         (1, 0, 0x20, LANE_VECTORS + 2, 0, 0x10, 2 * LANE_VECTORS + 4, 1), LOAD, 0x4000
     ): range(LANE_VECTORS, LANE_VECTORS + 2),
@@ -345,7 +346,9 @@ vector) at DRAM pitch 0: row 1's vector lands (verified, pre-registered against 
 one address leave the last row's bytes at inferred."""
 NO_MEMORY = (0x00, 0x10, 0x40)
 NO_MEMORY_STORE = (None, None, 0x20, 1, None, 0x10, 2, 1)
-NO_MEMORY_RAN = tuple(Ran((r0, *NO_MEMORY_STORE[1:]), STORE, 0x4000) for r0 in NO_MEMORY)
+NO_MEMORY_RAN = tuple(
+    Ran((r0, *NO_MEMORY_STORE[1:]), STORE, 0x4000) for r0 in NO_MEMORY
+)
 """A plain store under r0 0x00, 0x10 or 0x40 of one row of one vector of bytes from offset 0x4000
 ended and wrote nothing: dst kept its nonzero fill over its whole length (verified, pre-registered
 against zeros and a lane-memory store; one job each). From another offset, or handed as another
@@ -732,7 +735,9 @@ class Engine:
         if regs != ONE_VECTOR or len(self.events) != len(history):
             return False
         return all(
-            e.kind is None if h is None else e.kind is not None and h.matches(e.kind, e.regs, e.at)
+            e.kind is None
+            if h is None
+            else e.kind is not None and h.matches(e.kind, e.regs, e.at)
             for e, h in zip(self.events, history, strict=True)
         )
 
@@ -793,7 +798,11 @@ class Engine:
         """A kind of `KIND_AS` in a shape it ran in, its offsets in the form they ran in (`KIND_SHAPES`):
         the job is capped at the shape's tier. Else the command is unmeasured (False)."""
         run = next(
-            (t for want, t in KIND_SHAPES[cmd.handed].items() if _fits(cmd.values, want)),
+            (
+                t
+                for want, t in KIND_SHAPES[cmd.handed].items()
+                if _fits(cmd.values, want)
+            ),
             None,
         )
         if run is None:
@@ -940,7 +949,9 @@ class Engine:
             )
         store = cmd.kind == STORE
         lane_rows = LANE_STORE_ROWS if store else LANE_LOAD_ROWS
-        lane = memory == LANE_MEMORY and rows in lane_rows and _fits(cmd.values, ROW_SHAPE)
+        lane = (
+            memory == LANE_MEMORY and rows in lane_rows and _fits(cmd.values, ROW_SHAPE)
+        )
         # A kind of `KIND_AS` ran with its rows: its shape's tier caps the job already.
         any_shape = rows in (STORE_ROWS_ANY if store else LOAD_ROWS_ANY)
         tier = V if any_shape or lane or not cmd.plain else I
@@ -1181,7 +1192,9 @@ class Engine:
             raise _Off(why)
         width = LOCAL_WIDTHS.get(r2)
         if (bits, width) not in LOCAL_LOADS:
-            raise _Off(f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured")
+            raise _Off(
+                f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured"
+            )
         self._ends(m, cmd, r3, -(-fmt * lines // r2))
         if not ((bits, width) == (16, 32) and _ran(cmd, LOCAL_LOAD_WIDENED)):
             tier = min(tier, LOCAL_LOADS[(bits, width)])
@@ -1245,7 +1258,9 @@ class Engine:
         rows, tier = self._rows(cmd, memory, ks)
         tier = min([tier, ftier, self.cap, cmd.tier, *(x.tier for x in r)])
         if len(ks) < r[7].value and not _ran(cmd, STORE_SAME_ROWS):
-            tier = min(tier, I)  # rows that rewrite one address: the last lands (inferred)
+            tier = min(
+                tier, I
+            )  # rows that rewrite one address: the last lands (inferred)
         tier = min(tier, self._behind(rows, 16 * r6, True))
         zeros = memory == LANE_MEMORY and r2 != 0x20
         if memory == LANE_MEMORY:
@@ -1279,7 +1294,9 @@ class Engine:
         elif not m.lanes_lost:
             per = -(-n // LANE_COUNT)
             starts = {off // VECTOR_BYTES for _, off in rows}
-            self._land_loads(m, {(s + v) % LANE_VECTORS for s in starts for v in range(per)})
+            self._land_loads(
+                m, {(s + v) % LANE_VECTORS for s in starts for v in range(per)}
+            )
         src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
         taken = []
         for dram, off in rows:

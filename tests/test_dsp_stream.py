@@ -536,7 +536,12 @@ def test_two_rows_at_half_a_vector_share_it_and_the_later_lands(to, r4, tier):
 
 @pytest.mark.parametrize(
     ("r4", "r7", "to", "tier"),
-    [(0x100, 2, RAN_AT, V), (0x100, 2, 0, I), (0x200, 2, RAN_AT, I), (0x100, 3, RAN_AT, I)],
+    [
+        (0x100, 2, RAN_AT, V),
+        (0x100, 2, 0, I),
+        (0x200, 2, RAN_AT, I),
+        (0x100, 3, RAN_AT, I),
+    ],
 )
 def test_load_rows_at_lane_pitch_0_land_the_last_row(r4, r7, to, tier):
     """Measured with two rows 0x100 apart in DRAM into vector 0x100: row 1 lands."""
@@ -944,7 +949,9 @@ def test_a_store_to_an_unknown_address_raises():
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *store(0, 0, UNKNOWN)])
 
 
-@pytest.mark.parametrize(("r7", "frm", "tier"), [(2, RAN_AT, V), (2, 0, I), (3, RAN_AT, I)])
+@pytest.mark.parametrize(
+    ("r7", "frm", "tier"), [(2, RAN_AT, V), (2, 0, I), (3, RAN_AT, I)]
+)
 def test_store_rows_at_one_address_write_it_once_the_last_row(r7, frm, tier):
     """At DRAM pitch 0 every row rewrites the first: of rows each from the next vector, the last
     one's vector lands (measured at two rows from vector 0x100)."""
@@ -1801,8 +1808,14 @@ def test_a_lenient_queue_past_the_depth_goes_on_at_hypothesis():
 @pytest.mark.parametrize(
     "values, why",
     [
-        ([*block(0, 1, 0, 0x40, 1, 0, 0x10, 2, 1), *load(0, SRC, 0)], "r2 0x40 on a lane"),
-        ([*block(0, 2, 0, 4, 8, 0, 0x08, 2, 1), *store(0, 0, DST)], "a local store at r2"),
+        (
+            [*block(0, 1, 0, 0x40, 1, 0, 0x10, 2, 1), *load(0, SRC, 0)],
+            "r2 0x40 on a lane",
+        ),
+        (
+            [*block(0, 2, 0, 4, 8, 0, 0x08, 2, 1), *store(0, 0, DST)],
+            "a local store at r2",
+        ),
         ([*block(0, 3, 0, 0x20, 1, 0, 0x10, 2, 1), *store(0, 0, DST)], "r0 0x3"),
     ],
 )
