@@ -656,10 +656,10 @@ content, in every lane file and in U (verified on the camera, pre-registered).""
 S3_RESULT, S1_RESULT, S0_RESULT = "S3's result", "S1's result", "S0's result"
 S2_LOW, S2_HIGH = "S2's result, a product's low half", "S2's product's high half"
 S2_RESULT = "S2's result"
-LOAD_LAG = 4
+LANE_LOAD_LAG = 4
 """Words from an X0 load head to the one word whose port takes the loaded vector."""
 LANE_LOAD = (
-    f"a lane memory load's 32 lanes, {LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
+    f"a lane memory load's 32 lanes, {LANE_LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
 )
 LANE_SOURCES: dict[str, dict[int, tuple[str, Confidence]]] = {
     "f236_237": {0: (LANE_LOAD, V), 1: (S2_HIGH, V), 2: (S0_RESULT, V)},
@@ -774,7 +774,7 @@ LANE_MEMORY = (
     "inferred: five different contents at 0x20, 0x40, 0x80, 0x100 and 0x200, and 0x400, "
     "0x800 .. 0x4000 read vector 0). X0's heads 0x1c, 0x1d (address A[f100_104] + sK, K X0's "
     "signed 11-bit immediate) and 0x20, 0x21 (A[f100_104] + A[f105_109]) load one vector, "
-    f"delivered {LOAD_LAG} words after the head to the first lane ports under 0 "
+    f"delivered {LANE_LOAD_LAG} words after the head to the first lane ports under 0 "
     "(`LANE_SOURCES`) or to the store file O under 0 (`STORE_SOURCES`); 0x1a, 0x1b (A[a] + sK) "
     "and 0x1e, 0x1f (A[a] + A[b]) store the 32 lanes of O[f69_71] there (`X0_LANE_MEMORY`). "
     "It is the stock copy's buffer (program 16, cmd 0xF): the copy's load fills one element per "
@@ -786,7 +786,7 @@ LANE_MEMORY = (
     "vector reads the stored vector, and a store one, two or three words after a load of its "
     "vector does not change what the load delivers (verified on the camera, pre-registered); "
     "X0 0x1d loads in flight together in the measured chains land in their own port words "
-    "(`LOAD_CHAINS`). It keeps its content across jobs within a boot (verified on the "
+    "(`rules.LOAD_CHAINS`). It keeps its content across jobs within a boot (verified on the "
     "camera, pre-registered: vectors 0x40..0x7f written by one job gave a later job's exact "
     "output), so "
     "a job can leave data, such as a layer's weights, for the next"
@@ -845,7 +845,7 @@ _STORE_IMM, _STORE_REG = (
     f"stores O[f69_71] to vector A[a] + {offset}" for offset in ("sK", "A[b]")
 )
 _LOAD_IMM, _LOAD_REG = (
-    f"loads vector A[a] + {offset}, delivered {LOAD_LAG} words later"
+    f"loads vector A[a] + {offset}, delivered {LANE_LOAD_LAG} words later"
     for offset in ("sK", "A[b]")
 )
 X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
@@ -863,17 +863,6 @@ X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {
 included); the address modulo `LANE_VECTORS` (`LANE_MEMORY`)."""
 X0_LANE_LOADS = (0x1C, 0x1D, 0x20, 0x21)
 """X0's lane memory load heads; what f69_71 does on a load is open."""
-LOAD_HEAD = 0x1D
-LOAD_CHAINS = ((1,) * 15, (2,) * 31, (3,), (4,), (1, 3, 1, 3, 1))
-"""X0 `LOAD_HEAD` loads in flight together (each issued at most `LOAD_LAG` words after the last)
-that land as each would alone, as the words between their heads, from the chain's first load on:
-each vector at its first lane port `LOAD_LAG` words after its head (verified on the camera,
-pre-registered): sixteen in consecutive words (into L3 and L2, and a matrix product's rows); up to
-32 two words apart (one vector per two words, beside and between lane stores); two three or four
-words apart (a head in the word the first load lands); pairs in consecutive words three words
-apart, six loads (a two-row convolution). A chain that begins as one of these counts (a load's
-tier is fixed as its head runs). Other loads in flight together (longer or mixed chains, the
-other load heads) were not measured: inferred."""
 X0_LANE_BY_REGISTER = range(0x1E, 0x22)
 """The lane memory heads that add A[b], not sK, to A[a]."""
 

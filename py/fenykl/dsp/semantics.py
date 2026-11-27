@@ -7,12 +7,11 @@ run and taint what they touch.
 `OP_SEMANTICS` is the op slot's table: what a data op does, each with its confidence.
 Stepping (`emu.Executor.step`) can take `Given` decisions for the conditions of ops 0..2 over
 the datapath's own (`Branching`). `X_RULES` are the functions of the two X units and
-`LANE_RULES` the lane functions of the four S units (`lane_result`); `LaneMemory` and
-`lane_address` model the lane memory X0 loads and stores. `HEAD_READS` (`head_reads`) holds the
+`LANE_RULES` the lane functions of the four S units (`lane_result`); `lane_address` gives the
+lane memory vector X0 loads and stores. `HEAD_READS` (`head_reads`) holds the
 operands each head reads, from the rules and what the machine does with a head.
 """
 
-import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -89,17 +88,13 @@ Value = Callable[..., int | None]
 class OpValue:
     """A computing op's rule: f(ra, rb) (`form` "rb", a family E op; f120_122 has no effect on
     it) or f(ra, c) (`form` "c", c the immediate as its format decodes it, sign- or
-    zero-extended). `exact` gives the 32-bit result on exact operands (None where the rule is
-    open)."""
+    zero-extended), reading the registers of `reads` ("a" ra, "b" rb). `exact` gives the 32-bit
+    result on exact operands (None where the rule is open)."""
 
     text: str
     f: Callable[[int, int], int | None]
-    tier: Confidence
     form: str
-
-    @property
-    def reads_ra(self) -> bool:
-        return re.search(r"\bra\b", self.text) is not None
+    reads: str
 
     def exact(self, ra: int, rb: int | None, c: int | None) -> int | None:
         second = rb if self.form == "rb" else c
@@ -109,31 +104,31 @@ class OpValue:
         return None if v is None else _u32(v)
 
 
-def _e(text: str, f: Callable[[int, int], int | None], tier: Confidence = V) -> OpValue:
+def _e(text: str, f: Callable[[int, int], int | None], reads: str = "ab") -> OpValue:
     """A family E op on (ra, rb)."""
-    return OpValue(text, f, tier, "rb")
+    return OpValue(text, f, "rb", reads)
 
 
-def _imm(text: str, f: Callable[[int, int], int | None], tier: Confidence) -> OpValue:
+def _imm(text: str, f: Callable[[int, int], int | None]) -> OpValue:
     """An op on ra and c."""
-    return OpValue(text, f, tier, "c")
+    return OpValue(text, f, "c", "a")
 
 
 def _u32(v: int) -> int:
     return v & 0xFFFFFFFF
 
 
-def _s32(v: int) -> int:
+def s32(v: int) -> int:
     """v read as a signed 32-bit value: a register may hold either reading."""
     return ((v + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
 
 
 def _min(a: int, b: int) -> int:
-    return a if _s32(a) <= _s32(b) else b
+    return a if s32(a) <= s32(b) else b
 
 
 def _max(a: int, b: int) -> int:
-    return a if _s32(a) >= _s32(b) else b
+    return a if s32(a) >= s32(b) else b
 
 
 def _flag(test: bool) -> int:
@@ -182,7 +177,7 @@ def ring_step(s: int, length: int) -> int:
 MULTIPLY_LAG = 1
 """A multiply's product reaches the ALU bus this many words after the op; a port of that word
 takes it, and the op's own word gets nothing (verified on the camera by exact readout)."""
-LOAD_LAG = 3
+LOCAL_LOAD_LAG = 3
 """A load's datum reaches the ALU bus this many words after the load (verified on the camera by
 exact readout)."""
 
@@ -232,8 +227,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
             V,
             f"{fmt} local {LOCAL_UNITS[width]} load at the byte address ra + {width} x imm13 "
             f"modulo 0x2000, ra a base it does not write ({EXACT}); the datum reaches the ALU "
-            f"result bus {LOAD_LAG} words on, which stepping does not model: it records the "
-            "read only",
+            f"result bus {LOCAL_LOAD_LAG} words on",
         )
         for code, (width, signed) in LOCAL_LOADS.items()
         for fmt in ("a" if width == 4 else "a signed" if signed else "an unsigned",)
@@ -242,8 +236,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         code: OpSemantics(
             V,
             f"a local {LOCAL_UNITS[width]} store at the byte address ra + {width} x imm13 "
-            f"modulo 0x2000 of the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT}); "
-            "the R file is not modelled, so the bytes become unknown",
+            f"modulo 0x2000 of the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT})",
         )
         for code, width in LOCAL_STORES.items()
     },
@@ -266,28 +259,26 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     },
     0x38: OpSemantics(V, f"ra & imm16 sign-extended ({EXACT})"),
     0x0B: OpSemantics(V, f"imm16 sign-extended; ra not read ({EXACT})"),
-    0x37: OpSemantics(
-        V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c, V)
-    ),
+    0x37: OpSemantics(V, f"ra | imm15 ({EXACT})", _imm("ra | c", lambda a, c: a | c)),
     0x0A: OpSemantics(
         V,
         "ra | (imm16 << 16) (verified on the camera by exact readout, pre-registered)",
-        _imm("ra | (c << 16)", lambda a, c: a | c << 16, V),
+        _imm("ra | (c << 16)", lambda a, c: a | c << 16),
     ),
     0x3E: OpSemantics(
         V,
         "ra >> imm5, arithmetic; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra >> c", lambda a, c: _s32(a) >> c, V),
+        _imm("ra >> c", lambda a, c: s32(a) >> c),
     ),
     0x3F: OpSemantics(
         V,
         "ra >> imm5, logical; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra >>> c", lambda a, c: _u32(a) >> c, V),
+        _imm("ra >>> c", lambda a, c: _u32(a) >> c),
     ),
     0x40: OpSemantics(
         V,
         "ra << imm5; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra << c", lambda a, c: a << c, V),
+        _imm("ra << c", lambda a, c: a << c),
     ),
     0x44: OpSemantics(
         V,
@@ -297,37 +288,36 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x46: OpSemantics(
         V,
         "the ring pointer step as 0x44's with s = zext(ra) + sext(R[f120_122]) "
-        f"({EXACT}); the R file is not modelled, so the result is unknown",
+        f"({EXACT})",
     ),
     0x47: OpSemantics(
         V,
-        "the ring pointer step as 0x46's with L = rb "
-        f"({EXACT}); the R file is not modelled, so the result is unknown",
+        f"the ring pointer step as 0x46's with L = rb ({EXACT})",
     ),
     0x08: OpSemantics(
         V,
         "ra where R[f120_122] is 0, else rb (measured on the camera by exact readout, "
         "pre-registered against rb, the complement, a test of R3 or of R[ra's index], of the low "
         "16 bits, of bit 1 and of the sign: R 0 gave ra at f120_122 0, 3, 5, 6 and 7, R 1, 2, 4, "
-        "7, 9, 0x10000 and 0x80000000 gave rb; the same in program 13's word 107 and in copies "
-        "of its words 99..107); at f120_122 1, 2 and 4 inferred",
+        "7, 9, 0x10000 and 0x80000000 gave rb; the same in a stock program's select and in copies "
+        "of the words around it); at f120_122 1, 2 and 4 inferred",
     ),
     0x09: OpSemantics(
         V,
         f"rb ({_EXACT_RULE}; R[f120_122] 0 or not gave rb, measured on the camera)",
-        _e("rb", lambda a, b: b),
+        _e("rb", lambda a, b: b, "b"),
     ),
     0x32: OpSemantics(
         V,
         "abs(rb) (verified on the camera by exact readout, pre-registered)",
-        _e("abs(rb)", lambda a, b: abs(_s32(b)), V),
+        _e("abs(rb)", lambda a, b: abs(s32(b)), "b"),
     ),
     0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
     0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
     0x34: OpSemantics(V, f"ra - rb ({_EXACT_RULE})", _e("ra - rb", lambda a, b: a - b)),
     0x35: OpSemantics(V, f"ra + rb ({_EXACT_RULE})", _e("ra + rb", lambda a, b: a + b)),
-    0x33: OpSemantics(V, f"-rb ({_EXACT_RULE})", _e("-rb", lambda a, b: -b)),
-    0x3D: OpSemantics(V, f"~ra ({_EXACT_RULE})", _e("~ra", lambda a, b: ~a)),
+    0x33: OpSemantics(V, f"-rb ({_EXACT_RULE})", _e("-rb", lambda a, b: -b, "b")),
+    0x3D: OpSemantics(V, f"~ra ({_EXACT_RULE})", _e("~ra", lambda a, b: ~a, "a")),
     0x2F: OpSemantics(
         V, f"min(ra, rb) signed ({_EXACT_RULE})", _e("min(ra, rb)", _min)
     ),
@@ -337,7 +327,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x2C: OpSemantics(
         V,
         "max(ra, rb) unsigned (verified on the camera by exact readout, pre-registered)",
-        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b, V),
+        _e("maxu(ra, rb)", lambda a, b: a if _u32(a) >= _u32(b) else b),
     ),
     0x28: OpSemantics(
         V,
@@ -352,12 +342,12 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x2A: OpSemantics(
         V,
         f"1 if ra <= rb signed, else 0 ({EXACT})",
-        _e("ra <= rb", lambda a, b: _flag(_s32(a) <= _s32(b))),
+        _e("ra <= rb", lambda a, b: _flag(s32(a) <= s32(b))),
     ),
     0x2B: OpSemantics(
         V,
         f"1 if ra < rb signed, else 0 ({EXACT})",
-        _e("ra < rb", lambda a, b: _flag(_s32(a) < _s32(b))),
+        _e("ra < rb", lambda a, b: _flag(s32(a) < s32(b))),
     ),
     0x30: OpSemantics(
         V,
@@ -372,12 +362,12 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x41: OpSemantics(
         V,
         f"ra >> (rb & 31), arithmetic ({EXACT})",
-        _e("ra >> rb", lambda a, b: _s32(a) >> (b & 31)),
+        _e("ra >> rb", lambda a, b: s32(a) >> (b & 31)),
     ),
     0x42: OpSemantics(
         V,
         "ra >> (rb & 31), logical (verified on the camera by exact readout, pre-registered)",
-        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31), V),
+        _e("ra >>> rb", lambda a, b: _u32(a) >> (b & 31)),
     ),
     0x43: OpSemantics(
         V,
@@ -387,82 +377,82 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x1E: OpSemantics(
         V,
         "ra - imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
-        _imm("ra - c", lambda a, c: a - c, V),
+        _imm("ra - c", lambda a, c: a - c),
     ),
     0x1F: OpSemantics(
         V,
         "ra + imm16, imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
-        _imm("ra + c", lambda a, c: a + c, V),
+        _imm("ra + c", lambda a, c: a + c),
     ),
     0x36: OpSemantics(
         V,
         f"ra ^ c, c = imm16 sign-extended ({EXACT})",
-        _imm("ra ^ c", lambda a, c: a ^ c, V),
+        _imm("ra ^ c", lambda a, c: a ^ c),
     ),
     0x24: OpSemantics(
         V,
         f"max(ra, c) signed, c = imm16 sign-extended ({EXACT})",
-        _imm("max(ra, c)", _max, V),
+        _imm("max(ra, c)", _max),
     ),
     0x25: OpSemantics(
         V,
         f"min(ra, c) signed, c = imm16 sign-extended ({EXACT})",
-        _imm("min(ra, c)", _min, V),
+        _imm("min(ra, c)", _min),
     ),
     0x1C: OpSemantics(
         V,
         f"1 if ra != c, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra != c", lambda a, c: _flag(_u32(a) != _u32(c)), V),
+        _imm("ra != c", lambda a, c: _flag(_u32(a) != _u32(c))),
     ),
     0x1D: OpSemantics(
         V,
         f"1 if ra == c, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra == c", lambda a, c: _flag(_u32(a) == _u32(c)), V),
+        _imm("ra == c", lambda a, c: _flag(_u32(a) == _u32(c))),
     ),
     0x20: OpSemantics(
         V,
         f"1 if ra <= c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra <= c", lambda a, c: _flag(_s32(a) <= c), V),
+        _imm("ra <= c", lambda a, c: _flag(s32(a) <= c)),
     ),
     0x21: OpSemantics(
         V,
         f"1 if ra < c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra < c", lambda a, c: _flag(_s32(a) < c), V),
+        _imm("ra < c", lambda a, c: _flag(s32(a) < c)),
     ),
     0x22: OpSemantics(
         V,
         f"1 if ra <= imm16 unsigned, else 0; imm16 zero-extended ({_UNSEEN_IMM})",
-        OpValue("ra <=u c", lambda a, c: _flag(_u32(a) <= c), V, "c"),
+        _imm("ra <=u c", lambda a, c: _flag(_u32(a) <= c)),
     ),
     0x26: OpSemantics(
         V,
         f"max(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_IMM})",
-        OpValue("maxu(ra, c)", lambda a, c: max(_u32(a), c), V, "c"),
+        _imm("maxu(ra, c)", lambda a, c: max(_u32(a), c)),
     ),
     0x27: OpSemantics(
         V,
         f"min(ra, imm16) unsigned, imm16 zero-extended ({_UNSEEN_IMM})",
-        OpValue("minu(ra, c)", lambda a, c: min(_u32(a), c), V, "c"),
+        _imm("minu(ra, c)", lambda a, c: min(_u32(a), c)),
     ),
     0x2D: OpSemantics(
         V,
         f"min(ra, rb) unsigned ({_UNSEEN})",
-        _e("minu(ra, rb)", lambda a, b: min(_u32(a), _u32(b)), V),
+        _e("minu(ra, rb)", lambda a, b: min(_u32(a), _u32(b))),
     ),
-    0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b, V)),
+    0x39: OpSemantics(V, f"ra ^ rb ({_UNSEEN})", _e("ra ^ rb", lambda a, b: a ^ b)),
     0x3B: OpSemantics(
-        V, f"ra & ~rb ({_UNSEEN_PAIRS})", _e("ra & ~rb", lambda a, b: a & ~b, V)
+        V, f"ra & ~rb ({_UNSEEN_PAIRS})", _e("ra & ~rb", lambda a, b: a & ~b)
     ),
     0x45: OpSemantics(
         V,
         "the ring pointer step as 0x44's with s = zext(ra) + 1 and L = rb, all 32 bits of rb "
         f"({_UNSEEN})",
-        _e("ring step ra + 1, L rb", lambda a, b: ring_step(_u32(a) + 1, _u32(b)), V),
+        _e("ring step ra + 1, L rb", lambda a, b: ring_step(_u32(a) + 1, _u32(b))),
     ),
     0x23: OpSemantics(
         V,
         "1 if ra < imm16 unsigned, else 0; imm16 zero-extended (verified on the camera by exact readout, pre-registered)",
-        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c), V),
+        _imm("ra <u c", lambda a, c: _flag(_u32(a) < c)),
     ),
     0x49: OpSemantics(
         V,
@@ -489,17 +479,17 @@ _X_SHARED: dict[int, XValue] = {
     0x01: lambda a, b, zk, sk: _flag(_u32(a) == _u32(sk)),
     0x02: lambda a, b, zk, sk: a - zk,
     0x03: lambda a, b, zk, sk: a + zk,
-    0x04: lambda a, b, zk, sk: _flag(_s32(a) <= sk),
-    0x05: lambda a, b, zk, sk: _flag(_s32(a) < sk),
+    0x04: lambda a, b, zk, sk: _flag(s32(a) <= sk),
+    0x05: lambda a, b, zk, sk: _flag(s32(a) < sk),
     0x06: lambda a, b, zk, sk: _flag(_u32(a) <= zk),
     0x07: lambda a, b, zk, sk: _flag(_u32(a) < zk),
     0x08: lambda a, b, zk, sk: _flag(_u32(a) <= _u32(b)),
     0x09: lambda a, b, zk, sk: _flag(_u32(a) < _u32(b)),
-    0x0A: lambda a, b, zk, sk: _flag(_s32(a) <= _s32(b)),
-    0x0B: lambda a, b, zk, sk: _flag(_s32(a) < _s32(b)),
+    0x0A: lambda a, b, zk, sk: _flag(s32(a) <= s32(b)),
+    0x0B: lambda a, b, zk, sk: _flag(s32(a) < s32(b)),
     0x0C: lambda a, b, zk, sk: _flag(_u32(a) != _u32(b)),
     0x0D: lambda a, b, zk, sk: _flag(_u32(a) == _u32(b)),
-    0x0E: lambda a, b, zk, sk: abs(_s32(b)),
+    0x0E: lambda a, b, zk, sk: abs(s32(b)),
     0x0F: lambda a, b, zk, sk: -b,
     0x10: lambda a, b, zk, sk: a - b,
     0x11: lambda a, b, zk, sk: a + b,
@@ -1160,7 +1150,7 @@ class ScalarValue:
     run: Callable[[Sequence[int | None], Sequence[int | None], Scalars], int]
 
 
-def _known(v: Sequence[int | None], name: str) -> list[int]:
+def _known_lanes(v: Sequence[int | None], name: str) -> list[int]:
     if any(x is None for x in v):
         raise UnknownInput(name)
     return list(v)
@@ -1173,13 +1163,15 @@ def _bits(tests: Iterable[bool]) -> int:
 def _mask_ab(f: Callable[[int, int], bool]) -> ScalarValue:
     """Bit k from f(lane k of a, lane k of b)."""
     return ScalarValue(
-        "ab", lambda a, b, c: _bits(map(f, _known(a, "a"), _known(b, "b")))
+        "ab", lambda a, b, c: _bits(map(f, _known_lanes(a, "a"), _known_lanes(b, "b")))
     )
 
 
 def _mask_b(f: Callable[[int, Scalars], bool]) -> ScalarValue:
     """Bit k from f(lane k of b, scalars)."""
-    return ScalarValue("b", lambda a, b, c: _bits(f(y, c) for y in _known(b, "b")))
+    return ScalarValue(
+        "b", lambda a, b, c: _bits(f(y, c) for y in _known_lanes(b, "b"))
+    )
 
 
 def _carry_mask(carry_in: bool) -> ScalarValue:
@@ -1187,7 +1179,7 @@ def _carry_mask(carry_in: bool) -> ScalarValue:
 
     def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
         r = c["r"] if carry_in else 0
-        pairs = enumerate(zip(_known(a, "a"), _known(b, "b")))
+        pairs = enumerate(zip(_known_lanes(a, "a"), _known_lanes(b, "b")))
         return _bits((x + y + (r >> k & 1)) >> 16 for k, (x, y) in pairs)
 
     return ScalarValue("ab", value)
@@ -1195,7 +1187,7 @@ def _carry_mask(carry_in: bool) -> ScalarValue:
 
 def _overflows(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
     """The signed overflows of a + b per lane, with carry-in bit k of "r" for lane k."""
-    pairs = enumerate(zip(_known(a, "a"), _known(b, "b")))
+    pairs = enumerate(zip(_known_lanes(a, "a"), _known_lanes(b, "b")))
     return _bits(
         not -0x8000 <= _s16(x) + _s16(y) + (c["r"] >> k & 1) <= 0x7FFF
         for k, (x, y) in pairs
@@ -1220,7 +1212,7 @@ def _lane_of(index: Callable[[Scalars], int], signed: bool) -> ScalarValue:
 
 def _reduce(f: Callable[[list[int]], int], signed: bool) -> ScalarValue:
     def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
-        lanes = _known(b, "b")
+        lanes = _known_lanes(b, "b")
         return f([_s16(x) for x in lanes] if signed else lanes)
 
     return ScalarValue("b", value)
@@ -1491,40 +1483,6 @@ def head_reads(unit: str, word: int) -> frozenset[str] | None:
         if unit == "s0" or lane is None or "b" in lane.reads:
             reads |= {LATCH_OPERAND[unit]}
     return reads
-
-
-@dataclass
-class LaneMemory:
-    """The lane memory's content by vector (`fields.LANE_MEMORY`), a None lane where it is not
-    known (power-up content). The addresses count modulo `LANE_VECTORS`."""
-
-    vectors: dict[int, Lanes] = field(default_factory=dict)
-
-    def load(self, address: int) -> Lanes:
-        return list(self.vectors.get(address % LANE_VECTORS, [None] * LANE_COUNT))
-
-    def store(self, address: int, lanes: Sequence[int | None]) -> None:
-        if len(lanes) != LANE_COUNT:
-            raise ValueError(f"{len(lanes)} lanes: expected {LANE_COUNT}")
-        self.vectors[address % LANE_VECTORS] = [
-            None if v is None else v & LANE_MASK for v in lanes
-        ]
-
-    def copy_in(self, vector: int, data: bytes) -> None:
-        """The stock copy's load: byte i, zero-extended, to lane i % 32 of vector + i // 32;
-        a last partial vector's other lanes are unknown (not measured)."""
-        for start in range(0, len(data), LANE_COUNT):
-            address = vector + start // LANE_COUNT
-            chunk = list(data[start : start + LANE_COUNT])
-            self.store(address, chunk + [None] * (LANE_COUNT - len(chunk)))
-
-    def copy_out(self, vector: int, length: int) -> list[int | None]:
-        """The stock copy's store of `length` bytes from `vector` on: each element's low 8 bits,
-        None for an unknown lane."""
-        lanes = [
-            v for n in range(-(-length // LANE_COUNT)) for v in self.load(vector + n)
-        ]
-        return [None if v is None else v & 0xFF for v in lanes[:length]]
 
 
 @dataclass(frozen=True)

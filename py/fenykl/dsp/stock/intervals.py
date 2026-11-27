@@ -151,7 +151,7 @@ def _result(
     return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
 
 
-def _interval(rule: OpValue, word: Word, slot: RegisterFile) -> Effect:
+def _interval(rule: OpValue, tier: Confidence, word: Word, slot: RegisterFile) -> Effect:
     """A computing op's rule (`OpValue`) over the register intervals ra, rb read."""
     args = word.operands
     assert args is not None
@@ -160,13 +160,13 @@ def _interval(rule: OpValue, word: Word, slot: RegisterFile) -> Effect:
         named = rule.text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
         if args.ra == args.rb:
             return _result(
-                word, named, (slot[args.ra],), lambda a: rule.f(a, a), rule.tier
+                word, named, (slot[args.ra],), lambda a: rule.f(a, a), tier
             )
-        return _result(word, named, (slot[args.ra], slot[args.rb]), rule.f, rule.tier)
+        return _result(word, named, (slot[args.ra], slot[args.rb]), rule.f, tier)
     assert args.imm is not None
     c = args.imm
     named = rule.text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
-    return _result(word, named, (slot[args.ra],), lambda a: rule.f(a, c), rule.tier)
+    return _result(word, named, (slot[args.ra],), lambda a: rule.f(a, c), tier)
 
 
 def _const(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
@@ -366,5 +366,5 @@ def op_effect(
     """What data op `word` with semantics `sem` does over the register intervals of `slot`, the
     set ra and rb read; None where the word lies outside what the semantics covers."""
     if sem.rule is not None:
-        return _interval(sem.rule, word, slot)
+        return _interval(sem.rule, sem.confidence, word, slot)
     return _OWN_RULES[word.op](word, slot, local)

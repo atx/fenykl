@@ -13,7 +13,7 @@ of its address does not change the load's datum, a load one or two words after a
 new content). Buses carry values in the word they arrive in, counted in executed words:
 
 - the ALU bus: the word's own op result; a multiply's product one word after the op; a local load's
-  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
+  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOCAL_LOAD_LAG`); an arrival in a word
   whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
   whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
@@ -26,10 +26,10 @@ new content). Buses carry values in the word they arrive in, counted in executed
   (a port at another word writes nothing); a head whose lag was not measured puts its result on the
   bus at both lags 0 and 1 as a hypothesis; a lag-1 result and the next word's lag-0 result of
   one unit are OR-ed on its bus (verified on the camera in S0, S1, S2 and S3);
-- a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
+- a lane memory load's vector four words after its X0 head (`fields.LANE_LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing; loads in flight
   together (issued at most four words apart) land at inferred, except X0 0x1d heads in the measured
-  chains of `fields.LOAD_CHAINS` (`Machine._loads_in_flight`);
+  chains of `rules.LOAD_CHAINS` (`Machine._chained`);
 - M: an S head's own-word scalar result; S0's and S1's held masks one word after the head, for one
   word; S3's reductions in the third word after the head only.
 
@@ -62,7 +62,6 @@ Programs composed from these rules ran exact on the camera, every output byte pr
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import pairwise
 from typing import Protocol
 
 from .fields import (
@@ -77,9 +76,8 @@ from .fields import (
     LANE_FILES,
     LANE_LAG,
     LANE_LOAD,
+    LANE_LOAD_LAG,
     LANE_SOURCES,
-    LOAD_CHAINS,
-    LOAD_HEAD,
     M_HELD_BESIDE_OWN,
     M_LANE_ONLY,
     M_OTHER_OPEN,
@@ -112,6 +110,7 @@ from .fields import (
     WAIT_HEAD,
     WAIT_NOTHING,
     X0_BESIDE_KEPT,
+    X0_LANE_BY_REGISTER,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
     X_IMMEDIATES,
@@ -120,9 +119,7 @@ from .fields import (
     lookup,
     op,
 )
-from .fields import (
-    LOAD_LAG as LANE_LOAD_LAG,
-)
+from .rules import DIVIDE_CHAINS, FIRST_PORT_WINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
 from .semantics import (
     IDLE_OP,
     LANE_COUNT,
@@ -130,8 +127,8 @@ from .semantics import (
     LANE_SHIFTS,
     LATCH_OPERAND,
     LATCHED,
-    LOAD_LAG,
     LOCAL_BYTES,
+    LOCAL_LOAD_LAG,
     LOCAL_LOADS,
     LOCAL_LOADS_RB,
     LOCAL_STORES,
@@ -151,6 +148,7 @@ from .semantics import (
     product_high,
     ring_length,
     ring_step,
+    s32,
     s_result,
     x_result,
 )
@@ -216,36 +214,32 @@ def _cap(x, tier: Confidence):
 
 
 def _or_bus(quotient: Sv, x1: Sv, head: int) -> Sv:
-    """A quotient and an X1 head's own result on X1's bus in one word: OR-ed."""
+    """A quotient and an X1 head's own result on X1's bus in one word: OR-ed, verified beside
+    X1 0x13 only."""
     if quotient.value is None or x1.value is None:
         return Sv(None, min(quotient.tier, x1.tier))
-    return Sv(quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I))
+    return Sv(
+        quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I)
+    )
 
 
 def _unknown(file: str) -> Sv | Vec:
     return UNKNOWN_VEC if file in VECTOR_FILES else UNKNOWN
 
 
-def _s32(v: int) -> int:
-    return v - (1 << 32) if v & 0x80000000 else v
-
-
 def _divide(a: Sv, b: Sv) -> Sv:
     """X1 0x1e: a / b signed, truncated toward zero (`fields.DIVIDE_HEAD`); b <= 0 was not
     measured."""
     tier = min(a.tier, b.tier)
-    if a.value is None or b.value is None or _s32(b.value) <= 0:
+    if a.value is None or b.value is None or s32(b.value) <= 0:
         return Sv(None, tier)
-    n, d = _s32(a.value), _s32(b.value)
+    n, d = s32(a.value), s32(b.value)
     q = abs(n) // d
     return Sv((-q if n < 0 else q) & M32, min(tier, I if n < 0 else V))
 
 
 def _sext(v: int, bits: int) -> int:
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
-
-
-HALF = 1 << 16
 
 
 def _id(lo: int, hi: int) -> str:
@@ -285,8 +279,53 @@ LANE_UNIT = {
     S1_RESULT: "s1",
     S2_LOW: "s2",
     S2_RESULT: "s2",
+    S2_HIGH: "s2",
     S3_RESULT: "s3",
 }
+"""The unit whose bus each lane port source takes."""
+OWN_RULES = frozenset(
+    {IDLE_OP, 0x08, 0x0B, 0x38, 0x44, 0x46, 0x47, 0x48, 0x49, *LOADS, *STORES}
+)
+"""The data ops without an `OpValue` rule that `Machine._op_slot` runs by its own rule."""
+
+
+def _check_rules() -> None:
+    """Every value of the X heads, the scalar ports' enables and O's source but the idle one,
+    every lane port source and every data op with semantics has a rule here."""
+
+    def values(name: str) -> set[int]:
+        f = lookup(name)
+        return set(range(1 << f.width)) - {f.idle}
+
+    gaps = [
+        *(
+            f"{u} {h:#x}"
+            for u in ("x0", "x1")
+            for h in values(HEAD_IDS[u]) - set(X_RULES[u])
+        ),
+        *(f"{e} {v}" for e in PR_ENABLES for v in values(e) - set(PR_SOURCES[e])),
+        *(f"{e} {v}" for e in PB_FILES for v in values(e) - set(PB_SOURCES[e])),
+        *(
+            f"f252_254 {v}"
+            for v in values("f252_254") - {*STORE_SOURCES, *STORE_NOTHING}
+        ),
+        *(
+            text
+            for rows in (*LANE_SOURCES.values(), STORE_SOURCES)
+            for text, _ in rows.values()
+            if text != LANE_LOAD and text not in LANE_UNIT
+        ),
+        *(
+            f"op {c:#x}"
+            for c, s in OP_SEMANTICS.items()
+            if s.rule is None and c not in OWN_RULES
+        ),
+    ]
+    if gaps:
+        raise ValueError(f"no machine rule for {', '.join(gaps)}")
+
+
+_check_rules()
 
 
 @dataclass
@@ -416,9 +455,9 @@ class Machine:
         self.x1_due: dict[int, Sv] = {}
         """X1 0x1e's quotients on X1's result bus, by word."""
         self.load_due: dict[int, list[Vec]] = {}
-        self.load_chain: tuple[int, tuple[int, ...], bool] | None = None
-        """The last lane loads in flight together: the last one's word, the words between their
-        heads, whether they begin a verified chain (`fields.LOAD_CHAINS`)."""
+        self.chains: dict[str, tuple[int, tuple[int, ...], bool]] = {}
+        """The last ops in flight together by kind ("load", "divide"): the last one's word, the
+        words between their heads, whether they begin a measured chain (`Machine._chained`)."""
         self.lane_due: dict[int, dict[str, list[tuple[Vec, Vec | None]]]] = {}
         self.held_due: dict[int, dict[str, Sv]] = {}
         self.reductions: list[tuple[int, Sv]] = []
@@ -428,7 +467,10 @@ class Machine:
         """The word of the last S head run."""
         self.head_values: set[tuple[str, int]] = set()
         """The (unit, head) pairs that ran in that word."""
-        self.prev_heads: tuple[int | None, frozenset[tuple[str, int]]] = (None, frozenset())
+        self.prev_heads: tuple[int | None, frozenset[tuple[str, int]]] = (
+            None,
+            frozenset(),
+        )
         """The word with S heads before that one and its (unit, head) pairs."""
         self.heads_run: dict[tuple[str, int], int] = {}
         """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
@@ -443,9 +485,8 @@ class Machine:
         self.cap = V
         """The tier cap of all the job leaves and decides from here on (`limit`)."""
         self.ceiling = V
-        """The tier cap of what the word being run leaves (`execute`), `cap` at most."""
-        self.fitted = False
-        """Whether the word being run runs at all by a fitted rule (`execute`'s ceiling)."""
+        """The tier cap of what the word being run leaves: `cap`, or a hypothesis from its
+        lapse on."""
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
@@ -531,7 +572,7 @@ class Machine:
         if ra.value is None:
             return Branch(None, f"r{word['ra']} unknown", V)
         v = ra.value
-        taken = {1: v == 0, 2: v != 0, 0: _s32(v) > 0}[word.op]
+        taken = {1: v == 0, 2: v != 0, 0: s32(v) > 0}[word.op]
         return Branch(taken, f"r{word['ra']} = {v:#x}", min(ra.tier, self.cap))
 
     # ------------------------------------------------------------------ reads
@@ -539,15 +580,11 @@ class Machine:
     def _rd(self, file: str, reg: int) -> Sv:
         return self._file(file)[reg]
 
-    _rv = _rd
-
     # ------------------------------------------------------------------ the word
 
-    def execute(self, index: int, word: Word, t: int, ceiling: Confidence = V) -> str:
-        """Run word `word` (program index `index`) as executed word number `t`; returns a note.
-        What it writes (registers, lane and local memory) is capped at `ceiling`: words whose
-        running at all was fitted."""
-        self.ceiling, self.fitted = min(ceiling, self.cap), ceiling < V
+    def execute(self, index: int, word: Word, t: int) -> str:
+        """Run word `word` (program index `index`) as executed word number `t`; returns a note."""
+        self.ceiling = self.cap
         if word.control and word.op < 4 and word["f120_122"] & 3:
             # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
             raise UnknownSemantics(
@@ -567,26 +604,18 @@ class Machine:
             m = self._m(index, word, own, t)
             # An active X0 head's result is not on its bus under M (verified with a value on
             # M; with nothing on M the kept register measured beside `X0_BESIDE_KEPT` only).
-            beside = (word[HEAD_IDS["x0"]], self._heads_at(t)) == X0_BESIDE_KEPT
-            x0bus = (
-                Kept(min(m.tier, V if beside else I))
-                if x0 is not None and isinstance(m, Kept)
-                else m
-            )
+            x0_head = word[HEAD_IDS["x0"]]
+            x0bus = m
+            if isinstance(m, Kept) and x0_head != lookup(HEAD_IDS["x0"]).idle:
+                beside = (x0_head, self._heads_at(t)) == X0_BESIDE_KEPT
+                x0bus = Kept(min(m.tier, V if beside else I))
         else:
             x0bus = UNKNOWN if x0 is None else x0
-        quotient = self.x1_due.get(t)
-        if quotient is not None:
-            # A quotient beside an X1 head's own result: the OR (measured on the camera beside X1
-            # 0x13 with an immediate, two words; other heads inferred).
-            x1bus = quotient if x1 is None else _or_bus(quotient, x1, word[HEAD_IDS["x1"]])
-        elif x1 is None and word[HEAD_IDS["x1"]] == DIVIDE_HEAD:
-            x1bus = NOTHING  # a divide drives nothing in its own word (verified)
-        else:
-            x1bus = UNKNOWN if x1 is None else x1
+        x1bus = self._x1_bus(word[HEAD_IDS["x1"]], x1, t)
         writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
-            self._commit(key, _cap(value, self.ceiling), t)
+            file, reg = key
+            self._file(file)[reg] = _cap(value, self.ceiling)
         for due in (
             self.bus_due,
             self.x1_due,
@@ -639,8 +668,7 @@ class Machine:
             return self._select(word, ra, rb, sem.confidence)
         if sem.rule is not None:
             rule = sem.rule
-            ins = [ra] if rule.reads_ra else []
-            ins += [rb] if rule.form == "rb" else []
+            ins = [v for name, v in (("a", ra), ("b", rb)) if name in rule.reads]
             tier = min([sem.confidence, *(v.tier for v in ins)])
             if any(v.value is None for v in ins):
                 return Sv(None, tier)
@@ -653,17 +681,12 @@ class Machine:
             return Sv(None, tier)
         if code == 0x38:
             return Sv(ra.value & c & M32, tier)
-        if code in (0x44, 0x46, 0x47):
-            return self._ring(index, word, code, ra, rb, c, tier)
-        raise UnknownSemantics(
-            index, op(code).name, [(OP_FIELD, code)], "no exact rule"
-        )
+        return self._ring(index, word, code, ra, rb, c, tier)
 
     def _select(self, word: Word, ra: Sv, rb: Sv, tier: Confidence) -> Sv:
         """Op 0x08: ra where R[f120_122] is 0, else rb (measured on the camera by exact readout:
-        R 0 gave ra at f120_122 0, 3, 5, 6 and 7, every non-zero R tried gave rb, also in
-        program 13's word 107, which so sets the first block at b = 1). An unknown R gives an
-        unknown result unless ra and rb agree."""
+        R 0 gave ra at f120_122 0, 3, 5, 6 and 7, every non-zero R tried gave rb, also in a
+        stock program's select). An unknown R gives an unknown result unless ra and rb agree."""
         r = word["f120_122"]
         x = self._rd("R", r)
         if r not in SELECT_MEASURED:
@@ -675,17 +698,26 @@ class Machine:
         return Sv(pick.value, min(tier, x.tier, pick.tier))
 
     def _ring(
-        self, index: int, word: Word, code: int, ra: Sv, rb: Sv | None, c: int, tier: Confidence
+        self,
+        index: int,
+        word: Word,
+        code: int,
+        ra: Sv,
+        rb: Sv | None,
+        c: int,
+        tier: Confidence,
     ) -> Sv:
         """The ring pointer step (`semantics.OP_SEMANTICS` 0x44 / 0x46 / 0x47)."""
         if code == 0x44:
             step = Sv(1)
         else:
             step = self._rd("R", word["f120_122"])
-            step = Sv(None if step.value is None else _s32(step.value), step.tier)
+            step = Sv(None if step.value is None else s32(step.value), step.tier)
         length, ltier = (rb.value, V) if code == 0x47 else ring_length(c)
         if length is None and code != 0x47:
-            self.lapse(index, op(code).name, f"ring length of imm13 {c:#x}: not measured")
+            self.lapse(
+                index, op(code).name, f"ring length of imm13 {c:#x}: not measured"
+            )
         if step.value is None or length is None:
             return Sv(None, tier)
         s = ring_step(ra.value + step.value, length)
@@ -737,8 +769,8 @@ class Machine:
             v = _sext(v, 8 * width) & M32 if signed else v
             datum = Sv(v, min(ra.tier, b.weakest()))
         else:
-            datum = Sv(None)
-        self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
+            datum = Sv(None, ra.tier)
+        self.bus_due.setdefault(t + LOCAL_LOAD_LAG, []).append((datum, "load"))
 
     def _unknown_access(self, code: int, t: int) -> None:
         """A family A access at an address not known or not covered: a store forgets local
@@ -746,7 +778,7 @@ class Machine:
         if code in STORES:
             self.boot.local.forget(self.store_src)
         else:
-            self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
+            self.bus_due.setdefault(t + LOCAL_LOAD_LAG, []).append((Sv(None), "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
         # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.
@@ -792,11 +824,6 @@ class Machine:
                 self.lapse(index, f"x1 {head:#x}", why, [(lookup("f110_114"), select)])
                 self.lose_memories(why)
                 return None
-            if self.fitted:
-                # Lenient: handed as if the word runs.
-                self.lapse(
-                    index, f"x1 {head:#x}", "a transfer in words run by a fitted rule"
-                )
             if self.stream is None:
                 why = "a transfer to the stream engine: no stream"
                 self.lapse(index, f"x1 {head:#x}", why)
@@ -806,33 +833,48 @@ class Machine:
             return None
         if unit == "x1" and head == DIVIDE_HEAD:
             quotient = _divide(a, b)
-            issued = sorted(k - DIVIDE_LAG for k in self.x1_due) + [t]
-            # Measured on the camera (pre-registered): a second divide 1..4 words after the first,
-            # and four in consecutive words, each quotient as alone; other mixes inferred.
-            if len(issued) > 4 or (
-                len(issued) > 2 and any(b - a != 1 for a, b in pairwise(issued))
-            ):
+            if not self._chained("divide", t, self.x1_due, DIVIDE_CHAINS, True):
                 self.x1_due = {k: _cap(q, I) for k, q in self.x1_due.items()}
                 quotient = _cap(quotient, I)
             self.x1_due[t + DIVIDE_LAG] = quotient
         if unit == "x0" and head in X0_LANE_MEMORY:
             self._lane_memory(index, word, head, a, b, k, t)
-        if head not in X_RULES[unit]:
-            raise UnknownSemantics(index, f"{unit} {head:#x}", [], "no rule")
         rule = X_RULES[unit][head]
         if rule.value is None:
             return None
         ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
+        tier = min([rule.confidence, *(v.tier for v in ins)])
         if any(v.value is None for v in ins):
-            return Sv(None)
-        value = x_result(unit, head, a.value or 0, b.value or 0, k)
-        return Sv(value, min([rule.confidence, *(v.tier for v in ins)]))
+            return Sv(None, tier)
+        return Sv(x_result(unit, head, a.value or 0, b.value or 0, k), tier)
+
+    def _x1_bus(self, head: int, x1: Sv | None, t: int) -> Sv | object:
+        """X1's result bus in word t: the head's result, a quotient due (`fields.DIVIDE_LAG`) or
+        their OR (measured on the camera beside X1 0x13 with an immediate, two words; other heads
+        with a result inferred). A quotient is as alone beside an idle X1 or a divide (measured),
+        inferred beside the other heads without a result."""
+        quotient = self.x1_due.get(t)
+        if quotient is None:
+            if x1 is None and head == DIVIDE_HEAD:
+                return NOTHING  # a divide drives nothing in its own word (verified)
+            return UNKNOWN if x1 is None else x1
+        if x1 is not None:
+            return _or_bus(quotient, x1, head)
+        if head in (lookup(HEAD_IDS["x1"]).idle, DIVIDE_HEAD):
+            return quotient
+        return _cap(quotient, I)
 
     def _lane_memory(
         self, index: int, word: Word, head: int, a: Sv, b: Sv, k: int, t: int
     ) -> None:
-        by_reg = head in range(0x1E, 0x22)
-        flight = self._loads_in_flight(t, head) if head in X0_LANE_LOADS else V
+        by_reg = head in X0_LANE_BY_REGISTER
+        flight = V
+        if head in X0_LANE_LOADS and not self._chained(
+            "load", t, self.load_due, LOAD_CHAINS, head == LOAD_CHAIN_HEAD
+        ):
+            for when, due in self.load_due.items():
+                self.load_due[when] = [_cap(v, I) for v in due]
+            flight = I
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
                 why = "a lane store at an unknown address"
@@ -868,29 +910,27 @@ class Machine:
                 self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"memory[{addr:#x}] {state}")
             return
         reg = word["f69_71"]
-        self.memory[addr] = _cap(self._rv("O", reg), tier)
+        self.memory[addr] = _cap(self._rd("O", reg), tier)
         if self.trace is not None:
             source = f"x0 {head:#x}'s store of O[{reg}]"
             self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
 
-    def _loads_in_flight(self, t: int, head: int) -> Confidence:
-        """A lane load in word t beside loads in flight (due in word t or later, a load landing in
-        the word of the next load's head included): verified while all of them, from the first
-        of the chain on, begin one of `fields.LOAD_CHAINS`; otherwise each of them still due,
-        and this one, lands at inferred."""
-        flight = [when for when in self.load_due if when >= t]
-        if not flight:
-            self.load_chain = (t, (), head == LOAD_HEAD)
-            return V
-        last, gaps, ok = self.load_chain or (t, (), False)
+    def _chained(
+        self, kind: str, t: int, due: Mapping, chains: tuple, measured: bool
+    ) -> bool:
+        """Whether an op of `kind` in word t lands as it would alone beside the ops in flight
+        (`due`: results due in word t or later, one landing in this word included): alone, or
+        while every op of the chain is `measured` and the words between their heads, from the
+        chain's first op on, begin one of `chains`. Otherwise each op in flight and this one land
+        at inferred."""
+        if not due:
+            self.chains[kind] = (t, (), measured)
+            return True
+        last, gaps, ok = self.chains[kind]
         gaps += (t - last,)
-        ok = ok and head == LOAD_HEAD and any(c[: len(gaps)] == gaps for c in LOAD_CHAINS)
-        self.load_chain = (t, gaps, ok)
-        if ok:
-            return V
-        for when in flight:
-            self.load_due[when] = [_cap(v, I) for v in self.load_due[when]]
-        return I
+        ok = ok and measured and any(c[: len(gaps)] == gaps for c in chains)
+        self.chains[kind] = (t, gaps, ok)
+        return ok
 
     # ------------------------------------------------------------------ S units
 
@@ -902,7 +942,7 @@ class Machine:
             head = word[HEAD_IDS[unit]]
             if head == lookup(HEAD_IDS[unit]).idle:
                 continue
-            a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
+            a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             if unit != "s3":
@@ -928,7 +968,7 @@ class Machine:
                     s_result(unit, head, a.lanes, b.lanes, sc), min(tier, sc.tier)
                 )
             except UnknownInput:
-                value = Sv(None)
+                value = Sv(None, tier)
             if rule.held:
                 self.reductions.append((t + rule.lag, value))
             elif rule.lag == 0:
@@ -1145,7 +1185,7 @@ class Machine:
         n = _sext(scalars["f92_95"].value, 4)
         if not 1 <= abs(n) <= 4 or all(x is None for x in lanes):
             return lanes, tier
-        u = self._rv("U", scalars["f31_34"].value)
+        u = self._rd("U", scalars["f31_34"].value)
         out = list(lanes)
         if n > 0:
             out[LANE_COUNT - n :] = u.lanes[:n]
@@ -1209,8 +1249,11 @@ class Machine:
             and frozenset(self.head_values) in M_TOGETHER
             and self.head_values <= M_LANE_ONLY
         )
-        if before is not None and not s2_next and not lane_only and not (
-            sel == "s3" and sel in own and _own_word("s3", before)
+        if (
+            before is not None
+            and not s2_next
+            and not lane_only
+            and not (sel == "s3" and sel in own and _own_word("s3", before))
         ):
             # One word after a head whose result there is open (S3's extracts in consecutive
             # words each read their own lane: measured), M is not known: a value not fitted is
@@ -1239,9 +1282,10 @@ class Machine:
                 # (verified: four, five, eight and twenty words after the reduction head).
                 return _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (verified).
+            tier = min(v.tier, fresh.tier)
             if v.value is None or fresh.value is None:
-                return Sv(None)
-            return Sv(v.value | fresh.value, min(v.tier, fresh.tier))
+                return Sv(None, tier)
+            return Sv(v.value | fresh.value, tier)
         if h is not None:
             return Sv(
                 None, H
@@ -1289,35 +1333,52 @@ class Machine:
         sources: dict[tuple[str, int], str] = {}
 
         def put(file: str, reg: int, value, source: str) -> None:
+            key = (file, reg)
             if self.trace is not None:
-                key = LANE_UNIT.get(source, "s2" if source == S2_HIGH else source)
-                why = self.why_due.get(t, {}).get(key, "")
+                unit = LANE_UNIT.get(source, source)
+                why = self.why_due.get(t, {}).get(unit, "")
                 self._note(index, f"{file}[{reg}]", source, value, why)
-            if value is NOTHING:
+            if key in sources:
+                second(key, value, source)
                 return
+            sources[key] = source
             if isinstance(value, Kept):
-                kept[(file, reg)] = value.tier
+                kept[key] = value.tier
+            elif value is not NOTHING:
+                writes[key] = value
+
+        def second(key: tuple[str, int], value, source: str) -> None:
+            """A second port on a register: the first port's value (`FIRST_PORT_WINS`)."""
+            if key[0] not in LANE_FILES:
+                self.lapse(index, "ports", f"two ports write {key[0]}[{key[1]}]")
+                writes[key] = _unknown(key[0])
                 return
-            if (file, reg) in writes:
-                # Both ports of a lane file on one register: the first port's value (measured on
-                # the camera in L0, L1, L2 and L3, lanes 0..3, first port S0 0x41's b, second S3
-                # 0x19's copy; other sources inferred).
-                if file not in LANE_FILES:
-                    self.lapse(index, "ports", f"two ports write {file}[{reg}]")
-                    writes[(file, reg)] = _unknown(file)
-                elif (sources[(file, reg)], source) != (S0_RESULT, S3_RESULT):
-                    writes[(file, reg)] = _cap(writes[(file, reg)], I)
+            heads, due = self._heads_at(t), self.lane_due.get(t, {})
+            carries = value is not NOTHING and not isinstance(value, Kept)
+            if (
+                key in writes
+                and carries
+                and (sources[key], source) == (S0_RESULT, S3_RESULT)
+                and all(
+                    len(due.get(u, ())) == 1 and (u, h) in heads
+                    for u, h in FIRST_PORT_WINS
+                )
+            ):
                 return
-            writes[(file, reg)] = value
-            sources[(file, reg)] = source
+            if key not in writes and carries:
+                writes[key] = value
+            if key in writes:
+                writes[key] = _cap(writes[key], I)
+            if isinstance(value, Kept):
+                kept[key] = min(kept.get(key, V), value.tier)
+            if key in kept:
+                kept[key] = min(kept[key], I)
 
         scalar = {"X0's result": x0bus, "X1's result": x1, ALU_BUS: bus}
         for enable, reg_id in PR_ENABLES.items():
             v = word[enable]
             if v == lookup(enable).idle:
                 continue
-            if v not in PR_SOURCES[enable]:
-                raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PR_SOURCES[enable][v]
             if src is not None:
                 put(PR_FILES[enable], word[reg_id], scalar[src], src)
@@ -1325,8 +1386,6 @@ class Machine:
             v = word[enable]
             if v == lookup(enable).idle:
                 continue
-            if v not in PB_SOURCES[enable]:
-                raise UnknownSemantics(index, enable, [], f"enable {v}")
             src = PB_SOURCES[enable][v]
             if src is not None:
                 put(file, word[PORTS[enable]], scalar[src], src)
@@ -1343,17 +1402,11 @@ class Machine:
         if v in STORE_NOTHING:
             kept[("O", word["f179_181"])] = V
         elif v != lookup("f252_254").idle:
-            if v not in STORE_SOURCES:
-                raise UnknownSemantics(index, "f252_254", [], f"O's source {v}")
             text, tier = STORE_SOURCES[v]
             put("O", word["f179_181"], _cap(self._lane_source(text, t), tier), text)
-        u = word["f232_233"]
-        if u == 1:
-            # With no S3 head (or one of U_NOTHING) the port writes nothing (verified).
-            if self._u_write is not None:
-                put("U", *self._u_write, "S3's U port")
-        elif u != lookup("f232_233").idle and u not in (0, 2):
-            raise UnknownSemantics(index, "f232_233", [], f"enable {u}")
+        # U's port writes under 1 only; with no S3 head (or one of U_NOTHING) nothing (verified).
+        if word["f232_233"] == 1 and self._u_write is not None:
+            put("U", *self._u_write, "S3's U port")
         self._u_write = None
         for (file, reg), tier in kept.items():
             if (file, reg) not in writes:
@@ -1366,9 +1419,7 @@ class Machine:
             if len(due) > 1:
                 self._why(t, LANE_LOAD, "two lane loads arrive in one word")
             return NOTHING if not due else due[0] if len(due) == 1 else UNKNOWN_VEC
-        unit = LANE_UNIT.get(text, "s2" if text == S2_HIGH else None)
-        if unit is None:
-            raise ValueError(text)
+        unit = LANE_UNIT[text]
         alone = self._alone_read(unit, t, port)
         if alone is not None:
             return alone
@@ -1403,7 +1454,3 @@ class Machine:
         scalar = {"G": self.g, "A": self.a, "B": self.b, "R": self.r, **self.f}
         vector = {"U": self.u, "O": self.o, **self.lanes}
         return scalar.get(file) or vector[file]
-
-    def _commit(self, key: tuple[str, int], value, t: int) -> None:
-        file, reg = key
-        self._file(file)[reg] = value

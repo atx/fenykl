@@ -20,8 +20,8 @@ from fenykl.dsp.fields import (
     LANE_FUNCTIONS,
     LANE_LAG,
     LANE_LOAD,
+    LANE_LOAD_LAG,
     LANE_SOURCES,
-    LOAD_LAG,
     NO_LANE,
     PB_FILES,
     PB_SOURCES,
@@ -282,7 +282,7 @@ def test_every_x0_load_has_its_port_write_four_words_later(items):
         words = decode_item(data, STOCK[item]).words
         heads = {i for i, w in enumerate(words) if w["x0op"] in X0_LANE_LOADS}
         takes = {i for i, w in enumerate(words) if any(w[e] == 0 for e in takers)}
-        assert {i + LOAD_LAG for i in heads} == takes, item
+        assert {i + LANE_LOAD_LAG for i in heads} == takes, item
         loads += len(heads)
     assert loads == 379
 
