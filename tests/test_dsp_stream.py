@@ -553,10 +553,14 @@ def test_load_rows_at_lane_pitch_0_land_the_last_row(r4, r7, to, tier):
     assert m.memory[to // 64].tier == tier
 
 
-@pytest.mark.parametrize(("r7", "to"), [(3, 0), (2, 0x20)])
-def test_other_lane_pitches_off_whole_vectors_go_off_script(r7, to):
+@pytest.mark.parametrize(
+    ("r7", "command"),
+    [(3, load(0, SRC, 0)), (2, load(0, SRC, 0x20)), (2, store(0, RAN_AT, DST))],
+)
+def test_other_lane_pitches_off_whole_vectors_go_off_script(r7, command):
+    """Only loads ran at half a vector."""
     m, e = machine(bytes(1024)), stream.Engine()
-    drive(m, e, [*lanes(0, 1, r6=2, r7=r7, r1=0x20, r4=0x100), *load(0, SRC, to), WAIT])
+    drive(m, e, [*lanes(0, 1, r6=2, r7=r7, r1=0x20, r4=0x100), *command, WAIT])
     assert "memory pitch" in e.off
 
 

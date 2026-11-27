@@ -315,11 +315,11 @@ counts verified in any shape (`LOAD_ROWS_ANY`, `STORE_ROWS_ANY`)."""
 LOAD_ROWS_ANY = range(1, 5)
 STORE_ROWS_ANY = range(1, 3)
 """Row counts verified on either memory in any shape: loads 1..4, stores 1..2."""
-HALF_VECTOR_SHAPE = (1, 0x20, 0x20, 1, None, 0x10, 2, 2)
+HALF_VECTOR_PITCH = Ran((1, 0x20, 0x20, 1, None, 0x10, 2, 2))
 HALF_VECTOR_ROWS = Ran((1, 0x20, 0x20, 1, 0x100, 0x10, 2, 2), LOAD, 0x4000)
 """A plain lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes and a DRAM pitch
 of 0x100 into vector 0x100: row 1's offset floors to row 0's vector and row 1's elements land there,
-the next vector untouched (verified, pre-registered: one job). In `HALF_VECTOR_SHAPE` at another
+the next vector untouched (verified, pre-registered: one job). In `HALF_VECTOR_PITCH` at another
 DRAM pitch or vector-aligned offset inferred; other lane pitches off whole vectors were not
 measured."""
 SAME_VECTOR_ROWS = Ran((1, 0, 0x20, 1, 0x100, 0x10, 2, 2), LOAD, 0x4000)
@@ -961,7 +961,7 @@ class Engine:
         if rows > 1:
             pitch, dpitch = _known(r[1], "r1"), _known(r[4], "r4")
             unit = VECTOR_BYTES if memory == LANE_MEMORY else 4
-            half = _fits(cmd.values, HALF_VECTOR_SHAPE)
+            half = _ran(cmd, HALF_VECTOR_PITCH)
             if pitch % unit and not (half and mem % VECTOR_BYTES == 0):
                 raise _Off(f"memory pitch {pitch:#x}: not measured")
             if (
