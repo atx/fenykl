@@ -13,7 +13,7 @@ of its address does not change the load's datum, a load one or two words after a
 new content). Buses carry values in the word they arrive in, counted in executed words:
 
 - the ALU bus: the word's own op result; a multiply's product one word after the op; a local load's
-  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOAD_LAG`); an arrival in a word
+  datum three words after the load (`semantics.MULTIPLY_LAG`, `LOCAL_LOAD_LAG`); an arrival in a word
   whose op has no result (a branch, a store, a load, a multiply) is on the bus alone, and
   arrivals beside each other or beside an op's result are OR-ed (verified on the camera, values
   whose bits are not nested); in an op 3 or op 4 word the same (verified for a load's datum,
@@ -26,7 +26,7 @@ new content). Buses carry values in the word they arrive in, counted in executed
   (a port at another word writes nothing); a head whose lag was not measured puts its result on the
   bus at both lags 0 and 1 as a hypothesis; a lag-1 result and the next word's lag-0 result of
   one unit are OR-ed on its bus (verified on the camera in S0, S1, S2 and S3);
-- a lane memory load's vector four words after its X0 head (`fields.LOAD_LAG`), at the first lane
+- a lane memory load's vector four words after its X0 head (`fields.LANE_LOAD_LAG`), at the first lane
   ports and O's port under enable 0; a port with no load arriving writes nothing; loads in flight
   together (issued at most four words apart) land at inferred, except X0 0x1d heads in the measured
   chains of `rules.LOAD_CHAINS` (`Machine._chained`);
@@ -76,6 +76,7 @@ from .fields import (
     LANE_FILES,
     LANE_LAG,
     LANE_LOAD,
+    LANE_LOAD_LAG,
     LANE_SOURCES,
     M_HELD_BESIDE_OWN,
     M_LANE_ONLY,
@@ -118,9 +119,6 @@ from .fields import (
     lookup,
     op,
 )
-from .fields import (
-    LOAD_LAG as LANE_LOAD_LAG,
-)
 from .rules import DIVIDE_CHAINS, FIRST_PORT_WINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
 from .semantics import (
     IDLE_OP,
@@ -129,8 +127,8 @@ from .semantics import (
     LANE_SHIFTS,
     LATCH_OPERAND,
     LATCHED,
-    LOAD_LAG,
     LOCAL_BYTES,
+    LOCAL_LOAD_LAG,
     LOCAL_LOADS,
     LOCAL_LOADS_RB,
     LOCAL_STORES,
@@ -748,7 +746,7 @@ class Machine:
             datum = Sv(v, min(ra.tier, b.weakest()))
         else:
             datum = Sv(None, ra.tier)
-        self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
+        self.bus_due.setdefault(t + LOCAL_LOAD_LAG, []).append((datum, "load"))
 
     def _unknown_access(self, code: int, t: int) -> None:
         """A family A access at an address not known or not covered: a store forgets local
@@ -756,7 +754,7 @@ class Machine:
         if code in STORES:
             self.boot.local.forget(self.store_src)
         else:
-            self.bus_due.setdefault(t + LOAD_LAG, []).append((Sv(None), "load"))
+            self.bus_due.setdefault(t + LOCAL_LOAD_LAG, []).append((Sv(None), "load"))
 
     def _bus(self, word: Word, alu: Sv | None, t: int) -> Sv | object:
         # Of the arrivals in an op 3 or op 4 word only a load's datum was measured.

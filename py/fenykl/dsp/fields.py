@@ -930,10 +930,10 @@ LANE_THIRD_FILE = (
 S3_RESULT, S1_RESULT, S0_RESULT = "S3's result", "S1's result", "S0's result"
 S2_LOW, S2_HIGH = "S2's result, a product's low half", "S2's product's high half"
 S2_RESULT = "S2's result"
-LOAD_LAG = 4
+LANE_LOAD_LAG = 4
 """Words from an X0 load head to the one word whose port takes the loaded vector."""
 LANE_LOAD = (
-    f"a lane memory load's 32 lanes, {LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
+    f"a lane memory load's 32 lanes, {LANE_LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
 )
 LANE_SOURCES: dict[str, dict[int, tuple[str, Confidence]]] = {
     "f236_237": {0: (LANE_LOAD, V), 1: (S2_HIGH, V), 2: (S0_RESULT, V)},
@@ -1048,7 +1048,7 @@ LANE_MEMORY = (
     "inferred: five different contents at 0x20, 0x40, 0x80, 0x100 and 0x200, and 0x400, "
     "0x800 .. 0x4000 read vector 0). X0's heads 0x1c, 0x1d (address A[f100_104] + sK, K X0's "
     "signed 11-bit immediate) and 0x20, 0x21 (A[f100_104] + A[f105_109]) load one vector, "
-    f"delivered {LOAD_LAG} words after the head to the first lane ports under 0 "
+    f"delivered {LANE_LOAD_LAG} words after the head to the first lane ports under 0 "
     "(`LANE_SOURCES`) or to the store file O under 0 (`STORE_SOURCES`); 0x1a, 0x1b (A[a] + sK) "
     "and 0x1e, 0x1f (A[a] + A[b]) store the 32 lanes of O[f69_71] there (`X0_LANE_MEMORY`). "
     "It is the stock copy's buffer (program 16, cmd 0xF): the copy's load fills one element per "
@@ -1123,7 +1123,7 @@ _STORE_IMM, _STORE_REG = (
     f"stores O[f69_71] to vector A[a] + {offset}" for offset in ("sK", "A[b]")
 )
 _LOAD_IMM, _LOAD_REG = (
-    f"loads vector A[a] + {offset}, delivered {LOAD_LAG} words later"
+    f"loads vector A[a] + {offset}, delivered {LANE_LOAD_LAG} words later"
     for offset in ("sK", "A[b]")
 )
 X0_LANE_MEMORY: dict[int, tuple[str, Confidence]] = {

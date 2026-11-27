@@ -159,8 +159,8 @@ their head, in that word only, and a port at another word writes nothing:
 |---|---|
 | a data op's result, an X unit's result | in the head's own word |
 | a multiply's product (`OP.mul`) | `semantics.MULTIPLY_LAG` (1) words later |
-| a local-memory load's datum | `semantics.LOAD_LAG` (3) words later |
-| a lane-memory load's vector (X0) | `fields.LOAD_LAG` (4) words later |
+| a local-memory load's datum | `semantics.LOCAL_LOAD_LAG` (3) words later |
+| a lane-memory load's vector (X0) | `fields.LANE_LOAD_LAG` (4) words later |
 | X1's divide | `fields.DIVIDE_LAG` (4) words later |
 | a lane head's result | per head, `fields.LANE_LAG` |
 | S0's and S1's masks on M, S3's reductions | see `fields.S_RESULTS` |

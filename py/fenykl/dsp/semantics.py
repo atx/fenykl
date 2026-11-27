@@ -177,7 +177,7 @@ def ring_step(s: int, length: int) -> int:
 MULTIPLY_LAG = 1
 """A multiply's product reaches the ALU bus this many words after the op; a port of that word
 takes it, and the op's own word gets nothing (verified on the camera by exact readout)."""
-LOAD_LAG = 3
+LOCAL_LOAD_LAG = 3
 """A load's datum reaches the ALU bus this many words after the load (verified on the camera by
 exact readout)."""
 
@@ -227,7 +227,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
             V,
             f"{fmt} local {LOCAL_UNITS[width]} load at the byte address ra + {width} x imm13 "
             f"modulo 0x2000, ra a base it does not write ({EXACT}); the datum reaches the ALU "
-            f"result bus {LOAD_LAG} words on, which stepping does not model: it records the "
+            f"result bus {LOCAL_LOAD_LAG} words on, which stepping does not model: it records the "
             "read only",
         )
         for code, (width, signed) in LOCAL_LOADS.items()
