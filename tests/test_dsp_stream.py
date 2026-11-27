@@ -144,6 +144,18 @@ def test_load_format_bits_above_0xff_outside_the_shape_run_go_off_script(regs):
     assert "load format" in e.off and "not measured" in e.off
 
 
+
+@pytest.mark.parametrize(("r3", "r6", "tier"), [(8, 2, V), (4, 1, I)])
+def test_a_local_load_zero_extends_16_bit_elements_into_32_bit_words(r3, r6, tier):
+    """Verified for eight words from two lines, inferred in another shape."""
+    data = bytes(range(0x80, 0xA0))
+    m, e = machine(data), stream.Engine()
+    drive(m, e, [*block(0, 2, 0, 1, r3, 0, 0x08, r6, 1), *load(0, SRC, 0x200), WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x200, 4 * r3)
+    want = b"".join(data[2 * k : 2 * k + 2] + bytes(2) for k in range(r3))
+    assert bytes(got.data) == want and all(got.known) and got.weakest() == tier
+    assert not e.off
+
 def test_rows_step_by_their_pitches():
     data = bytes(range(256)) * 4
     m, e = machine(data), stream.Engine()
@@ -473,8 +485,8 @@ def test_a_local_load_of_bytes_into_32_bit_words_never_ends():
 
 def test_other_loads_into_32_bit_words_go_off_script():
     m, e = machine(bytes(64)), stream.Engine()
-    drive(m, e, [*block(0, 2, 0, 1, 8, 0, 0x08, 2, 1), *load(0, SRC, 0), WAIT])
-    assert "16-bit elements at r2 0x1" in e.off
+    drive(m, e, [*block(0, 2, 0, 1, 8, 0, 0x0A, 2, 1), *load(0, SRC, 0), WAIT])
+    assert "12-bit elements at r2 0x1" in e.off
 
 
 def test_a_load_completed_by_the_jobs_end_is_inferred():

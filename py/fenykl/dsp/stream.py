@@ -400,10 +400,17 @@ LOCAL_LOADS: dict[tuple[int, int], Confidence] = {
     (16, 8): V,
     (16, 16): V,
     (32, 32): V,
+    (16, 32): I,
 }
 """(DRAM element bits, local element bits) measured on a local-memory load (verified): bytes to
 bytes, bytes zero-extended to 16 bits, 16-bit elements truncated to their low byte, 16-bit and
-32-bit elements unchanged. Other pairs were not measured."""
+32-bit elements unchanged, 16-bit elements zero-extended to 32 bits (verified in
+`LOCAL_LOAD_WIDENED` only). Other pairs were not measured."""
+LOCAL_LOAD_WIDENED = (2, None, 1, 8, None, 0x08, 2, 1)
+"""A plain local-memory load of 16-bit elements into eight 32-bit words (r2 1, r5 0x08, one row)
+ended, and each word held its element zero-extended (verified, pre-registered against the
+elements packed two to a word; one job). 16-bit elements into 32-bit words in other shapes are
+inferred."""
 LOCAL_STORES: dict[tuple[int, int], Confidence] = {
     (4, 0x10): V,
     (2, 0x10): V,
@@ -1013,7 +1020,8 @@ class Engine:
                 tier = min(tier, LANE_UNITS[r2])
             return self._lane_load(m, cmd, rows, bits, r6, r2, r3, tier, skip)
         width = LOCAL_WIDTHS[r2]
-        tier = min(tier, LOCAL_LOADS[(bits, width)])
+        if not ((bits, width) == (16, 32) and cmd.plain and _fits(cmd, LOCAL_LOAD_WIDENED)):
+            tier = min(tier, LOCAL_LOADS[(bits, width)])
         return self._local_load(m, cmd, rows, bits, r6, width, r2, r3, tier)
 
     def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier, skip=0):
