@@ -237,9 +237,9 @@ B1 = {FLAT: _planes("..."), VARY: _planes("...")}
 TAP1_LOW = Operands((Operand.UNKNOWN, Operand.LOW, Operand.UNKNOWN, Operand.UNKNOWN))
 PHASE14 = Phase(14)
 SUBSTITUTE = Substitute()
-COEFFICIENT_SELECT = (3, 2, 4, 5)
-"""Word 439 + k's f88_91 value selecting c0..c3 for tap k (k 0..3); each word's stock value
-selects its own tap's coefficient."""
+COEFFICIENT_SELECT = frozenset({2, 3, 4, 5})
+"""The f88_91 values of words 439..442 that select one of c0..c3 for their tap; each word's
+stock value selects its own tap's coefficient."""
 
 
 HELD_433 = set_fields(
@@ -665,11 +665,11 @@ SUBSTITUTE_KEEPERS: tuple[tuple[int, Edit], ...] = (
     *((439, FieldValue("f88_91", v)) for v in (0, 1, 2, 4, 5)),
     *((439 + t, GRID_A_ONLY) for t in (1, 2, 3)),
     (440, FieldValue("f57_60", 5)),
+    # Words 440..442 at another tap's selector (at their own, no edit).
     *(
         (439 + t, FieldValue("f88_91", v))
         for t in (1, 2, 3)
-        for v in COEFFICIENT_SELECT
-        if v != COEFFICIENT_SELECT[t]
+        for v in sorted(COEFFICIENT_SELECT)
     ),
 )
 """The edits seen to leave a substitute of 0 in place, on a flat source at W 64 (verified: a
