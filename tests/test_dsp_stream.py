@@ -106,27 +106,36 @@ def packed(elements: list[int], bits: int, per: int) -> bytes:
 
 
 @pytest.mark.parametrize(
-    ("r5", "bits", "r6", "tier"),
-    [(0x0C, 10, 3, V), (0x09, 14, 4, V), (0x0C, 10, 6, I), (0x09, 14, 8, I)],
+    ("r5", "bits", "r6", "vector", "tier"),
+    [
+        (0x0C, 10, 3, 0x100, V),
+        (0x09, 14, 4, 0x100, V),
+        (0x0C, 10, 6, 0x100, I),
+        (0x09, 14, 8, 0x100, I),
+        (0x0C, 10, 3, 0, I),
+    ],
 )
-def test_10_and_14_bit_loads_unpack_verified_in_the_shape_run(r5, bits, r6, tier):
-    """One vector from 3 lines of 10-bit or 4 of 14-bit elements as run; from twice the lines
-    inferred."""
+def test_10_and_14_bit_loads_unpack_verified_in_the_shape_run(r5, bits, r6, vector, tier):
+    """One vector 0x100 from 3 lines of 10-bit or 4 of 14-bit elements as run; from twice the
+    lines, or into another vector, inferred."""
     elements = [(0x2A5 + 97 * i) & (1 << bits) - 1 for i in range(r5 * r6)]
     m, e = machine(packed(elements, bits, r5)), stream.Engine()
-    drive(m, e, [*lanes(0, 1, r5=r5, r6=r6), *load(0, SRC, 0), WAIT])
-    assert m.memory[0] == Vec(tuple(elements[:32]), tier)
+    drive(m, e, [*lanes(0, 1, r5=r5, r6=r6), *load(0, SRC, vector * 64), WAIT])
+    assert m.memory[vector] == Vec(tuple(elements[:32]), tier)
     assert not e.off
 
 
-@pytest.mark.parametrize(("r5", "skip", "tier"), [(0x810, 8, V), (0x110, 1, V), (0x410, 4, I)])
-def test_load_format_bits_above_0xff_skip_the_rows_first_bytes(r5, skip, tier):
+@pytest.mark.parametrize(
+    ("r5", "skip", "vector", "tier"),
+    [(0x810, 8, 0x100, V), (0x110, 1, 0x100, V), (0x410, 4, 0x100, I), (0x810, 8, 0, I)],
+)
+def test_load_format_bits_above_0xff_skip_the_rows_first_bytes(r5, skip, vector, tier):
     """Bytes skip.. land from lane 0, the lanes past the row's 32 bytes 0: verified at 0x810 and
-    0x110 in the shape run, another offset inferred."""
+    0x110 into vector 0x100 as run, another offset or vector inferred."""
     data = bytes(range(0x40, 0x60))
     m, e = machine(data), stream.Engine()
-    drive(m, e, [*block(0, 1, 0, 0x20, 1, 0, r5, 2, 1), *load(0, SRC, 0), WAIT])
-    assert m.memory[0] == Vec((*data[skip:], *[0] * skip), tier)
+    drive(m, e, [*block(0, 1, 0, 0x20, 1, 0, r5, 2, 1), *load(0, SRC, vector * 64), WAIT])
+    assert m.memory[vector] == Vec((*data[skip:], *[0] * skip), tier)
     assert not e.off
 
 
@@ -145,13 +154,16 @@ def test_load_format_bits_above_0xff_outside_the_shape_run_go_off_script(regs):
 
 
 
-@pytest.mark.parametrize(("r3", "r6", "tier"), [(8, 2, V), (4, 1, I)])
-def test_a_local_load_zero_extends_16_bit_elements_into_32_bit_words(r3, r6, tier):
-    """Verified for eight words from two lines, inferred in another shape."""
+@pytest.mark.parametrize(
+    ("r3", "r6", "to", "tier"), [(8, 2, 0x200, V), (4, 1, 0x200, I), (8, 2, 0x400, I)]
+)
+def test_a_local_load_zero_extends_16_bit_elements_into_32_bit_words(r3, r6, to, tier):
+    """Verified for eight words from two lines at offset 0x200, inferred in another shape or at
+    another offset."""
     data = bytes(range(0x80, 0xA0))
     m, e = machine(data), stream.Engine()
-    drive(m, e, [*block(0, 2, 0, 1, r3, 0, 0x08, r6, 1), *load(0, SRC, 0x200), WAIT])
-    got = m.boot.local.read(LOCAL_BASE + 0x200, 4 * r3)
+    drive(m, e, [*block(0, 2, 0, 1, r3, 0, 0x08, r6, 1), *load(0, SRC, to), WAIT])
+    got = m.boot.local.read(LOCAL_BASE + to, 4 * r3)
     want = b"".join(data[2 * k : 2 * k + 2] + bytes(2) for k in range(r3))
     assert bytes(got.data) == want and all(got.known) and got.weakest() == tier
     assert not e.off
