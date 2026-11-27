@@ -8,7 +8,7 @@ from functools import cache
 from pathlib import Path
 
 import pytest
-from conftest import stock_image
+from conftest import CONF, stock_image
 
 from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import Boot, dram_alias
@@ -101,7 +101,6 @@ SEGMENT_KEYS = {
     "firmware": {"at", "end", "kind", "address"},
     "unknown": {"at", "end", "kind"},
 }
-CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
 
 # Per job: the weakest taint of the known checked dst bytes ("-" none known or no dst checked,
 # "." job not checked), then the result's taint, by stock.model's confidence rule: a copy is at
@@ -278,11 +277,8 @@ SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
 
 
 def copy(boot: StockBoot, program: Program, data: bytes, strict: bool = True):
-    boot.put(SRC, data, "src")
-    boot.put(DST, b"\xa5" * LEN, "prefill")
-    result = run_model(
-        boot, model(), commands.copy(program, SRC, DST, LEN), strict=strict
-    )
+    """`run` of `data`; (result, dst bytes)."""
+    result, boot = run(program, strict=strict, boot=boot, data=data)
     return result, boot.read(DST, LEN)
 
 
@@ -411,9 +407,17 @@ def test_a_counted_transfer_before_the_return_stalls_the_job():
     assert any("unset stream slot" in why for why in result.why)
 
 
-def run(program: Program, length: int = LEN, strict: bool = True, boot=None):
+def run(
+    program: Program,
+    length: int = LEN,
+    strict: bool = True,
+    boot: StockBoot | None = None,
+    data: bytes | None = None,
+):
+    """The copy job of `length` bytes of `data` (default a byte ramp) from SRC onto a prefilled
+    dst; (result, boot)."""
     boot = boot or StockBoot()
-    boot.put(SRC, bytes(range(256)) * (length // 256), "src")
+    boot.put(SRC, bytes(range(256)) * (length // 256) if data is None else data, "src")
     boot.put(DST, b"\xa5" * length, "prefill")
     job = commands.copy(program, SRC, DST, length)
     result = run_model(boot, model(), job, strict=strict)
