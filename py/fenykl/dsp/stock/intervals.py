@@ -1,7 +1,8 @@
 """The op slot over register intervals: what a data op of `semantics.OP_SEMANTICS` computes when its
 operands are `registers.Reg` intervals (`op_effect`), and where the word's PR ports send its result
-(`destinations`). The copy model covers inserted words by it (`copy.Copy16Model`). Every op's value
-and tier is the one `machine.Machine` steps by; this only widens it to intervals."""
+(`destinations`). The copy model covers inserted words by it (`copy.Copy16Model`). The ops' rules and
+tiers are `semantics`', as `machine.Machine` steps by them; over intervals a select gives the hull
+of its inputs and a result past 32 bits is unknown."""
 
 from collections.abc import Callable
 from dataclasses import dataclass

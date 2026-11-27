@@ -16,9 +16,10 @@ register transfers are X1's semantic at any index, matched by their signature, w
 register contexts and the register group B and route values of the stock transfers as the
 reference. A job with words inserted into the stock program is covered by content (`align`,
 `Copy16Model.cover_job`). A job with a halt off the stock one is stepped on a decoded
-`machine.Machine` (`Copy16Model._halt`). No stock word's bits are part of this code: edits are
-stated against the stock value read at runtime. The model resolves a job's trace into its one
-load and one store (`resolve`) and applies them to the boot (`apply`):
+`machine.Machine` (`Copy16Model._halt`). The words are read from the firmware at runtime; the
+edits of a word are stated by its new field values or the bits flipped against the stock value.
+The model resolves a job's trace into its one load and one store (`resolve`) and applies them to
+the boot (`apply`):
 
     load:   buffer[i + o68] = S[i] for i in [0, len), S read at word 67's address
     store:  dst[i] = format(buffer)[i + o76] for i in [0, n73); dst[n73, len) not written

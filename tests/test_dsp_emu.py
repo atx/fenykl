@@ -14,7 +14,7 @@ from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import Boot, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv
-from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
+from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble, stock_items
 from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics, ring_length
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.copy import Copy16Model
@@ -30,6 +30,7 @@ from fenykl.dsp.stock.registers import (
     back_firmware,
 )
 from fenykl.dsp.word import IDLE, Word
+from fenykl.firmware import unpack_firmware
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
 SRC_AREA = 0xA0FCA800
@@ -253,8 +254,8 @@ def test_every_vector_has_its_taints():
 
 
 def test_the_vectors_hold_no_firmware_bytes():
-    # No 16-byte window of the stock image at a 16-byte offset is in a vector's dst bytes, so
-    # no run of 31 or more firmware bytes is (windows of fewer than 4 distinct byte values
+    # No 16-byte window of the firmware's unpacked blocks or program items at a 16-byte offset
+    # is in a vector's dst bytes, so no run of 31 or more firmware bytes is (windows of fewer than 4 distinct byte values
     # left out: zero runs with a stray byte, which the patterns hold too).
     windows = set()
     for path in VECTORS.glob("*.json"):
@@ -269,8 +270,12 @@ def test_the_vectors_hold_no_firmware_bytes():
                     if len(set(blob[o : o + 16])) >= 4
                 }
     image = stock_image("em10ii")
-    hits = [o for o in range(0, len(image) - 15, 16) if image[o : o + 16] in windows]
-    assert hits == []
+    bodies = [b.body for b in unpack_firmware(image).blocks]
+    bodies += stock_items(image).values()
+    for body in bodies:
+        assert not any(
+            body[o : o + 16] in windows for o in range(0, len(body) - 15, 16)
+        )
 
 
 SRC, DST, LEN = 0xA0FCA800, 0xA1113600, 0x400
