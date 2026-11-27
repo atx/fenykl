@@ -52,7 +52,7 @@ Hazards: idling word 62 lost the camera's link and idling 64 or 72 failed the jo
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 
-from ..emu import HALT_OP, Boot, Executor, Job, Stop, dram_alias
+from ..emu import HALT_OP, Boot, Job, NoHalt, Stop, dram_alias
 from ..fields import (
     DELAY_SLOTS,
     FIELDS,
@@ -69,7 +69,6 @@ from ..machine import Machine
 from ..program import Program
 from ..semantics import OP_SEMANTICS, Given, OpSemantics, UnknownSemantics
 from ..state import Bytes
-from ..stream import Engine
 from ..units import UNITS
 from ..word import IDLE, Word
 from .intervals import STORES, Effect, RegSet, destinations, op_effect
@@ -1094,26 +1093,32 @@ class Copy16Model:
 
     @staticmethod
     def _halt_flow(job: Job) -> tuple[Flow, Machine]:
-        """The job stepped on a lenient `Machine`, which decides the branches; where it cannot,
-        `_STOCK_PATH` decides, a hypothesis from there on. Raises where neither does."""
+        """The job run lenient on a fresh boot (`Boot.run`), whose machine decides the branches;
+        where it cannot, `_STOCK_PATH` decides, a hypothesis from there on. Raises where
+        neither does."""
         given: dict[int, bool] = {}
-        fallback = _STOCK_PATH
         while True:
-            boot = Boot()
-            machine = Machine(boot, None, Engine())
             branching = (
                 Given(given, H, "as in the copies run on the camera") if given else None
             )
-            flow = Executor(boot, machine, strict=False, branching=branching).step(job)
-            at = flow.steps[-1].index
-            if flow.stop is not Stop.UNDECIDED or at not in fallback or at in given:
-                break
-            given[at] = fallback[at]
-        # Off the stock halt `_halt` refuses an open end; at it `_halt` returns None and
-        # `resolve` takes over.
-        if flow.stop not in (Stop.HALT, Stop.OPEN_END):
-            raise UnknownSemantics(0, "halt", [], f"the job does not halt: {flow.why}")
-        return flow, machine
+            try:
+                run = Boot().run(
+                    job.program, request=job.local, strict=False, branching=branching
+                )
+            except NoHalt as e:
+                at = e.flow.steps[-1].index
+                if (
+                    e.flow.stop is Stop.UNDECIDED
+                    and at in _STOCK_PATH
+                    and at not in given
+                ):
+                    given[at] = _STOCK_PATH[at]
+                    continue
+                why = f"the job does not halt: {e.flow.why}"
+                raise UnknownSemantics(0, "halt", [], why) from None
+            # Off the stock halt `_halt` refuses an open end; at it `_halt` returns None and
+            # `resolve` takes over.
+            return run.flow, run.machine
 
     def resolve(
         self,
