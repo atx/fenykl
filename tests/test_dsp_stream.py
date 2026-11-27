@@ -220,6 +220,37 @@ def test_local_memory_both_ways():
 
 
 @pytest.mark.parametrize(
+    ("r2", "r3", "r5"), [(4, 8, 0x10), (2, 16, 0x10), (4, 4, 0x08), (2, 8, 0x08), (1, 8, 0x04)]
+)
+def test_the_local_load_widths_measured_are_verified(r2, r3, r5):
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [*block(0, 2, 0, r2, r3, 0, r5, 2, 1), *load(0, SRC, 0x400), WAIT])
+    got = m.boot.local.read(LOCAL_BASE + 0x400, 4 * r3)
+    assert all(got.known) and got.weakest() == V and not e.off
+
+
+@pytest.mark.parametrize(("r2", "r3", "r5"), [(4, 8, 0x10), (2, 16, 0x10), (2, 8, 0x08), (1, 8, 0x04)])
+def test_the_local_store_widths_measured_are_verified(r2, r3, r5):
+    m, e = machine(), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + 0x400, Bytes.of(bytes(range(64)), m.boot.source("own", "own"), V))
+    drive(m, e, [*block(0, 2, 0, r2, r3, 0, r5, 2, 1), *store(0, 0x400, DST), WAIT])
+    got = m.boot.read(DST, 32)
+    assert all(got.known) and got.weakest() == V and not e.off
+
+
+@pytest.mark.parametrize(
+    ("r5", "tier"),
+    [(0x0C, V), (0x0A, V), (0x09, V), (0x04, V), (0x0D, V), (0x44, I)],
+)
+def test_store_formats_carry_their_tier(r5, tier):
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *lanes(1, 1, r5=r5, r6=2)])
+    drive(m, e, [*store(1, 0, DST), WAIT])
+    got = m.boot.read(DST, 32)
+    assert all(got.known) and got.weakest() == tier and not e.off
+
+
+@pytest.mark.parametrize(
     ("off", "words", "lines", "kinds", "tier"),
     [
         (0x202, 8, 2, (0, 6), V),
