@@ -938,7 +938,7 @@ def test_a_block_key_with_bit_9_outside_the_run_caps_the_job_at_inferred(before)
     m, e = machine(bytes(range(32))), stream.Engine()
     values = (1, 0, 0x20, 1, 0x40, 0x10, 2, 1) if not before else stream.BLOCK_KEY_RUN
     drive(m, e, [*before, 0x220, *values, *load(0, SRC, 0), WAIT])
-    assert e.cap == I and not e.off
+    assert e.cap == I and not e.off and not e.dropped
     if before:
         assert m.memory[0] == Vec(tuple(range(32)), I)  # its registers kept
 
@@ -958,6 +958,30 @@ def test_a_wait_right_after_a_register_or_store_key_with_none_outstanding_never_
         drive(m, stream.Engine(), [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, *mid])
     assert ("(inferred)" in str(raised.value)) == inferred
 
+
+def test_a_store_on_a_channel_dropped_by_bit_9_keeps_the_job_at_inferred():
+    """Only a plain load ran on the dropped channel."""
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(m, e, [0x220, *stream.BLOCK_KEY_RUN, *store(0, 0, DST), WAIT])
+    assert e.cap == I
+
+
+@pytest.mark.parametrize(
+    ("values", "match"),
+    [
+        ([key(1, 2), WAIT, 0x20], "grammar was lost"),  # no command handed yet
+        ([1 << 6 | stream.STORE, WAIT, 0, DST], "inside a command"),  # no command handed yet
+        (  # at a store's second value
+            [*lanes(0, 1, r6=2), *load(0, SRC, 0), WAIT, 1 << 6 | stream.STORE, 0, WAIT],
+            "inside a command",
+        ),
+    ],
+)
+def test_a_wait_inside_a_group_outside_the_run_does_not_predict_never_ending(values, match):
+    m = machine(bytes(32))
+    with pytest.raises(UnknownSemantics, match=match) as raised:
+        drive(m, stream.Engine(), [*values, *lanes(0, 1, r6=2)])
+    assert "never ends" not in str(raised.value)
 
 def test_a_lenient_wait_right_after_a_key_with_none_outstanding_goes_on_with_the_group():
     m, e = lenient_machine()

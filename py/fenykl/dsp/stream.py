@@ -41,7 +41,8 @@ inferred):
 - r1 the pitch between rows on the memory side in bytes (64 per vector);
 - r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
   line's remaining bits 0 (`LOAD_FORMATS`, `PACKED_LOADS`, `STORE_FORMATS`); on a load of bytes,
-  bits 8 and up skip that many of the row's first elements (`LOAD_SKIP_SHAPE`);
+  bits 8 and up skip that many of the row's first elements (`LOAD_SKIP_SHAPE`: verified at
+  two values in one shape, else inferred);
 - r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
   `LANE_LOAD_ROWS`, `LANE_STORE_ROWS`, local memory loads at up to 4 rows and stores at up to 2;
   other counts inferred).
