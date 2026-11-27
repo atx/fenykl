@@ -442,9 +442,8 @@ class Machine:
         self.cap = V
         """The tier cap of all the job leaves and decides from here on (`limit`)."""
         self.ceiling = V
-        """The tier cap of what the word being run leaves (`execute`), `cap` at most."""
-        self.fitted = False
-        """Whether the word being run runs at all by a fitted rule (`execute`'s ceiling)."""
+        """The tier cap of what the word being run leaves: `cap`, or a hypothesis from its
+        lapse on."""
         self.open_m: dict[int, set[str]] = {}
         self.open_next: dict[int, dict[str, int]] = {}
         """M results not known one word after a head: by word, unit and head."""
@@ -542,11 +541,9 @@ class Machine:
 
     # ------------------------------------------------------------------ the word
 
-    def execute(self, index: int, word: Word, t: int, ceiling: Confidence = V) -> str:
-        """Run word `word` (program index `index`) as executed word number `t`; returns a note.
-        What it writes (registers, lane and local memory) is capped at `ceiling`: words whose
-        running at all was fitted."""
-        self.ceiling, self.fitted = min(ceiling, self.cap), ceiling < V
+    def execute(self, index: int, word: Word, t: int) -> str:
+        """Run word `word` (program index `index`) as executed word number `t`; returns a note."""
+        self.ceiling = self.cap
         if word.control and word.op < 4 and word["f120_122"] & 3:
             # 0 or 4 in every stock control word; with 7 a word left its program on the camera.
             raise UnknownSemantics(
@@ -781,11 +778,6 @@ class Machine:
                 self.lapse(index, f"x1 {head:#x}", why, [(lookup("f110_114"), select)])
                 self.lose_memories(why)
                 return None
-            if self.fitted:
-                # Lenient: handed as if the word runs.
-                self.lapse(
-                    index, f"x1 {head:#x}", "a transfer in words run by a fitted rule"
-                )
             if self.stream is None:
                 why = "a transfer to the stream engine: no stream"
                 self.lapse(index, f"x1 {head:#x}", why)
