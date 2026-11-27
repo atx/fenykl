@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from conftest import CONF, stock_image
 
-from fenykl.dsp.asm import OP, Bundle, G, Label, raw
+from fenykl.dsp.asm import OP, Bundle, G, Label, R, raw
 from fenykl.dsp.emu import Boot, dram_alias
 from fenykl.dsp.fields import FORMATS, Confidence
 from fenykl.dsp.machine import Machine, Sv
@@ -965,8 +965,14 @@ def test_an_inserted_op_takes_its_semantics_tier():
             "no PR port enabled: where the result goes is open",
         ),
         (lambda: stock().words[42], 12, "an inserted register transfer"),
+        # A word store of R[0] to local word r5 + 4, beside the copy's request.
+        (
+            lambda: OP(0x18, ra=G[5], imm=4, rr=R[0]).word(),
+            12,
+            "a local store, the copy's request in local memory may change",
+        ),
     ],
-    ids=["no-row", "unaligned", "no-port", "transfer"],
+    ids=["no-row", "unaligned", "no-port", "transfer", "local-store"],
 )
 def test_an_insert_without_semantics_is_unknown(word, at: int, why: str):
     program = inserted(at, word())
