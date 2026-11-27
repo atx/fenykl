@@ -666,10 +666,8 @@ class Engine:
             if v & (BLOCK_KEY_BIT9 | BLOCK_KEY_BIT10) and not ran:
                 self.cap = min(self.cap, I)
             if v & BLOCK_KEY_BIT9:
-                if ran and all(r is None for r in self.regs[channel]):
+                if ran:  # the job's first values: no register programmed before
                     self.dropped.add(channel)
-                else:
-                    self.cap = min(self.cap, I)  # a channel programmed before: not run
                 return
             self.regs[channel][:] = [_weaker(x, key.tier) for x in values]
         else:
@@ -943,7 +941,9 @@ class Engine:
         store = cmd.kind == STORE
         lane_rows = LANE_STORE_ROWS if store else LANE_LOAD_ROWS
         lane = memory == LANE_MEMORY and rows in lane_rows and _fits(cmd.values, ROW_SHAPE)
-        tier = V if rows in (STORE_ROWS_ANY if store else LOAD_ROWS_ANY) or lane else I
+        # A kind of `KIND_AS` ran with its rows: its shape's tier caps the job already.
+        any_shape = rows in (STORE_ROWS_ANY if store else LOAD_ROWS_ANY)
+        tier = V if any_shape or lane or not cmd.plain else I
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0
