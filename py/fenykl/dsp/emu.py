@@ -14,7 +14,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from ..firmware import unpack_firmware
 from .fields import DELAY_SLOTS, Confidence, op
 from .job import Flow, Job, Step, Stop
 from .machine import Carry, Machine, Preset
@@ -453,14 +452,3 @@ class Executor:
             confidence=min(conf, b.confidence),
         )
         return step, t if b.taken else None
-
-
-MAIN_CODE = 0x60021020
-"""Where the main code runs: word 67 at r21 reads its bytes at 0x606CC000 (offset 0x6AAFE0)."""
-
-
-def back_firmware(boot: Boot, image: bytes) -> int:
-    """Back the DRAM view with the main code of the stock `.BIN` `image`; returns its source."""
-    firmware = unpack_firmware(image)
-    body = firmware.blocks[firmware.find_block("main-code-01")].body
-    return boot.back(MAIN_CODE, body, "firmware main code")

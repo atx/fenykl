@@ -5,12 +5,15 @@ When a job starts, `REGISTER_FACTS` set the registers they cover from the job's 
 boot's parameters (unknown where a fact has no value for the job). They are kept apart from the
 op slot's registers (ra, rb): nothing shows the two to be one file.
 
-`machine_start` gives `Machine` the B registers a program 16 job starts with by these facts.
+`machine_start` gives `Machine` the B registers a program 16 job starts with by these facts;
+`back_firmware` backs a boot's DRAM with the firmware main code that word 67 loads at r21 and r29.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from ...firmware import unpack_firmware
+from ..emu import Boot
 from ..fields import PR_FILES, PR_SOURCES, Confidence, lookup
 from ..machine import M32, Carry, Sv
 from ..program import Program
@@ -186,6 +189,18 @@ class BootParams:
     r29: int | None = None
     r21_format: str | None = None
     r21: int | None = 0x606CC000
+
+
+MAIN_CODE = 0x60021020
+"""Where the main code runs: word 67 at r21 reads its bytes at 0x606CC000 (offset 0x6AAFE0)."""
+
+
+def back_firmware(boot: Boot, image: bytes) -> int:
+    """Back the DRAM view with the main code of the stock `.BIN` `image`, which word 67 loads
+    at r21 and r29; returns its source."""
+    firmware = unpack_firmware(image)
+    body = firmware.blocks[firmware.find_block("main-code-01")].body
+    return boot.back(MAIN_CODE, body, "firmware main code")
 
 
 R14_EXACT = (-0x1C00, -0x1C00)

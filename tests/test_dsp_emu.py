@@ -11,7 +11,7 @@ import pytest
 from conftest import stock_image
 
 from fenykl.dsp.asm import Bundle, Label, raw
-from fenykl.dsp.emu import MAIN_CODE, Boot, back_firmware, dram_alias
+from fenykl.dsp.emu import Boot, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
@@ -21,11 +21,13 @@ from fenykl.dsp.stock.copy import Copy16Model
 from fenykl.dsp.stock.intervals import RegSet, destinations, op_effect
 from fenykl.dsp.stock.model import Status, StockBoot, run_model
 from fenykl.dsp.stock.registers import (
+    MAIN_CODE,
     R14_BELOW,
     R14_EXACT,
     BootParams,
     Reg,
     RegisterFile,
+    back_firmware,
 )
 from fenykl.dsp.word import IDLE, Word
 
