@@ -1353,7 +1353,7 @@ def test_several_divides_in_flight_are_verified_back_to_back_only(m, gaps, tier)
 
 def test_a_quotient_beside_x1_0x13s_result_is_the_or(m):
     m.b[1], m.b[2] = Sv(1000), Sv(7)
-    k = 0x2A5
+    k = 0x1C3
     x1k = {"f308_312": 0x13, "f115_119": k >> 8, "f9_14": k >> 2 & 63, "f7_8": k & 3}
     words = [w(f308_312=0x1E, f110_114=1, f115_119=2)] + [IDLE] * 3
     words.append(w(f272_273=0, f224_228=5, **x1k))

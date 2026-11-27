@@ -1301,7 +1301,7 @@ class Machine:
                 return
             if (file, reg) in writes:
                 # Both ports of a lane file on one register: the first port's value (measured on
-                # the camera in L0, L1, W and V, lanes 0..3, first port S0 0x41's b, second S3
+                # the camera in L0, L1, L2 and L3, lanes 0..3, first port S0 0x41's b, second S3
                 # 0x19's copy; other sources inferred).
                 if file not in LANE_FILES:
                     self.lapse(index, "ports", f"two ports write {file}[{reg}]")
