@@ -1039,7 +1039,14 @@ class Engine:
     def _local_load(self, m, cmd, rows, bits, lines, width, r2, r3, tier):
         size = 4 * r3
         src = m.boot.source("stream load in flight", f"{cmd.where}")
-        tier = min(tier, _floored(cmd, rows))
+        floored = _floored(cmd, rows)
+        tier = min(tier, floored)
+        if floored < V:
+            # The bytes past the word that a load at the byte offset would write: at most inferred.
+            for _, off in rows:
+                end = self._local_offset(off, size + off % 4) + size
+                tail = m.boot.local.read(LOCAL_BASE + end, off % 4)
+                m.boot.local.write(LOCAL_BASE + end, tail.capped(I))
         rows = [(dram, self._local_offset(off, size)) for dram, off in rows]
         for _, off in rows:
             m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, src))
@@ -1239,10 +1246,13 @@ class Engine:
         at = _known(cmd.to, "a memory offset")
         # Offsets do not wrap: a last row past the end is not measured, and at pitch 0 the rows
         # repeat the first.
-        self._local_offset(at + (rows - 1) * pitch, size)
+        # A row within a word spoils from its word to its byte offset's end.
+        last = at + (rows - 1) * pitch
+        self._local_offset(last, size + last % 4)
         for k in range(rows if pitch else 1):
-            off = self._local_offset(at + k * pitch, size)
-            m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size, lost))
+            row = at + k * pitch
+            off = self._local_offset(row, size + row % 4)
+            m.boot.local.write(LOCAL_BASE + off, Bytes.unknown(size + row % 4, lost))
 
     def _spoil_stores(self, m: Machine) -> None:
         lost = m.boot.source("stream off script", self.off)

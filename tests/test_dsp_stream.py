@@ -161,10 +161,13 @@ def test_a_local_offset_within_a_word_floors_to_the_word(off, words, lines, kind
     data = bytes(range(0x40, 0x80))
     n = 4 * words
     m, e = machine(data), stream.Engine()
+    m.boot.local.write(LOCAL_BASE + 0x200 + n, Bytes.of(bytes(4), 0))
     regs = block(0, 2, 0, 4, words, 0, 0x10, lines, 1)
     drive(m, e, [*regs, kinds[0], SRC, off, WAIT])
     got = m.boot.local.read(LOCAL_BASE + 0x200, n)
     assert bytes(got.data) == data[:n] and got.weakest() == tier
+    # The bytes a load at the byte offset would also write keep their content at `tier`.
+    assert m.boot.local.read(LOCAL_BASE + 0x200 + n, off % 4).weakest() == tier
     m.boot.local.write(LOCAL_BASE + 0x200, Bytes.of(bytes(range(n)), 0))
     drive(m, e, [kinds[1], off, DST, WAIT])
     got = m.boot.read(DST, n)
