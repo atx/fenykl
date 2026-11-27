@@ -19,9 +19,10 @@ fact strings of the code that applies the rule. This file says how to use the pa
 
 ## Layout
 
-Three layers: encode and decode, the runtime, and the stock models. The first two are the core,
-`fenykl.dsp`, whose `__all__` is the API for own programs; they do not import the third,
-`fenykl.dsp.stock`, as `tests/test_dsp_layers.py` checks.
+Four layers: encode and decode, the runtime, the stock models and the command line. The first
+two are the core, `fenykl.dsp`, whose `__all__` is the API for own programs; they do not import the
+stock models, `fenykl.dsp.stock`, as `tests/test_dsp_layers.py` checks. The command line, `cli.py`,
+sits on top of all three.
 
 | module | contents |
 |---|---|
@@ -40,9 +41,10 @@ Three layers: encode and decode, the runtime, and the stock models. The first tw
 | `job.py` | `Job`, `Flow`, `Step`, `Stop` |
 | `state.py` | `Bytes`, tri-state bytes with provenance and taint; the memory spaces |
 | `timing.py` | `estimate`: a job's minimum time on the camera |
-| `cli.py` | `fenykl dsp` |
 | **stock models** | |
 | `stock/` | `model.py` (`StockBoot`, `run_model`), `copy.py` (program 16), `resample.py`, `resample_edits.py`, `resample_window.py`, `exec.py` (program 13), `taps.py`, `commands.py`, `registers.py`, `intervals.py` |
+| **command line** | |
+| `cli.py` | `fenykl dsp` |
 
 ## Writing programs
 
@@ -211,6 +213,9 @@ print(r.flow.runs(), r.estimate)
   Preset the registers a command's CPU setup would provide this way.
 - `request`: (offset, bytes) pairs written to local memory first, as a command's setup does.
 - `strict`: True by default (below).
+- `branching`: decisions for the conditional control ops by word index, e.g.
+  `semantics.Given({27: True})`, in place of the datapath's; what follows a given
+  decision is capped at its tier, and a run whose cap ends below V leaves no carry.
 - `limit`: the step limit, `emu.STEP_LIMIT` (100000) by default.
 
 A `Run` holds the `job`, the `flow` (every executed word as a `Step`, in order, and why it
@@ -291,8 +296,9 @@ whose read set is not known shows every operand that differs.
 ## The stock models
 
 `fenykl.dsp.stock` models the copy (program 16, cmd 0xF) and the resampler (program 13,
-cmd 0xC). No stock word is decoded: each model is built at runtime from the user's firmware
-image and the outcomes measured on the camera. A `StockBoot` is a `Boot` with the state the
+cmd 0xC). No stock word is part of this code: each model is built at runtime from the user's
+firmware image and the outcomes measured on the camera; the copy's model also steps its words on
+the datapath to find where a job halts. The resampler's model decodes no word. A `StockBoot` is a `Boot` with the state the
 models keep across jobs; `run_model(boot, model, job)` runs a job by its model.
 
 ```python

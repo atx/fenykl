@@ -1,5 +1,6 @@
 import random
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,10 +28,12 @@ from fenykl.dsp.asm import (
     Bundle,
     G,
     Label,
+    M,
     O,
     Raw,
     U,
     b_add,
+    bundle,
     hand,
     lane_block,
     li,
@@ -41,7 +44,7 @@ from fenykl.dsp.asm import (
     wait,
 )
 from fenykl.dsp.disasm import listing, source
-from fenykl.dsp.fields import FIELDS, Confidence, Operands
+from fenykl.dsp.fields import FIELDS, OP_FIELD, Confidence, Operands
 from fenykl.dsp.program import (
     AssemblyError,
     HypothesisFieldWarning,
@@ -139,6 +142,9 @@ def test_names_and_codes_build_the_same_instruction():
         (lambda: OP.li(), "takes an immediate"),
         (lambda: S3.ins_reg(L3[1], 2, F3[3]), "a register of F3"),
         (lambda: S3.ins(L3[1], F3[3], idx=F3[2]), "an integer"),
+        (lambda: S1.xor(L1[1], a=L1[2]), "a given twice"),
+        (lambda: to(S1, O[1]), r"to\(register, source\)"),
+        (lambda: M(X0), "M puts out S0..S3"),
     ],
 )
 def test_operands_are_typed_and_checked(build, error):
@@ -201,6 +207,18 @@ def test_an_instruction_carries_its_weakest_tier():
     # S1's head field is inferred: not every value has a verified row.
     assert S1.xor(L1[1], L1[2]).tier is Confidence.INFERRED
     assert (S2.mul(L2[1], L2[2]) | raw(f35_36=0)).tier is Confidence.HYPOTHESIS
+
+
+def test_a_bundle_takes_the_weakest_tier_of_its_ports_and_m():
+    port, strobe = to(O[1], S2), M(S2)
+    word = S2.mul(L2[1], L2[2]) | port | strobe
+    assert port.tier is strobe.tier is word.tier is Confidence.VERIFIED
+    # A port whose source row were inferred: every port's row is verified today.
+    text, _ = port.spec.sources[port.value]
+    spec = replace(port.spec, sources={port.value: (text, Confidence.INFERRED)})
+    weak = replace(port, spec=spec)
+    assert weak.tier is Confidence.INFERRED
+    assert (S2.mul(L2[1], L2[2]) | weak | strobe).tier is Confidence.INFERRED
 
 
 def test_a_bundle_names_its_target_by_label():
@@ -376,6 +394,21 @@ def test_dsl_source_rebuilds_every_stock_program(labelled):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", HypothesisFieldWarning)
             assert assemble(namespace["P"]).words == program.words, item
+
+
+def test_dsl_source_rebuilds_every_code_and_random_words():
+    rng = random.Random(1)
+    words = [Word(rng.getrandbits(320)) for _ in range(200)]
+    for key, unit in asm.UNITS_BY_KEY.items():
+        head = OP_FIELD if key == "op" else VIEWS[key].operands["op"]
+        own = UNITS["op_slot" if key == "op" else key].fields
+        for code in unit.names:
+            words.append(Word.from_fields({head.id: code}))
+            others = {f.id: rng.randrange(f.mask + 1) for f in own}
+            words.append(Word.from_fields(others | {head.id: code}))
+    namespace: dict = {}
+    exec(source(Program(tuple(words)), "P"), namespace)  # noqa: S102 (our own generated source)
+    assert [bundle(b).word() for b in namespace["P"]] == words
 
 
 def test_listing_shows_data_ops_in_their_format():

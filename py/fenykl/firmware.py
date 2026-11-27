@@ -25,6 +25,7 @@ body byte is XORed with 0xFF and the bytes of each 16 byte chunk are permuted.
 
 import hashlib
 import json
+import lzma
 import struct
 import sys
 import tomllib
@@ -244,6 +245,12 @@ def _unpack_block(data: bytes, offset: int) -> Block:
             f"0x{computed:08x} computed"
         )
     return Block(header, body)
+
+
+def read_bin(path: Path) -> bytes:
+    """Read a `.BIN`, decompressing it if it is stored as `.BIN.lzma`."""
+    data = path.read_bytes()
+    return lzma.decompress(data) if path.suffix == ".lzma" else data
 
 
 def unpack_firmware(data: bytes) -> Firmware:

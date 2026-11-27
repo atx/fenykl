@@ -27,10 +27,21 @@ def stock_imports(path: Path) -> list[int]:
 
 
 def test_the_codec_and_runtime_do_not_import_the_stock_models():
+    # The command line sits on top of the stock models.
     modules = [p for p in DSP.glob("*.py") if p.name != "cli.py"]
     assert len(modules) > 10
     assert {p.name: stock_imports(p) for p in modules} == {p.name: [] for p in modules}
 
 
-def test_the_check_sees_a_stock_import():
-    assert stock_imports(DSP / "cli.py")
+def test_the_check_sees_a_stock_import_at_any_depth(tmp_path):
+    module = tmp_path / "module.py"
+    module.write_text(
+        "import fenykl.dsp.stock.copy\n"
+        "from .stock import commands\n"
+        "from . import stock\n"
+        "def f():\n"
+        "    from .stock.copy import ITEM\n"
+        "from . import fields\n"
+        "from .. import firmware\n"
+    )
+    assert stock_imports(module) == [1, 2, 3, 5]

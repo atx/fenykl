@@ -211,9 +211,9 @@ class Instr(Part):
     args: tuple[tuple[str, Value], ...] = field(compare=False)
     fields: Mapping[str, int] = field(repr=False)
     tier: Confidence = field(compare=False)
-    target: str | None = None
-    span: int = field(default=-1, compare=False, repr=False)
+    span: int = field(compare=False, repr=False)
     """The word bits its operands and target set; the rest of its fields stay idle."""
+    target: str | None = None
 
     @property
     def name(self) -> str | None:
@@ -232,9 +232,6 @@ class Instr(Part):
             positional = positional and i < len(reads) and reads[i] == k
             args.append(_text(v) if positional else f"{k}={_text(v)}")
         return f"{self.unit.key}.{self.name}({', '.join(args)})"
-
-    def __hash__(self) -> int:
-        return hash((self.unit.key, self.code, tuple(self.fields.items()), self.target))
 
 
 @dataclass(frozen=True)
@@ -259,9 +256,6 @@ class Port(Part):
 
     def __repr__(self) -> str:
         return f"to({self.dst!r}, {self.src!r})"
-
-    def __hash__(self) -> int:
-        return hash((self.dst, self.src.name))
 
 
 def _sources(spec: PortSpec, src: Source) -> list[int]:
@@ -294,9 +288,6 @@ class Raw(Part):
         )
         return f"raw({', '.join(args)})"
 
-    def __hash__(self) -> int:
-        return hash(tuple(self.fields.items()))
-
 
 def raw(word: Word | None = None, /, **values: int) -> Raw:
     """Fields by id or name, each checked against its width; `raw(word)` the fields where
@@ -321,9 +312,6 @@ class Label(Part):
 
     def __repr__(self) -> str:
         return f"Label({self.name!r})"
-
-    def __hash__(self) -> int:
-        return hash(self.name)
 
 
 @dataclass(frozen=True)
@@ -588,7 +576,7 @@ def _instr(unit: Unit, code: int, operands: Mapping[str, Value]) -> Instr:
     owned = [f for f in UNITS[_UNIT_OF[unit.unit]].fields if f.span & span]
     fields = {f.id: f.get(value) for f in owned}
     tier = min(_function_tier(unit.unit, code), *(f.confidence for f in owned))
-    return Instr(unit, code, tuple(operands.items()), fields, tier, target, span)
+    return Instr(unit, code, tuple(operands.items()), fields, tier, span, target)
 
 
 _UNIT_OF = {"op": "op_slot"} | {u: u for u in HEAD_VIEWS}

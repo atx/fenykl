@@ -3,8 +3,7 @@
 `Executor.step` steps a job: a program counter that follows the control ops (jumps,
 branches and loop ends with their delay slots, the halt) and has the datapath executor
 (`machine.Machine`) run each word's units; its `Flow` lists every executed word in order.
-`Boot.run` steps a program on a `Machine` in one call. The stock programs also run by their
-models (`stock.model.run_model`).
+`Boot.run` steps a program on a `Machine` in one call.
 
 `Boot.run` estimates each run's minimum time on the camera from its flow (`timing.estimate`,
 from the costs `timing.JOB`, `FIRST`, `REPEAT`, `UNRUN` and the stream rates `timing.RATES`).
@@ -12,7 +11,6 @@ from the costs `timing.JOB`, `FIRST`, `REPEAT`, `UNRUN` and the stream rates `ti
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Protocol
 
 from ..firmware import unpack_firmware
 from .fields import DELAY_SLOTS, Confidence, op
@@ -21,7 +19,6 @@ from .machine import Carry, Machine, Preset
 from .program import Program
 from .semantics import (
     LOCAL_BYTES,
-    Branch,
     Branching,
     UnknownSemantics,
 )
@@ -38,9 +35,6 @@ from .timing import Estimate, estimate
 from .word import Word
 
 H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
-
-LOCAL_SIZE = LOCAL_BYTES
-"""Local memory, 8 KiB, which the scalar addresses wrap in (`semantics.LOCAL_BYTES`)."""
 
 STEP_LIMIT = 100_000
 
@@ -76,12 +70,12 @@ class Boot:
         self.sources: list[Source] = []
         self._source_ids: dict[Source, int] = {}
         never = self.source("unwritten", "no job on this boot wrote it")
-        self.local = Space("local", LOCAL_BASE, LOCAL_SIZE, never)
+        self.local = Space("local", LOCAL_BASE, LOCAL_BYTES, never)
         self.dram = SparseSpace("dram", self.source("dram", "not in the DRAM view"))
         self.carry: Carry | None = None
         """What the last job `run` left for the next (`machine.Carry`); None before the first
-        run and after a run that did not halt, may not have ended (`Stop.OPEN_END`), raised or
-        lapsed (`Machine.lapse`)."""
+        run and after a run that did not halt, may not have ended (`Stop.OPEN_END`), raised,
+        lapsed (`Machine.lapse`) or followed a path its branching gave below V."""
 
     def source(self, name: str, fact: str = "") -> int:
         """The id of source (name, fact). Equal sources share one id, so the list stays bounded
@@ -124,65 +118,33 @@ class Boot:
         regs: Mapping[str, Mapping[int, Preset]] | None = None,
         request: tuple[tuple[int, bytes], ...] = (),
         strict: bool = True,
+        branching: Branching | None = None,
         limit: int = STEP_LIMIT,
     ) -> Run:
         """Step `program` on a `Machine` with a fresh stream `Engine`, its registers and lane
         memory those the last run left (`carry`), then `regs` by file and index
-        (`Machine.preset`); keep what it leaves for the next run. Raises `NoHalt` for a run
+        (`Machine.preset`), its conditional control ops decided by `branching` where it decides
+        them (`Executor`); keep what it leaves for the next run. Raises `NoHalt` for a run
         that stops short of its halt; a run whose end is not known (`Stop.OPEN_END`: check
-        `run.flow.stop`) returns, its bytes as far as they are known, and leaves no carry."""
+        `run.flow.stop`) returns, its bytes as far as they are known, and leaves no carry; nor does
+        a run given a `branching` whose cap ends below V (`Machine.limit`): what it leaves
+        depends on the path given."""
         machine = Machine(self, self.carry, stream=Engine())
         machine.preset(regs or {})
         job = Job(program, request)
         self.carry = None
-        flow = Executor(self, machine, strict=strict, limit=limit).step(job)
+        executor = Executor(
+            self, machine, strict=strict, branching=branching, limit=limit
+        )
+        flow = executor.step(job)
         if flow.stop not in (Stop.HALT, Stop.OPEN_END):
             raise NoHalt(flow)
         carry = machine.between_jobs()
-        self.carry = None if machine.lapses or flow.stop is Stop.OPEN_END else carry
+        guessed = branching is not None and machine.cap < V
+        dropped = machine.lapses or flow.stop is Stop.OPEN_END or guessed
+        self.carry = None if dropped else carry
         timed = estimate(job, flow, machine.stream)
         return Run(job, flow, machine, timed, tuple(machine.lapses))
-
-
-class Datapath(Protocol):
-    """What runs a word's units under `Executor.step` (`machine.Machine`): `execute` runs word
-    `word` at program index `index` as executed word number `t`, what it leaves capped at
-    `ceiling`, and returns a note; as a `Branching` it decides the conditional control ops,
-    before the control word's own units run. Not `strict`, a case it does not cover lapses
-    (`lapse`) instead of raising."""
-
-    strict: bool
-    lapses: list[str]
-    """Why each lapse of the job, in order."""
-    cap: Confidence
-    """The tier cap of all the job leaves and decides from here on (`limit`)."""
-
-    def lapse(self, index: int, what: str, why: str) -> None:
-        """Raises `UnknownSemantics` when strict; else records why and caps all the job leaves
-        and decides from here on at a hypothesis."""
-        ...
-
-    def execute(
-        self, index: int, word: Word, t: int, ceiling: Confidence = V
-    ) -> str: ...
-
-    def link(self, word: Word) -> tuple[int | None, Confidence]:
-        """The word an op 4 jumps to, G[f128_132], with its tier (None: not known)."""
-        ...
-
-    def limit(self, tier: Confidence) -> None:
-        """Cap all the job leaves and decides from here on at `tier`."""
-        ...
-
-    def forget_job(self, why: str) -> None:
-        """Forget all the job's memories and registers may hold (words run but not stepped)."""
-        ...
-
-    def decide(self, index: int, visit: int, word: Word) -> Branch: ...
-
-    def open_end(self) -> str:
-        """Why whether the job ends at its halt is not known; empty when it does."""
-        ...
 
 
 HALT_TAIL = 3
@@ -237,7 +199,7 @@ class Executor:
     slots hold 0x0b #(i + 5) on r1 (verified on the camera: op 4 through r1 and through r21,
     op 3 with and without a link word); it is undecided while that register is unknown. brf,
     br and a loop end go to T when `branching` takes them, else as the datapath decides
-    (`Machine.decide`); a decision `branching` gives caps the datapath at its tier from there
+    (`Machine.decide`), both before the control word's own units run; a decision `branching` gives caps the datapath at its tier from there
     on. Every control op has four delay slots that run before its transfer takes effect; a
     control op in another's delay slots jumps after its own four, and so does a loop end whose
     T lies in its own slots (verified on the camera for a br in a br's first slot and a loop
@@ -245,18 +207,18 @@ class Executor:
     at most). Op 7 halts at any word and call depth, and the next three words fetched behind it
     still run (`HALT_TAIL`, `TAIL_SHAPES`). The flow stops at `Stop.OPEN_END` in place of
     `Stop.HALT` where the datapath cannot tell whether the job ends there
-    (`Datapath.open_end`: the stream engine off script), the halt's step a hypothesis. A step
+    (`Machine.open_end`: the stream engine off script), the halt's step a hypothesis. A step
     past the program end raises `UnknownSemantics`: what it does is open. Strict mode raises at
     an undecided control op; lenient mode stops there.
 
-    strict=False makes the datapath lenient (`Datapath.lapse`), each word that lapses an
+    strict=False makes the datapath lenient (`Machine.lapse`), each word that lapses an
     unknown step.
     """
 
     def __init__(
         self,
         boot: Boot,
-        datapath: Datapath,
+        datapath: Machine,
         *,
         strict: bool = True,
         branching: Branching | None = None,
@@ -341,10 +303,10 @@ class Executor:
         ends after them. A taken jump
         due among them redirects the fetch to its target's words, one due after them is not
         taken; the tail's tier follows the jump's shape (`TAIL_SHAPES`), other pending jumps
-        lapse (`Datapath.lapse`). Control words and halts in the tail are passive where measured
+        lapse (`Machine.lapse`). Control words and halts in the tail are passive where measured
         (`PASSIVE_BEHIND_HALT`) and lapse elsewhere; words past the program's end are not run.
         A lapse in the tail ends the job there, marks the halt's step and forgets what the rest
-        of the tail may write (`Datapath.forget_job`)."""
+        of the tail may write (`Machine.forget_job`)."""
         halt, lapses = len(steps) - 1, len(self.datapath.lapses)
         ceiling = V
         if jumps:
@@ -401,7 +363,7 @@ class Executor:
             i = fetched(i + 1)
 
     def _capped(self, step: Step) -> Step:
-        """`step` at the datapath's cap at most (`Datapath.limit`)."""
+        """`step` at the datapath's cap at most (`Machine.limit`)."""
         if step.confidence is None:
             return step
         return replace(step, confidence=min(step.confidence, self.datapath.cap))
