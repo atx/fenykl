@@ -113,21 +113,6 @@ class Bytes:
             i = j
         return out
 
-    def segments(self) -> Iterator[tuple[int, int, int, int]]:
-        """(start, end, source, offset of start) runs that continue one source contiguously."""
-        i, n = 0, len(self)
-        while i < n:
-            j = i + 1
-            while (
-                j < n
-                and self.src[j] == self.src[i]
-                and self.known[j] == self.known[i]
-                and (not self.known[i] or self.off[j] == self.off[j - 1] + 1)
-            ):
-                j += 1
-            yield i, j, self.src[i], self.off[i]
-            i = j
-
     def weakest(self) -> Confidence | None:
         """The weakest taint of the known bytes, None if none is known."""
         known = [t for t, k in zip(self.taint, self.known) if k]

@@ -94,8 +94,8 @@ before the store completes, inferred for a store of one vector and unknown for t
 vectors of a longer store: one of 0x80 vectors took the new bytes, measured), the order of
 commands on one DRAM range while one of them is outstanding is inferred, and the lane memory read
 while any command is outstanding is a hypothesis, but outside every outstanding command's
-vectors: there verified beside one-row byte loads and stores of kinds 0 / 6, inferred beside
-other lane-memory shapes (`Engine.lane_tier`).
+vectors: there verified beside the shapes `Engine.lane_tier` names, inferred beside other
+lane-memory shapes.
 
 What was not measured takes the engine off script (so does a command that moves more DRAM bytes
 than a job's time allows, `MOST_BYTES`): the lane memory is unknown for the rest of the job, what
@@ -103,9 +103,9 @@ later commands write is unknown (`off` says why), and so is whether the job ends
 holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at its halt
 (`Machine.open_end`). A command whose destination cannot be bounded (among them a store whose rows
 write more than the DRAM alias space), a value handed after the grammar is lost and a 0x1d among a
-command's values (but right after a register or store key with a command outstanding: it waits and
-the group goes on, `Engine._joins_in_group`) raise `UnknownSemantics`, as do kinds and shapes not run and a job that never ends
-or wedges; on a lenient machine they lapse instead (`Machine.lapse`): a command that never ends
+command's values (but right after a register or store key with a command outstanding: it waits
+and the group goes on, `Engine._joins_in_group`) raise `UnknownSemantics`, as do kinds and shapes
+not run and a job that never ends or wedges; on a lenient machine they lapse instead (`Machine.lapse`): a command that never ends
 goes off script, a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d
 that never returns or was not measured and a queue past `DEPTH` go on as if they had returned."""
 
@@ -254,7 +254,7 @@ twice, also with only 44 0x1d after them, so the depth is 44 and handing past it
 MOST_BYTES = 32 << 20
 """DRAM bytes a command may move and still be known to end: at the fastest rate timed (0.42 us per
 KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware aborts the job
-(`timing.LONGEST_JOB_US`). A command of more takes the engine off script: whether the job ends,
+(the longest jobs run took 7 ms, `timing.LONGEST_JOB_US`). A command of more takes the engine off script: whether the job ends,
 and what it moved before the abort, are not known."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
@@ -358,7 +358,10 @@ STORE_PITCH_OFF16 = 0x108
 +0x100, not +0x108 or +0x110); other such pitches, or more rows, were not measured."""
 ROW_SHAPE = (1, None, 0x20, 1, None, 0x10, 2, None)
 """Rows of one vector of bytes each: the shape of `LANE_LOAD_ROWS` and `LANE_STORE_ROWS` past the
-counts measured before (loads 1..4, stores 1..2, any shape)."""
+counts verified in any shape (`LOAD_ROWS_ANY`, `STORE_ROWS_ANY`)."""
+LOAD_ROWS_ANY = range(1, 5)
+STORE_ROWS_ANY = range(1, 3)
+"""Row counts verified on either memory in any shape: loads 1..4, stores 1..2."""
 HALF_VECTOR_ROWS = Ran((1, 0x20, 0x20, 1, None, 0x10, 2, 2))
 """A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes from a vector-aligned
 offset: row 1's offset floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
@@ -957,10 +960,10 @@ class Engine:
             raise _Off("no rows: not measured")
         if 16 * rows * _known(r[6], "r6") > MOST_BYTES:
             raise _Off(f"{rows:#x} rows of {r[6].value:#x} lines: more than a job's time moves")
-        ran = LANE_STORE_ROWS if cmd.kind == STORE else LANE_LOAD_ROWS
-        before = rows in range(1, 3 if cmd.kind == STORE else 5)
-        now = memory == LANE_MEMORY and rows in ran and _fits(cmd, ROW_SHAPE)
-        tier = V if before or now else I
+        store = cmd.kind == STORE
+        lane_rows = LANE_STORE_ROWS if store else LANE_LOAD_ROWS
+        lane = memory == LANE_MEMORY and rows in lane_rows and _fits(cmd, ROW_SHAPE)
+        tier = V if rows in (STORE_ROWS_ANY if store else LOAD_ROWS_ANY) or lane else I
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0
@@ -1095,7 +1098,7 @@ class Engine:
         for k, v in last.values():
             wanted[k].append(v)
         sources = [
-            self._lane_elements(m, dram, bits, lines, vectors)
+            self._row_elements(m, dram, bits, lines, vectors)
             for (dram, _), vectors in zip(rows, wanted, strict=True)
         ]
 
@@ -1169,7 +1172,7 @@ class Engine:
         return complete
 
     @staticmethod
-    def _lane_elements(
+    def _row_elements(
         m: Machine, dram: int, bits: int, lines: int, vectors: list[int]
     ) -> tuple[int, list[tuple[int | None, Confidence]]]:
         """The row's elements from DRAM `dram` that `vectors` take, in whole lines of the row's
@@ -1297,7 +1300,7 @@ class Engine:
                     ]
                 element = _lane_elements(m, off, r5)
             width = 8 * nb if memory == LOCAL_MEMORY else 16
-            out = pack(src, 0 if zeros else bits, 16 * r6, element, tier, width)
+            out = _pack(src, 0 if zeros else bits, 16 * r6, element, tier, width)
             _write_dram(m, dram, out)
             self.stored.append((dram, 16 * r6))
 
@@ -1565,7 +1568,7 @@ def _lane_elements(
     return element
 
 
-def pack(
+def _pack(
     src: int,
     bits: int,
     n: int,
