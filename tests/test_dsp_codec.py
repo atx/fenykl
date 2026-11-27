@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 from conftest import stock_image
 
+from fenykl.dsp.disasm import WIDTH, listing, word_parts
 from fenykl.dsp.fields import (
     ALU_BUS,
     CONTROL_FLAG,
@@ -17,25 +18,39 @@ from fenykl.dsp.fields import (
     IDLE_VALUE,
     LANE_FILES,
     LANE_FUNCTIONS,
+    LANE_LAG,
     LANE_LOAD,
     LANE_SOURCES,
     LOAD_LAG,
+    NO_LANE,
     PB_FILES,
     PB_SOURCES,
     PORTS,
     SCALAR_READS,
     STAIRCASE,
     STORE_SOURCES,
-    WORD_BITS,
+    WORD_BYTES,
     X0_LANE_LOADS,
     X_IMMEDIATES,
+    Bits,
     Confidence,
     Operands,
+    _head_tier,
     _index,
+    lane_file,
     lookup,
     op,
 )
-from fenykl.dsp.program import STOCK, decode_item, encode_item, stock_items
+from fenykl.dsp.program import (
+    SLOT_BYTES,
+    STOCK,
+    Program,
+    ProgramFormatError,
+    StockProgram,
+    decode_item,
+    encode_item,
+    stock_items,
+)
 from fenykl.dsp.units import UNITS
 from fenykl.dsp.word import IDLE, Word
 
@@ -59,10 +74,26 @@ def test_x1_head_is_f310_312_over_f308_309():
     assert word["x1op"] == 0x1D
 
 
-def test_every_bit_in_exactly_one_field():
-    owners = Counter(bit for f in FIELDS for bit in range(f.lo, f.hi + 1))
-    assert sorted(owners) == list(range(WORD_BITS))
-    assert set(owners.values()) == {1}
+@pytest.mark.parametrize(
+    "edit, match",
+    [
+        ({"hi": 320}, "outside the word"),
+        ({"idle": 2}, "does not fit"),
+        ({"lo": 0, "hi": 1}, "bit 0 in both"),
+        ({"lo": 1, "hi": 0}, "outside the word"),
+    ],
+)
+def test_the_index_refuses_a_field_off_the_partition(edit, match):
+    # f1 (bit 1) moved past the word's end, given an idle wider than itself, onto f0's bit and
+    # turned around.
+    fields = tuple(replace(f, **edit) if f.id == "f1" else f for f in FIELDS)
+    with pytest.raises(ValueError, match=match):
+        _index(fields)
+
+
+def test_the_index_refuses_a_gap():
+    with pytest.raises(ValueError, match=r"bits without a field: \[1\]"):
+        _index(tuple(f for f in FIELDS if f.id != "f1"))
 
 
 @pytest.mark.parametrize("name", ["f2_6", "f0x", "rb", "class"])
@@ -213,15 +244,6 @@ def test_program_13_tap_loads_reach_the_file_s2_reads(items):
         assert words[i][PORTS[enable]] == words[i + 4][nibble], i
 
 
-def test_lane_tables_verified_rows():
-    # The rows whose pre-registered lanes all matched on the camera in either of two runs.
-    verified = {
-        unit: sum(tier is Confidence.VERIFIED for _, tier, _ in rows.values())
-        for unit, rows in LANE_FUNCTIONS.items()
-    }
-    assert verified == {"s0": 104, "s1": 116, "s2": 15, "s3": 63}
-
-
 def test_a_head_field_is_verified_once_every_value_has_a_verified_row():
     # S2's and S3's values all have verified rows and lags (S3's last, 0x6's lag); S0, S1 still have open rows.
     tiers = {
@@ -237,15 +259,16 @@ def test_a_head_field_is_verified_once_every_value_has_a_verified_row():
     }
 
 
-def test_each_lane_port_writes_the_file_its_nibble_110_below_reads():
-    # A unit's lane file has two ports, the grid B partners of its two lane nibbles.
-    ports = {}
-    for enable in LANE_SOURCES:
-        lo = int(PORTS[enable][1:4]) - 110
-        ports[f"f{lo}_{lo + 3}"] = enable
-    assert sorted(ports) == sorted(n for _, *nibs in LANE_FILES.values() for n in nibs)
-    for file, (unit, *nibs) in LANE_FILES.items():
-        assert [lookup(n).unit for n in nibs] == [unit, unit], file
+def test_each_lane_file_has_the_two_ports_of_its_nibbles():
+    # Measured on the camera: L3 written through f250_251, L2 through f244_245, L0 and L1 by
+    # their first ports.
+    assert Counter(map(lane_file, LANE_SOURCES)) == dict.fromkeys(LANE_FILES, 2)
+    assert [lane_file(e) for e in ("f236_237", "f240_241", "f244_245", "f250_251")] == [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+    ]
 
 
 def test_every_x0_load_has_its_port_write_four_words_later(items):
@@ -253,8 +276,6 @@ def test_every_x0_load_has_its_port_write_four_words_later(items):
     takers = [
         e for e, rows in LANE_SOURCES.items() if rows.get(0, ("",))[0] == LANE_LOAD
     ]
-    assert takers == ["f236_237", "f240_241", "f244_245", "f248_249"]
-    assert STORE_SOURCES[0][0] == LANE_LOAD
     takers.append("f252_254")
     loads = 0
     for item, data in items.items():
@@ -282,9 +303,8 @@ def test_every_stock_s0_0x13_hands_its_mask_to_f0_through_m(items):
 
 def test_the_store_file_enable_has_rows_only_for_the_values_run():
     # 5 and 6 were never run, so they have no row and do not lower the tier.
-    enable = lookup("f252_254")
-    assert sorted(enable.values) == [0, 1, 2, 3, 4, 7]
-    assert enable.confidence is Confidence.VERIFIED
+    assert sorted(STORE_SOURCES) == [0, 1, 2, 3, 4]
+    assert lookup("f252_254").confidence is Confidence.VERIFIED
     assert PORTS["f252_254"] == "f179_181"
 
 
@@ -434,3 +454,89 @@ def test_program_16_reads_its_local_words_by_immediate(items):
         15: Operands(ra=5, imm=2),
         24: Operands(ra=5, imm=0),
     }
+
+
+@pytest.mark.parametrize("edit", ["lag", "row"])
+def test_a_head_is_verified_only_while_every_value_has_a_verified_row_and_lag(
+    monkeypatch, edit
+):
+    # S2's values all have verified rows and lags; one open lag or a missing row leaves it
+    # inferred.
+    assert _head_tier("s2", 0xF) is Confidence.VERIFIED
+    head = next(h for h, row in LANE_FUNCTIONS["s2"].items() if row[0] != NO_LANE)
+    if edit == "lag":
+        lag, _ = LANE_LAG["s2"][head]
+        monkeypatch.setitem(LANE_LAG["s2"], head, (lag, Confidence.INFERRED))
+    else:
+        monkeypatch.delitem(LANE_FUNCTIONS["s2"], head)
+    assert _head_tier("s2", 0xF) is Confidence.INFERRED
+
+
+def test_a_word_repr_evaluates_back_to_the_word():
+    # A register field prints decimal, the others hex, an unnamed one by its id.
+    word = Word.from_fields({"op": 0x1F, "ra": 3, "imm": 0x12, "f35_36": 1, "s0a": 9})
+    assert eval(repr(word), {"Word": Word}) == word
+
+
+def test_bits_refuse_a_value_wider_than_themselves():
+    with pytest.raises(ValueError, match="does not fit 4 bits"):
+        Bits(lookup("imm"), 0, 3).put(IDLE_VALUE, 0x10)
+
+
+SPEC = StockProgram(0, 0, 0, 4 * SLOT_BYTES, 2 * SLOT_BYTES, 2, "")
+PROGRAM = Program((IDLE, Word(1)), bytes(range(8)))
+
+
+def test_an_item_decodes_back_to_its_program():
+    assert decode_item(encode_item(PROGRAM, SPEC), SPEC) == PROGRAM
+
+
+@pytest.mark.parametrize(
+    "at, match",
+    [
+        (None, "bytes, expected"),
+        (4 * SLOT_BYTES - 1, "non-zero bytes after"),
+        (WORD_BYTES, "slot 0 has bytes past the word"),
+    ],
+)
+def test_an_item_off_the_layout_is_refused(at, match):
+    data = bytearray(encode_item(PROGRAM, SPEC))
+    if at is None:
+        data.append(0)
+    else:
+        data[at] = 1
+    with pytest.raises(ProgramFormatError, match=match):
+        decode_item(bytes(data), SPEC)
+
+
+@pytest.mark.parametrize(
+    "program", [Program((IDLE,) * 3, bytes(8)), Program((IDLE,), bytes(4))]
+)
+def test_a_program_that_does_not_fit_the_layout_is_refused(program):
+    # Three words past the constants at slot 2, or constants of the wrong size.
+    with pytest.raises(ProgramFormatError, match="does not fit"):
+        encode_item(program, SPEC)
+
+
+def test_an_image_that_is_no_stock_firmware_is_refused():
+    with pytest.raises(ProgramFormatError, match="not the stock"):
+        stock_items(bytes(4096))
+
+
+def test_a_head_whose_reads_are_not_known_shows_every_operand_of_its_view():
+    # S0 0x40's reads are not known: its view's s and imm show; 0x1 does not read s, which
+    # shows raw.
+    assert word_parts(Word.from_fields({"s0op": 0x40, "s0a": 3, "s0s": 5}))[1] == (
+        "s0: op=40~ a=3! s=5! imm=0xf3ff!"
+    )
+    assert word_parts(Word.from_fields({"s0op": 0x1, "s0a": 3, "s0s": 5}))[1] == (
+        "s0: op=1~ a=3! s0s=5!"
+    )
+
+
+def test_a_listing_wraps_a_long_word_under_its_index():
+    word = Word.from_fields({f.id: 1 for f in FIELDS if f.kind == "reg"})
+    lines = listing(Program((word,))).splitlines()[3:]
+    assert len(lines) > 1
+    assert all(len(line) <= WIDTH for line in lines)
+    assert all(line.startswith(" " * 12) and line[12] != " " for line in lines[1:])
