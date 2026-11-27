@@ -502,8 +502,6 @@ def op(value: int) -> Op:
         fmt = FORMATS[value]
         basis = UNSEEN_FORMAT_FACTS.get(value, FAMILY_BASIS)
         fact = f"{DATA_OP_FACT}; family {fmt.family.name} ({basis}): {fmt.family.fact}"
-        if value in MEANINGS:
-            fact += f"; {MEANINGS[value]}"
         return Op(name, DATA_OP_CONFIDENCE, fact, fmt)
     return Op(name, H, UNSEEN_OP_FACT)
 
@@ -3363,52 +3361,6 @@ IMM_BITS = {0x37: 15}
 """Ops whose immediate is narrower than their family's."""
 SIGNED = {0x0B: True, 0x38: True, 0x1E: False, 0x1F: False, 0x23: False}
 """Ops whose immediate's extension differs from their family's: True sign-extended."""
-MEANINGS = {
-    0x09: "the op at 294 of 381 call targets, often with ra = 31: a routine prologue (inferred "
-    f"from its position); it passes rb ({EXACT})",
-    0x0A: "periodic immediates such as 0x5555 and 0x3333: ra | (imm16 << 16) (verified on the camera, pre-registered), a "
-    "high-half set-up (hypothesis)",
-    0x0B: "the most varied immediates, often in a call's delay slots: the sign-extended imm16, "
-    f"ra not used ({EXACT})",
-    0x0C: f"a byte store ({EXACT}); its immediates 0x1fxx are small negative offsets",
-    0x0E: f"a signed byte load ({EXACT}); every one of its 8 reads of r0-based slots follows a "
-    "store to them across later firmware versions of the same family",
-    0x10: f"an unsigned byte load ({EXACT}); in program 13 every non-zero immediate lies in its "
-    "tap block 0x00..0x1f",
-    0x12: f"a halfword store ({EXACT}); across later firmware versions of the same family, the "
-    "first touch of r0-based slots in 108 of its 114 accesses of them, and entry spills at "
-    "-64..-1 B",
-    0x14: f"an unsigned halfword load ({EXACT})",
-    0x16: f"a signed halfword load ({EXACT}); in program 13 every non-zero immediate lies in its "
-    "tap block 0x00..0x1f, in runs that step 0, 1, 2, 3 with one ra per run; on the camera, "
-    "imm 1 -> 0 in the resampler's tap-1 read gave tap 1 tap 0's coefficient byte for byte "
-    "(verified at that word): the imm the tap index",
-    0x18: f"a word store ({EXACT}); across later firmware versions of the same family, it opens "
-    "88 of the 95 r0-based word slots of the E-M10 II programs, with entry spills and exit "
-    "restores by 0x1a at -64..-1 B",
-    0x1A: f"a word load ({EXACT}); program 16's three 0x1a words read src, dst and len at one "
-    "ra and immediates 0, 1 and 2; idling the one at 2 on the camera stores 16 KiB of zeros "
-    "whatever len is, idling the other two leaves dst unwritten",
-    0x1E: "at a routine's entry + 1 in 67 routines: ra - imm16 (verified on the camera, pre-registered), a frame allocate "
-    "there (hypothesis)",
-    0x1F: "in 300 return delay slots, its immediate a multiple of 4 in all: ra + imm16 "
-    "(verified on the camera, pre-registered), the frame release there (hypothesis)",
-    0x36: f"imm 1, f128_132 and f120_122 0 in all 53 words: ra ^ 1 there ({EXACT} for the "
-    "rule), a toggle (hypothesis)",
-    0x37: f"periodic immediates such as 0x5555 and 0x2222: ra | imm15 ({EXACT}), a lane or "
-    "phase mask set-up (hypothesis)",
-    0x38: "1022 of 1321 immediates are 2^k - 1 or its complement: ra & the sign-extended imm16 "
-    f"({EXACT})",
-    0x3F: "ra >> imm5, logical (verified on the camera by exact readout, pre-registered)",
-    0x40: "ra << imm5 (verified on the camera by exact readout, pre-registered)",
-    0x47: f"{RING_STEP}; R = R[f120_122], L = rb",
-    0x48: "the multiply as 0x49, the same 32 bits on every operand pair; no stock word uses it "
-    f"({EXACT}); what sets it apart from 0x49 is open",
-    0x49: "the multiply: (ra x rb) & 0xffffffff on the ALU bus one word after the op, nothing in "
-    "the op's own word and nothing two or three words on; a port of the next word takes it, "
-    f"also when that word holds the next multiply ({EXACT}, 48 of 48 values on eight operand "
-    "pairs of both signs); the high half was not seen",
-}
 
 
 @dataclass(frozen=True)

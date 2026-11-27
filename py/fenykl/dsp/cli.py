@@ -18,7 +18,6 @@ from .fields import (
     IDLE_OP,
     IMM13,
     IMM16,
-    MEANINGS,
     OP_FIELD,
     OPS,
     TARGET,
@@ -110,8 +109,6 @@ def cmd_fields(args: argparse.Namespace) -> None:
             print(f"  op{value:02x}: imm{fmt.imm_bits}{sign}")
     for composite in (IMM13, IMM16):
         print(f"{composite.name}: {composite.fact}")
-    for value, meaning in MEANINGS.items():
-        print(f"  op{value:02x}: {meaning}")
     print(f"delay slots: {DELAY_SLOTS}; {DELAY_FACT}")
     kinds = Counter(str(f.kind) for f in FIELDS)
     confidence = Counter(f.confidence.name.lower() for f in FIELDS)
