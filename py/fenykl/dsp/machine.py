@@ -214,7 +214,8 @@ def _cap(x, tier: Confidence):
 
 
 def _or_bus(quotient: Sv, x1: Sv, head: int) -> Sv:
-    """A quotient and an X1 head's own result on X1's bus in one word: OR-ed."""
+    """A quotient and an X1 head's own result on X1's bus in one word: OR-ed, verified beside
+    X1 0x13 only."""
     if quotient.value is None or x1.value is None:
         return Sv(None, min(quotient.tier, x1.tier))
     return Sv(quotient.value | x1.value, min(quotient.tier, x1.tier, V if head == 0x13 else I))
@@ -573,15 +574,7 @@ class Machine:
             )
         else:
             x0bus = UNKNOWN if x0 is None else x0
-        quotient = self.x1_due.get(t)
-        if quotient is not None:
-            # A quotient beside an X1 head's own result: the OR (measured on the camera beside X1
-            # 0x13 with an immediate, two words; other heads inferred).
-            x1bus = quotient if x1 is None else _or_bus(quotient, x1, word[HEAD_IDS["x1"]])
-        elif x1 is None and word[HEAD_IDS["x1"]] == DIVIDE_HEAD:
-            x1bus = NOTHING  # a divide drives nothing in its own word (verified)
-        else:
-            x1bus = UNKNOWN if x1 is None else x1
+        x1bus = self._x1_bus(word[HEAD_IDS["x1"]], x1, t)
         writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
             self._commit(key, _cap(value, self.ceiling), t)
@@ -820,6 +813,22 @@ class Machine:
             return Sv(None)
         value = x_result(unit, head, a.value or 0, b.value or 0, k)
         return Sv(value, min([rule.confidence, *(v.tier for v in ins)]))
+
+    def _x1_bus(self, head: int, x1: Sv | None, t: int) -> Sv | object:
+        """X1's result bus in word t: the head's result, a quotient due (`fields.DIVIDE_LAG`) or
+        their OR (measured on the camera beside X1 0x13 with an immediate, two words; other heads
+        with a result inferred). A quotient is as alone beside an idle X1 or a divide (measured),
+        inferred beside the other heads without a result."""
+        quotient = self.x1_due.get(t)
+        if quotient is None:
+            if x1 is None and head == DIVIDE_HEAD:
+                return NOTHING  # a divide drives nothing in its own word (verified)
+            return UNKNOWN if x1 is None else x1
+        if x1 is not None:
+            return _or_bus(quotient, x1, head)
+        if head in (lookup(HEAD_IDS["x1"]).idle, DIVIDE_HEAD):
+            return quotient
+        return _cap(quotient, I)
 
     def _lane_memory(
         self, index: int, word: Word, head: int, a: Sv, b: Sv, k: int, t: int

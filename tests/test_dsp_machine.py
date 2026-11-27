@@ -1379,14 +1379,29 @@ def test_divides_in_flight_land_as_alone_in_the_measured_chains_only(m, gaps, ti
     assert [m.g[5 + k] for k in range(len(at))] == [Sv(142, t) for t in tiers]
 
 
-def test_a_quotient_beside_x1_0x13s_result_is_the_or(m):
-    m.b[1], m.b[2] = Sv(1000), Sv(7)
-    k = 0x1C3
-    x1k = {"f308_312": 0x13, "f115_119": k >> 8, "f9_14": k >> 2 & 63, "f7_8": k & 3}
+K = 0x1C3
+X1_K = {"f115_119": K >> 8, "f9_14": K >> 2 & 63, "f7_8": K & 3}
+
+
+@pytest.mark.parametrize(
+    ("beside", "want"),
+    [
+        ({}, Sv(142, V)),
+        ({"f308_312": 0x1E, "f110_114": 1, "f115_119": 2}, Sv(142, V)),  # another divide
+        ({"f308_312": 0x13, **X1_K}, Sv(142 | K, V)),  # zK
+        ({"f308_312": 0x03, "f110_114": 4, **X1_K}, Sv(142 | 0x100 + K, I)),  # B[4] + zK
+        ({"f308_312": 0x03, "f110_114": 5, **X1_K}, Sv(None, V)),  # B[5] unknown
+        ({"f308_312": 0x1C, "f110_114": 0, "f115_119": 4}, Sv(142, I)),  # a transfer
+    ],
+)
+def test_a_quotient_beside_an_x1_head(beside, want):
+    """G[5] := X1's bus four words after X1 0x1e, beside `beside`'s X1 head."""
+    m = Machine(Boot(), stream=_Transfers())
+    m.b[1], m.b[2], m.b[4] = Sv(1000), Sv(7), Sv(0x100)
     words = [w(f308_312=0x1E, f110_114=1, f115_119=2)] + [IDLE] * 3
-    words.append(w(f272_273=0, f224_228=5, **x1k))
+    words.append(w(f272_273=0, f224_228=5, **beside))
     run(m, words)
-    assert m.g[5] == Sv(142 | k, V)
+    assert m.g[5] == want
 
 
 def l0_after(first: dict[str, int], ports: dict[str, int]) -> Vec:
