@@ -664,6 +664,9 @@ def test_a_register_form_store_and_load_address_by_rb(m):
     assert m.g[12] == Sv(0xFFFFAABB)
 
 
+HALT_WORD = Word.from_fields({"f313_319": 7}, base=IDLE)
+
+
 def control(code: int, target: int | None = None, **fields: int) -> Word:
     return Word.from_fields(
         {"f120_122": 0, **fields}, base=OP(code, to=target).word()
@@ -1048,6 +1051,32 @@ def test_a_halt_and_an_op_4_behind_a_halt_change_nothing():
     assert m.g[16] == Sv(2)
 
 
+@pytest.mark.parametrize(
+    ("tail", "passive"),
+    [
+        ([HALT_WORD], True),
+        ([IDLE, control(3, 9)], True),
+        ([IDLE, control(4, f128_132=20)], True),
+        ([IDLE, IDLE, HALT_WORD], True),
+        ([control(3, 9)], False),  # an op 3 first
+        ([IDLE, HALT_WORD], False),  # a halt second
+        ([IDLE, IDLE, control(4, f128_132=20)], False),  # an op 4 third
+    ],
+)
+def test_only_the_measured_control_words_behind_a_halt_are_passive(tail, passive):
+    boot = Boot()
+    m = Machine(boot)
+    m.g[20] = Sv(0)
+    job = Job(Program((HALT_WORD, *tail, *[IDLE] * 3)), ())
+    if not passive:
+        with pytest.raises(UnknownSemantics, match="a control op behind a halt"):
+            Executor(boot, datapath=m).step(job)
+        return
+    flow = Executor(boot, datapath=m).step(job)
+    behind = [s for s in flow.steps if s.note == "behind a halt: not taken"]
+    assert len(behind) == 1 and behind[0].confidence is V
+
+
 def test_m_under_s0_in_an_s3_heads_own_word_is_quiet(m):
     m.lanes["L3"][1] = Vec(A)
     m.r[0] = Sv(0x0A5A)
@@ -1141,9 +1170,10 @@ def heads(*pairs: tuple[str, int]) -> dict[str, int]:
     return {**OPERANDS, **{UNIT_HEADS[u]: h for u, h in pairs}}
 
 
-def m_read(words: list[dict[str, int]], at: int, sel: int) -> Sv:
+def m_read(words: list[dict[str, int]], at: int, sel: int, strict: bool = True) -> Sv:
     """R[0] after `words` with M's strobe under `sel` in word `at` (a fresh machine)."""
     m = Machine(Boot())
+    m.strict = strict
     for file in ("L0", "L1", "L2", "L3"):
         m.lanes[file][1], m.lanes[file][2] = Vec(A), Vec(B)
     m.f["F1"][3], m.f["F2"][4], m.f["F3"][13] = Sv(0x20020), Sv(0x40040), Sv(0x80080)
@@ -1577,7 +1607,7 @@ def test_the_trace_follows_a_load_of_an_unwritten_vector():
 
 
 ALONE_HEAD = {"s0": "f278_284", "s1": "f285_291"}
-"""The head fields of the units with `fields.ALONE_ZEROS`."""
+"""The head fields of the units with `rules.ALONE_ZEROS`."""
 SENT = Vec((0x0A5A,) * 32)
 ZEROS_0_15 = Vec((0,) * 16 + (None,) * 16)
 
@@ -2047,3 +2077,83 @@ def test_a_multiply_writes_nothing_in_its_own_word(m):
     m.g[2], m.g[3], m.g[4] = Sv(-13 & M32), Sv(7), Sv(0x5555)
     run(m, [op_word(0x49, 2, 3, f272_273=1, f224_228=4), TAKE])
     assert m.g[4] == Sv(0x5555) and m.g[12] == Sv(-91 & M32)
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_m_under_a_third_unit_beside_two_own_word_results_not_measured_lapses(strict):
+    together = heads(("s1", 0x54), ("s2", 0xE))
+    if strict:
+        with pytest.raises(UnknownSemantics, match="own-word results"):
+            m_read([together], 0, 0)
+        return
+    assert m_read([together], 0, 0, strict=False) == Sv(None, H)
+
+
+def test_an_own_word_result_beside_its_units_held_result_is_a_hypothesis():
+    alone = m_read([{}, heads(("s1", 0x54))], 1, 1)
+    assert alone.value is not None and alone.tier == V
+    assert m_read([heads(("s1", 0x45)), heads(("s1", 0x54))], 1, 1) == Sv(None, H)
+
+
+def test_a_scalar_rule_that_is_not_exact_puts_an_inferred_unknown_on_m():
+    """S1 0x12's word one word after the head is fitted, not exact."""
+    assert m_read([heads(("s1", 0x12))], 1, 1) == Sv(None, I)
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_two_ports_on_one_scalar_register_lapse(m, strict):
+    m.strict = strict
+    m.b[3] = Sv(0x1234)
+    word = w(f308_312=0x13, f267_268=0, f211_215=3, f269=0, f216_220=3)
+    if strict:
+        with pytest.raises(UnknownSemantics, match=r"two ports write B\[3\]"):
+            m.execute(0, word, 0)
+        return
+    m.execute(0, word, 0)
+    assert m.b[3] == Sv(None, H) and len(m.lapses) == 1
+
+
+def test_a_lane_port_enable_without_a_source_writes_nothing(m):
+    m.lanes["L1"][1] = Vec(A)
+    m.lanes["L3"][5] = Vec(B)
+    run(m, [w(f285_291=0x0, f45_48=1, f49_52=1, f248_249=2, f171_174=5)])
+    assert m.lanes["L3"][5] == Vec(B)
+
+
+def test_an_unknown_part_on_the_alu_bus_makes_the_or_unknown(m):
+    m.g[9] = Sv(0x123)
+    words = [
+        op_word(0x49, 11, 9),
+        op_word(0x0B, 31, imm=0x1808, f272_273=1, f224_228=12),
+    ]
+    run(m, words)
+    assert m.g[12] == Sv(None)
+
+
+@pytest.mark.parametrize(("head", "known"), [(0x1F, True), (0x0, False)])
+def test_what_u_takes_beside_an_s3_head_whose_take_is_open_is_a_hypothesis(
+    m, head, known
+):
+    m.lanes["L3"][2] = Vec(B)
+    run(m, [w(f296_301=head, f61_64=1, f65_68=2, f232_233=1, f141_144=4)])
+    got = m.u[4]
+    if known:
+        assert got == Vec((*B[:4], *(None,) * 28))
+    else:
+        assert got == Vec((None,) * 32, H)
+
+
+def test_nothing_at_the_other_lag_on_the_run_whose_zeros_were_read_is_inferred(m):
+    """S0 0x54's zeros were read on its second run, one word after the head."""
+    alone_operands(m)
+    h = alone_head("s0", 0x54)
+    run(m, [w(**h, **alone_port("s0", 8)), IDLE, IDLE, w(**h, **alone_port("s0", 9))])
+    assert (m.lanes["L3"][8], m.lanes["L3"][9]) == (SENT, Vec(SENT.lanes, I))
+
+
+def test_a_kept_register_beside_a_second_port_is_inferred(m):
+    """The first port keeps L3[8] (nothing at the run's other lag); the second takes nothing."""
+    alone_operands(m)
+    h = alone_head("s0", 0x54)
+    run(m, [w(**h, **alone_port("s0", 8), **l3_port(8, 0))])
+    assert m.lanes["L3"][8] == Vec(SENT.lanes, I)

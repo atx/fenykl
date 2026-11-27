@@ -65,10 +65,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .fields import (
-    ALONE_PORTS,
-    ALONE_SELECTS,
-    ALONE_ZERO_LANES,
-    ALONE_ZEROS,
     ALU_BUS,
     DIVIDE_HEAD,
     DIVIDE_LAG,
@@ -78,10 +74,6 @@ from .fields import (
     LANE_LOAD,
     LANE_LOAD_LAG,
     LANE_SOURCES,
-    M_HELD_BESIDE_OWN,
-    M_LANE_ONLY,
-    M_OTHER_OPEN,
-    M_TOGETHER,
     M_UNITS,
     OP_FIELD,
     PB_FILES,
@@ -94,22 +86,12 @@ from .fields import (
     S2_HIGH,
     S2_HIGH_HALVES,
     S2_LOW,
-    S2_NEXT,
     S2_RESULT,
     S3_RESULT,
     S_IMMEDIATES,
-    S_NEXT_NONE,
-    S_NEXT_VALUES,
-    S_OWN_OPEN,
-    STORE_NOTHING,
     STORE_SOURCES,
     STREAM_SELECT,
     TRANSFER_HEADS,
-    U_NOTHING,
-    U_TAKES,
-    WAIT_HEAD,
-    WAIT_NOTHING,
-    X0_BESIDE_KEPT,
     X0_LANE_BY_REGISTER,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
@@ -119,7 +101,33 @@ from .fields import (
     lookup,
     op,
 )
-from .rules import DIVIDE_CHAINS, FIRST_PORT_WINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
+from .rules import (
+    ALONE_PORTS,
+    ALONE_SELECTS,
+    ALONE_ZERO_LANES,
+    ALONE_ZEROS,
+    DIVIDE_CHAINS,
+    FIRST_PORT_WINS,
+    LATCH_MEASURED,
+    LOAD_CHAIN_HEAD,
+    LOAD_CHAINS,
+    M_HELD_BESIDE_OWN,
+    M_LANE_ONLY,
+    M_OTHER_OPEN,
+    M_TOGETHER,
+    S2_NEXT,
+    S_NEXT_NONE,
+    S_NEXT_VALUES,
+    S_OWN_OPEN,
+    SELECT_MEASURED,
+    STORE_NOTHING,
+    WAIT_HEAD,
+    WAIT_NOTHING,
+    WEDGING_S0,
+    WEDGING_S0_AT,
+    WEDGING_S0_WHY,
+    X0_BESIDE_KEPT,
+)
 from .semantics import (
     IDLE_OP,
     LANE_COUNT,
@@ -137,7 +145,6 @@ from .semantics import (
     OP_SEMANTICS,
     PR_ENABLES,
     S_RULES,
-    SELECT_MEASURED,
     X_RULES,
     Branch,
     UnknownInput,
@@ -145,11 +152,13 @@ from .semantics import (
     lane_address,
     lane_result,
     lane_tier,
+    latches,
     product_high,
     ring_length,
     ring_step,
     s32,
     s_result,
+    u_take,
     x_result,
 )
 from .state import LOCAL_BASE, Bytes, Space, SparseSpace
@@ -247,24 +256,6 @@ def _id(lo: int, hi: int) -> str:
 
 
 HEAD_IDS = {u: _id(*HEADS[u]) for u in HEADS}
-WEDGING_S0 = 0x4F
-WEDGING_S0_AT = 3
-"""The count of `WEDGING_S0` words under M's strobe and port 272 / 2 at which a job lapses."""
-WEDGING_S0_WHY = (
-    "a third S0 0x4f word under M's strobe with port 272 / 2 in the job: three or four such "
-    "words (nibbles 1..3, G12 written) wedged the camera's job, each as a fresh boot's first "
-    "job after a stock copy, so the boot's earlier jobs are not needed; one alone (four "
-    "settings, either port form) and two (four pairs, adjacent or not) ran; each of three "
-    "triples wedged (verified in one frame; other frames and settings inferred)"
-)
-"""The S0 head whose words, under M's strobe and with port 272 / 2, never let a job end on the
-camera from the third such word in a job; one or two ran, each writing nothing through the port."""
-LATCH_MEASURED = {
-    "s0": frozenset({0x05, 0x20, 0x41}),
-    "s1": frozenset({0x00, 0x01, 0x34, 0x53}),
-}
-"""Heads whose read was latched on the camera; other heads latch at inferred. S1 0x39, which
-reads a only, kept S1's latch (measured)."""
 LANE_PORT_FILE = {enable: lane_file(enable) for enable in LANE_SOURCES}
 """The lane file each lane port writes: its register nibble lies 110 bits above the file's nibble."""
 S_OPERANDS = {
@@ -454,7 +445,8 @@ class Machine:
         self.bus_due: dict[int, list[tuple[Sv, str]]] = {}
         self.x1_due: dict[int, Sv] = {}
         """X1 0x1e's quotients on X1's result bus, by word."""
-        self.load_due: dict[int, list[Vec]] = {}
+        self.load_due: dict[int, Vec] = {}
+        """Lane memory loads' vectors, by the word they land in (one X0 head per word)."""
         self.chains: dict[str, tuple[int, tuple[int, ...], bool]] = {}
         """The last ops in flight together by kind ("load", "divide"): the last one's word, the
         words between their heads, whether they begin a measured chain (`Machine._chained`)."""
@@ -463,15 +455,8 @@ class Machine:
         self.reductions: list[tuple[int, Sv]] = []
         self.latched = {unit: Vec((0,) * LANE_COUNT, V) for unit in LATCH_OPERAND}
         """S0's / S1's latched operand (`LATCHED`): 0 at a job's start."""
-        self.last_head: int | None = None
-        """The word of the last S head run."""
-        self.head_values: set[tuple[str, int]] = set()
-        """The (unit, head) pairs that ran in that word."""
-        self.prev_heads: tuple[int | None, frozenset[tuple[str, int]]] = (
-            None,
-            frozenset(),
-        )
-        """The word with S heads before that one and its (unit, head) pairs."""
+        self.word_heads: dict[int, frozenset[tuple[str, int]]] = {}
+        """The (unit, head) pairs of the last two words with S heads, by word, oldest first."""
         self.heads_run: dict[tuple[str, int], int] = {}
         """The runs so far in the job of each S0, S1 and S2 (unit, head) pair (`ALONE_ZEROS`)."""
         self.wedging_runs = 0
@@ -607,7 +592,10 @@ class Machine:
             x0_head = word[HEAD_IDS["x0"]]
             x0bus = m
             if isinstance(m, Kept) and x0_head != lookup(HEAD_IDS["x0"]).idle:
-                beside = (x0_head, self._heads_at(t)) == X0_BESIDE_KEPT
+                beside = (
+                    x0_head,
+                    self.word_heads.get(t, frozenset()),
+                ) in X0_BESIDE_KEPT
                 x0bus = Kept(min(m.tier, V if beside else I))
         else:
             x0bus = UNKNOWN if x0 is None else x0
@@ -872,8 +860,7 @@ class Machine:
         if head in X0_LANE_LOADS and not self._chained(
             "load", t, self.load_due, LOAD_CHAINS, head == LOAD_CHAIN_HEAD
         ):
-            for when, due in self.load_due.items():
-                self.load_due[when] = [_cap(v, I) for v in due]
+            self.load_due = {when: _cap(v, I) for when, v in self.load_due.items()}
             flight = I
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
@@ -881,7 +868,7 @@ class Machine:
                 self.lapse(index, f"x0 {head:#x}", why)
                 self.lose_lanes()
                 return
-            self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
+            self.load_due[t + LANE_LOAD_LAG] = UNKNOWN_VEC
             self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"x0 {head:#x}: address not known")
             return
         addr = lane_address(head, a.value, b.value if b.value is not None else 0, k)
@@ -893,14 +880,12 @@ class Machine:
             tier = min(tier, self.stream.lane_tier(addr))
         if self.lanes_lost:
             if head in X0_LANE_LOADS:
-                self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(
-                    Vec(UNKNOWN_VEC.lanes, H)
-                )
+                self.load_due[t + LANE_LOAD_LAG] = Vec(UNKNOWN_VEC.lanes, H)
                 self._why(t + LANE_LOAD_LAG, LANE_LOAD, "the lane memory is lost")
             return
         if head in X0_LANE_LOADS:
             v = self.memory.get(addr, UNKNOWN_VEC)
-            self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(_cap(v, tier))
+            self.load_due[t + LANE_LOAD_LAG] = _cap(v, tier)
             if self.trace is not None and not _known(v):
                 state = (
                     "not known"
@@ -938,6 +923,7 @@ class Machine:
         """Run the active S heads: lane results scheduled at their lag, held results scheduled;
         returns the own-word scalar results by unit."""
         own: dict[str, Sv] = {}
+        ran: set[tuple[str, int]] = set()
         for unit, (file, a_id, b_id) in S_OPERANDS.items():
             head = word[HEAD_IDS[unit]]
             if head == lookup(HEAD_IDS[unit]).idle:
@@ -947,11 +933,7 @@ class Machine:
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             if unit != "s3":
                 self.heads_run[unit, head] = self.heads_run.get((unit, head), 0) + 1
-            if self.last_head != t:
-                self.prev_heads = (self.last_head, frozenset(self.head_values))
-                self.head_values = set()
-            self.head_values.add((unit, head))
-            self.last_head = t
+            ran.add((unit, head))
             rule = S_RULES[unit].get(head)
             if head in S_OWN_OPEN.get(unit, ()):
                 self.open_m.setdefault(t, set()).add(unit)
@@ -975,6 +957,11 @@ class Machine:
                 own[unit] = value
             else:
                 self.held_due.setdefault(t + rule.lag, {})[unit] = value
+        if ran:
+            self.word_heads = {
+                **dict(list(self.word_heads.items())[-1:]),
+                t: frozenset(ran),
+            }
         return own
 
     def _scalars(self, unit: str, word: Word) -> dict[str, Sv]:
@@ -1031,11 +1018,10 @@ class Machine:
         word: Word,
         t: int,
     ) -> None:
-        if unit in LATCH_OPERAND:
-            if head in LATCHED:
-                a = b = self.latched[unit]
-            else:
-                self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
+        if unit in LATCH_OPERAND and head in LATCHED:
+            a = b = self.latched[unit]
+        elif latches(unit, head):
+            self._latch(unit, head, a if LATCH_OPERAND[unit] == "a" else b)
         rule = LANE_RULES[unit].get(head)
         zeros = self._alone_zeros(unit, head, word, t)
         if rule is None:
@@ -1194,27 +1180,24 @@ class Machine:
         return out, min(tier, u.tier)
 
     def _latch(self, unit: str, head: int, operand: Vec) -> None:
-        """What a head of S0 / S1 leaves for the unit's 0x60.. heads (`LATCHED`)."""
-        rule = LANE_RULES[unit].get(head)
-        if rule is None and head not in S_RULES[unit]:
+        """What a head of S0 / S1 that latches leaves for the unit's 0x60.. heads (`LATCHED`)."""
+        if head not in LANE_RULES[unit] and head not in S_RULES[unit]:
             self.latched[unit] = Vec(UNKNOWN_VEC.lanes, H)
-            return
-        if unit == "s1" and rule is not None and "b" not in rule.reads:
             return
         tier = V if head in LATCH_MEASURED[unit] else I
         self.latched[unit] = Vec(operand.lanes, min(operand.tier, tier))
 
     def _u_port(self, index: int, head: int, b: Vec, word: Word) -> None:
         reg = word["f141_144"]
-        if head in U_NOTHING:
-            self._u_write = None
-            return
-        take = U_TAKES.get(head)
+        take = u_take(head)
         if take is None:
             self._u_write = (
                 reg,
                 Vec(UNKNOWN_VEC.lanes, H),
             )  # what U takes here is open
+            return
+        if not take:
+            self._u_write = None
             return
         lanes = (*(b.lanes[k] for k in take), *(None,) * (LANE_COUNT - 4))
         self._u_write = (reg, Vec(lanes, b.tier))
@@ -1227,6 +1210,10 @@ class Machine:
         first word only. A held result of another unit is not on M (inferred), so beside one M's
         value is at most inferred."""
         sel = M_UNITS[word["f274_275"]]
+        pair = (
+            self.word_heads.get(t - 1, frozenset()),
+            self.word_heads.get(t, frozenset()),
+        )
         held = dict(self.held_due.get(t, {}))
         fresh = next((v for w, v in reversed(self.reductions) if w == t), None)
         if fresh is not None:
@@ -1234,31 +1221,14 @@ class Machine:
         # A reduction is on M under 3 beside another unit's held result (verified); beside the
         # heads of `M_TOGETHER` each held result is on M under its own unit alone (measured).
         others = any(u != sel for u in held if u != "s3") and not (
-            self.last_head == t - 1 and self._together(sel, t)
+            not pair[1] and self._together(sel, t)
         )
         tier = I if others and not (sel == "s3" and fresh is not None) else V
         if sel in self.open_m.get(t, ()):
             return Sv(None, H)
-        before = self.open_next.get(t, {}).get(sel)
-        # S2 0xc's extract and S2 0x1's product are not on M one word later: `S2_NEXT`.
-        s2_next = sel == "s2" and (self._heads_at(t - 1), self._heads_at(t)) in S2_NEXT
-        # Lane-only heads of several units: nothing on M one word later (inferred where not
-        # measured, `M_TOGETHER`).
-        lane_only = (
-            self.last_head == t - 1
-            and frozenset(self.head_values) in M_TOGETHER
-            and self.head_values <= M_LANE_ONLY
-        )
-        if (
-            before is not None
-            and not s2_next
-            and not lane_only
-            and not (sel == "s3" and sel in own and _own_word("s3", before))
-        ):
-            # One word after a head whose result there is open (S3's extracts in consecutive
-            # words each read their own lane: measured), M is not known: a value not fitted is
-            # there (inferred) or the word was not read (hypothesis).
-            return Sv(None, I if before in S_NEXT_VALUES.get(sel, ()) else H)
+        next_open = self._next_open(sel, t, own, pair)
+        if next_open is not None:
+            return next_open
         h = held.get(sel)
         if not own:
             if h is not None:
@@ -1273,8 +1243,7 @@ class Machine:
             # held result alone (measured in the forms of `M_HELD_BESIDE_OWN`, else inferred).
             if h is None:
                 return Kept(V if self._quiet(sel, t) else I)
-            beside = (self._heads_at(t - 1), self._heads_at(t)) in M_HELD_BESIDE_OWN
-            return _cap(h, tier if beside else I)
+            return _cap(h, tier if pair in M_HELD_BESIDE_OWN else I)
         v = own[sel]
         if sel == "s3":
             if fresh is None:
@@ -1292,6 +1261,34 @@ class Machine:
             )  # an own-word result beside its unit's held one: not measured
         return _cap(v, tier)
 
+    def _next_open(
+        self,
+        sel: str,
+        t: int,
+        own: dict[str, Sv],
+        pair: tuple[frozenset[tuple[str, int]], frozenset[tuple[str, int]]],
+    ) -> Sv | None:
+        """M under `sel` one word after a head whose result there is open (`open_next`): not
+        known, a value not fitted there (inferred) or the word not read (hypothesis). None where
+        it is not open: measured after the heads of `S2_NEXT` under S2, after lane-only heads of
+        several units (inferred where not measured, `M_TOGETHER`) and under S3 beside an
+        extract's own-word result (S3's extracts in consecutive words each read their own lane)."""
+        head = self.open_next.get(t, {}).get(sel)
+        if head is None:
+            return None
+        before, now = pair
+        if sel == "s2" and pair in S2_NEXT:
+            return None
+        if not now and before in M_TOGETHER and before <= M_LANE_ONLY:
+            return None
+        if sel == "s3" and sel in own and _own_word("s3", head):
+            return None
+        return Sv(None, I if head in S_NEXT_VALUES.get(sel, ()) else H)
+
+    def _last_heads(self) -> tuple[int | None, frozenset[tuple[str, int]]]:
+        """The last word with S heads and its (unit, head) pairs; None with no head in the job."""
+        return next(reversed(self.word_heads.items()), (None, frozenset()))
+
     def _quiet(self, sel: str, t: int) -> bool:
         """Whether "nothing on M" was measured for this case: in every word from two after a
         head under every unit, also after a reduction (but its first word) with other heads
@@ -1299,29 +1296,22 @@ class Machine:
         every unit (verified). Beside a head of `M_OTHER_OPEN` under another unit in its word and
         the next, with two units' heads in one word and with no head in the job, it is
         inferred."""
-        if self.last_head is None:
+        last, heads = self._last_heads()
+        if last is None:
             return False
-        if t - self.last_head >= 2:
+        if t - last >= 2:
             return True
-        if len({u for u, _ in self.head_values}) > 1:
+        if len({u for u, _ in heads}) > 1:
             return self._together(sel, t)
-        return not any(
-            u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in self.head_values
-        )
+        return not any(u != sel and h in M_OTHER_OPEN.get(u, ()) for u, h in heads)
 
     def _together(self, sel: str, t: int) -> bool:
         """Whether M under `sel` in word t was measured beside the last word's heads of several
         units (`M_TOGETHER`)."""
-        if self.last_head is None:
+        last, heads = self._last_heads()
+        if last is None:
             return False
-        cells = M_TOGETHER.get(frozenset(self.head_values), frozenset())
-        return (t - self.last_head, sel) in cells
-
-    def _heads_at(self, t: int) -> frozenset[tuple[str, int]]:
-        """The (unit, head) pairs that ran in word t, for the last two words with S heads."""
-        if self.last_head == t:
-            return frozenset(self.head_values)
-        return self.prev_heads[1] if self.prev_heads[0] == t else frozenset()
+        return (t - last, sel) in M_TOGETHER.get(heads, frozenset())
 
     # ------------------------------------------------------------------ ports
 
@@ -1353,7 +1343,7 @@ class Machine:
                 self.lapse(index, "ports", f"two ports write {key[0]}[{key[1]}]")
                 writes[key] = _unknown(key[0])
                 return
-            heads, due = self._heads_at(t), self.lane_due.get(t, {})
+            heads, due = self.word_heads.get(t, ()), self.lane_due.get(t, {})
             carries = value is not NOTHING and not isinstance(value, Kept)
             if (
                 key in writes
@@ -1415,10 +1405,7 @@ class Machine:
 
     def _lane_source(self, text: str, t: int, port: tuple[str, int] | None = None):
         if text == LANE_LOAD:
-            due = self.load_due.get(t, [])
-            if len(due) > 1:
-                self._why(t, LANE_LOAD, "two lane loads arrive in one word")
-            return NOTHING if not due else due[0] if len(due) == 1 else UNKNOWN_VEC
+            return self.load_due.get(t, NOTHING)
         unit = LANE_UNIT[text]
         alone = self._alone_read(unit, t, port)
         if alone is not None:
@@ -1427,7 +1414,7 @@ class Machine:
         if not due:
             return NOTHING
         if text == S2_HIGH:
-            now = [h for u, h in self._heads_at(t) if u == "s2"]
+            now = [h for u, h in self.word_heads.get(t, ()) if u == "s2"]
             timed = bool(now) and LANE_LAG["s2"].get(now[0]) == (0, V)
             if len(due) == 2 and due[0][1] is not None and due[1][1] is None and timed:
                 # A product's high half beside a timed lag-0 S2 head without one: the high half
