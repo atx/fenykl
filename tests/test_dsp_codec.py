@@ -42,10 +42,10 @@ from fenykl.dsp.fields import (
     lookup,
     op,
 )
-from fenykl.dsp.program import (
+from fenykl.dsp.program import Program
+from fenykl.dsp.stock.items import (
     SLOT_BYTES,
     STOCK,
-    Program,
     ProgramFormatError,
     StockProgram,
     decode_item,

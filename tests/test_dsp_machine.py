@@ -14,7 +14,7 @@ from fenykl.dsp.asm import VIEWS
 from fenykl.dsp.emu import HALT_OP, LOCAL_BASE, Boot, Executor, Flow, Job, NoHalt, Stop
 from fenykl.dsp.fields import LANE_VECTORS, Composite, Confidence, Operands
 from fenykl.dsp.machine import Machine, Sv, Unknown, Vec
-from fenykl.dsp.program import Program, stock_programs
+from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import (
     HEAD_READS,
     Given,
@@ -24,6 +24,7 @@ from fenykl.dsp.semantics import (
 )
 from fenykl.dsp.state import Bytes
 from fenykl.dsp.stock import commands
+from fenykl.dsp.stock.items import stock_programs
 from fenykl.dsp.stream import Engine
 from fenykl.dsp.units import UNITS
 from fenykl.dsp.word import IDLE, Word

@@ -9,9 +9,10 @@ from conftest import CONF, stock_image
 from test_dsp_exec import rne
 
 from fenykl.dsp.fields import Confidence, lookup
-from fenykl.dsp.program import STOCK, Program, stock_items
+from fenykl.dsp.program import Program
 from fenykl.dsp.semantics import UnknownSemantics
 from fenykl.dsp.stock import commands, resample_edits
+from fenykl.dsp.stock.items import STOCK, stock_items
 from fenykl.dsp.stock.model import Status, StockBoot, run_model
 from fenykl.dsp.stock.resample import Resample13Model, footprint, predict
 from fenykl.dsp.stock.resample_edits import (

@@ -66,13 +66,14 @@ from ..fields import (
 )
 from ..job import Flow
 from ..machine import Machine
-from ..program import Program, stock_programs
+from ..program import Program
 from ..semantics import OP_SEMANTICS, Given, OpSemantics, UnknownSemantics
 from ..state import Bytes
 from ..stream import Engine
 from ..units import UNITS
 from ..word import IDLE, Word
 from .intervals import STORES, Effect, RegSet, destinations, op_effect
+from .items import stock_programs
 from .model import (
     BUFFER_HI,
     KIB,

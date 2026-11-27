@@ -80,7 +80,7 @@ from math import floor
 
 from ..emu import LOCAL_BASE, Boot, Job, dram_alias
 from ..fields import Confidence
-from ..program import Program, stock_programs
+from ..program import Program
 from ..semantics import UnknownSemantics
 from ..state import Bytes, Source
 from ..word import Word
@@ -98,6 +98,7 @@ from .exec import (
     run_window,
     weight,
 )
+from .items import stock_programs
 from .model import JobResult, ModelRun, Status, StockBoot, Trace, run_model
 from .resample_edits import (
     FACTS,

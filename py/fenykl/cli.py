@@ -9,7 +9,7 @@ from pathlib import Path
 from . import dev, sampler, screen, tp
 from .assets import ASSET_LAYOUTS, AssetError, dump_assets
 from .dsp import cli as dsp_cli
-from .dsp.program import ProgramFormatError
+from .dsp.stock.items import ProgramFormatError
 from .firmware import (
     FIRMWARE_DIR,
     TARGETS,

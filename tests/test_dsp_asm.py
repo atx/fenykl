@@ -52,9 +52,9 @@ from fenykl.dsp.program import (
     assemble,
     call_return_errors,
     labels,
-    stock_programs,
 )
 from fenykl.dsp.semantics import HEAD_READS
+from fenykl.dsp.stock.items import stock_programs
 from fenykl.dsp.units import UNITS
 from fenykl.dsp.word import IDLE, Word
 
