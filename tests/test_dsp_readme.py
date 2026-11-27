@@ -133,7 +133,7 @@ def test_what_the_readme_says_raises():
     with pytest.raises(TypeError):
         S1.xor_imm(L0[4], imm=0x20)
     with pytest.raises(TypeError):
-        NOP | Word.from_int(0)
+        NOP | Word(0)
     with pytest.raises(AssemblyError, match="not defined"):
         assemble([OP.loop(G[8], "top", rr=R[0])])
     with pytest.raises(AssemblyError, match="twice"):

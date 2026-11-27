@@ -64,14 +64,14 @@ from fenykl.dsp.word import IDLE, Word
     ],
 )
 def test_x_immediates_pack_into_their_fields(unit, k, parts):
-    word = Word.from_int(X_IMMEDIATES[unit].put(IDLE_VALUE, k))
+    word = Word(X_IMMEDIATES[unit].put(IDLE_VALUE, k))
     assert {key: word[key] for key in parts} == parts
     assert X_IMMEDIATES[unit].get(word.value) == k
 
 
 def test_x1_head_is_f310_312_over_f308_309():
     # The transfer form 0x1d: 7 in 310..312, 1 in 308..309.
-    word = Word.from_int(IDLE_VALUE & ~(0x1F << 308) | (7 << 310) | (1 << 308))
+    word = Word(IDLE_VALUE & ~(0x1F << 308) | (7 << 310) | (1 << 308))
     assert word["x1op"] == 0x1D
 
 
@@ -118,7 +118,7 @@ def test_stock_items_found(items):
 
 def test_words_round_trip_through_fields(items):
     # Rebuilt from the field values alone on an all-zero base, so the table must hold every bit.
-    zero = Word.from_int(0)
+    zero = Word(0)
     for item, data in items.items():
         for index, word in enumerate(decode_item(data, STOCK[item]).words):
             rebuilt = Word.from_fields(word.fields(), base=zero)

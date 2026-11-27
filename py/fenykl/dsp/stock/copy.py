@@ -864,7 +864,7 @@ class Copy16Model:
                         [],
                         f"its target {t} is no stock word of the job",
                     )
-                word = Word.from_int(TARGET.put(word.value, to))
+                word = Word(TARGET.put(word.value, to))
             self.cover(trace, s, word, run.strict)
             stocked.append(word)
         if trace.writes:

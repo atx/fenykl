@@ -33,14 +33,10 @@ class Word:
         object.__setattr__(self, "value", value)
 
     @classmethod
-    def from_int(cls, value: int) -> "Word":
-        return cls(value)
-
-    @classmethod
     def from_bytes(cls, data: bytes) -> "Word":
         if len(data) != WORD_BYTES:
             raise ValueError(f"a word is {WORD_BYTES} bytes, got {len(data)}")
-        return cls.from_int(int.from_bytes(data, "little"))
+        return cls(int.from_bytes(data, "little"))
 
     @classmethod
     def from_fields(
@@ -50,7 +46,7 @@ class Word:
         value = IDLE_VALUE if base is None else base.value
         for key, v in values.items():
             value = lookup(key).put(value, v)
-        return cls.from_int(value)
+        return cls(value)
 
     def to_bytes(self) -> bytes:
         return self.value.to_bytes(WORD_BYTES, "little")
@@ -110,4 +106,4 @@ class Word:
         return f"Word.from_fields({{{args}}})"
 
 
-IDLE = Word.from_int(IDLE_VALUE)
+IDLE = Word(IDLE_VALUE)
