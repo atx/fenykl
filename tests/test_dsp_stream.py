@@ -1168,6 +1168,37 @@ def test_a_block_key_with_bit_9_writes_no_register_and_the_load_moves_nothing(
     assert e.cap == V and not e.off and not e.outstanding
 
 
+@pytest.mark.parametrize("block_key", [0x220, 0x420])
+def test_a_block_key_with_bit_9_or_10_after_other_values_caps_the_job_at_inferred(
+    block_key,
+):
+    m, e = machine(bytes(range(32))), stream.Engine()
+    drive(
+        m,
+        e,
+        [*lanes(1, 1, r6=2), block_key, *stream.BLOCK_KEY_RUN, *load(0, SRC, 0x4000)],
+    )
+    assert e.cap == I
+
+
+def test_a_load_on_a_dropped_channel_after_another_command_keeps_its_vector_inferred():
+    held = Vec(tuple(range(100, 132)))
+    m, e = machine(bytes(range(32))), stream.Engine()
+    m.memory[0x100] = held
+    drive(
+        m, e, [0x220, *stream.BLOCK_KEY_RUN, *lanes(1, 1, r6=2), *load(1, SRC, 0), WAIT]
+    )
+    drive(m, e, [*load(0, SRC, 0x4000), WAIT])
+    assert m.memory[0x100] == replace(held, tier=I)
+
+
+def test_a_store_over_the_last_vector_of_an_outstanding_longer_store_is_inferred():
+    m, e = machine(bytes(range(256)) * 16), stream.Engine()
+    drive(m, e, [*lanes(0, 0x80, r6=0x100), *load(0, SRC, 0), WAIT, *lanes(1, 1, r6=2)])
+    drive(m, e, [*store(0, 0, DST), *store(1, 0, DST + 0x7F * 32), WAIT, WAIT])
+    assert m.boot.read(DST + 0x7F * 32, 32).weakest() == I
+
+
 def test_only_the_first_load_on_a_channel_dropped_by_bit_9_moves_nothing_at_verified():
     m, e = machine(bytes(range(32))), stream.Engine()
     drive(m, e, [0x220, *stream.BLOCK_KEY_RUN, *load(0, SRC, 0x4000), WAIT])

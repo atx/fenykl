@@ -264,7 +264,8 @@ ONE_VECTOR = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
 """The registers of the odd keys' runs: one row of one vector of bytes, pitches 0."""
 KEY_RUN_LOAD = (LOAD, ONE_VECTOR)
 """The one command before the keys of `REGISTER_KEY_RUN` and `KEY_WAITS_RUN` ran, as `Event`
-(kind, registers): a one-vector byte load on channel 0 into vector 0x100."""
+(kind, registers): a one-vector byte load (it ran on channel 0 into vector 0x100; a history is
+matched on its commands' kinds and registers only)."""
 JOINED = (None, ())
 """A 0x1d in a job's history, as `Event` (kind, registers)."""
 REGISTER_KEY_RUN = (0x1161, 0x20)
@@ -856,7 +857,7 @@ class Engine:
         dropped = cmd.channel in self.dropped and all(r is None for r in cmd.regs)
         if dropped and cmd.plain and cmd.kind == LOAD:
             self.dropped.discard(cmd.channel)
-            self._dropped_load(m, cmd)
+            self._dropped_load(m, cmd, first=len(self.events) == 1)
             return
         if any(r is None for r in cmd.regs):
             self._moves_nothing(m, cmd)
@@ -950,13 +951,16 @@ class Engine:
         return complete
 
     @staticmethod
-    def _dropped_load(m: Machine, cmd: _Command) -> None:
+    def _dropped_load(m: Machine, cmd: _Command, first: bool) -> None:
         """The load after a 0x220 block (`BLOCK_KEY_RUN`) moves nothing: its vector keeps its
-        tier where it ran, the rest of the lane and local memory is capped at inferred."""
+        tier where it ran (the job's first command, at its offset), the rest of the lane and
+        local memory is capped at inferred."""
         local = m.boot.local.read(LOCAL_BASE, LOCAL_BYTES)
         m.boot.local.write(LOCAL_BASE, local.capped(I))
         kept = (
-            cmd.to.value // VECTOR_BYTES if cmd.to.value == BLOCK_KEY_LOAD_TO else None
+            cmd.to.value // VECTOR_BYTES
+            if first and cmd.to.value == BLOCK_KEY_LOAD_TO
+            else None
         )
         for at, vec in m.memory.items():
             if at != kept:
@@ -1026,9 +1030,10 @@ class Engine:
         )  # measured as the later command: one vector only
         for d in self.drams[:-1]:
             if _overlap(d.writes, mine):
-                tier = min(
-                    tier, V if later and d.queue and _last_row(d.writes, mine) else I
-                )
+                # Two stores measured at one vector each; a load also behind 0x80 vectors.
+                queue = d.queue == 1 if store else d.queue
+                ran = later and queue and _last_row(d.writes, mine)
+                tier = min(tier, V if ran else I)
             if store and _overlap(d.reads, mine):
                 # Measured behind a one-vector load only.
                 ran = later and d.queue == 1 and _last_row(d.reads, mine)
