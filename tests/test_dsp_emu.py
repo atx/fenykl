@@ -864,7 +864,10 @@ def test_an_insert_after_the_last_word_moves_nothing():
 def any_operands(code: int, imm: int) -> Word:
     """Op `code` on r1 and r2 or imm, in the operand form its family takes."""
     fmt = FORMATS[code]
-    given = {"rb": G[2] if fmt.family.rb else None, "imm": None if fmt.imm is None else imm}
+    given = {
+        "rb": G[2] if fmt.family.rb else None,
+        "imm": None if fmt.imm is None else imm,
+    }
     return OP(code, ra=G[1], **{k: v for k, v in given.items() if v is not None}).word()
 
 
