@@ -20,3 +20,8 @@ whose quotients land as each would alone, as the words between their heads, from
 first divide on (verified on the camera, pre-registered): four in consecutive words, and a second
 one to four words after the first. A chain that begins as one of these counts; other divides in
 flight together were not measured: inferred."""
+FIRST_PORT_WINS = (("s0", 0x41), ("s3", 0x19))
+"""Both ports of a lane file naming one register in one word: the first port's value (measured on
+the camera in L0, L1, L2 and L3, the first port taking S0 0x41's result, the second S3 0x19's,
+both in the head's own word, each head alone in its unit). Other sources and heads, and either
+port taking nothing, inferred."""

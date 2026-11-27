@@ -120,7 +120,7 @@ from .fields import (
 from .fields import (
     LOAD_LAG as LANE_LOAD_LAG,
 )
-from .rules import DIVIDE_CHAINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
+from .rules import DIVIDE_CHAINS, FIRST_PORT_WINS, LOAD_CHAIN_HEAD, LOAD_CHAINS
 from .semantics import (
     IDLE_OP,
     LANE_COUNT,
@@ -1294,27 +1294,43 @@ class Machine:
         sources: dict[tuple[str, int], str] = {}
 
         def put(file: str, reg: int, value, source: str) -> None:
+            key = (file, reg)
             if self.trace is not None:
-                key = LANE_UNIT.get(source, "s2" if source == S2_HIGH else source)
-                why = self.why_due.get(t, {}).get(key, "")
+                unit = LANE_UNIT.get(source, "s2" if source == S2_HIGH else source)
+                why = self.why_due.get(t, {}).get(unit, "")
                 self._note(index, f"{file}[{reg}]", source, value, why)
-            if value is NOTHING:
+            if key in sources:
+                second(key, value, source)
                 return
+            sources[key] = source
             if isinstance(value, Kept):
-                kept[(file, reg)] = value.tier
+                kept[key] = value.tier
+            elif value is not NOTHING:
+                writes[key] = value
+
+        def second(key: tuple[str, int], value, source: str) -> None:
+            """A second port on a register: the first port's value (`FIRST_PORT_WINS`)."""
+            if key[0] not in LANE_FILES:
+                self.lapse(index, "ports", f"two ports write {key[0]}[{key[1]}]")
+                writes[key] = _unknown(key[0])
                 return
-            if (file, reg) in writes:
-                # Both ports of a lane file on one register: the first port's value (measured on
-                # the camera in L0, L1, L2 and L3, lanes 0..3, first port S0 0x41's b, second S3
-                # 0x19's copy; other sources inferred).
-                if file not in LANE_FILES:
-                    self.lapse(index, "ports", f"two ports write {file}[{reg}]")
-                    writes[(file, reg)] = _unknown(file)
-                elif (sources[(file, reg)], source) != (S0_RESULT, S3_RESULT):
-                    writes[(file, reg)] = _cap(writes[(file, reg)], I)
+            heads, due = self._heads_at(t), self.lane_due.get(t, {})
+            carries = value is not NOTHING and not isinstance(value, Kept)
+            if (
+                key in writes
+                and carries
+                and (sources[key], source) == (S0_RESULT, S3_RESULT)
+                and all(len(due.get(u, ())) == 1 and (u, h) in heads for u, h in FIRST_PORT_WINS)
+            ):
                 return
-            writes[(file, reg)] = value
-            sources[(file, reg)] = source
+            if key not in writes and carries:
+                writes[key] = value
+            if key in writes:
+                writes[key] = _cap(writes[key], I)
+            if isinstance(value, Kept):
+                kept[key] = min(kept.get(key, V), value.tier)
+            if key in kept:
+                kept[key] = min(kept[key], I)
 
         scalar = {"X0's result": x0bus, "X1's result": x1, ALU_BUS: bus}
         for enable, reg_id in PR_ENABLES.items():

@@ -1410,32 +1410,45 @@ def test_a_quotient_beside_an_x1_head(beside, want):
     assert m.g[5] == want
 
 
-def l0_after(first: dict[str, int], ports: dict[str, int]) -> Vec:
-    """L0[8] after S0 0x0 (lag 1), then `first`'s heads with `ports` on L0[8]."""
+def l0_after(words: list[dict[str, int]]) -> Vec:
+    """L0[8] after `words`, ending in the one whose ports name it."""
     m = Machine(Boot())
     for file in ("L0", "L1", "L3"):
         m.lanes[file][1], m.lanes[file][2] = Vec(A), Vec(B)
     m.lanes["L0"][8] = Vec((0x0A5A,) * 32)
-    run(m, [w(f278_284=0x0, f37_40=1, f41_44=2), w(**first, **ports)])
+    m.f["F0"][5] = Sv(9)
+    run(m, [w(**f) for f in words])
     return m.lanes["L0"][8]
 
 
 S0_PORT = {"f236_237": 2, "f147_150": 8}
 """L0's first port on register 8: S0's result."""
+S3_PORT = {"f238_239": 0, "f151_154": 8}
+"""L0's second port on register 8: S3's result."""
+S0_MOVE = {"f278_284": 0x41, "f37_40": 1, "f41_44": 2, "f76_79": 5}  # b, at lag 0
+S3_COPY = {"f296_301": 0x19, "f61_64": 2}  # lag 0
 
 
 @pytest.mark.parametrize(
-    ("second", "head", "tier"),
+    ("before", "heads", "second", "tier"),
     [
-        ({"f238_239": 0, "f151_154": 8}, {"f296_301": 0x19, "f61_64": 2}, V),  # S3's result
-        ({"f238_239": 2, "f151_154": 8}, {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}, I),  # S1's
+        ({}, S0_MOVE | S3_COPY, S3_PORT, V),  # the measured form
+        ({}, S0_MOVE | {"f285_291": 0x03, "f45_48": 1, "f49_52": 2}, {"f238_239": 2, "f151_154": 8}, I),
+        ({"f278_284": 0x0, "f37_40": 1, "f41_44": 2}, S3_COPY, S3_PORT, I),  # S0 0x0 at lag 1
+        ({"f278_284": 0x0, "f37_40": 1, "f41_44": 2}, S0_MOVE | S3_COPY, S3_PORT, I),  # two S0 results
     ],
 )
-def test_two_ports_on_one_lane_register_the_first_wins(second, head, tier):
-    first = l0_after(head, S0_PORT)
-    other = l0_after(head, second)
+def test_two_ports_on_one_lane_register_the_first_wins(before, heads, second, tier):
+    first = l0_after([before, heads | S0_PORT])
+    other = l0_after([before, heads | second])
     assert first.tier == V and other.lanes != first.lanes
-    assert l0_after(head, {**S0_PORT, **second}) == Vec(first.lanes, tier)
+    assert l0_after([before, heads | S0_PORT | second]) == Vec(first.lanes, tier)
+
+
+def test_a_second_port_beside_a_first_that_takes_nothing_is_inferred():
+    alone = l0_after([{}, S3_COPY | S3_PORT])
+    assert alone.tier == V
+    assert l0_after([{}, S3_COPY | S0_PORT | S3_PORT]) == Vec(alone.lanes, I)
 
 
 def l1_high(beside: dict[str, int]) -> Vec:
