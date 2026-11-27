@@ -535,6 +535,26 @@ def test_a_field_value_edit_is_scored_on_its_classes_only():
         predict(m, taps, FLAT, TABLE13, edits=[(437, FieldValue("f211_215", 9))])
 
 
+def test_facts_of_one_edited_word_merge_and_must_agree():
+    program = model().program
+    rename = FieldValue("f211_215", 4)
+    planes = (resample_edits.STOCK,) * 3
+    flat = Fact(rename, (437,), {resample_edits.FLAT: planes}, "flat")
+    vary = Fact(rename, (437,), {resample_edits.VARY: planes}, "vary")
+    merged = Resample13Model(program, (flat, vary)).edits[
+        437, rename.apply(program.words[437]).value
+    ]
+    assert set(merged.planes) == {resample_edits.FLAT, resample_edits.VARY}
+    assert merged.fact == "flat; vary"
+    changed = (resample_edits.Changed("other"),) * 3
+    other = Fact(rename, (437,), {resample_edits.FLAT: changed}, "")
+    with pytest.raises(ValueError, match="word 437: facts of one edited word disagree"):
+        Resample13Model(program, (flat, other))
+    own = FieldValue("f211_215", program.words[437]["f211_215"])
+    with pytest.raises(ValueError, match="word 437: .* leaves it unchanged"):
+        Resample13Model(program, (Fact(own, (437,), {resample_edits.FLAT: planes}, ""),))
+
+
 def test_an_edited_tap_read_loads_another_coefficient():
     # Word 433 reads tap 1. Its imm 0 loads c0 instead (c1 := c0), op 0x10 the byte at offset 1
     # of the phase's taps, zero-extended (c1 := c0's bits 8..15): -8 gives 255, 384 gives 1.

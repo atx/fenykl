@@ -870,6 +870,19 @@ def test_an_op_over_exact_intervals_is_what_the_machine_computes(code: int):
         assert got == m.g[5], (a, b, imm)
 
 
+@pytest.mark.parametrize("r, tier", [(0, Confidence.VERIFIED), (1, Confidence.INFERRED)])
+def test_a_select_is_the_hull_of_its_inputs_at_the_measured_r_fields(r: int, tier):
+    """With the R file not modelled, 0x08 gives the hull of ra and rb; verified at an f120_122
+    measured with R both 0 and not, inferred at the others (as the machine has it)."""
+    word = Word.from_fields({"f120_122": r}, base=e_op(0x08, 1, 2))
+    regs = RegisterFile()
+    regs[1] = Reg(3, 5, Confidence.VERIFIED, "a")
+    regs[2] = Reg(9, 9, Confidence.VERIFIED, "b")
+    effect = op_effect(OP_SEMANTICS[0x08], word, regs)
+    assert effect is not None and effect.result is not None
+    assert (effect.result.lo, effect.result.hi, effect.result.taint) == (3, 9, tier)
+
+
 def test_a_result_goes_to_its_port_registers_or_is_open():
     const = Word.data(0x0B, Operands(ra=0, imm=1))
     both = Word.from_fields(
