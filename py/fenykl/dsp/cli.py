@@ -50,9 +50,11 @@ def cmd_flow(args: argparse.Namespace) -> None:
     given = dict(args.branch or ())
     branching = Given(given, fact="given on the command line") if given else None
     try:
-        flow = Boot().run(
-            job.program, request=job.local, strict=False, branching=branching
-        ).flow
+        flow = (
+            Boot()
+            .run(job.program, request=job.local, strict=False, branching=branching)
+            .flow
+        )
     except NoHalt as e:
         flow = e.flow
     print(flow.runs())

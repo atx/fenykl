@@ -133,7 +133,9 @@ class Boot:
         machine.preset(regs or {})
         job = Job(program, request)
         self.carry = None
-        executor = Executor(self, machine, strict=strict, branching=branching, limit=limit)
+        executor = Executor(
+            self, machine, strict=strict, branching=branching, limit=limit
+        )
         flow = executor.step(job)
         if flow.stop not in (Stop.HALT, Stop.OPEN_END):
             raise NoHalt(flow)
