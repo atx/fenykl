@@ -445,7 +445,8 @@ class Machine:
         self.bus_due: dict[int, list[tuple[Sv, str]]] = {}
         self.x1_due: dict[int, Sv] = {}
         """X1 0x1e's quotients on X1's result bus, by word."""
-        self.load_due: dict[int, list[Vec]] = {}
+        self.load_due: dict[int, Vec] = {}
+        """Lane memory loads' vectors, by the word they land in (one X0 head per word)."""
         self.chains: dict[str, tuple[int, tuple[int, ...], bool]] = {}
         """The last ops in flight together by kind ("load", "divide"): the last one's word, the
         words between their heads, whether they begin a measured chain (`Machine._chained`)."""
@@ -859,8 +860,7 @@ class Machine:
         if head in X0_LANE_LOADS and not self._chained(
             "load", t, self.load_due, LOAD_CHAINS, head == LOAD_CHAIN_HEAD
         ):
-            for when, due in self.load_due.items():
-                self.load_due[when] = [_cap(v, I) for v in due]
+            self.load_due = {when: _cap(v, I) for when, v in self.load_due.items()}
             flight = I
         if a.value is None or (by_reg and b.value is None):
             if head not in X0_LANE_LOADS:
@@ -868,7 +868,7 @@ class Machine:
                 self.lapse(index, f"x0 {head:#x}", why)
                 self.lose_lanes()
                 return
-            self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(UNKNOWN_VEC)
+            self.load_due[t + LANE_LOAD_LAG] = UNKNOWN_VEC
             self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"x0 {head:#x}: address not known")
             return
         addr = lane_address(head, a.value, b.value if b.value is not None else 0, k)
@@ -880,14 +880,12 @@ class Machine:
             tier = min(tier, self.stream.lane_tier(addr))
         if self.lanes_lost:
             if head in X0_LANE_LOADS:
-                self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(
-                    Vec(UNKNOWN_VEC.lanes, H)
-                )
+                self.load_due[t + LANE_LOAD_LAG] = Vec(UNKNOWN_VEC.lanes, H)
                 self._why(t + LANE_LOAD_LAG, LANE_LOAD, "the lane memory is lost")
             return
         if head in X0_LANE_LOADS:
             v = self.memory.get(addr, UNKNOWN_VEC)
-            self.load_due.setdefault(t + LANE_LOAD_LAG, []).append(_cap(v, tier))
+            self.load_due[t + LANE_LOAD_LAG] = _cap(v, tier)
             if self.trace is not None and not _known(v):
                 state = (
                     "not known"
@@ -1407,10 +1405,7 @@ class Machine:
 
     def _lane_source(self, text: str, t: int, port: tuple[str, int] | None = None):
         if text == LANE_LOAD:
-            due = self.load_due.get(t, [])
-            if len(due) > 1:
-                self._why(t, LANE_LOAD, "two lane loads arrive in one word")
-            return NOTHING if not due else due[0] if len(due) == 1 else UNKNOWN_VEC
+            return self.load_due.get(t, NOTHING)
         unit = LANE_UNIT[text]
         alone = self._alone_read(unit, t, port)
         if alone is not None:
