@@ -844,27 +844,27 @@ def test_an_inserted_op_takes_its_semantics_tier():
     "word, at, why",
     [
         (
-            Word.from_fields({"f313_319": 0x4A}, base=IDLE),
+            lambda: Word.from_fields({"f313_319": 0x4A}, base=IDLE),
             12,
             "op4a has no op semantics",
         ),
         # A word load at r2, (len + 0x1f) / 16 at the engine site: not word-aligned.
         (
-            Word.data(0x1A, Operands(ra=2, imm=0)),
+            lambda: Word.data(0x1A, Operands(ra=2, imm=0)),
             65,
             "outside what its op semantics covers",
         ),
         (
-            Word.from_fields({"f313_319": 0x38}, base=IDLE),
+            lambda: Word.from_fields({"f313_319": 0x38}, base=IDLE),
             12,
             "no PR port enabled: where the result goes is open",
         ),
-        (stock().words[42], 12, "an inserted register transfer"),
+        (lambda: stock().words[42], 12, "an inserted register transfer"),
     ],
     ids=["no-row", "unaligned", "no-port", "transfer"],
 )
-def test_an_insert_without_semantics_is_unknown(word: Word, at: int, why: str):
-    program = inserted(at, word)
+def test_an_insert_without_semantics_is_unknown(word, at: int, why: str):
+    program = inserted(at, word())
     with pytest.raises(UnknownSemantics, match=f"word {at}: .*{why}"):
         run(program)
     result, boot = run(program, strict=False)
