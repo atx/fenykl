@@ -1,0 +1,188 @@
+"""`fenykl dsp`: listings, DSL source, the field table and the copy's control flow."""
+
+import argparse
+from collections import Counter
+from pathlib import Path
+
+from ..firmware import TARGETS, read_bin
+from .disasm import listing, source
+from .fields import (
+    DATA_OP_CONFIDENCE,
+    DATA_OP_FACT,
+    DATA_OPS,
+    DELAY_FACT,
+    DELAY_SLOTS,
+    FAMILIES,
+    FIELDS,
+    FORMATS,
+    IDLE_OP,
+    IMM13,
+    IMM16,
+    OP_FIELD,
+    OPS,
+    TARGET,
+    TARGET_OPS,
+)
+from .program import Program
+from .semantics import Given
+from .stock.items import STOCK, stock_programs
+
+
+def _program(file: Path | None, item: int) -> Program:
+    return stock_programs(read_bin(file or TARGETS["em10ii"].stock_path()))[item]
+
+
+def cmd_disasm(args: argparse.Namespace) -> None:
+    spec = STOCK[args.item]
+    title = f"item {spec.item}, command {spec.cmd:#x}: {spec.fact}"
+    print(listing(_program(args.file, args.item), title), end="")
+
+
+def cmd_source(args: argparse.Namespace) -> None:
+    print(source(_program(args.file, args.item), f"ITEM{args.item}"), end="")
+
+
+def cmd_flow(args: argparse.Namespace) -> None:
+    from .emu import Boot, NoHalt, Stop
+    from .stock import commands
+    from .stock.copy import ITEM
+
+    job = commands.copy(_program(args.file, ITEM), args.src, args.dst, args.len)
+    given = dict(args.branch or ())
+    branching = Given(given, fact="given on the command line") if given else None
+    try:
+        flow = (
+            Boot()
+            .run(job.program, request=job.local, strict=False, branching=branching)
+            .flow
+        )
+    except NoHalt as e:
+        flow = e.flow
+    print(flow.runs())
+    for step in flow.steps:
+        if step.op != IDLE_OP:
+            print(step)
+    unknown = sum(s.unknown for s in flow.steps)
+    # An open end's why is on its halt step, printed above.
+    why = flow.why if flow.why and flow.stop is not Stop.OPEN_END else ""
+    print(
+        f"{len(flow.steps)} steps, {unknown} not covered; stop: "
+        f"{flow.stop.value}{': ' + why if why else ''}"
+    )
+
+
+def _branch(text: str) -> tuple[int, bool]:
+    index, _, taken = text.partition("=")
+    if taken not in ("0", "1"):
+        raise argparse.ArgumentTypeError(f"{text!r} is not INDEX=0 or INDEX=1")
+    return int(index, 0), taken == "1"
+
+
+def cmd_fields(args: argparse.Namespace) -> None:
+    for f in FIELDS:
+        bits = f"{f.lo}" if f.lo == f.hi else f"{f.lo}..{f.hi}"
+        name = f" {f.name}" if f.name else ""
+        print(
+            f"{f.id:<9} {bits:>8}  {f.unit:<6} {f.kind:<6} {f.confidence.name.lower():<10} "
+            f"idle {f.idle:#x}{name}: {f.fact}"
+        )
+    shift, parts = 0, []
+    for f in TARGET.parts:
+        parts.append(f.id if shift == 0 else f"{f.id} << {shift}")
+        shift += f.width
+    print(
+        f"{TARGET.name}: {' | '.join(parts)} for {OP_FIELD.id} {TARGET_OPS.start}.."
+        f"{TARGET_OPS.stop - 1}, {TARGET.confidence.name.lower()}: {TARGET.fact}"
+    )
+    data = f"{DATA_OPS.start}..{DATA_OPS.stop - 1}"
+    rows = [(v, str(v), o.name, o.confidence, o.fact) for v, o in OPS.items()]
+    rows.append((DATA_OPS.start, data, "opNN", DATA_OP_CONFIDENCE, DATA_OP_FACT))
+    for _, value, name, confidence, fact in sorted(rows):
+        print(
+            f"{OP_FIELD.label} {value:<6} {name:<5} {confidence.name.lower():<10} {fact}"
+        )
+    for family in FAMILIES:
+        regs = "ra, rb" if family.rb else "ra"
+        imm = f", imm{family.imm_bits}" if family.imm_bits else ""
+        ops = " ".join(f"{v:02x}" for v in family.ops)
+        print(f"family {family.name:<2} {regs}{imm}  ops {ops}: {family.fact}")
+    for value, fmt in FORMATS.items():
+        if fmt.imm_bits != fmt.family.imm_bits or fmt.signed:
+            sign = ", two's complement" if fmt.signed else ""
+            print(f"  op{value:02x}: imm{fmt.imm_bits}{sign}")
+    for composite in (IMM13, IMM16):
+        print(f"{composite.name}: {composite.fact}")
+    print(f"delay slots: {DELAY_SLOTS}; {DELAY_FACT}")
+    kinds = Counter(str(f.kind) for f in FIELDS)
+    confidence = Counter(f.confidence.name.lower() for f in FIELDS)
+    print(f"{len(FIELDS)} fields; {dict(kinds)}; {dict(confidence)}")
+
+
+def _program_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("item", type=int, choices=sorted(STOCK), help="program item")
+    parser.add_argument(
+        "file",
+        nargs="?",
+        type=Path,
+        metavar="FILE.BIN",
+        help="stock E-M10 II firmware (default: its image in firmware/)",
+    )
+
+
+def add_parser(commands: argparse._SubParsersAction) -> None:
+    dsp = commands.add_parser(
+        "dsp", help="DSP microcode: listings, DSL source, field table"
+    )
+    dsp_commands = dsp.add_subparsers(required=True, metavar="COMMAND")
+    disasm = dsp_commands.add_parser(
+        "disasm", help="list a stock program's words by unit and field"
+    )
+    _program_args(disasm)
+    disasm.set_defaults(func=cmd_disasm)
+    src = dsp_commands.add_parser(
+        "source",
+        help="print a stock program as DSL source",
+        description="Print a stock program as DSL source. The output reproduces stock "
+        "microcode from your firmware image: for local work only, never commit it.",
+    )
+    _program_args(src)
+    src.set_defaults(func=cmd_source)
+    flow = dsp_commands.add_parser(
+        "flow",
+        help="step the stock copy (item 16) on the datapath executor, lenient, and print the "
+        "words it executes in order",
+    )
+    ran = "(default: that of a copy run on the camera)"
+    flow.add_argument(
+        "--len", type=lambda v: int(v, 0), default=0x400, help=f"bytes {ran}"
+    )
+    flow.add_argument(
+        "--src",
+        type=lambda v: int(v, 0),
+        default=0xA0FCA800,
+        help=f"uncached source address {ran}",
+    )
+    flow.add_argument(
+        "--dst",
+        type=lambda v: int(v, 0),
+        default=0xA1113600,
+        help=f"uncached destination address {ran}",
+    )
+    flow.add_argument(
+        "--branch",
+        action="append",
+        type=_branch,
+        metavar="INDEX=0|1",
+        help="decide the conditional control op at INDEX (every visit) in place of the "
+        "datapath; repeatable",
+    )
+    flow.add_argument(
+        "file",
+        nargs="?",
+        type=Path,
+        metavar="FILE.BIN",
+        help="stock E-M10 II firmware (default: its image in firmware/)",
+    )
+    flow.set_defaults(func=cmd_flow)
+    fields = dsp_commands.add_parser("fields", help="print the field table")
+    fields.set_defaults(func=cmd_fields)

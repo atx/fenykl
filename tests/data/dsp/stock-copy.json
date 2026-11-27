@@ -1,0 +1,34 @@
+{
+ "name": "stock-copy",
+ "fact": "the stock program copies len bytes",
+ "boot": {
+  "r14": "exact",
+  "r29": null,
+  "r21_format": null
+ },
+ "jobs": [
+  {
+   "edits": [],
+   "src": 2700912640,
+   "dst": 2702259712,
+   "len": 1024,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 709656397
+   },
+   "fill": 0,
+   "fill_len": 1024,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 1024,
+      "kind": "bytes",
+      "data": "/AZ7tC+MIhZeEurwiZmRUjgfWT1rpQCfmizIecWy99t0OL+lp79mBNZFLuYBy9VAsFKdIuPYRI0SXgxvXeQ7yYxr46s/8ao1bndSlJn+GXbIhMDQewqIsqqRtxzVF3//BJ0mWbck7jvmqpWFETBdZEC2BMbzPcygIsP7Am1Jo+yc0GpPz1YSKX7c2YupY4EV2OlI9AtvcFa69j8w5XznkhQCrnxHiFXf9g8duSGVxBtQG4zlg6K7RzIoYyZ9riqArDXSYt+7mcwOQUGvucgICehOMOsb1P91Slqn1/XhbrYkZxYQV+3d8oZ0hVwx+kw/YIB7mZMHI3vCjerFDROSp7yaWQbvIAHgHqbIQkks8Cz4s7+OKzlnaVq/LsuFRtZVNMydN2dSRZaW2QxwwV800nDl47yjbKse0vJS+R14GltM/sEl/4WIhy4LsGFZkX/AiBgnojue7gxqJJbulatdScQxBSt3t8y1pj70F9HEo/EASmtQs9ESMuJX2pwt3YF+XGNJ2Y/qcLs+cDgFafbn55h9r0HLA1YgeokdgqUQxWzUlozOBxy0qLajYwvhKSuVEK/Sd0M1mtHyvEGwPUIJEmzIMPyfT/heztWnOHlbb5uo4hZl22jexwruhaG1dU0A5Pt04heBI0xGB+su8Y6SiCAUWmtTmgH1giHJV82n8DF8LbiTr7Rnct46L9wJwNa+uEeeGOvNRfsaUw1FRdk0J/Rg/IEn5qtjVmxTwoHzGqwwecIOY/+J6JKGsErdDHjVDJInt78Z7xHun5bzGSVeUkirBTz7Ms2eKrj0eFU+vNqExWulN0sTB2bR2uGRWIJDwN5JInNkcYyi6zhu7XHgyBz3r6pPfVc1/gQelymKxXFYEI3Ti5e0vTodfBxloyv+lCrTWMewmjp2NkKFob0JZ9BDMcEDyfijslCgDf3Wb+wsXBdOX+LeKI5phoo5700VaHV195v8PFHKguszdQiTnaSPWnzXFQLeBpvJuLEi8RrgqLjkEy5gR0K0LyGNO9eDPMGebW9HRsyezg2uyVQ1CHja/OqrYaR02udT1wVtG7G09MIT53qK/RYAsV9Bhng+8A0gmCOT73pSGZfEnaBep8wmBgF/rM3jrjP1Tdm5vC8IP2SOu8YTaOpM28oV0oJURFhKN/ffcZEmZTlzUevg3YByqL8z+FceYn4f+K0Fxlrci40kDxG1hr6YfGHpHiTDGKTTrUsqmw/6sULuJTcKSFS9MSqHRPm0NsqgFmFQaPGQ1xdTw13fPXLjhp+9ak5+7PB12B92PbpO/OQE+YOT5igJW0FbjwIjihbKjTWc8W9kIrnJl6lgqMYvKApxtdeUoDyfdtPCRtECSA6zTc41HQ=="
+     }
+    ]
+   }
+  }
+ ]
+}

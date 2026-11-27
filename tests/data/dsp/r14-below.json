@@ -1,0 +1,46 @@
+{
+ "name": "r14-below",
+ "fact": "76 at r14 offsets by -0x100 on this boot; below index 0 was never written",
+ "boot": {
+  "r14": "below",
+  "r29": null,
+  "r21_format": null
+ },
+ "jobs": [
+  {
+   "edits": [
+    {
+     "at": 76,
+     "set": {
+      "f115_119": 14
+     }
+    }
+   ],
+   "src": 2700912640,
+   "dst": 2702259712,
+   "len": 1024,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 4175890887
+   },
+   "fill": 0,
+   "fill_len": 1024,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 256,
+      "kind": "unknown"
+     },
+     {
+      "at": 256,
+      "end": 1024,
+      "kind": "bytes",
+      "data": "dnDQZqX6icTUZEEiA+86gLJp8u/h06tNEFpjq0/EXAn+ThR3LcnN1lwzhTSLvX6SOiQ28Gmu71+YKKe915KQGwYdSHm1hwHn5AH5RhOIsqRC8msC8XwjYCDnHM5fYdQtjuuNiz1SRels3D5Xm0b2tsrArxR5S2dyqLVQ0Oc/CD4WpsGdRSC5+/SqclkjFSrHUp/jJoEZ24QwgJTibwpMQJ50Ba7N/v4NfHm2a6vjb8nabSc3CdQQlbheyPT32IFSJkN5sFXNMh6EN+p9M76j22I4mzmRolSnwCwMBX+XxWSuEb3C3Zt2IAwCLo67jOft6vbQSxlxiKlI+0EXh2U5dTbs8tRlVqoylNBjkMNaW/5yxRRcoU/Mu9DJhRkPMH2Hvro25e0k7kQcr6eiSymfAPqTSG4pGgDMWIT5K5cOsYnGiGr3dfMjVaR9G7PT59QSAm6McLHoRd7gUj08H932m05Hrvn9wWdnLEhfxVuyCCOKPMCCOae54GghcU6nqyqs1hXiCwWc22m0BpPX44BMNRILBJNBdf3y8P+2UC9mbr5e4CccjWofejzVyNlrX4BHmtl5pclDMQN4yupitzSiwOa+my4VOVOMRKMM6vMtxEkilL23UR51FYCYLnM/A+bSbo3fMJ33iJ7McUD8e/g5Wqpi8bnZ7KonCFdihUfRW+P2WxNBJcLMoFRMhA6Dtn1sMjE1ymG77imQJaaXz6+f9X4WV1OtkACx3Br4EAuFsX66D2nc6YkiOhjwG5hXetMHhuSMZTVvRMNk6T0hk1P1gMLdru5xRGZMoM5fqt9IFwgOs8B3vT241eyncTMbLimRSqji8PkS2l4onZO8ZwdLGpaBBHjFC/zndHK1RaP8bqPSZiYBAeEfb7Br187v1YAsHlx4ik3GMej8QOlXK8uitVo1mhOJv1NxOCYL33egxD6mKryc1ZR1+gQfLVizmebH4gPeJRGKl4NA9EDh/344Ty758a5dY6kMjO1iajtUWshq3hM2mVjLlcjChPMHTXxR"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -10,7 +10,11 @@ import pytest
 
 from fenykl import dev, fwapi, plugin, sdk
 from fenykl.cli import read_bin
+from fenykl.dsp.fields import Confidence
 from fenykl.firmware import TARGETS, StockMissingError
+
+CONF = {"V": Confidence.VERIFIED, "I": Confidence.INFERRED, "H": Confidence.HYPOTHESIS}
+"""The tiers by their letters, as the camera vectors' taint lists give them."""
 
 
 @cache

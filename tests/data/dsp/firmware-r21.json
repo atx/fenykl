@@ -1,0 +1,206 @@
+{
+ "name": "firmware-r21",
+ "fact": "word 67 at r21 loads firmware text, with 68 and 73 edits",
+ "boot": {
+  "r14": "exact",
+  "r29": null,
+  "r21_format": null
+ },
+ "jobs": [
+  {
+   "edits": [],
+   "src": 2700916736,
+   "dst": 2702259712,
+   "len": 1024,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 3164993207
+   },
+   "fill": 165,
+   "fill_len": 1024,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 1024,
+      "kind": "bytes",
+      "data": "Bsu7wNVB8KakxygEc1xh6sLSWUiRaJYvYOHOjT9nB3OO/X/RXXK0sCwI7Rb7jiX0SgcSWhmdSjjoE4Ofp6n7fXYuMOPFpGhBlDqhIGOzmYYySdZkgc8OylBER6gv2r8P/lD07U3pLFMcb2Ux6+Vdl7p7inYJ8MLU2HY7upcMcBhmhaj/NRvhXYSR2cNTFhahIqxOB/Eih+ZAu/9EHzE0Ku63bIi9TaVvDMKdzdtYyrOq3gIReVd798jts1aHY+g0VvggmiV+GXj09FHeQ42OvRIDxyPhmT+BsB90Zw+UrMbeKuWkraDdCnw5CujLv0JOmjW7LWnK85M4QChx98Zg10ZfWbUV1ZEU5GvO+rPhBlgCZn8+0fy3naBy7AN/CyXhzoEdR50HSiVsnIKEOxL7aoqoM8hZIWiuKKegDec9mfO2s9FRBUgON9TORpWjRL90ct332sFTLLiQ6WQeb25d/D7klWONesLBXPM6pyuJcwX6D6jkSYTgShga2SjXkBGOphZObHWvhtPEJf+xk7s3F2IwbPUxtqRUgEydOl/F1ZguWwJ+/dF63ExWs0Mb7Osh6mIgh7n4GGUIcVHLx/eJqpaNxghlAj/uNJh3TIMerDNSl+SRIS3dd/CjFdVPOEK7Hr66Gu008/i8yiteC0NgPNrZWKKpX5EBeNTJ5zdqBkWG4H4rVXm3iiT/72jzdSTOQgodrBGAVRLgBoLxv5z6Vw4VMzXdq2ubrCGgenummNjKPNG+mbIJHGhLRoInwb5h9kf3x0XcL6UUUmQL4+hc6bJulUgB580u0H06jK/zcnJ+iKvRzQ7gt5yE2BVrHRH7OpNJWYkphjhYrv6eFyQ3fOa6b+K1MKRBBMmcJ9NP1YWixQ1rcVp6ycDQsqifVusObu8j7D1lGFKM+1AwW3CJlyr2wXX5jD7bSAV3uQebrxjWEeT+pZfcXHQsFcLDok2gkji6B2Gx8uUwNytLj81jKV5CWI8t2JBu/F7JzEvXAbIabX4Q6eO297h571V3/ic7xnQcmZUKVX9kg43eMxn6vIKfMiJRFGuAIKqjZ/8gmMVOudCrHT8JCey1Qe+7S75OCsD2LNlGL5Ko3GdwZ1Vc1jbrlLWFYc0bVOYF+SN8cl/y8qo+QYvjnBAB2ALvhxDgvh1JRg2SgSXcKP6Lq642aXonb8/JvaeumDOcDFfI1PImTg1Q9cRFNkRdspUT0+p74mkj2bHvG78AZFAd3/qI/K5wwWJ9CT7AzI92ppsFrwVqmufrORDcSYiWFC9HL02NFqWFbOU78tK0sSqwAzZjFtLMW/ShQpBbcNvIOc9RAZ+e13l9bWy23Dzi7kKLeCcgWvEfhil3VGT4DY3Lt4PFqQ=="
+     }
+    ]
+   }
+  },
+  {
+   "edits": [
+    {
+     "at": 67,
+     "set": {
+      "f115_119": 21
+     }
+    },
+    {
+     "at": 68,
+     "set": {
+      "f115_119": 1
+     }
+    }
+   ],
+   "src": 2700916736,
+   "dst": 2702259712,
+   "len": 1024,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 2528101057
+   },
+   "fill": 165,
+   "fill_len": 1024,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 32,
+      "kind": "bytes",
+      "data": "Bsu7wNVB8KakxygEc1xh6sLSWUiRaJYvYOHOjT9nB3M="
+     },
+     {
+      "at": 32,
+      "end": 1024,
+      "kind": "firmware",
+      "address": 1617739776
+     }
+    ]
+   }
+  },
+  {
+   "edits": [],
+   "src": 2700916736,
+   "dst": 2702259712,
+   "len": 2048,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 2687294811
+   },
+   "fill": 165,
+   "fill_len": 2048,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 2048,
+      "kind": "bytes",
+      "data": "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"
+     }
+    ]
+   }
+  },
+  {
+   "edits": [
+    {
+     "at": 67,
+     "set": {
+      "f115_119": 21
+     }
+    },
+    {
+     "at": 68,
+     "set": {
+      "f115_119": 1
+     }
+    }
+   ],
+   "src": 2700916736,
+   "dst": 2702259712,
+   "len": 2048,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 1723840963
+   },
+   "fill": 165,
+   "fill_len": 2048,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 64,
+      "kind": "bytes",
+      "data": "6uAy3DlqebpI7KEYn3fo9i750FR9Qx8zjMpHkdNMjm9i1vbNsVk9rMAjZAoXpazopiybRvW2wyQEOAqDS4JyYQ=="
+     },
+     {
+      "at": 64,
+      "end": 2048,
+      "kind": "firmware",
+      "address": 1617739776
+     }
+    ]
+   }
+  },
+  {
+   "edits": [],
+   "src": 2700916736,
+   "dst": 2702259712,
+   "len": 1024,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 2597290225
+   },
+   "fill": 165,
+   "fill_len": 1024,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 1024,
+      "kind": "bytes",
+      "data": "QL3R5pM3moDisUIiNSoLzISkM27XHvwJJpekq3kRbVXIixX3GwTelmp+hzC9+E/SDHF4fF/rIB6uZem54d+RWzBYWsWD0gJn0kzLBiXF86B0P7xCx7lk7BYyLY5prNUpuCaeywufRnVaGQ8XrZM3sfwN4FBPhqjyngBRnNF6Gj4g88LZc22Le8Lns+UVYHyHZNokIbdU7cAGzZViWUdeDKjBBq77O89JSrT3650uoJXsqGg3PyER0Y6b2XDBFYISEI5KvGMIc16ygjv4Bfvkm1R1rQWn71Wn9mkeQUnixuCYXI+C69a3LDpPYM6NySho3EPRCy+8mbV+NkJXsbAK8QApM5NTo/syoh2k3PWXbH5EEBUYl4rdu+YEhiU5fU/HiPd3YdtxIAMq6uiifWSRTMzeWe4fVwKIbtHKK6FL89Xwxbt3Qz5kEZK4LLPlMtVSNKud/IclRp7Wnw44KRg32niS/0XLDKjnGoVQgW3/GSO8ecLCD/KKbF5ssw6R5nuo4GAkSjPZ7PWCU5WX1c1dMSRGBtN3wM5yxjr3HBmzv75oLWhYu6cQ+gog2WVdmoEHrBRKof+OckNOBzvtgYHjjND7rC4jdFXIcu4dasVoxhUU4Y63Z1u3UbbVf/MJTiidWMjQPKtCmd76vEF4TTUKGpyvMoTvKfsnPqKjwXEcbGPAlhQNEw/drGKJhU61A07oBHx3ilf2PzSmcOjX+eqQcUhjWROb3QG96lfKXD3Q8v6MSruY38RjOi49LKRht9RHsDGd4QOqRYNSJA4tpZ42z/QY/25HkacIlgtQqumFGFQ4/sH3i3iKkdrysjMta3vdfOUjf89f7B4e2JS4UVJdWqDMBcTzRs5nQr/2AZU5v6Pks2dNNywQ74am2I7ZIIEoKJlJynsTcnTKjToWHQbjsWyAq1O/+lT9DnMdn0HtxT6QZ47Y4+G2ejJaf+SF1CeG1E7QISfHmMN2QUFtybsJDxg0MqlrrvpIuiij6g2ha5RcGxQ2r5Xc0f4PhXMxiE0dgAJ2v9N8P1ki9ef4dW+QmsTpWAQXYgGmZtzJQblW8uMIz7qNW0ljL6rDK8n9PdRoTLacCp8wRbTuqg1WISM28HCd/pPDF6c9EpBv32UKGHm0hMAYB/2JulZ3siSp8XrG+GsjYEvk6wOaXpSt7dhcTzxRBemPy82I3kX2KhG+vtRgOGd2s7IvEAIr2LNVpYBdpB9J//eZcZlGEjo7mYzi2ugGq0Q7f1TmivkcgN1zxSMs7I3Nf2a2b87gfgkBWSerUNPvSqNNmPTyx0CWRUAJMJS6MdLnNPp9Nq2iH4kna7nYoRNbKxrc+nqUhGTNDk0GHId1oG8BPkK+e+ft8fWvjw=="
+     }
+    ]
+   }
+  },
+  {
+   "edits": [
+    {
+     "at": 67,
+     "set": {
+      "f115_119": 21
+     }
+    },
+    {
+     "at": 73,
+     "set": {
+      "f115_119": 7
+     }
+    }
+   ],
+   "src": 2700916736,
+   "dst": 2702259712,
+   "len": 1024,
+   "pattern": {
+    "kind": "seeded",
+    "seed": 3464496619
+   },
+   "fill": 165,
+   "fill_len": 1024,
+   "expect": {
+    "status": "ok",
+    "dst": [
+     {
+      "at": 0,
+      "end": 512,
+      "kind": "firmware",
+      "address": 1617739776
+     },
+     {
+      "at": 512,
+      "end": 1024,
+      "kind": "bytes",
+      "data": "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaU="
+     }
+    ]
+   }
+  }
+ ]
+}

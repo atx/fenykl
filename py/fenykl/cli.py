@@ -2,13 +2,14 @@
 
 import argparse
 import hashlib
-import lzma
 import sys
 from collections import Counter
 from pathlib import Path
 
 from . import dev, sampler, screen, tp
 from .assets import ASSET_LAYOUTS, AssetError, dump_assets
+from .dsp import cli as dsp_cli
+from .dsp.stock.items import ProgramFormatError
 from .firmware import (
     FIRMWARE_DIR,
     TARGETS,
@@ -18,6 +19,7 @@ from .firmware import (
     identify,
     load_unpacked,
     pack_firmware,
+    read_bin,
     save_unpacked,
     unpack_firmware,
 )
@@ -26,12 +28,6 @@ from .payload import PayloadError, describe, describe_shared, pack_elf
 from .plugin import BuildError, build, plugin_targets
 from .sdk import TargetError, toolchain_prefix
 from .sdk import target as sdk_target
-
-
-def read_bin(path: Path) -> bytes:
-    """Read a `.BIN`, decompressing it if it is stored as `.BIN.lzma`."""
-    data = path.read_bytes()
-    return lzma.decompress(data) if path.suffix == ".lzma" else data
 
 
 def _write(path: Path, data: bytes) -> None:
@@ -302,6 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     tp_build.set_defaults(func=cmd_tp_build)
 
     sampler.add_parser(dev.add_parser(commands))
+    dsp_cli.add_parser(commands)
 
     toolchain = commands.add_parser("toolchain", help="locate the cross toolchain")
     toolchain_commands = toolchain.add_subparsers(required=True, metavar="COMMAND")
@@ -325,6 +322,7 @@ def main(argv: list[str] | None = None) -> None:
         StockMissingError,
         TargetError,
         AssetError,
+        ProgramFormatError,
         dev.DevmonError,
         screen.ScreenError,
     ) as error:
