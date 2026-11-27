@@ -492,7 +492,14 @@ def test_the_edit_kinds_are_the_encoding_measured_on_the_camera():
     # holds 1 in every one of them.
     op = sum(
         lookup(k).span
-        for k in ("f265_266", "f267_268", "f272_273", "f302_307", "f308_312", "f313_319")
+        for k in (
+            "f265_266",
+            "f267_268",
+            "f272_273",
+            "f302_307",
+            "f308_312",
+            "f313_319",
+        )
     )
     assert OP_IDLE.mask == op
     for w in model().program.words:
@@ -551,7 +558,9 @@ def test_facts_of_one_edited_word_merge_and_must_agree():
         Resample13Model(program, (flat, other))
     own = FieldValue("f211_215", program.words[437]["f211_215"])
     with pytest.raises(ValueError, match="word 437: .* leaves it unchanged"):
-        Resample13Model(program, (Fact(own, (437,), {resample_edits.FLAT: planes}, ""),))
+        Resample13Model(
+            program, (Fact(own, (437,), {resample_edits.FLAT: planes}, ""),)
+        )
 
 
 def test_an_edited_tap_read_loads_another_coefficient():

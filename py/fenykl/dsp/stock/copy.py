@@ -914,7 +914,9 @@ class Copy16Model:
             fields, why = [(OP_FIELD, word.op)], f"{name} has no op semantics"
         elif word.op in STORES:
             fields = [(OP_FIELD, word.op)]
-            why = f"{name}: a local store, the copy's request in local memory may change"
+            why = (
+                f"{name}: a local store, the copy's request in local memory may change"
+            )
         else:
             fields = [(OP_FIELD, word.op)]
             regs = RegisterFile() if operands is None else operands.regs

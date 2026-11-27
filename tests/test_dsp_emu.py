@@ -684,7 +684,9 @@ def test_route_nibbles_must_hold_the_stock_values():
     ],
     ids=["reversed", "rotated", "swapped"],
 )
-def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int], stores: bool):
+def test_reordered_prologue_words_are_at_most_hypothesis(
+    order: list[int], stores: bool
+):
     words = stock().words
     program = Program((*(words[i] for i in order), *words[20:]))
     with pytest.raises(UnknownSemantics, match="word 0: no semantics"):
@@ -897,7 +899,9 @@ def test_an_op_over_exact_intervals_is_what_the_machine_computes(code: int):
         assert got == m.g[5], (a, b, imm)
 
 
-@pytest.mark.parametrize("r, tier", [(0, Confidence.VERIFIED), (1, Confidence.INFERRED)])
+@pytest.mark.parametrize(
+    "r, tier", [(0, Confidence.VERIFIED), (1, Confidence.INFERRED)]
+)
 def test_a_select_is_the_hull_of_its_inputs_at_the_measured_r_fields(r: int, tier):
     """With the R file not modelled, 0x08 gives the hull of ra and rb; verified at an f120_122
     measured with R both 0 and not, inferred at the others (as the machine has it)."""
