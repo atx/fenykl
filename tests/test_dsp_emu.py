@@ -638,20 +638,27 @@ def test_route_nibbles_must_hold_the_stock_values():
 
 
 @pytest.mark.parametrize(
-    "order",
-    [list(range(19, -1, -1)), [*range(1, 20), 0], [1, 0, *range(2, 20)]],
+    "order, stores",
+    [
+        (list(range(19, -1, -1)), False),
+        ([*range(1, 20), 0], False),
+        ([1, 0, *range(2, 20)], True),
+    ],
     ids=["reversed", "rotated", "swapped"],
 )
-def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int]):
+def test_reordered_prologue_words_are_at_most_hypothesis(order: list[int], stores: bool):
     words = stock().words
     program = Program((*(words[i] for i in order), *words[20:]))
-    try:
-        result, boot = run(program)
-    except UnknownSemantics:
-        return
-    assert result.taint is Confidence.HYPOTHESIS
+    with pytest.raises(UnknownSemantics, match="word 0: no semantics"):
+        run(program)
+    result, boot = run(program, strict=False)
+    assert result.status is Status.OK and result.taint is Confidence.HYPOTHESIS
+    assert (result.stored is not None) is stores
     dst = boot.read(DST, LEN)
-    assert dst.weakest() is Confidence.HYPOTHESIS or bytes(dst.data) == b"\xa5" * LEN
+    if stores:
+        assert dst.weakest() is Confidence.HYPOTHESIS
+    else:
+        assert bytes(dst.data) == b"\xa5" * LEN
 
 
 def test_a_stock_word_at_another_index_is_no_row():
