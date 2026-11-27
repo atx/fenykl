@@ -81,13 +81,13 @@ from .model import (
     Outcome,
     Part,
     Role,
-    Sequencer,
     Status,
     StockBoot,
     Trace,
     Transfer,
     Use,
     WordClass,
+    assign_roles,
 )
 from .registers import READOUT, JobView, Reg, RegisterFile
 
@@ -522,7 +522,7 @@ def _transfer_semantic(words: tuple[Word, ...]) -> TransferSemantic:
         "register transfer: hands the register named in 115..119 to the stream "
         "configuration; its role (address, offset, count, enable, format) is given by the "
         "sequencer, by transfer order [inferred, strong for moves within 73..77; a counted "
-        "transfer at 78 stalls the job, see `Sequencer`]",
+        "transfer at 78 stalls the job, see `assign_roles`]",
         {f.id: f.idle for f in FIELDS if f.id not in TRANSFER_OPERANDS},
         TRANSFER_OPERANDS,
     )
@@ -1027,9 +1027,7 @@ class Copy16Model:
             late = RegisterFile(list(boot.regs.regs))
             for r, (v, _) in trace.writes.items():
                 late[r] = v
-        plan = self.resolve(
-            trace, boot.regs, view, run.sequencer, job.program.words, late
-        )
+        plan = self.resolve(trace, boot.regs, view, job.program.words, late)
         return self._apply(boot, plan, trace, view)
 
     def _halt(self, job: Job, trace: Trace, view: JobView) -> JobResult | None:
@@ -1121,7 +1119,6 @@ class Copy16Model:
         trace: Trace,
         regs: RegisterFile,
         view: JobView,
-        sequencer: Sequencer,
         words: tuple[Word, ...],
         late: RegisterFile | None = None,
     ) -> Plan:
@@ -1172,7 +1169,7 @@ class Copy16Model:
                 continue
             drop = sorted(t.index for t in slots if t.index in trace.standins)[:over]
             transfers[c.name] = [t for t in slots if t.index not in drop]
-        filled, stalls = sequencer.assign(self.channels, transfers)
+        filled, stalls = assign_roles(self.channels, transfers)
         for why, conf in stalls:
             plan.outcomes.append(
                 (Outcome.TIMEOUT, f"{why}: the stream never completes", conf)

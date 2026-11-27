@@ -18,7 +18,7 @@ from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.copy import Copy16Model
 from fenykl.dsp.stock.intervals import RegSet, destinations
-from fenykl.dsp.stock.model import Mode, Sequencer, Status, StockBoot, run_model
+from fenykl.dsp.stock.model import Status, StockBoot, run_model
 from fenykl.dsp.stock.registers import R14_BELOW, R14_EXACT, BootParams, JobView
 from fenykl.dsp.word import IDLE, Word
 
@@ -151,7 +151,7 @@ def check_keys(vector: dict) -> list[str]:
     return bad
 
 
-def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
+def run_vector(vector: dict) -> list[str]:
     """Replays the vector's jobs; returns its mismatches, empty when every check holds."""
     bad = check_keys(vector)
     boot = boot_of(vector["boot"])
@@ -177,7 +177,6 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
             boot,
             model(),
             commands.copy(edited(job["edits"]), job["src"], job["dst"], job["len"]),
-            sequencer=Sequencer(mode),
         )
         status = result.status
         if CONF[taint[1]] is not result.taint:
@@ -234,12 +233,11 @@ def run_vector(vector: dict, mode: Mode = Mode.POINTER) -> list[str]:
     return bad
 
 
-@pytest.mark.parametrize("mode", list(Mode), ids=lambda m: m.value)
 @pytest.mark.parametrize("path", sorted(VECTORS.glob("*.json")), ids=lambda p: p.stem)
-def test_camera_vector(path: Path, mode: Mode):
+def test_camera_vector(path: Path):
     vector = json.loads(path.read_text())
     assert vector["name"] == path.stem
-    assert run_vector(vector, mode) == [], vector["fact"]
+    assert run_vector(vector) == [], vector["fact"]
 
 
 def test_every_vector_has_its_taints():
