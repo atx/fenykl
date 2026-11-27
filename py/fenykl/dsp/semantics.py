@@ -7,8 +7,8 @@ run and taint what they touch.
 `OP_SEMANTICS` is the op slot's table: what a data op does, each with its confidence.
 Stepping (`emu.Executor.step`) can take `Given` decisions for the conditions of ops 0..2 over
 the datapath's own (`Branching`). `X_RULES` are the functions of the two X units and
-`LANE_RULES` the lane functions of the four S units (`lane_result`); `LaneMemory` and
-`lane_address` model the lane memory X0 loads and stores. `HEAD_READS` (`head_reads`) holds the
+`LANE_RULES` the lane functions of the four S units (`lane_result`); `lane_address` gives the
+lane memory vector X0 loads and stores. `HEAD_READS` (`head_reads`) holds the
 operands each head reads, from the rules and what the machine does with a head.
 """
 
@@ -118,17 +118,17 @@ def _u32(v: int) -> int:
     return v & 0xFFFFFFFF
 
 
-def _s32(v: int) -> int:
+def s32(v: int) -> int:
     """v read as a signed 32-bit value: a register may hold either reading."""
     return ((v + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
 
 
 def _min(a: int, b: int) -> int:
-    return a if _s32(a) <= _s32(b) else b
+    return a if s32(a) <= s32(b) else b
 
 
 def _max(a: int, b: int) -> int:
-    return a if _s32(a) >= _s32(b) else b
+    return a if s32(a) >= s32(b) else b
 
 
 def _flag(test: bool) -> int:
@@ -272,7 +272,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x3E: OpSemantics(
         V,
         "ra >> imm5, arithmetic; rb and f120_122 have no effect (verified on the camera by exact readout, pre-registered)",
-        _imm("ra >> c", lambda a, c: _s32(a) >> c),
+        _imm("ra >> c", lambda a, c: s32(a) >> c),
     ),
     0x3F: OpSemantics(
         V,
@@ -315,7 +315,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x32: OpSemantics(
         V,
         "abs(rb) (verified on the camera by exact readout, pre-registered)",
-        _e("abs(rb)", lambda a, b: abs(_s32(b)), "b"),
+        _e("abs(rb)", lambda a, b: abs(s32(b)), "b"),
     ),
     0x3C: OpSemantics(V, f"ra & rb ({_EXACT_RULE})", _e("ra & rb", lambda a, b: a & b)),
     0x3A: OpSemantics(V, f"ra | rb ({_EXACT_RULE})", _e("ra | rb", lambda a, b: a | b)),
@@ -347,12 +347,12 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x2A: OpSemantics(
         V,
         f"1 if ra <= rb signed, else 0 ({EXACT})",
-        _e("ra <= rb", lambda a, b: _flag(_s32(a) <= _s32(b))),
+        _e("ra <= rb", lambda a, b: _flag(s32(a) <= s32(b))),
     ),
     0x2B: OpSemantics(
         V,
         f"1 if ra < rb signed, else 0 ({EXACT})",
-        _e("ra < rb", lambda a, b: _flag(_s32(a) < _s32(b))),
+        _e("ra < rb", lambda a, b: _flag(s32(a) < s32(b))),
     ),
     0x30: OpSemantics(
         V,
@@ -367,7 +367,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x41: OpSemantics(
         V,
         f"ra >> (rb & 31), arithmetic ({EXACT})",
-        _e("ra >> rb", lambda a, b: _s32(a) >> (b & 31)),
+        _e("ra >> rb", lambda a, b: s32(a) >> (b & 31)),
     ),
     0x42: OpSemantics(
         V,
@@ -417,12 +417,12 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x20: OpSemantics(
         V,
         f"1 if ra <= c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra <= c", lambda a, c: _flag(_s32(a) <= c)),
+        _imm("ra <= c", lambda a, c: _flag(s32(a) <= c)),
     ),
     0x21: OpSemantics(
         V,
         f"1 if ra < c signed, else 0; c = imm16 sign-extended ({EXACT})",
-        _imm("ra < c", lambda a, c: _flag(_s32(a) < c)),
+        _imm("ra < c", lambda a, c: _flag(s32(a) < c)),
     ),
     0x22: OpSemantics(
         V,
@@ -484,17 +484,17 @@ _X_SHARED: dict[int, XValue] = {
     0x01: lambda a, b, zk, sk: _flag(_u32(a) == _u32(sk)),
     0x02: lambda a, b, zk, sk: a - zk,
     0x03: lambda a, b, zk, sk: a + zk,
-    0x04: lambda a, b, zk, sk: _flag(_s32(a) <= sk),
-    0x05: lambda a, b, zk, sk: _flag(_s32(a) < sk),
+    0x04: lambda a, b, zk, sk: _flag(s32(a) <= sk),
+    0x05: lambda a, b, zk, sk: _flag(s32(a) < sk),
     0x06: lambda a, b, zk, sk: _flag(_u32(a) <= zk),
     0x07: lambda a, b, zk, sk: _flag(_u32(a) < zk),
     0x08: lambda a, b, zk, sk: _flag(_u32(a) <= _u32(b)),
     0x09: lambda a, b, zk, sk: _flag(_u32(a) < _u32(b)),
-    0x0A: lambda a, b, zk, sk: _flag(_s32(a) <= _s32(b)),
-    0x0B: lambda a, b, zk, sk: _flag(_s32(a) < _s32(b)),
+    0x0A: lambda a, b, zk, sk: _flag(s32(a) <= s32(b)),
+    0x0B: lambda a, b, zk, sk: _flag(s32(a) < s32(b)),
     0x0C: lambda a, b, zk, sk: _flag(_u32(a) != _u32(b)),
     0x0D: lambda a, b, zk, sk: _flag(_u32(a) == _u32(b)),
-    0x0E: lambda a, b, zk, sk: abs(_s32(b)),
+    0x0E: lambda a, b, zk, sk: abs(s32(b)),
     0x0F: lambda a, b, zk, sk: -b,
     0x10: lambda a, b, zk, sk: a - b,
     0x11: lambda a, b, zk, sk: a + b,
@@ -1155,7 +1155,7 @@ class ScalarValue:
     run: Callable[[Sequence[int | None], Sequence[int | None], Scalars], int]
 
 
-def _known(v: Sequence[int | None], name: str) -> list[int]:
+def _known_lanes(v: Sequence[int | None], name: str) -> list[int]:
     if any(x is None for x in v):
         raise UnknownInput(name)
     return list(v)
@@ -1168,13 +1168,13 @@ def _bits(tests: Iterable[bool]) -> int:
 def _mask_ab(f: Callable[[int, int], bool]) -> ScalarValue:
     """Bit k from f(lane k of a, lane k of b)."""
     return ScalarValue(
-        "ab", lambda a, b, c: _bits(map(f, _known(a, "a"), _known(b, "b")))
+        "ab", lambda a, b, c: _bits(map(f, _known_lanes(a, "a"), _known_lanes(b, "b")))
     )
 
 
 def _mask_b(f: Callable[[int, Scalars], bool]) -> ScalarValue:
     """Bit k from f(lane k of b, scalars)."""
-    return ScalarValue("b", lambda a, b, c: _bits(f(y, c) for y in _known(b, "b")))
+    return ScalarValue("b", lambda a, b, c: _bits(f(y, c) for y in _known_lanes(b, "b")))
 
 
 def _carry_mask(carry_in: bool) -> ScalarValue:
@@ -1182,7 +1182,7 @@ def _carry_mask(carry_in: bool) -> ScalarValue:
 
     def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
         r = c["r"] if carry_in else 0
-        pairs = enumerate(zip(_known(a, "a"), _known(b, "b")))
+        pairs = enumerate(zip(_known_lanes(a, "a"), _known_lanes(b, "b")))
         return _bits((x + y + (r >> k & 1)) >> 16 for k, (x, y) in pairs)
 
     return ScalarValue("ab", value)
@@ -1190,7 +1190,7 @@ def _carry_mask(carry_in: bool) -> ScalarValue:
 
 def _overflows(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
     """The signed overflows of a + b per lane, with carry-in bit k of "r" for lane k."""
-    pairs = enumerate(zip(_known(a, "a"), _known(b, "b")))
+    pairs = enumerate(zip(_known_lanes(a, "a"), _known_lanes(b, "b")))
     return _bits(
         not -0x8000 <= _s16(x) + _s16(y) + (c["r"] >> k & 1) <= 0x7FFF
         for k, (x, y) in pairs
@@ -1215,7 +1215,7 @@ def _lane_of(index: Callable[[Scalars], int], signed: bool) -> ScalarValue:
 
 def _reduce(f: Callable[[list[int]], int], signed: bool) -> ScalarValue:
     def value(a: Sequence[int | None], b: Sequence[int | None], c: Scalars) -> int:
-        lanes = _known(b, "b")
+        lanes = _known_lanes(b, "b")
         return f([_s16(x) for x in lanes] if signed else lanes)
 
     return ScalarValue("b", value)
@@ -1486,40 +1486,6 @@ def head_reads(unit: str, word: int) -> frozenset[str] | None:
         if unit == "s0" or lane is None or "b" in lane.reads:
             reads |= {LATCH_OPERAND[unit]}
     return reads
-
-
-@dataclass
-class LaneMemory:
-    """The lane memory's content by vector (`fields.LANE_MEMORY`), a None lane where it is not
-    known (power-up content). The addresses count modulo `LANE_VECTORS`."""
-
-    vectors: dict[int, Lanes] = field(default_factory=dict)
-
-    def load(self, address: int) -> Lanes:
-        return list(self.vectors.get(address % LANE_VECTORS, [None] * LANE_COUNT))
-
-    def store(self, address: int, lanes: Sequence[int | None]) -> None:
-        if len(lanes) != LANE_COUNT:
-            raise ValueError(f"{len(lanes)} lanes: expected {LANE_COUNT}")
-        self.vectors[address % LANE_VECTORS] = [
-            None if v is None else v & LANE_MASK for v in lanes
-        ]
-
-    def copy_in(self, vector: int, data: bytes) -> None:
-        """The stock copy's load: byte i, zero-extended, to lane i % 32 of vector + i // 32;
-        a last partial vector's other lanes are unknown (not measured)."""
-        for start in range(0, len(data), LANE_COUNT):
-            address = vector + start // LANE_COUNT
-            chunk = list(data[start : start + LANE_COUNT])
-            self.store(address, chunk + [None] * (LANE_COUNT - len(chunk)))
-
-    def copy_out(self, vector: int, length: int) -> list[int | None]:
-        """The stock copy's store of `length` bytes from `vector` on: each element's low 8 bits,
-        None for an unknown lane."""
-        lanes = [
-            v for n in range(-(-length // LANE_COUNT)) for v in self.load(vector + n)
-        ]
-        return [None if v is None else v & 0xFF for v in lanes[:length]]
 
 
 @dataclass(frozen=True)

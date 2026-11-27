@@ -3,7 +3,6 @@
 import pytest
 
 from fenykl.dsp.semantics import (
-    LaneMemory,
     lane_address,
     lane_result,
     product_high,
@@ -421,22 +420,6 @@ def test_heads_without_a_lane_result():
 )
 def test_lane_memory_address(head, a, b, k, vector):
     assert lane_address(head, a, b, k) == vector
-
-
-def test_lane_memory_aliases_modulo_its_size():
-    memory = LaneMemory()
-    memory.store(0x400, list(range(0xFFF0, 0x10010)))
-    assert memory.load(0) == [v & 0xFFFF for v in range(0xFFF0, 0x10010)]
-    assert memory.load(0x4001) == [None] * 32
-
-
-def test_the_stock_copy_fills_one_element_per_byte_and_stores_its_low_byte():
-    memory = LaneMemory()
-    memory.copy_in(0x3FF, bytes(range(40)))
-    assert memory.load(0x3FF) == list(range(32))
-    assert memory.load(0)[:9] == [*range(32, 40), None]  # the wrap; the rest unknown
-    memory.store(0x3FF, [0x1234] * 32)
-    assert memory.copy_out(0x3FF, 34) == [0x34] * 32 + [32, 33]
 
 
 def test_s3_0x9_looks_b_up_in_each_half():

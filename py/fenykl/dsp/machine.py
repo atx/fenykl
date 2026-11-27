@@ -109,6 +109,7 @@ from .fields import (
     WAIT_HEAD,
     WAIT_NOTHING,
     X0_BESIDE_KEPT,
+    X0_LANE_BY_REGISTER,
     X0_LANE_LOADS,
     X0_LANE_MEMORY,
     X_IMMEDIATES,
@@ -149,6 +150,7 @@ from .semantics import (
     product_high,
     ring_length,
     ring_step,
+    s32,
     s_result,
     x_result,
 )
@@ -225,26 +227,19 @@ def _unknown(file: str) -> Sv | Vec:
     return UNKNOWN_VEC if file in VECTOR_FILES else UNKNOWN
 
 
-def _s32(v: int) -> int:
-    return v - (1 << 32) if v & 0x80000000 else v
-
-
 def _divide(a: Sv, b: Sv) -> Sv:
     """X1 0x1e: a / b signed, truncated toward zero (`fields.DIVIDE_HEAD`); b <= 0 was not
     measured."""
     tier = min(a.tier, b.tier)
-    if a.value is None or b.value is None or _s32(b.value) <= 0:
+    if a.value is None or b.value is None or s32(b.value) <= 0:
         return Sv(None, tier)
-    n, d = _s32(a.value), _s32(b.value)
+    n, d = s32(a.value), s32(b.value)
     q = abs(n) // d
     return Sv((-q if n < 0 else q) & M32, min(tier, I if n < 0 else V))
 
 
 def _sext(v: int, bits: int) -> int:
     return v - (1 << bits) if v >> (bits - 1) & 1 else v
-
-
-HALF = 1 << 16
 
 
 def _id(lo: int, hi: int) -> str:
@@ -563,15 +558,13 @@ class Machine:
         if ra.value is None:
             return Branch(None, f"r{word['ra']} unknown", V)
         v = ra.value
-        taken = {1: v == 0, 2: v != 0, 0: _s32(v) > 0}[word.op]
+        taken = {1: v == 0, 2: v != 0, 0: s32(v) > 0}[word.op]
         return Branch(taken, f"r{word['ra']} = {v:#x}", min(ra.tier, self.cap))
 
     # ------------------------------------------------------------------ reads
 
     def _rd(self, file: str, reg: int) -> Sv:
         return self._file(file)[reg]
-
-    _rv = _rd
 
     # ------------------------------------------------------------------ the word
 
@@ -607,7 +600,8 @@ class Machine:
         x1bus = self._x1_bus(word[HEAD_IDS["x1"]], x1, t)
         writes = self._ports(index, word, t, bus, x0bus, x1bus)
         for key, value in writes.items():
-            self._commit(key, _cap(value, self.ceiling), t)
+            file, reg = key
+            self._file(file)[reg] = _cap(value, self.ceiling)
         for due in (
             self.bus_due,
             self.x1_due,
@@ -698,7 +692,7 @@ class Machine:
             step = Sv(1)
         else:
             step = self._rd("R", word["f120_122"])
-            step = Sv(None if step.value is None else _s32(step.value), step.tier)
+            step = Sv(None if step.value is None else s32(step.value), step.tier)
         length, ltier = (rb.value, V) if code == 0x47 else ring_length(c)
         if length is None and code != 0x47:
             self.lapse(index, op(code).name, f"ring length of imm13 {c:#x}: not measured")
@@ -753,7 +747,7 @@ class Machine:
             v = _sext(v, 8 * width) & M32 if signed else v
             datum = Sv(v, min(ra.tier, b.weakest()))
         else:
-            datum = Sv(None)
+            datum = Sv(None, ra.tier)
         self.bus_due.setdefault(t + LOAD_LAG, []).append((datum, "load"))
 
     def _unknown_access(self, code: int, t: int) -> None:
@@ -827,10 +821,10 @@ class Machine:
         if rule.value is None:
             return None
         ins = [v for name, v in (("a", a), ("b", b)) if name in rule.reads]
+        tier = min([rule.confidence, *(v.tier for v in ins)])
         if any(v.value is None for v in ins):
-            return Sv(None)
-        value = x_result(unit, head, a.value or 0, b.value or 0, k)
-        return Sv(value, min([rule.confidence, *(v.tier for v in ins)]))
+            return Sv(None, tier)
+        return Sv(x_result(unit, head, a.value or 0, b.value or 0, k), tier)
 
     def _x1_bus(self, head: int, x1: Sv | None, t: int) -> Sv | object:
         """X1's result bus in word t: the head's result, a quotient due (`fields.DIVIDE_LAG`) or
@@ -851,7 +845,7 @@ class Machine:
     def _lane_memory(
         self, index: int, word: Word, head: int, a: Sv, b: Sv, k: int, t: int
     ) -> None:
-        by_reg = head in range(0x1E, 0x22)
+        by_reg = head in X0_LANE_BY_REGISTER
         flight = V
         if head in X0_LANE_LOADS and not self._chained(
             "load", t, self.load_due, LOAD_CHAINS, head == LOAD_CHAIN_HEAD
@@ -894,7 +888,7 @@ class Machine:
                 self._why(t + LANE_LOAD_LAG, LANE_LOAD, f"memory[{addr:#x}] {state}")
             return
         reg = word["f69_71"]
-        self.memory[addr] = _cap(self._rv("O", reg), tier)
+        self.memory[addr] = _cap(self._rd("O", reg), tier)
         if self.trace is not None:
             source = f"x0 {head:#x}'s store of O[{reg}]"
             self._note(index, f"memory[{addr:#x}]", source, self.memory[addr], "")
@@ -926,7 +920,7 @@ class Machine:
             head = word[HEAD_IDS[unit]]
             if head == lookup(HEAD_IDS[unit]).idle:
                 continue
-            a, b = self._rv(file, word[a_id]), self._rv(file, word[b_id])
+            a, b = self._rd(file, word[a_id]), self._rd(file, word[b_id])
             scalars = self._scalars(unit, word)
             self._lane_head(index, unit, head, a, b, scalars, word, t)
             if unit != "s3":
@@ -952,7 +946,7 @@ class Machine:
                     s_result(unit, head, a.lanes, b.lanes, sc), min(tier, sc.tier)
                 )
             except UnknownInput:
-                value = Sv(None)
+                value = Sv(None, tier)
             if rule.held:
                 self.reductions.append((t + rule.lag, value))
             elif rule.lag == 0:
@@ -1169,7 +1163,7 @@ class Machine:
         n = _sext(scalars["f92_95"].value, 4)
         if not 1 <= abs(n) <= 4 or all(x is None for x in lanes):
             return lanes, tier
-        u = self._rv("U", scalars["f31_34"].value)
+        u = self._rd("U", scalars["f31_34"].value)
         out = list(lanes)
         if n > 0:
             out[LANE_COUNT - n :] = u.lanes[:n]
@@ -1263,9 +1257,10 @@ class Machine:
                 # (verified: four, five, eight and twenty words after the reduction head).
                 return _cap(v, tier)
             # A reduction's register on its first word, OR-ed with an extract's lane (verified).
+            tier = min(v.tier, fresh.tier)
             if v.value is None or fresh.value is None:
-                return Sv(None)
-            return Sv(v.value | fresh.value, min(v.tier, fresh.tier))
+                return Sv(None, tier)
+            return Sv(v.value | fresh.value, tier)
         if h is not None:
             return Sv(
                 None, H
@@ -1431,7 +1426,3 @@ class Machine:
         scalar = {"G": self.g, "A": self.a, "B": self.b, "R": self.r, **self.f}
         vector = {"U": self.u, "O": self.o, **self.lanes}
         return scalar.get(file) or vector[file]
-
-    def _commit(self, key: tuple[str, int], value, t: int) -> None:
-        file, reg = key
-        self._file(file)[reg] = value
