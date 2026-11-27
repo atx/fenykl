@@ -652,9 +652,7 @@ S2_LOW, S2_HIGH = "S2's result, a product's low half", "S2's product's high half
 S2_RESULT = "S2's result"
 LANE_LOAD_LAG = 4
 """Words from an X0 load head to the one word whose port takes the loaded vector."""
-LANE_LOAD = (
-    f"a lane memory load's 32 lanes, {LANE_LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
-)
+LANE_LOAD = f"a lane memory load's 32 lanes, {LANE_LOAD_LAG} words after its X0 head (`LANE_MEMORY`)"
 LANE_SOURCES: dict[str, dict[int, tuple[str, Confidence]]] = {
     "f236_237": {0: (LANE_LOAD, V), 1: (S2_HIGH, V), 2: (S0_RESULT, V)},
     "f238_239": {0: (S3_RESULT, V), 1: (S2_LOW, V), 2: (S1_RESULT, V)},

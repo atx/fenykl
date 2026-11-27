@@ -668,9 +668,7 @@ HALT_WORD = Word.from_fields({"f313_319": 7}, base=IDLE)
 
 
 def control(code: int, target: int | None = None, **fields: int) -> Word:
-    return Word.from_fields(
-        {"f120_122": 0, **fields}, base=OP(code, to=target).word()
-    )
+    return Word.from_fields({"f120_122": 0, **fields}, base=OP(code, to=target).word())
 
 
 def inc(reg: int) -> Word:
@@ -926,9 +924,7 @@ def test_the_words_behind_a_halt_run_and_a_control_word_there_raises():
 
 def test_the_machine_refuses_a_control_word_with_f120_122_low_bits():
     boot = Boot()
-    job = Job(
-        Program((OP.jump(1).word(), IDLE)), ()
-    )  # the idle word's f120_122 is 7
+    job = Job(Program((OP.jump(1).word(), IDLE)), ())  # the idle word's f120_122 is 7
     with pytest.raises(UnknownSemantics, match="f120_122 bits 0..1"):
         Executor(boot, datapath=Machine(boot)).step(job)
 

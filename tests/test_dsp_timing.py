@@ -304,9 +304,7 @@ def test_words_branched_over_cost_only_inside_a_fetch_line_that_runs():
     from fenykl.dsp.timing import LINE, UNRUN
 
     def over(target: int) -> Estimate:
-        br = Word.from_fields(
-            {"ra": 2, "f120_122": 0}, base=OP.bnz(to=target).word()
-        )
+        br = Word.from_fields({"ra": 2, "f120_122": 0}, base=OP.bnz(to=target).word())
         body = [br, *[IDLE] * (target - 1), *[IDLE] * 8]
         return run([], body=body, g={2: Sv(1)})
 
