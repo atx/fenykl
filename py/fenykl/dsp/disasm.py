@@ -123,6 +123,7 @@ def _head_items(unit: str, word: Word, base: Word) -> list[str]:
     reads and the fields with other bits that differ, or every operand where not known."""
     reads = head_reads(unit, word.value)
     if reads is None:
+        # Without the operands asm adds, which repeat bits of others, so each bit shows once.
         operands = HEAD_VIEWS[unit].operands
     else:
         operands = {
