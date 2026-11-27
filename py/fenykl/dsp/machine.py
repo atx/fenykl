@@ -669,9 +669,8 @@ class Machine:
 
     def _select(self, word: Word, ra: Sv, rb: Sv, tier: Confidence) -> Sv:
         """Op 0x08: ra where R[f120_122] is 0, else rb (measured on the camera by exact readout:
-        R 0 gave ra at f120_122 0, 3, 5, 6 and 7, every non-zero R tried gave rb, also in
-        program 13's word 107, which so sets the first block at b = 1). An unknown R gives an
-        unknown result unless ra and rb agree."""
+        R 0 gave ra at f120_122 0, 3, 5, 6 and 7, every non-zero R tried gave rb, also in a
+        stock program's select). An unknown R gives an unknown result unless ra and rb agree."""
         r = word["f120_122"]
         x = self._rd("R", r)
         if r not in SELECT_MEASURED:

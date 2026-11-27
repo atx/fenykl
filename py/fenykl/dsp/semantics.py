@@ -227,8 +227,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
             V,
             f"{fmt} local {LOCAL_UNITS[width]} load at the byte address ra + {width} x imm13 "
             f"modulo 0x2000, ra a base it does not write ({EXACT}); the datum reaches the ALU "
-            f"result bus {LOCAL_LOAD_LAG} words on, which stepping does not model: it records the "
-            "read only",
+            f"result bus {LOCAL_LOAD_LAG} words on",
         )
         for code, (width, signed) in LOCAL_LOADS.items()
         for fmt in ("a" if width == 4 else "a signed" if signed else "an unsigned",)
@@ -237,8 +236,7 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
         code: OpSemantics(
             V,
             f"a local {LOCAL_UNITS[width]} store at the byte address ra + {width} x imm13 "
-            f"modulo 0x2000 of the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT}); "
-            "the R file is not modelled, so the bytes become unknown",
+            f"modulo 0x2000 of the low {8 * width} bits of R[f120_122], ra a base it does not write ({EXACT})",
         )
         for code, width in LOCAL_STORES.items()
     },
@@ -292,20 +290,20 @@ OP_SEMANTICS: dict[int, OpSemantics] = {
     0x46: OpSemantics(
         V,
         "the ring pointer step as 0x44's with s = zext(ra) + sext(R[f120_122]) "
-        f"({EXACT}); the R file is not modelled, so the result is unknown",
+        f"({EXACT})",
     ),
     0x47: OpSemantics(
         V,
         "the ring pointer step as 0x46's with L = rb "
-        f"({EXACT}); the R file is not modelled, so the result is unknown",
+        f"({EXACT})",
     ),
     0x08: OpSemantics(
         V,
         "ra where R[f120_122] is 0, else rb (measured on the camera by exact readout, "
         "pre-registered against rb, the complement, a test of R3 or of R[ra's index], of the low "
         "16 bits, of bit 1 and of the sign: R 0 gave ra at f120_122 0, 3, 5, 6 and 7, R 1, 2, 4, "
-        "7, 9, 0x10000 and 0x80000000 gave rb; the same in program 13's word 107 and in copies "
-        "of its words 99..107); at f120_122 1, 2 and 4 inferred",
+        "7, 9, 0x10000 and 0x80000000 gave rb; the same in a stock program's select and in copies "
+        "of the words around it); at f120_122 1, 2 and 4 inferred",
     ),
     0x09: OpSemantics(
         V,
