@@ -1,5 +1,6 @@
 import base64
 import json
+import random
 import struct
 import warnings
 from dataclasses import replace
@@ -13,13 +14,21 @@ from fenykl.dsp.asm import Bundle, Label, raw
 from fenykl.dsp.emu import MAIN_CODE, Boot, back_firmware, dram_alias
 from fenykl.dsp.fields import Confidence, Operands
 from fenykl.dsp.job import Stop
+from fenykl.dsp.machine import Machine, Sv
 from fenykl.dsp.program import HypothesisFieldWarning, Program, assemble
-from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics
+from fenykl.dsp.semantics import OP_SEMANTICS, UnknownSemantics, ring_length
 from fenykl.dsp.stock import commands
 from fenykl.dsp.stock.copy import Copy16Model
-from fenykl.dsp.stock.intervals import RegSet, destinations
+from fenykl.dsp.stock.intervals import RegSet, destinations, op_effect
 from fenykl.dsp.stock.model import Status, StockBoot, run_model
-from fenykl.dsp.stock.registers import R14_BELOW, R14_EXACT, BootParams, JobView
+from fenykl.dsp.stock.registers import (
+    R14_BELOW,
+    R14_EXACT,
+    BootParams,
+    JobView,
+    Reg,
+    RegisterFile,
+)
 from fenykl.dsp.word import IDLE, Word
 
 VECTORS = Path(__file__).resolve().parent / "data" / "dsp"
@@ -813,15 +822,59 @@ def test_an_insert_after_the_last_word_moves_nothing():
     assert boot.read(DST, LEN).taint == base.read(DST, LEN).taint
 
 
+def any_operands(code: int, imm: int) -> Word:
+    """Op `code` on r1 and r2 or imm, in the operand form its family takes."""
+    for args in (
+        Operands(ra=1, rb=2),
+        Operands(ra=1, imm=imm),
+        Operands(ra=1, rb=2, imm=imm),
+    ):
+        try:
+            return Word.data(code, args)
+        except ValueError:
+            continue
+    raise AssertionError(f"no operand form for op {code:#x}")
+
+
+COMPUTING = sorted(
+    {c for c, s in OP_SEMANTICS.items() if s.rule is not None} | {0x0B, 0x38, 0x44}
+)
+RING_IMMS = [x for x in range(0x200) if ring_length(x)[0] is not None]
+
+
+@pytest.mark.parametrize("code", COMPUTING, ids=hex)
+def test_an_op_over_exact_intervals_is_what_the_machine_computes(code: int):
+    """Where the interval evaluation gives a value, it and its tier are the machine's."""
+    rng = random.Random(code)
+    for _ in range(20):
+        a, b = rng.randrange(-0x800, 0x800), rng.randrange(-0x800, 0x800)
+        imm = rng.choice(RING_IMMS) if code == 0x44 else rng.randrange(32)
+        word = Word.from_fields(
+            {"f272_273": 1, "f224_228": 5}, base=any_operands(code, imm)
+        )
+        m = Machine(Boot())
+        m.g[1], m.g[2] = Sv(a & 0xFFFFFFFF), Sv(b & 0xFFFFFFFF)
+        m.execute(0, word, 0)
+        regs = RegisterFile()
+        regs[1] = Reg(a, a, Confidence.VERIFIED, "a")
+        regs[2] = Reg(b, b, Confidence.VERIFIED, "b")
+        effect = op_effect(OP_SEMANTICS[code], word, regs)
+        assert effect is not None and effect.computes
+        if effect.result is None:
+            continue
+        got = Sv(effect.result.lo & 0xFFFFFFFF, effect.result.taint)
+        assert got == m.g[5], (a, b, imm)
+
+
 def test_a_result_goes_to_its_port_registers_or_is_open():
     const = Word.data(0x0B, Operands(ra=0, imm=1))
     both = Word.from_fields(
         {"f267_268": 1, "f211_215": 5, "f272_273": 1, "f224_228": 6}, base=const
     )
-    assert destinations(both) == ([(RegSet.XREG, 5, 4), (RegSet.OPERAND, 6, 3)], "")
+    assert destinations(both) == ([(RegSet.XREG, 5), (RegSet.OPERAND, 6)], "")
     # A port that writes nothing (f267_268 = 2) is no destination, open or not.
     idle = Word.from_fields({"f267_268": 2, "f211_215": 5}, base=both)
-    assert destinations(idle) == ([(RegSet.OPERAND, 6, 3)], "")
+    assert destinations(idle) == ([(RegSet.OPERAND, 6)], "")
     assert destinations(const)[1] == "no PR port enabled: where the result goes is open"
     other = Word.from_fields({"f272_273": 2, "f224_228": 4}, base=const)
     assert destinations(other) == ([], "where the result goes under f272_273=2 is open")
@@ -927,13 +980,14 @@ def test_an_engine_op_sets_the_load_offset():
     assert dst.weakest() is Confidence.HYPOTHESIS  # stock words off their indices
 
 
-def test_an_operand_chain_feeds_a_count():
-    """min(r2, 4) = 4 into r13 through port 272, read three words on by a compare through
-    port 267 into r12: true is 1, so word 73 stores 16 bytes."""
+@pytest.mark.parametrize("gap", [0, 2])
+def test_an_operand_chain_feeds_a_count(gap: int):
+    """min(r2, 4) = 4 into r13 through port 272, read `gap` + 1 words on by a compare through
+    port 267 into r12: true is 1, so word 73 stores 16 bytes. A port write is read from the
+    next word on."""
     words = (
         port(d_op(0x25, 2, 0x40), "f272_273", 13),
-        IDLE,
-        IDLE,
+        *(IDLE,) * gap,
         port(e_op(0x31, 13, 13), "f267_268", 12),
     )
     result, boot = engine(words, reader=73)
@@ -956,15 +1010,6 @@ def test_a_mask_through_the_count_reads_in_16_byte_units():
 @pytest.mark.parametrize(
     "words, why",
     [
-        # Read two words after the write: the latency is not met.
-        (
-            (
-                port(d_op(0x25, 2, 0x40), "f272_273", 13),
-                IDLE,
-                port(e_op(0x31, 13, 13), "f267_268", 12),
-            ),
-            "a value the model does not know",
-        ),
         ((port(d_op(0x25, 2, -0x400), "f267_268", 12),), "a negative value"),
         (
             (
@@ -988,7 +1033,7 @@ def test_a_mask_through_the_count_reads_in_16_byte_units():
             "beyond the buffer",
         ),
     ],
-    ids=["latency", "negative", "hidden-r", "beyond"],
+    ids=["negative", "hidden-r", "beyond"],
 )
 def test_an_engine_value_the_load_cannot_place_is_unknown(words, why):
     with pytest.raises(UnknownSemantics, match=why):

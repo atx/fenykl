@@ -1,6 +1,7 @@
-"""The op slot over register intervals: what a data op of `semantics.OP_SEMANTICS` does when its
+"""The op slot over register intervals: what a data op of `semantics.OP_SEMANTICS` computes when its
 operands are `registers.Reg` intervals (`op_effect`), and where the word's PR ports send its result
-(`destinations`). The copy model covers inserted words by it (`copy.Copy16Model`)."""
+(`destinations`). The copy model covers inserted words by it (`copy.Copy16Model`). Every op's value
+and tier is the one `machine.Machine` steps by; this only widens it to intervals."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,9 +16,8 @@ from ..semantics import (
     LOCAL_STORES,
     LOCAL_STORES_RB,
     LOCAL_UNITS,
-    MULTIPLY_LAG,
-    OP_SEMANTICS,
     PR_ENABLES,
+    SELECT_MEASURED,
     OpSemantics,
     OpValue,
     Value,
@@ -25,24 +25,24 @@ from ..semantics import (
     ring_length,
     ring_step,
 )
-from ..state import Space
 from ..word import Word
 from .registers import Reg, RegisterFile
 
-V = Confidence.VERIFIED
+I, V = Confidence.INFERRED, Confidence.VERIFIED
+
+STORES = frozenset({*LOCAL_STORES, *LOCAL_STORES_RB})
+"""The local stores: what they write is not modelled over intervals."""
 
 
 @dataclass(frozen=True)
 class Effect:
     """What a data op did: the value it computes, when it computes one (`computes`; result None
     = a value not known), which its word's PR ports route to a register (`destinations`); a
-    note for the trace; local memory writes of unknown data (address, bytes; address None =
-    anywhere)."""
+    note for the trace."""
 
     computes: bool = False
     result: Reg | None = None
     note: str = ""
-    stores: tuple[tuple[int | None, int], ...] = ()
 
 
 class RegSet(Enum):
@@ -57,36 +57,33 @@ class RegSet(Enum):
 @dataclass(frozen=True)
 class ResultPort:
     """A PR port that carries a data op's result: under `enable` = `value` the register its
-    field `reg` names, in `to`, from `latency` executed words after the op on."""
+    field `reg` names, in `to`."""
 
     enable: str
     value: int
     reg: str
     to: RegSet
-    latency: int
 
 
 RESULT_PORTS = (
-    ResultPort("f267_268", 1, "f211_215", RegSet.XREG, 4),
-    ResultPort("f272_273", 1, "f224_228", RegSet.OPERAND, 3),
+    ResultPort("f267_268", 1, "f211_215", RegSet.XREG),
+    ResultPort("f272_273", 1, "f224_228", RegSet.OPERAND),
 )
 """The ports a data op's result goes through (verified on the camera by exact readout: each
 enable value's source, `fields.PR_SOURCES`; and in the copy, a data op of each of the families
 B, C, D and E inserted after a copy's last setup word wrote the register f211_215 names under
-f267_268 = 1, not ra, which word 68 or 73 then read through its xreg; f224_228
-under f272_273 = 1 fed a later op's ra and rb). The latencies are the shortest distances seen
-working in the copy: the xreg transfer four words after the write, the operand read three
-words after it; exact readout on the camera shows the G write read by the very next word, which
-the operand latency here does not model yet."""
+f267_268 = 1, not ra, which word 68 or 73 then read through its xreg; f224_228 under
+f272_273 = 1 fed a later op's ra and rb). A port write lands at its word's end and is read from
+the next word on (`machine`'s clock rule)."""
 
 
-def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], str]:
-    """Where the word's data op result goes: (set, register, latency) per decoded enabled port,
-    and why the destination is incomplete ("" when every enabled port is decoded and one is).
-    An enable that takes X0's or X1's result (`fields.PR_SOURCES`) or writes R or A counts as
-    open here; one that writes nothing (f267_268 = 2) is skipped as idle. Without an enabled
-    port a data op writes no register (verified on the camera by exact readout); this still
-    reports such a result as open rather than dropping it."""
+def destinations(word: Word) -> tuple[list[tuple[RegSet, int]], str]:
+    """Where the word's data op result goes: (set, register) per decoded enabled port, and why
+    the destination is incomplete ("" when every enabled port is decoded and one is). An enable
+    that takes X0's or X1's result (`fields.PR_SOURCES`) or writes R or A counts as open here;
+    one that writes nothing (f267_268 = 2) is skipped as idle. Without an enabled port a data op
+    writes no register (verified on the camera by exact readout); this still reports such a
+    result as open rather than dropping it."""
     dests, names = [], []
     for enable in PR_ENABLES:
         v = word[enable]
@@ -100,7 +97,7 @@ def destinations(word: Word) -> tuple[list[tuple[RegSet, int, int]], str]:
         if port is None:
             names.append(f"{enable}={v}")
         else:
-            dests.append((port.to, word[port.reg], port.latency))
+            dests.append((port.to, word[port.reg]))
     if names:
         why = f"where the result goes under {', '.join(names)} is open"
     elif not dests:
@@ -151,106 +148,51 @@ def _result(
     return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
 
 
-def _interval(rule: OpValue, word: Word, slot: RegisterFile) -> Effect:
+def _interval(
+    sem: OpSemantics, rule: OpValue, word: Word, slot: RegisterFile
+) -> Effect:
     """A computing op's rule (`OpValue`) over the register intervals ra, rb read."""
     args = word.operands
     assert args is not None
+    tier = min(sem.confidence, rule.tier)
     if rule.form == "rb":
         assert args.rb is not None
         named = rule.text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
         if args.ra == args.rb:
-            return _result(
-                word, named, (slot[args.ra],), lambda a: rule.f(a, a), rule.tier
-            )
-        return _result(word, named, (slot[args.ra], slot[args.rb]), rule.f, rule.tier)
+            return _result(word, named, (slot[args.ra],), lambda a: rule.f(a, a), tier)
+        return _result(word, named, (slot[args.ra], slot[args.rb]), rule.f, tier)
     assert args.imm is not None
     c = args.imm
     named = rule.text.replace("ra", f"r{args.ra}").replace("c", f"{c:#x}")
-    return _result(word, named, (slot[args.ra],), lambda a: rule.f(a, c), rule.tier)
+    return _result(word, named, (slot[args.ra],), lambda a: rule.f(a, c), tier)
 
 
-def _const(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+def _const(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
     """0x0b: the sign-extended imm16; ra is not read."""
     args = word.operands
     assert args is not None and args.imm is not None
     c = args.imm
-    return _result(word, f"{c:#x}", (), lambda: c, V)
+    return _result(word, f"{c:#x}", (), lambda: c, sem.confidence)
 
 
-def _local_access(
-    width: int, word: Word, slot: RegisterFile
-) -> tuple[str, int | None] | None:
-    """(the access as text, its index in units of `width` from the local base, None for an
-    unknown base) at the byte address ra + width x imm13 modulo `LOCAL_BYTES`; None at an
-    address not aligned to the width (not measured)."""
+def _local_load(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
+    """A read of local memory at ra + width x imm13; ra is a base it does not write. The read
+    is recorded only: the datum's delivery to the ALU bus three words on is not modelled. None
+    at an address not aligned to the width (not measured)."""
+    width = LOCAL_LOADS[word.op][0]
     args = word.operands
     assert args is not None and args.imm is not None
     offset = local_offset(width, args.imm)
     where = f"local {LOCAL_UNITS[width]} r{args.ra} + {offset:#x} B"
     base = slot[args.ra]
     if base is None or base.exact is None:
-        return f"{where}, r{args.ra} unknown", None
-    addr = (base.exact + offset) % LOCAL_BYTES
-    if addr % width:
+        return Effect(note=f"reads {where}, r{args.ra} unknown")
+    if (base.exact + offset) % LOCAL_BYTES % width:
         return None
-    return where, addr // width
+    return Effect(note=f"reads {where}")
 
 
-def _local_load(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A read of `width` bytes of local memory; ra is a base it does not write. The read is
-    recorded only: the datum's delivery to a port three words on is not modelled."""
-    unit = LOCAL_UNITS[width]
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        access = _local_access(width, word, slot)
-        if access is None:
-            return None
-        where, k = access
-        if k is None:
-            return Effect(note=f"reads {where}")
-        b = local.read(local.base + width * k, width)
-        value = f"{int.from_bytes(b.data, 'little'):#x}" if all(b.known) else "unknown"
-        return Effect(note=f"reads local {unit} {k:#x}: {value}")
-
-    return run
-
-
-def _local_store(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A write of `width` bytes of local memory; ra is a base it does not write. The datum,
-    R[f120_122], is not modelled, so the bytes become unknown; with an unknown base, all of
-    local memory."""
-    unit = LOCAL_UNITS[width]
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        access = _local_access(width, word, slot)
-        if access is None:
-            return None
-        where, k = access
-        if k is None:
-            return Effect(stores=((None, width),), note=f"writes {where}: anywhere")
-        addr = local.base + width * k
-        return Effect(
-            stores=((addr, width),), note=f"writes local {unit} {k:#x}: unknown datum"
-        )
-
-    return run
-
-
-def _local_load_rb(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-    """A register-form load: stepping holds no rb, so it records the read only."""
-    return Effect(note="reads local memory at ra + w x rb")
-
-
-def _local_store_rb(width: int) -> Callable[[Word, RegisterFile, Space], Effect | None]:
-    """A register-form store: stepping holds no rb, so all of local memory becomes unknown."""
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        return Effect(stores=((None, width),), note="writes ra + w x rb: anywhere")
-
-    return run
-
-
-def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+def _and_mask(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
     """ra & imm16 sign-extended. A mask that clears only low bits (~(2^k - 1)) is monotonic, so
     a wide ra interval keeps exact bounds; other masks of a wide interval give a bound."""
     args = word.operands
@@ -260,15 +202,16 @@ def _and_mask(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
     text = f"r{args.ra} & {mask & 0xFFFFFFFF:#x}"
     clears_low = mask < 0 and (-mask) & (-mask - 1) == 0
     if src is None or src.exact is not None or not clears_low:
-        return _result(word, text, (src,), lambda a: a & mask, V)
+        return _result(word, text, (src,), lambda a: a & mask, sem.confidence)
     if src.lo < 0:
         return Effect(True, None, f"{text} (op {word.op:#x}): a negative input")
     name = f"{text} (op {word.op:#x})"
-    reg = Reg(src.lo & mask, src.hi & mask, src.taint, name)
+    taint = min(src.taint, sem.confidence)
+    reg = Reg(src.lo & mask, src.hi & mask, taint, name)
     return Effect(True, reg, f"{name} = {reg.lo:#x}..{reg.hi:#x}")
 
 
-def _ring_one(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+def _ring_one(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
     """0x44: the ring pointer step with R = 1 and L from imm13 (`semantics.ring_length`)."""
     args = word.operands
     assert args is not None and args.imm is not None
@@ -282,89 +225,64 @@ def _ring_one(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
         text,
         (slot[args.ra],),
         lambda a: ring_step((a & 0xFFFFFFFF) + 1, length),
-        tier,
+        min(tier, sem.confidence),
     )
 
 
-def _ring_r(text: str) -> Callable[[Word, RegisterFile, Space], Effect | None]:
+def _ring_r(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
     """0x46 / 0x47: the ring pointer step with R[f120_122], which the model does not hold, so
     the result is unknown."""
-
-    def run(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-        args = word.operands
-        assert args is not None
-        named = text.replace("ra", f"r{args.ra}").replace("rb", f"r{args.rb}")
-        r = word["f120_122"]
-        return Effect(
-            True, None, f"{named}, R{r} (op {word.op:#x}): the R file is not modelled"
-        )
-
-    return run
+    return Effect(
+        True,
+        None,
+        f"ring step, R{word['f120_122']} (op {word.op:#x}): the R file is not modelled",
+    )
 
 
-def _select(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
+def _select(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
     """0x08: ra where R[f120_122] is 0, else rb; the R file is not modelled, so the result is
     the hull of ra and rb."""
     args = word.operands
     assert args is not None and args.rb is not None
     a, b = slot[args.ra], slot[args.rb]
-    name = f"R{word['f120_122']} == 0 ? r{args.ra} : r{args.rb} (op 0x8)"
+    r = word["f120_122"]
+    name = f"R{r} == 0 ? r{args.ra} : r{args.rb} (op 0x8)"
     if a is None or b is None:
         return Effect(True, None, f"{name}: an unknown input")
-    taint = min(a.taint, b.taint, OP_SEMANTICS[0x08].confidence)
+    measured = V if r in SELECT_MEASURED else I
+    taint = min(a.taint, b.taint, sem.confidence, measured)
     lo, hi = min(a.lo, b.lo), max(a.hi, b.hi)
     value = f"{lo:#x}" if lo == hi else f"{lo:#x}..{hi:#x}"
     return Effect(True, Reg(lo, hi, taint, name), f"{name} = {value}")
 
 
-def _multiply(word: Word, slot: RegisterFile, local: Space) -> Effect | None:
-    """0x48 / 0x49: the low 32 bits of ra x rb, recorded only: stepping does not deliver a
-    product to the next word's ports."""
-    args = word.operands
-    assert args is not None and args.rb is not None
-    text = f"r{args.ra} x r{args.rb}"
-    if args.ra == args.rb:
-        product_ = _result(
-            word, text, (slot[args.ra],), lambda a: a * a & 0xFFFFFFFF, V
-        )
-    else:
-        product_ = _result(
-            word,
-            text,
-            (slot[args.ra], slot[args.rb]),
-            lambda a, b: a * b & 0xFFFFFFFF,
-            V,
-        )
-    return Effect(
-        note=f"{product_.note}; on the ALU bus {MULTIPLY_LAG} word on, not delivered"
-    )
+def _recorded(note: str) -> Callable[[OpSemantics, Word, RegisterFile], Effect | None]:
+    """An op whose result is not modelled here: recorded only."""
+    return lambda sem, word, slot: Effect(note=note)
 
 
-Evaluate = Callable[[Word, RegisterFile, Space], Effect | None]
+Evaluate = Callable[[OpSemantics, Word, RegisterFile], Effect | None]
 
 _OWN_RULES: dict[int, Evaluate] = {
-    IDLE_OP: lambda word, slot, local: Effect(),
-    **{code: _local_load(width) for code, (width, _) in LOCAL_LOADS.items()},
-    **{code: _local_store(width) for code, width in LOCAL_STORES.items()},
-    **{code: _local_load_rb for code in LOCAL_LOADS_RB},
-    **{code: _local_store_rb(width) for code, width in LOCAL_STORES_RB.items()},
+    IDLE_OP: _recorded(""),
+    **{code: _local_load for code in LOCAL_LOADS},
+    **{code: _recorded("reads local memory at ra + w x rb") for code in LOCAL_LOADS_RB},
     0x38: _and_mask,
     0x08: _select,
     0x0B: _const,
     0x44: _ring_one,
-    0x46: _ring_r("ring step ra + R, L imm"),
-    0x47: _ring_r("ring step ra + R, L rb"),
-    0x48: _multiply,
-    0x49: _multiply,
+    0x46: _ring_r,
+    0x47: _ring_r,
+    0x48: _recorded("a product on the ALU bus, not delivered"),
+    0x49: _recorded("a product on the ALU bus, not delivered"),
 }
-"""The ops of `OP_SEMANTICS` without an `OpValue` rule, by op."""
+"""The ops of `OP_SEMANTICS` without an `OpValue` rule, by op, but the local stores."""
 
 
-def op_effect(
-    sem: OpSemantics, word: Word, slot: RegisterFile, local: Space
-) -> Effect | None:
+def op_effect(sem: OpSemantics, word: Word, slot: RegisterFile) -> Effect | None:
     """What data op `word` with semantics `sem` does over the register intervals of `slot`, the
-    set ra and rb read; None where the word lies outside what the semantics covers."""
+    set ra and rb read; None where the word lies outside what the semantics covers. A local
+    store (`STORES`) has no effect here: its caller refuses it."""
     if sem.rule is not None:
-        return _interval(sem.rule, word, slot)
-    return _OWN_RULES[word.op](word, slot, local)
+        return _interval(sem, sem.rule, word, slot)
+    return _OWN_RULES[word.op](sem, word, slot)

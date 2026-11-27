@@ -70,7 +70,7 @@ from ..state import Bytes
 from ..stream import Engine
 from ..units import UNITS
 from ..word import IDLE, Word
-from .intervals import RESULT_PORTS, Effect, RegSet, destinations, op_effect
+from .intervals import STORES, Effect, RegSet, destinations, op_effect
 from .model import (
     BUFFER_HI,
     KIB,
@@ -97,6 +97,9 @@ ITEM = 16
 ENGINE_AFTER = 64
 """Inserted data ops right after this stock word (before 65) are the measured site: their
 operands and their results through the PR ports are modelled there only."""
+XREG_DISTANCE = 4
+"""The shortest distance in executed words from an inserted word's xreg-set write to the stock
+transfer that read it, seen working in the copy on the camera; nearer is not measured."""
 ENGINE_OPERANDS = (
     (
         2,
@@ -751,10 +754,9 @@ def _floor32(v: int) -> int:
 @dataclass
 class Operands16:
     """The operand set as inserted words at the engine site see it: `ENGINE_OPERANDS` and
-    their own writes, each read `RESULT_PORTS`' latency after it lands (nearer: unknown)."""
+    their own writes, each read from the next word on."""
 
     regs: RegisterFile = field(default_factory=RegisterFile)
-    written: dict[int, int] = field(default_factory=dict)
     seeded: bool = False
 
     def seed(self, length: int) -> None:
@@ -762,18 +764,6 @@ class Operands16:
             v = value(length)
             self.regs[r] = None if v is None else Reg(v[0], v[1], I, fact)
         self.seeded = True
-
-    def write(self, j: int, r: int, value: Reg | None) -> None:
-        self.regs[r] = value
-        self.written[r] = j
-
-    def at(self, j: int) -> RegisterFile:
-        latency = next(p.latency for p in RESULT_PORTS if p.to is RegSet.OPERAND)
-        view = RegisterFile(list(self.regs.regs))
-        for r, w in self.written.items():
-            if j - w < latency:
-                view[r] = None
-        return view
 
 
 class Copy16Model:
@@ -795,7 +785,7 @@ class Copy16Model:
             r
             for w in words[ENGINE_AFTER + 1 : STREAM.stop]
             if not w.control
-            for to, r, _ in destinations(w)[0]
+            for to, r in destinations(w)[0]
             if to is RegSet.XREG
         }
         """The xreg-set registers that stock words after the engine site write."""
@@ -897,8 +887,8 @@ class Copy16Model:
         and PR ports' fields off idle that its op semantics (`ops`, `op_effect`) covers, at the
         semantics' confidence. A load is recorded only (where its datum goes is open). A
         result goes through the word's PR ports (`destinations`): at the engine site
-        (`ENGINE_AFTER`, `operands` given) to the operand set, which later inserts read after
-        the port's latency, or to the xreg set, which the stock transfers after the site read
+        (`ENGINE_AFTER`, `operands` given) to the operand set, which later inserts read from
+        the next word on, or to the xreg set, which the stock transfers after the site read
         (`Trace.writes`); elsewhere the operands are unknown and a result has no modelled
         reader. Anything else raises UnknownSemantics (strict) or is ignored and taints."""
         if word == IDLE:
@@ -914,10 +904,13 @@ class Copy16Model:
             why = "fields outside the op slot and the PR ports"
         elif sem is None:
             fields, why = [(OP_FIELD, word.op)], f"{name} has no op semantics"
+        elif word.op in STORES:
+            fields = [(OP_FIELD, word.op)]
+            why = f"{name}: a local store, the copy's request in local memory may change"
         else:
             fields = [(OP_FIELD, word.op)]
-            regs = RegisterFile() if operands is None else operands.at(j)
-            effect = op_effect(sem, word, regs, run.boot.local)
+            regs = RegisterFile() if operands is None else operands.regs
+            effect = op_effect(sem, word, regs)
             why = self._insert_effect(word, name, effect, operands, trace, j)
             if effect is None:
                 fields = [(f, word[f.id]) for f in UNITS["op_slot"].fields]
@@ -949,10 +942,6 @@ class Copy16Model:
         """Apply an inserted word's effect; returns why it is not covered ("" when it is)."""
         if effect is None:
             return f"{name}: outside what its op semantics covers"
-        if effect.stores:
-            return (
-                f"{name} ({effect.note}): the copy's request in local memory may change"
-            )
         if not effect.computes:
             if any(f.unit == "pr" for f, _ in word.changed(IDLE)):
                 return f"{name}: a PR port enabled, where its datum goes is open"
@@ -965,9 +954,9 @@ class Copy16Model:
                 f"{name} ({effect.note}): its result has no modelled reader off the "
                 f"site after word {ENGINE_AFTER}"
             )
-        for to, r, _ in dests:
+        for to, r in dests:
             if to is RegSet.OPERAND:
-                operands.write(j, r, effect.result)
+                operands.regs[r] = effect.result
             elif r in self.late_writes:
                 trace.writes[r] = (None, j)
                 trace.notes.append(
@@ -1325,13 +1314,12 @@ class Copy16Model:
         len (whether a count off 16-byte steps is floored or rounded up is open: a floor fits
         the inserted counts, not an odd-length copy's; above len a full copy then a timeout was
         seen, and so was an overrun on another route). Only these two roles were measured
-        reading such a value, `RESULT_PORTS`' latency or more words after the write."""
-        latency = next(p.latency for p in RESULT_PORTS if p.to is RegSet.XREG)
+        reading such a value, `XREG_DISTANCE` or more words after the write."""
         what = None
         if role.use not in (Use.LOAD_OFFSET, Use.COUNT):
             what = "a value for a role not measured with one"
-        elif distance < latency:
-            what = f"a value written {distance} words before, under the latency"
+        elif distance < XREG_DISTANCE:
+            what = f"a value written {distance} words before, nearer than measured"
         elif value is None:
             what = "a value the model does not know"
         elif value.lo < 0:
