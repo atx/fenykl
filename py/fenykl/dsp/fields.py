@@ -393,10 +393,15 @@ pre-registered values on operands that separate the compares, X1 139 of 155; the
 on those misses then matched 100 of 100 pre-registered values on fresh operands, on both units
 with K's top bit set)."""
 NO_RESULT = "no result on the ALU bus"
-TRANSFER_HEADS = (0x1C, 0x1D)
-"""X1's transfers to the stream engine (`stream.Engine`) with register a (f110_114) =
-`STREAM_SELECT`: 0x1c hands B[f115_119], 0x1d waits for one command; no result, no R, G or B
-register changed."""
+TRANSFERS = {
+    0x1C: "with a = B[0] hands B[b] to the stream engine, read before the word's ports write "
+    "(`stream`); another a not measured",
+    0x1D: "with a = B[0] hands nothing and waits for one command of the stream engine "
+    "(`stream`); with B[1], B[2] or B[8] hands nothing and returns; another a not measured",
+}
+"""X1's transfers to the stream engine (`stream.Engine`) by head, register a being f110_114
+(`STREAM_SELECT`, `WAIT_NOTHING`) and b f115_119; no result, no R, G or B register changed."""
+TRANSFER_HEADS = tuple(TRANSFERS)
 WAIT_HEAD = 0x1D
 STREAM_SELECT = 0
 """The register a of X1 0x1c and 0x1d that meet the stream engine: a 0x1c hands its value, a 0x1d
@@ -422,10 +427,7 @@ X1_ONLY: dict[int, tuple[str, Confidence, str]] = {
     0x19: ("a | b", V, ""),
     0x1A: ("a & b", V, ""),
     0x1B: ("~b", V, ""),
-    **{
-        h: (f"{NO_RESULT}: a transfer to the stream engine", V, "")
-        for h in TRANSFER_HEADS
-    },
+    **{h: (f"{NO_RESULT}: {text}", V, "") for h, text in TRANSFERS.items()},
     DIVIDE_HEAD: (
         f"{NO_RESULT} in its own word: a / b signed on X1's result bus {DIVIDE_LAG} words later",
         V,
@@ -763,6 +765,9 @@ VECTOR_BYTES = 64
 """A lane-memory offset counts bytes of 16-bit elements: 64 per vector."""
 STREAM_CHANNELS = 4
 """The stream engine's channels (`stream`)."""
+STREAM_BLOCK, STREAM_CHANNEL_SHIFT = 0x20, 6
+"""A stream key's block bit (set: the key programs registers, else it hands a command) and the
+shift of its channel (`stream`)."""
 STREAM_LOAD, STREAM_NOTHING_MOVES, STREAM_STORE = 0, 1, 6
 """The stream command kinds measured (`stream`)."""
 STREAM_LANE_MEMORY, STREAM_LOCAL_MEMORY = 1, 2

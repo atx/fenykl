@@ -114,6 +114,8 @@ from dataclasses import dataclass, field, replace
 from math import gcd
 
 from .fields import LANE_VECTORS, VECTOR_BYTES, Confidence
+from .fields import STREAM_BLOCK as BLOCK
+from .fields import STREAM_CHANNEL_SHIFT as CHANNEL_SHIFT
 from .fields import STREAM_CHANNELS as CHANNELS
 from .fields import STREAM_LANE_MEMORY as LANE_MEMORY
 from .fields import STREAM_LOAD as LOAD
@@ -270,6 +272,8 @@ KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware
 and what it moved before the abort, are not known."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
+SINGLE = 0x01
+"""With `fields.STREAM_BLOCK`, the bit of a key of one register."""
 REGISTER_KEY_BIT8 = 0x100
 ONE_VECTOR = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
 """The registers of the odd keys' runs: one row of one vector of bytes, pitches 0."""
@@ -700,12 +704,8 @@ class Engine:
         if v is None:
             self._go_off(m, f"{where} hands an unknown key", lost=True)
             return
-        if v & 0x21 == 0x21:
-            allowed, need = REGISTER_KEY, 1
-        elif v & 0x21 == 0x20:
-            allowed, need = BLOCK_KEY, REGISTERS
-        else:
-            allowed, need = COMMAND_KEY, 2
+        allowed = _form(v)
+        need = {REGISTER_KEY: 1, BLOCK_KEY: REGISTERS, COMMAND_KEY: 2}[allowed]
         odd = v & ~allowed
         if odd and odd not in ODD_KEY_BITS[allowed]:
             self._go_off(m, f"{where} key {v:#x}: bits outside its fields", lost=True)
@@ -716,8 +716,9 @@ class Engine:
         key, values = self.key, self.group
         self.key, self.group = None, []
         v = key.value
-        channel = v >> 6 & 3
-        if v & 0x21 == 0x21:
+        channel = v >> CHANNEL_SHIFT & CHANNELS - 1
+        form = _form(v)
+        if form == REGISTER_KEY:
             reg = v >> 11 & 7
             value = _weaker(values[0], key.tier)
             if v & REGISTER_KEY_BIT8:
@@ -730,7 +731,7 @@ class Engine:
                 else:
                     value = Sv(now.value, min(now.tier, value.tier))
             self.regs[channel][reg] = value
-        elif v & 0x21 == 0x20:
+        elif form == BLOCK_KEY:
             ran = tuple(x.value for x in values) == BLOCK_KEY_RUN
             ran = (
                 ran and channel == 0 and self.count == REGISTERS + 1
@@ -771,7 +772,7 @@ class Engine:
                 )
                 m.lapse(index, "x1 0x1d", f"{where}: {why}")
                 return
-            if self.key.value & 0x20 == 0:
+            if _form(self.key.value) == COMMAND_KEY:
                 m.lapse(index, "x1 0x1d", f"{where}: a 0x1d inside a command's values")
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
             return
@@ -789,7 +790,8 @@ class Engine:
         if self.key is None or self.group:
             return False
         v = self.key.value
-        return v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)
+        form = _form(v)
+        return form == REGISTER_KEY or (form == COMMAND_KEY and v & 0x3F == STORE)
 
     def _joins_in_group(self) -> bool:
         if not self.outstanding or not self._at_join():
@@ -1505,6 +1507,13 @@ def _floored(cmd: _Command, rows: list[tuple[int, int]]) -> Confidence:
     if all(off % 4 == 0 for _, off in rows):
         return V
     return V if _ran(cmd, *LOCAL_FLOORED) else I
+
+
+def _form(v: int) -> int:
+    """A key's kind, by the bits it may set: `REGISTER_KEY`, `BLOCK_KEY` or `COMMAND_KEY`."""
+    if v & (BLOCK | SINGLE) == BLOCK | SINGLE:
+        return REGISTER_KEY
+    return BLOCK_KEY if v & BLOCK else COMMAND_KEY
 
 
 def _ran(cmd: _Command, *rans: Ran) -> bool:
