@@ -48,6 +48,8 @@ from .fields import (
     S2_RESULT,
     S3_RESULT,
     S_RESULTS,
+    STREAM_BLOCK,
+    STREAM_CHANNEL_SHIFT,
     STREAM_CHANNELS,
     STREAM_LANE_MEMORY,
     STREAM_LOAD,
@@ -1118,8 +1120,6 @@ def wait() -> Instr:
     return X1.wait(b=B[1])
 
 
-_BLOCK = 0x20
-"""A block key's bits besides its channel: the next eight values are the channel's r0..r7."""
 LINE_BYTES = 16
 """A DRAM line of the stream engine: 16 byte elements (r5 0x10)."""
 HANDED_VECTORS = range(0x8000 // VECTOR_BYTES)
@@ -1129,7 +1129,7 @@ HANDED_VECTORS = range(0x8000 // VECTOR_BYTES)
 def _channel(channel: int) -> int:
     if not 0 <= channel < STREAM_CHANNELS:
         raise ValueError(f"channel is 0..{STREAM_CHANNELS - 1}, not {channel}")
-    return channel << 6
+    return channel << STREAM_CHANNEL_SHIFT
 
 
 def _vector(vector: int) -> int:
@@ -1155,7 +1155,7 @@ def lane_block(channel: int, nbytes: int) -> list[int]:
     if nbytes <= 0 or nbytes % LANE_COUNT:
         raise ValueError(f"a lane block is whole vectors of 32 bytes, not {nbytes}")
     return [
-        _BLOCK | _channel(channel),
+        STREAM_BLOCK | _channel(channel),
         STREAM_LANE_MEMORY,  # r0: the lane memory
         0,  # r1: the memory-side row pitch, unused for one row
         LANE_COUNT,  # r2: elements per vector, one per lane
@@ -1296,13 +1296,6 @@ def _decode(value: int, labels: Mapping[int, str]) -> list[Part]:
 
 # The review list --------------------------------------------------------------------------
 
-_TRANSFERS = {
-    0x1C: "with a = B[0] hands B[b] to the stream engine, read before the word's ports write "
-    "(`stream`); another a not measured",
-    0x1D: "with a = B[0] hands nothing and waits for one command of the stream engine "
-    "(`stream`); with B[1], B[2] or B[8] hands nothing and returns; another a not measured",
-}
-"""X1's transfers as `stream` describes them."""
 _EVIDENCE = (" (verified", " (measured", " (inferred", " (fitted", " (a data op")
 
 
@@ -1335,8 +1328,6 @@ def formula(unit: str, code: int) -> str:
         if unit == "s2" and code in S2_HIGH_HALVES:
             parts.append(f"high half: {S2_HIGH_HALVES[code][0]}")
         return "; ".join(parts) + (_u(code) if unit == "s3" else "")
-    if unit == "x1" and code in _TRANSFERS:
-        return _TRANSFERS[code]
     if unit in X_FUNCTIONS:
         text = X_FUNCTIONS[unit][code][0]
         if unit == "x0" and code in X0_LANE_MEMORY:

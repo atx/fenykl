@@ -90,6 +90,7 @@ def test_words_before_the_wait_hide_the_transfer():
     short = run(values, {len(values) - 1: 20})
     long = run(values, {len(values) - 1: 300})
     assert part(alone, "stream waits").us > 0
+    assert part(alone, "job").tier == I  # the fixed cost is fitted
     assert abs(short.us - alone.us) < 1e-9
     assert long.us > alone.us
     assert part(long, "stream waits").us == 0 and part(long, "stream waits").tier == I
@@ -317,6 +318,7 @@ def test_words_branched_over_cost_only_inside_a_fetch_line_that_runs():
         == 3 * UNRUN.us
     )
     assert part(near, "first runs").us == part(far, "first runs").us
+    assert part(near, "unrun line words").tier == I  # fitted
 
 
 def test_a_hypothesis_rate_caps_the_waits(monkeypatch):

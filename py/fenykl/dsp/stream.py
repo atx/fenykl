@@ -1,119 +1,44 @@
 """The stream engine as the datapath executor drives it: the values X1's head 0x1c hands it, the
-channel registers they program, and the loads and stores between DRAM and the DSP's memories.
+channel registers they program, and the loads and stores between DRAM and the DSP's lane and local
+memories.
 
-The engine sees the values handed and nothing else of the program: which words hand them does not
-matter (verified on the camera). X1 0x1c hands B[f115_119] (read before the word's ports write);
-X1 0x1d hands nothing and waits for one command (below); both with register a 0
-(`fields.STREAM_SELECT`, which `Machine` checks).
+What it models. The engine sees the values handed and nothing else of the program (which words
+hand them does not matter, verified on the camera; the heads: `fields.TRANSFERS`). The values form
+groups, each starting with a key v (verified): with `fields.STREAM_BLOCK` and bit 0 set, register
+v >> 11 & 7 of channel v >> `fields.STREAM_CHANNEL_SHIFT` & 3 takes the next value; with the block
+bit alone the next eight values are the channel's r0..r7; without it v hands a command of kind
+v & 0x3f on the channel, followed by "from" and "to". Kind 0 loads, 6 stores, 1 moves nothing; the
+other kinds run as one of them or fill, each only in the shapes it ran in (`KIND_AS`,
+`KIND_SHAPES`). The registers: r0 the DSP-side memory, r1 its row pitch in bytes, r2 elements per
+unit (vector or 32-bit word), r3 units per row, r4 the DRAM row pitch, r5 the DRAM element format,
+r6 16-byte DRAM lines per row, r7 rows; they do not survive from one job to the next. A command
+starts when its last value is handed and runs beside the sequencer, up to `DEPTH` outstanding, in
+the order handed; a 0x1d waits for the oldest one. A load's destination is unknown from its hand
+until it lands; a store takes its source as of its hand.
 
-Grammar (verified): the values form groups, each starting with a key v.
+The tier basis. Every rule is tied to what ran on the camera. A constant holds each measured shape
+(`Ran`: the registers, the kind handed and, where the rule rests on few jobs, the memory-side
+offset), its docstring says what was measured; a command of that shape is verified, a near miss
+inferred. DRAM addresses are free: the acceptance kernels ran at other DRAM addresses than the
+measurement jobs, and every verified byte they wrote matched the camera.
 
-- v & 0x21 == 0x21: one register, channel v >> 6 & 3, register v >> 11 & 7; the next value is
-  written to it.
-- v & 0x21 == 0x20: a block, the next eight values are registers 0..7 of channel v >> 6 & 3.
-- v & 0x20 == 0: a command on channel v >> 6 & 3 of kind v & 0x3f, followed by (from, to): 0 a
-  load (from a DRAM address, to an offset in the DSP-side memory), 6 a store (from a memory
-  offset, to a DRAM address), 1 moves nothing (verified) and counts as a command for a 0x1d
-  (inferred: what follows it is capped at inferred). Kinds 2 and 4 load and store as 0 and 6,
-  kinds 3 and 5 move nothing as 1, kind 8 fills (under r0 1 r3 lane-memory vectors from the one
-  "to" names, every lane "from"'s low 16 bits; under r0 2 r3 local words from "to", each filled
-  with copies of "from"'s low r2-wide element: `LOCAL_FILLS`; no DRAM read or written), each only
-  in the shapes it ran in (`KIND_SHAPES`, by tier). Other kinds and shapes were not measured and raise
-  `UnknownSemantics`.
-
-A key with bits set outside these fields was not measured, but for one bit per kind
-(`ODD_KEY_BITS`): a register key with bit 8 takes its value (`REGISTER_KEY_RUN`), a block key with
-bit 10 programs as without it and one with bit 9 writes no register (`BLOCK_KEY_RUN`).
-
-Channel registers (four channels of eight; they do not survive from one job to the next: a
-command on a channel with a register not handed in this job moves nothing and completes,
-inferred: the lane memory, DRAM after a store and local memory after a load are then capped at
-inferred):
-
-- r0 the DSP-side memory: 1 the lane memory, 2 the local memory (verified both ways); a store
-  under r0 0x00, 0x10 or 0x40 writes nothing (`NO_MEMORY`);
-- r2 elements per unit of that memory: lane memory 0x20, one 16-bit element per lane of a vector
-  (verified; 0x10 writes zeros into the vectors on a load, verified for 32-bit elements at the
-  count that ends the load, `ZERO_FORMATS`, inferred otherwise; 0x10 and 0x200 write zeros on a
-  store, `LANE_STORE_ZEROS`); local memory 4 bytes or 2 16-bit elements per 32-bit word
-  (little-endian);
-- r3 units per row (vectors, or 32-bit words);
-- r1 the pitch between rows on the memory side in bytes (64 per vector);
-- r5 elements per 16-byte DRAM line, each 128 // r5 bits packed least significant first, the
-  line's remaining bits 0 (`LOAD_FORMATS`, `PACKED_LOADS`, `STORE_FORMATS`); on a load of bytes,
-  bits 8 and up skip that many of the row's first elements (`LOAD_SKIP_SHAPE`: verified at
-  two values in one shape, else inferred);
-- r6 16-byte DRAM lines per row; r4 the pitch between DRAM rows in bytes; r7 the rows (verified:
-  `LANE_LOAD_ROWS`, `LANE_STORE_ROWS`, local memory loads at up to 4 rows and stores at up to 2;
-  other counts inferred).
-
-Row k of a command runs at DRAM address + k r4 (32-bit wrapping, so a pitch handed as
-0xfffffe00 steps back; verified on loads) and memory offset + k r1. A row's DRAM address is
-floored to 16 bytes (a load's pitch of 0x208 steps 0x200, verified; a store's of 0x108 at two rows
-steps 0x100, verified, other store pitches off 16 bytes not run), a lane-memory offset to its
-vector, vectors counted modulo `fields.LANE_VECTORS` (verified; the wrap verified in `WRAPS`,
-else inferred), a local-memory offset to its word (`LOCAL_OFFSET_FLOORED`). Of the lane
-pitches that are not whole vectors only `HALF_VECTOR_ROWS` ran: both rows write one vector, and
-the later row lands (verified). Where a load's rows or its wrap write a vector again, or a store's
-rows one DRAM address, the last write lands (verified in `HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`,
-`WRAPS`, `STORE_SAME_ROWS`, else inferred). A load row
-fills r3 units from its n = r5 r6 elements; with more units than ceil(n / r2) the transfer never
-ends, with fewer it fills r3 units and ends (verified). Lane memory: element i goes to lane
-i % 32 of vector i / 32, its low 16 bits, the lanes beyond n 0 (verified). Local memory: element
-i goes to element i, zero-extended or truncated to the memory's width (`LOCAL_LOADS`). A store
-row takes its n elements in the same order, truncated to the DRAM width (`LOCAL_STORES`); with
-fewer than n elements on the memory side (r2 r3 < n) it never ends (verified).
-
-Zero counts: a lane-memory load of r3 units with r6 0 ended (inferred, three jobs; what it writes
-was not seen, so its vectors are unknown), a lane-memory load with r3 0 ended in the shapes of
-`ZERO_LOADS` (inferred; the vectors read back after it unchanged, the rest of its footprint
-unknown), a lane-memory store with r3 0 of n > 0 elements ended and wrote nothing (inferred,
-five jobs), and a lane-memory store with r6 0 ended and wrote nothing in the shapes of
-`ZERO_STORES` (inferred). Every other load or store with r3 or r6 0, on either memory, was not
-measured and goes off script.
-
-Timing (verified): a command starts when its last value is handed and runs beside the sequencer;
-a 0x1d waits until the oldest outstanding command is complete ("oldest" inferred); a 0x1d with
-no command outstanding never returns once the job has handed one (also right after a register or
-store key, `KEY_WAITS_RUN`); in a job that has handed none
-it was not measured (it raises `UnknownSemantics`); commands still outstanding at the job's end
-complete (verified for a store, inferred for a load). Of commands handed back to back before any
-0x1d (32-byte loads) the first 19 ran in one job (measured); the rest wait in the engine and run
-as 0x1d's free room: 32 loads handed, then 32 0x1d, all returned (verified) and the loads read
-back had landed (measured); with no 0x1d the 20th to 32nd had not run 8 us later (measured). So
-a 0x1d counts the commands handed, run or held (inferred). A command of kind 2 counted for a
-0x1d in one job (measured: a load joined, then kind 2, then a 0x1d that returned) and in another
-loaded 32 bytes from its "from" into the vector its "to" names, as kind 0 does (measured; the
-vector its "from" names kept its content). The emulator queues the held commands as the engine
-does, up to `DEPTH` outstanding; handing past it wedges the job, so more raises. The 19 running
-at once change only when a held load lands, not what it writes. The emulator never predicts a
-racing read: a load's destination is unknown from its hand until its 0x1d or the job's end
-(`finish`), a load takes its DRAM source as of the hand (a store handed after it runs after it),
-a store takes its source as of the hand and writes DRAM at once (where the source is rewritten
-before the store completes, inferred for a store of one vector and unknown for the rewritten
-vectors of a longer store: one of 0x80 vectors took the new bytes, measured), the order of
-commands on one DRAM range while one of them is outstanding is inferred, and the lane memory read
-while any command is outstanding is a hypothesis, but outside every outstanding command's
-vectors: there verified beside the shapes `Engine.lane_tier` names, inferred beside other
-lane-memory shapes.
-
-What was not measured takes the engine off script (so does a command that moves more DRAM bytes
-than a job's time allows, `MOST_BYTES`): the lane memory is unknown for the rest of the job, what
-later commands write is unknown (`off` says why), and so is whether the job ends: a command it
-holds may never complete, so the job's flow stops at `job.Stop.OPEN_END`, not at its halt
-(`Machine.open_end`). A command whose destination cannot be bounded (among them a store whose rows
-write more than the DRAM alias space), a value handed after the grammar is lost and a 0x1d among a
-command's values (but right after a register or store key with a command outstanding: it waits
-and the group goes on, `Engine._joins_in_group`) raise `UnknownSemantics`, as do kinds and shapes
-not run and a job that never ends or wedges; on a lenient machine they lapse instead (`Machine.lapse`): a command that never ends
-goes off script, a kind or shape not run and what cannot be bounded forget every memory, and a 0x1d
-that never returns or was not measured and a queue past `DEPTH` go on as if they had returned."""
+What is open. A kind, shape or key bit not measured takes the engine off script (`off` says why):
+the lane memory is unknown for the rest of the job, so is what later commands write, and since a
+command it holds may never complete, the job's flow stops at `job.Stop.OPEN_END`, not at its halt
+(`Machine.open_end`). So does a command that moves more DRAM bytes than a job's time allows
+(`MOST_BYTES`). A destination that cannot be bounded, a value after the grammar is lost, a 0x1d
+among a command's values and a job that never ends or wedges raise `UnknownSemantics`; on a
+lenient machine they lapse instead (`Machine.lapse`). Own words beside an outstanding command meet
+the engine at work: a hypothesis inside its vectors, verified outside them beside `LANE_BESIDE`
+only, inferred beside other shapes. A racing read is never predicted."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from math import gcd
 
 from .fields import LANE_VECTORS, VECTOR_BYTES, Confidence
+from .fields import STREAM_BLOCK as BLOCK
+from .fields import STREAM_CHANNEL_SHIFT as CHANNEL_SHIFT
 from .fields import STREAM_CHANNELS as CHANNELS
 from .fields import STREAM_LANE_MEMORY as LANE_MEMORY
 from .fields import STREAM_LOAD as LOAD
@@ -129,24 +54,34 @@ H, I, V = Confidence.HYPOTHESIS, Confidence.INFERRED, Confidence.VERIFIED
 
 @dataclass(frozen=True)
 class Ran:
-    """A command shape run on the camera, handed as kind 0 / 6: its registers 0..7 (None: any),
-    its kind (None: a load or a store) and the memory-side offset it ran at (None: not tied)."""
+    """A command shape run on the camera: its registers 0..7 (None: any), the kind it was handed
+    as (None: 0 or 6) and the memory-side offset it ran at (None: not tied)."""
 
     regs: tuple[int | None, ...]
     kind: int | None = LOAD
     at: int | None = None
+
+    def matches(self, kind: int, regs: tuple[int | None, ...], at: int | None) -> bool:
+        """A command handed as `kind`, with register values `regs`, at memory-side offset `at`."""
+        if kind not in ((LOAD, STORE) if self.kind is None else (self.kind,)):
+            return False
+        return (self.at is None or at == self.at) and _fits(regs, self.regs)
 
 
 REGISTERS = 8
 FILL = 8
 """Kind 8: fills the lane-memory vectors at "to" with "from"'s low 16 bits, or under r0 2 the
 local words at "to" with copies of "from"'s low r2-wide element (no DRAM side)."""
-HALF_ROWS_BESIDE = frozenset(
-    {(LOAD, 0x10, 0x40), (LOAD, 0x40, 0x100), (STORE, 0x10, 0x40)}
+BYTE_ROW_BESIDE = Ran((1, None, 0x20, None, None, 0x10, None, 1), None)
+HALF_ROWS_BESIDE = (
+    Ran((1, None, 0x20, 0x10, None, 0x08, 0x40, 1), LOAD, 0x400),
+    Ran((1, None, 0x20, 0x40, None, 0x08, 0x100, 1), LOAD, 0x1000),
+    Ran((1, None, 0x20, 0x10, None, 0x08, 0x40, 1), STORE, 0x400),
 )
-"""One-row 16-bit lane-memory commands (r2 0x20, r5 0x08) as (kind, r3, r6) beside which lane
-loads and stores of own words outside the command's vectors gave the pre-registered bytes on the
-camera (verified: 1 and 4 KiB loads, a 1 KiB store)."""
+"""One-row lane-memory commands beside which lane loads and stores of own words outside the
+command's vectors gave the pre-registered bytes on the camera (verified): byte loads and stores
+into or from the other bank, and 16-bit loads of 1 KiB at vector 0x10 and 4 KiB at vector 0x40
+and a 16-bit store of 1 KiB from vector 0x10."""
 KIND_AS = {
     2: LOAD,
     3: NOTHING_MOVES,
@@ -187,21 +122,23 @@ PAIR_SHAPE = (1, None, 0x20, 2, None, 0x10, 4, 1)
 """Two vectors of byte elements (four lines)."""
 TRIPLE_SHAPE = (1, None, 0x20, 3, None, 0x10, 6, 1)
 """Three vectors of byte elements (six lines)."""
-LOCAL_FILLS: dict[tuple[int, int, int], tuple[int, Confidence]] = {
-    (4, 3, 2): (0x400, I),
-    (4, 5, 2): (0x500, I),
-    (4, 8, 2): (0x400, I),
-    (2, 4, 4): (0x700, I),
-    (2, 8, 2): (0x600, I),
-    (1, 6, 3): (0x600, I),
-    (1, 3, 5): (0x700, I),
-}
-"""Kind 8 under r0 2 on channel 0 (r1 0, r4 0, r5 0x10, r7 1) by the (r2, r3, r6) that ran: the
-"to" it ran at and its tier: inferred, each shape having run in one job (the rule itself, r3 words of
-copies of "from"'s low r2-wide element, matched on pre-registered jobs at every r2). Another word-aligned
-"to" in `LOCAL_FILL_TO` is capped at inferred; other registers, channels and offsets, and a "from"
-at 0x8000 or above or whose element has its top bit set (every value that ran was below 0x8000,
-its element's top bit clear), raise
+LOCAL_FILLS = tuple(
+    Ran((2, 0, r2, r3, 0, 0x10, r6, 1), FILL, to)
+    for r2, r3, r6, to in (
+        (4, 3, 2, 0x400),
+        (4, 5, 2, 0x500),
+        (4, 8, 2, 0x400),
+        (2, 4, 4, 0x700),
+        (2, 8, 2, 0x600),
+        (1, 6, 3, 0x600),
+        (1, 3, 5, 0x700),
+    )
+)
+"""Kind 8 under r0 2 on channel 0 in the shapes and at the "to" that ran: inferred, each shape
+having run in one job (the rule itself, r3 words of copies of "from"'s low r2-wide element, matched
+on pre-registered jobs at every r2). Another word-aligned "to" in `LOCAL_FILL_TO` is inferred too;
+other registers, channels and offsets, and a "from" at 0x8000 or above or whose element has its top
+bit set (every value that ran was below 0x8000, its element's top bit clear), raise
 `UnknownSemantics`."""
 LOCAL_FILL_TO = range(0x400, 0x701)
 WRAPPED, DIRECT = "wrapped", "direct"
@@ -234,10 +171,7 @@ KIND_SHAPES: dict[int, dict[tuple[int | None, ...], tuple[Confidence, str | None
         BASE_SHAPE: (V, WRAPPED),
         HALF_SHAPE: (V, WRAPPED),
         QUAD_SHAPE: (V, WRAPPED),
-        **{
-            (2, 0, r2, r3, 0, 0x10, r6, 1): (tier, DIRECT)
-            for (r2, r3, r6), (_, tier) in LOCAL_FILLS.items()
-        },
+        **{ran.regs: (I, DIRECT) for ran in LOCAL_FILLS},
     },
 }
 """The shapes each kind ran in: (tier, the memory-side offset's form; both "from" and "to"
@@ -251,7 +185,11 @@ DEPTH = 44
 """Commands outstanding (handed, not yet joined by a 0x1d) that all completed: 40 and 44 did
 (measured, 44 again beside the wedges below); 45 and 46 wedged the job on two boots and 48
 twice, also with only 44 0x1d after them, so the depth is 44 and handing past it kills the job
-(measured). More than `DEPTH` raises `UnknownSemantics`."""
+(measured). More than `DEPTH` raises `UnknownSemantics`. Of 32-byte loads handed back to back
+the first 19 ran at once (measured); the rest waited in the engine and ran as 0x1d freed room
+(32 loads, then 32 0x1d: all returned and every load landed, verified; with no 0x1d the 20th to
+32nd had not run 8 us later, measured), so a 0x1d counts the commands handed, run or held
+(inferred)."""
 MOST_BYTES = 32 << 20
 """DRAM bytes a command may move and still be known to end: at the fastest rate timed (0.42 us per
 KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware aborts the job
@@ -259,15 +197,16 @@ KiB, `timing.RATES`) 32 MiB take 13.8 ms, past the 8 ms after which the firmware
 and what it moved before the abort, are not known."""
 REGISTER_KEY, BLOCK_KEY, COMMAND_KEY = 0x38E1, 0xE0, 0xFF
 """The bits each kind of key may set."""
+SINGLE = 0x01
+"""With `fields.STREAM_BLOCK`, the bit of a key of one register."""
 REGISTER_KEY_BIT8 = 0x100
 ONE_VECTOR = (1, 0, 0x20, 1, 0, 0x10, 2, 1)
 """The registers of the odd keys' runs: one row of one vector of bytes, pitches 0."""
-KEY_RUN_LOAD = (LOAD, ONE_VECTOR)
-"""The one command before the keys of `REGISTER_KEY_RUN` and `KEY_WAITS_RUN` ran, as `Event`
-(kind, registers): a one-vector byte load (it ran on channel 0 into vector 0x100; a history is
-matched on its commands' kinds and registers only)."""
-JOINED = (None, ())
-"""A 0x1d in a job's history, as `Event` (kind, registers)."""
+KEY_RUN_LOAD = Ran(ONE_VECTOR, LOAD, 0x4000)
+"""The one command before the keys of `REGISTER_KEY_RUN` and `KEY_WAITS_RUN` ran: a one-vector
+byte load into vector 0x100."""
+JOINED = None
+"""A 0x1d in a history (`Engine._after`)."""
 REGISTER_KEY_RUN = (0x1161, 0x20)
 """A register key with bit 8 set takes one value and the grammar stays aligned: channel 1 r2's
 key 0x1161 handed r2's own value 0x20, after `KEY_RUN_LOAD` and its 0x1d with channel 1
@@ -339,19 +278,22 @@ every lane (inferred, but see `ZERO_FORMATS`)."""
 ZERO_FORMATS = (0x04,)
 """r5 measured under r2 0x10 on a lane-memory load with zeros named before the run, at
 r3 = ceil(r5 r6 / 16): zeros (verified at that count; bytes gave zeros unforeseen, inferred)."""
-ZERO_LOADS: dict[tuple[int, int, int], int] = {
-    (0x20, 0x10, 0x40): 32,
-    (0x20, 0x10, 0x100): 32,
+ZERO_LOADS: dict[Ran, int] = {
+    Ran((1, None, 0x20, 0, None, 0x10, 0x40, 1)): 32,
+    Ran((1, None, 0x20, 0, None, 0x10, 0x100, 1)): 32,
 }
-"""A lane-memory load with r3 0 (one row) by the (r2, r5, r6) that ran: the vectors from its "to"
+"""A plain lane-memory load with r3 0 (one row) in the shapes that ran: the vectors from its "to"
 seen unchanged after it, of the ceil(r5 r6 / r2) a full count fills. Measured on the camera: the
 job ended, and a store from the same "to" emitted what those vectors held before the job, byte
 for byte (five jobs at r6 0x40, two of them at a src other than the one the held bytes came from:
 the whole footprint; two at r6 0x100: its first 32 vectors, the other 96 read back as bytes of
 no known origin, so they are unknown). Inferred: the jobs idled a whole program word, not the
 count alone."""
-ZERO_STORES = frozenset((0x20, r3, 0x10) for r3 in (0, 0x20, 0x80, 0x88, 0x200))
-"""A lane-memory store with r6 0 (one row) by the (r2, r3, r5) that ran. Measured on the camera,
+ZERO_STORES = tuple(
+    Ran((1, None, 0x20, r3, None, 0x10, 0, 1), STORE)
+    for r3 in (0, 0x20, 0x80, 0x88, 0x200)
+)
+"""A plain lane-memory store with r6 0 (one row) in the shapes that ran. Measured on the camera,
 29 jobs, each with this store as its only one, at dst: every job ended, dst read back as its fill
 over the whole length and the guards around it were intact (at r3 0x200 the length was 1 KiB of
 the 16 KiB a full count fills). Inferred: it writes nothing; the DRAM bytes a full r3 count would
@@ -373,47 +315,59 @@ counts verified in any shape (`LOAD_ROWS_ANY`, `STORE_ROWS_ANY`)."""
 LOAD_ROWS_ANY = range(1, 5)
 STORE_ROWS_ANY = range(1, 3)
 """Row counts verified on either memory in any shape: loads 1..4, stores 1..2."""
-HALF_VECTOR_ROWS = Ran((1, 0x20, 0x20, 1, None, 0x10, 2, 2))
-"""A lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes from a vector-aligned
-offset: row 1's offset floors to row 0's vector and row 1's elements land there, the next vector untouched (verified,
-pre-registered: one job, each row from its own DRAM line pair)."""
-SAME_VECTOR_ROWS = Ran((1, 0, 0x20, 1, 0x100, 0x10, 2, 2))
-"""A plain lane-memory load of two rows of one vector at lane pitch 0 (both into one vector) from
+HALF_VECTOR_PITCH = Ran((1, 0x20, 0x20, 1, None, 0x10, 2, 2))
+HALF_VECTOR_ROWS = Ran((1, 0x20, 0x20, 1, 0x100, 0x10, 2, 2), LOAD, 0x4000)
+"""A plain lane-memory load of two rows of one vector at a lane pitch of 0x20 bytes and a DRAM pitch
+of 0x100 into vector 0x100: row 1's offset floors to row 0's vector and row 1's elements land there,
+the next vector untouched (verified, pre-registered: one job). In `HALF_VECTOR_PITCH` at another
+DRAM pitch or vector-aligned offset inferred; other lane pitches off whole vectors were not
+measured."""
+SAME_VECTOR_ROWS = Ran((1, 0, 0x20, 1, 0x100, 0x10, 2, 2), LOAD, 0x4000)
+"""A plain lane-memory load of two rows of one vector at lane pitch 0, both into vector 0x100, from
 DRAM rows 0x100 apart: row 1's elements land (verified, pre-registered against row 0's; one job).
 Other loads whose rows write one vector again leave the last row's elements at inferred."""
-WRAPS: dict[tuple[tuple[int, ...], int], range] = {
-    ((1, 0, 0x20, 2, 0, 0x10, 4, 1), LANE_VECTORS - 1): range(1, 2),
-    ((1, 0, 0x20, LANE_VECTORS + 2, 0, 0x10, 2 * LANE_VECTORS + 4, 1), 0x100): range(
-        LANE_VECTORS, LANE_VECTORS + 2
+WRAPS: dict[Ran, range] = {
+    Ran((1, 0, 0x20, 2, 0, 0x10, 4, 1), LOAD, (LANE_VECTORS - 1) * VECTOR_BYTES): range(
+        1, 2
     ),
+    Ran(
+        (1, 0, 0x20, LANE_VECTORS + 2, 0, 0x10, 2 * LANE_VECTORS + 4, 1), LOAD, 0x4000
+    ): range(LANE_VECTORS, LANE_VECTORS + 2),
 }
-"""Plain one-row byte loads (registers, first vector) whose wrap past the last lane vector was read
+"""Plain one-row byte loads (shape and first vector) whose wrap past the last lane vector was read
 back, by the load's vectors v seen: two vectors from the last vector, the second landing in vector
 0, and `LANE_VECTORS` + 2 from vector 0x100, whose last two vectors rewrote 0x100 and 0x101 and
 replaced the first writes there (verified, pre-registered against stopping at the top and against
 the first write staying; one job each). Other wrapped vectors (that load's vectors 0..0xff among
 them) are inferred, and so is the last write of a vector a load writes more than once."""
-STORE_SAME_ROWS = Ran((1, 0x40, 0x20, 1, 0, 0x10, 2, 2), STORE)
-"""A lane-memory store of two rows of one vector each (lane pitch one vector) at DRAM pitch 0: row
-1's vector lands (verified, pre-registered against row 0's; one job). Other store rows that rewrite
+STORE_SAME_ROWS = Ran((1, 0x40, 0x20, 1, 0, 0x10, 2, 2), STORE, 0x4000)
+"""A plain lane-memory store of two rows of one vector each from vector 0x100 (lane pitch one
+vector) at DRAM pitch 0: row 1's vector lands (verified, pre-registered against row 0's; one job). Other store rows that rewrite
 one address leave the last row's bytes at inferred."""
 NO_MEMORY = (0x00, 0x10, 0x40)
 NO_MEMORY_STORE = (None, None, 0x20, 1, None, 0x10, 2, 1)
-"""A store under r0 0x00, 0x10 or 0x40 in this shape (one row of one vector of bytes) ended and
-wrote nothing: dst kept its nonzero fill over its whole length (verified, pre-registered against
-zeros and a lane-memory store; one job each). Other shapes, other r0 values, and loads under
-these, were not measured."""
+NO_MEMORY_RAN = tuple(
+    Ran((r0, *NO_MEMORY_STORE[1:]), STORE, 0x4000) for r0 in NO_MEMORY
+)
+"""A plain store under r0 0x00, 0x10 or 0x40 of one row of one vector of bytes from offset 0x4000
+ended and wrote nothing: dst kept its nonzero fill over its whole length (verified, pre-registered
+against zeros and a lane-memory store; one job each). From another offset, or handed as another
+kind, it writes nothing at inferred (dst's bytes keep their content, capped). Other shapes, other
+r0 values, and loads under these, were not measured."""
 LOCAL_LOAD_NEVER_ENDS = (2, None, 1, 8, None, 0x10, 2, 1)
 """A local-memory load of 32 bytes into eight 32-bit words (r2 1, r5 0x10, one row): the camera's
 job never ended (one job; the firmware timed it out and the store of those words after it, a
 measured shape, wrote nothing), so this shape never ends (inferred). Other byte or 16-bit loads
 into 32-bit words were not run."""
-ROWS_LOAD_BESIDE = Ran((1, 0x1000, 0x20, 0x40, 0x800, 0x10, 0x80, 3))
-LOCAL_LOAD_BESIDE = Ran((2, 0, 4, 0x200, 0, 0x10, 0x80, 1))
+ROWS_LOAD_BESIDE = Ran((1, 0x1000, 0x20, 0x40, 0x800, 0x10, 0x80, 3), LOAD, 0x4000)
+LOCAL_LOAD_BESIDE = Ran((2, 0, 4, 0x200, 0, 0x10, 0x80, 1), LOAD, 0x1000)
 """Loads beside which own lane words outside their vectors were measured on the camera: a 3-row
-byte load of 0x40 vectors per row, and a local-memory byte load of 0x800 bytes (which writes no
-lane vector). While each was outstanding, an X0 store into a vector outside it, and lane reads of
-such a vector, gave the bytes as alone (verified, pre-registered; one job each)."""
+byte load of 0x40 vectors per row into vector 0x100, and a local-memory byte load of 0x800 bytes to
+local offset 0x1000 (which writes no lane vector). While each was outstanding, an X0 store into a
+vector outside it, and lane reads of such a vector, gave the bytes as alone (verified,
+pre-registered; one job each)."""
+LANE_BESIDE = (BYTE_ROW_BESIDE, *HALF_ROWS_BESIDE, ROWS_LOAD_BESIDE)
+"""The lane-memory commands beside which own words outside their vectors are verified."""
 QUEUE_SHAPES = tuple(
     Ran((1, None, 0x20, n, None, 0x10, 2 * n, 1), None) for n in (1, 0x80)
 )
@@ -425,15 +379,17 @@ of two one-vector stores to one address won, two one-vector loads to one vector 
 and on one) left the later's bytes, and a one-vector store of the last vector an outstanding load
 writes stored the load's bytes. V in those roles only; other shapes, overlaps and roles keep the
 order at inferred."""
-LANE_STORE_ZEROS = frozenset({(0x10, 2, 2), (0x200, 1, 2)})
-"""A plain one-row lane-memory store of bytes (r5 0x10) at r2 other than 0x20, by the (r2, r3, r6)
-that ran: it wrote zeros over its 32 bytes (verified, pre-registered against the bytes at r2 0x20,
+LANE_STORE_ZEROS = (
+    Ran((1, None, 0x10, 2, None, 0x10, 2, 1), STORE, 0x4000),
+    Ran((1, None, 0x200, 1, None, 0x10, 2, 1), STORE, 0x4000),
+)
+"""A plain one-row lane-memory store of bytes (r5 0x10) from vector 0x100 at r2 other than 0x20, in
+the shapes that ran: it wrote zeros over its 32 bytes (verified, pre-registered against the bytes at r2 0x20,
 16 lanes of each vector and nothing written; one job each). Other shapes at r2 0x10 or 0x200 write
 zeros at inferred; other r2 values were not measured."""
-LOCAL_OFFSET_FLOORED = 2
-LOCAL_FLOORED = Ran(LOCAL_SHAPE, None)
-"""A plain local-memory load and a store of 32 bytes as bytes (`LOCAL_SHAPE`) at an offset this
-many bytes into a word ran at the word: the load wrote from the word's start, the store read from
+LOCAL_FLOORED = (Ran(LOCAL_SHAPE, LOAD, 0x202), Ran(LOCAL_SHAPE, STORE, 0x202))
+"""A plain local-memory load to, and a store from, offset 0x202 of 32 bytes as bytes
+(`LOCAL_SHAPE`) ran at the word 0x200: the load wrote from the word's start, the store read from
 it (verified, pre-registered against the byte offset; one job each). Other offsets within a word,
 shapes or kinds are floored at inferred."""
 LOCAL_WIDTHS = {4: 8, 2: 16, 1: 32}
@@ -491,12 +447,13 @@ Other values were not run or never ended."""
 
 @dataclass(frozen=True)
 class Event:
-    """A command handed (`kind` and its channel's registers) or a 0x1d (`kind` None) at executed
-    word `t` of the job, for the timing estimate (`timing`)."""
+    """A command handed (`kind` as handed, its channel's registers and its memory-side offset `at`)
+    or a 0x1d (`kind` None) at executed word `t` of the job, for the timing estimate (`timing`)."""
 
     t: int
     kind: int | None = None
     regs: tuple[int | None, ...] = ()
+    at: int | None = None
 
 
 class _Off(Exception):
@@ -506,7 +463,8 @@ class _Off(Exception):
 @dataclass
 class _Command:
     channel: int
-    kind: int
+    handed: int
+    """The kind as handed."""
     regs: list[Sv | None]
     frm: Sv
     to: Sv
@@ -516,8 +474,25 @@ class _Command:
     wrap_tier: Confidence = I
     """The tier of a lane-memory offset counted modulo `fields.LANE_VECTORS` (inferred, unless
     the kind ran so)."""
-    plain: bool = True
-    """Handed as kind 0 / 6 (not kind 1, nor a kind run as them, `KIND_AS`)."""
+
+    @property
+    def kind(self) -> int:
+        """The kind it runs as (`KIND_AS`)."""
+        return KIND_AS.get(self.handed, self.handed)
+
+    @property
+    def plain(self) -> bool:
+        """Handed as kind 0 / 6."""
+        return self.handed in (LOAD, STORE)
+
+    @property
+    def values(self) -> tuple[int | None, ...]:
+        return tuple(None if r is None else r.value for r in self.regs)
+
+    @property
+    def at(self) -> int | None:
+        """The memory-side offset: "from" for a store, else "to"."""
+        return (self.frm if self.kind == STORE else self.to).value
 
 
 def _known(v: Sv | None, what: str) -> int:
@@ -615,30 +590,26 @@ class Engine:
     def _span(self, cmd: _Command) -> tuple[frozenset[int], Confidence] | None:
         """The lane vectors a lane-memory load, store or fill writes or reads, as the command
         does (a load r3 per row, a store its elements' vectors per row, a fill r3), and the tier
-        of words beside it elsewhere: verified for a plain (kind 0 / 6) one-row byte command at
-        r2 0x20, the 16-bit commands of `HALF_ROWS_BESIDE` and the loads of `ROWS_LOAD_BESIDE`,
-        inferred for other shapes; no vectors at verified for the local load of
-        `LOCAL_LOAD_BESIDE`; None for other memory."""
+        of words beside it elsewhere: verified beside the shapes of `BYTE_ROW_BESIDE`,
+        `HALF_ROWS_BESIDE` and `ROWS_LOAD_BESIDE`, inferred beside other shapes; no vectors at
+        verified for `LOCAL_LOAD_BESIDE`; None for other memory."""
         r = cmd.regs
         if r[0].value != LANE_MEMORY:
-            if _ran(cmd, LOCAL_LOAD_BESIDE):
-                return frozenset(), V
-            return None
+            return (frozenset(), V) if _ran(cmd, LOCAL_LOAD_BESIDE) else None
         if cmd.kind == FILL:
             base = cmd.to.value // VECTOR_BYTES
             return frozenset((base + v) % LANE_VECTORS for v in range(r[3].value)), I
-        ks = None
         if cmd.kind == STORE:
             ks = _store_reach(r)[1]
             if len(ks) < r[7].value:
                 return None  # the rows not written last read vectors too
-        rows, _ = self._rows(cmd, LANE_MEMORY, ks)
-        if cmd.kind == STORE:
             bits, _ = STORE_FORMATS[r[5].value]
             per = -(-(128 // bits if bits else 0) * r[6].value // LANE_COUNT)
         else:
+            ks = None
             # A load at r3 0 that ran (`ZERO_LOADS`) spans the vectors a full count fills.
             per = r[3].value or -(-r[5].value * r[6].value // r[2].value)
+        rows, _ = self._rows(cmd, LANE_MEMORY, ks)
         starts = [off // VECTOR_BYTES for _, off in rows]
         vectors = frozenset(
             (s + v) % LANE_VECTORS
@@ -648,11 +619,7 @@ class Engine:
         last = max((s + per - 1 for s in starts if per), default=0)
         if last >= LANE_VECTORS:
             return vectors, I  # a wrap is only inferred
-        one_row = cmd.plain and r[7].value == 1 and r[2].value == 0x20
-        byte_row = one_row and r[5].value == 0x10
-        half = (cmd.kind, r[3].value, r[6].value) in HALF_ROWS_BESIDE
-        half_row = one_row and r[5].value == 0x08 and half
-        return vectors, V if byte_row or half_row or _ran(cmd, ROWS_LOAD_BESIDE) else I
+        return vectors, V if _ran(cmd, *LANE_BESIDE) else I
 
     def finish(self, m: Machine) -> None:
         """The job ends: the commands still outstanding complete (inferred for loads: only a
@@ -667,12 +634,8 @@ class Engine:
         if v is None:
             self._go_off(m, f"{where} hands an unknown key", lost=True)
             return
-        if v & 0x21 == 0x21:
-            allowed, need = REGISTER_KEY, 1
-        elif v & 0x21 == 0x20:
-            allowed, need = BLOCK_KEY, REGISTERS
-        else:
-            allowed, need = COMMAND_KEY, 2
+        allowed = _form(v)
+        need = {REGISTER_KEY: 1, BLOCK_KEY: REGISTERS, COMMAND_KEY: 2}[allowed]
         odd = v & ~allowed
         if odd and odd not in ODD_KEY_BITS[allowed]:
             self._go_off(m, f"{where} key {v:#x}: bits outside its fields", lost=True)
@@ -683,8 +646,9 @@ class Engine:
         key, values = self.key, self.group
         self.key, self.group = None, []
         v = key.value
-        channel = v >> 6 & 3
-        if v & 0x21 == 0x21:
+        channel = v >> CHANNEL_SHIFT & CHANNELS - 1
+        form = _form(v)
+        if form == REGISTER_KEY:
             reg = v >> 11 & 7
             value = _weaker(values[0], key.tier)
             if v & REGISTER_KEY_BIT8:
@@ -697,7 +661,7 @@ class Engine:
                 else:
                     value = Sv(now.value, min(now.tier, value.tier))
             self.regs[channel][reg] = value
-        elif v & 0x21 == 0x20:
+        elif form == BLOCK_KEY:
             ran = tuple(x.value for x in values) == BLOCK_KEY_RUN
             ran = (
                 ran and channel == 0 and self.count == REGISTERS + 1
@@ -705,29 +669,17 @@ class Engine:
             if v & (BLOCK_KEY_BIT9 | BLOCK_KEY_BIT10) and not ran:
                 self.cap = min(self.cap, I)
             if v & BLOCK_KEY_BIT9:
-                if ran and all(r is None for r in self.regs[channel]):
+                if ran:  # the job's first values: no register programmed before
                     self.dropped.add(channel)
-                else:
-                    self.cap = min(self.cap, I)  # a channel programmed before: not run
                 return
             self.regs[channel][:] = [_weaker(x, key.tier) for x in values]
         else:
-            regs = list(self.regs[channel])
             tier = min(key.tier, values[0].tier, values[1].tier)
-            kind = v & 0x3F
+            frm, to = values
             cmd = _Command(
-                channel,
-                kind,
-                regs,
-                values[0],
-                values[1],
-                tier,
-                where,
-                index,
-                plain=kind in (LOAD, STORE),
+                channel, v & 0x3F, list(self.regs[channel]), frm, to, tier, where, index
             )
-            known = tuple(None if r is None else r.value for r in regs)
-            self.events.append(Event(t, cmd.kind, known))
+            self.events.append(Event(t, cmd.handed, cmd.values, cmd.at))
             self._command(m, cmd)
 
     def _wait(self, m: Machine, index: int, where: str) -> None:
@@ -748,7 +700,7 @@ class Engine:
                 )
                 m.lapse(index, "x1 0x1d", f"{where}: {why}")
                 return
-            if self.key.value & 0x20 == 0:
+            if _form(self.key.value) == COMMAND_KEY:
                 m.lapse(index, "x1 0x1d", f"{where}: a 0x1d inside a command's values")
             self._go_off(m, f"{where}: a 0x1d inside a group", lost=True)
             return
@@ -766,7 +718,8 @@ class Engine:
         if self.key is None or self.group:
             return False
         v = self.key.value
-        return v & 0x21 == 0x21 or (v & 0x21 == 0 and v & 0x3F == STORE)
+        form = _form(v)
+        return form == REGISTER_KEY or (form == COMMAND_KEY and v & 0x3F == STORE)
 
     def _joins_in_group(self) -> bool:
         if not self.outstanding or not self._at_join():
@@ -775,13 +728,17 @@ class Engine:
             self.cap = min(self.cap, I)  # the wait in a group as measured only
         return True
 
-    def _after(self, channel: int, *history: tuple) -> bool:
-        """The job's commands and 0x1d so far are `history`, with `channel` programmed
-        `ONE_VECTOR` (the histories the odd keys ran in)."""
+    def _after(self, channel: int, *history: Ran | None) -> bool:
+        """The job's commands (`Ran`) and 0x1d (None) so far are `history`, with `channel`
+        programmed `ONE_VECTOR` (the histories the odd keys ran in)."""
         regs = tuple(None if r is None else r.value for r in self.regs[channel])
-        return (
-            regs == ONE_VECTOR
-            and tuple((e.kind, e.regs) for e in self.events) == history
+        if regs != ONE_VECTOR or len(self.events) != len(history):
+            return False
+        return all(
+            e.kind is None
+            if h is None
+            else e.kind is not None and h.matches(e.kind, e.regs, e.at)
+            for e, h in zip(self.events, history, strict=True)
         )
 
     def _go_off(self, m: Machine, why: str, lost: bool = False) -> None:
@@ -796,48 +753,8 @@ class Engine:
     # ------------------------------------------------------------------ commands
 
     def _command(self, m: Machine, cmd: _Command) -> None:
-        if cmd.kind in KIND_AS:
-            shape = tuple(None if r is None else r.value for r in cmd.regs)
-            run = next(
-                (
-                    t
-                    for want, t in KIND_SHAPES[cmd.kind].items()
-                    if all(
-                        w is None or v == w for v, w in zip(shape, want, strict=True)
-                    )
-                ),
-                None,
-            )
-            if run is None:
-                why = f"command kind {cmd.kind:#x} outside the shapes it ran in"
-                self._unmeasured(m, cmd, why)
-                return
-            tier, form = run
-            kind = KIND_AS[cmd.kind]
-            offs = {STORE: (cmd.frm,), NOTHING_MOVES: (cmd.frm, cmd.to)}.get(
-                kind, (cmd.to,)
-            )
-            for off in offs:
-                wrapped = (
-                    off.value is not None and off.value >= LANE_VECTORS * VECTOR_BYTES
-                )
-                if off.value is None or (form == WRAPPED) != wrapped:
-                    why = (
-                        f"command kind {cmd.kind:#x} with a memory offset "
-                        f"not {form} as where it ran"
-                    )
-                    self._unmeasured(m, cmd, why)
-                    return
-            if kind == FILL and form == WRAPPED and cmd.to.value % VECTOR_BYTES:
-                why = (
-                    f"a fill to {cmd.to.value:#x}, not vector-aligned as every fill ran"
-                )
-                self._unmeasured(m, cmd, why)
-                return
-            if form == WRAPPED:
-                cmd = replace(cmd, wrap_tier=tier)
-            self.cap = min(self.cap, tier)
-            cmd = replace(cmd, kind=KIND_AS[cmd.kind], plain=False)
+        if cmd.handed in KIND_AS and not self._runs_as(m, cmd):
+            return
         if cmd.kind not in (LOAD, NOTHING_MOVES, STORE, FILL):
             self._unmeasured(m, cmd, f"command kind {cmd.kind:#x}")
             return
@@ -877,6 +794,43 @@ class Engine:
             self._go_off(m, f"{cmd.where} {e}")
             self._spoil(m, cmd)
 
+    def _runs_as(self, m: Machine, cmd: _Command) -> bool:
+        """A kind of `KIND_AS` in a shape it ran in, its offsets in the form they ran in (`KIND_SHAPES`):
+        the job is capped at the shape's tier. Else the command is unmeasured (False)."""
+        run = next(
+            (
+                t
+                for want, t in KIND_SHAPES[cmd.handed].items()
+                if _fits(cmd.values, want)
+            ),
+            None,
+        )
+        if run is None:
+            why = f"command kind {cmd.handed:#x} outside the shapes it ran in"
+            self._unmeasured(m, cmd, why)
+            return False
+        tier, form = run
+        offs = {STORE: (cmd.frm,), NOTHING_MOVES: (cmd.frm, cmd.to)}.get(
+            cmd.kind, (cmd.to,)
+        )
+        for off in offs:
+            wrapped = off.value is not None and off.value >= LANE_VECTORS * VECTOR_BYTES
+            if off.value is None or (form == WRAPPED) != wrapped:
+                why = (
+                    f"command kind {cmd.handed:#x} with a memory offset "
+                    f"not {form} as where it ran"
+                )
+                self._unmeasured(m, cmd, why)
+                return False
+        if cmd.kind == FILL and form == WRAPPED and cmd.to.value % VECTOR_BYTES:
+            why = f"a fill to {cmd.to.value:#x}, not vector-aligned as every fill ran"
+            self._unmeasured(m, cmd, why)
+            return False
+        if form == WRAPPED:
+            cmd.wrap_tier = tier
+        self.cap = min(self.cap, tier)
+        return True
+
     def _fill(self, m: Machine, cmd: _Command) -> Callable[[Machine, Confidence], None]:
         """Kind 8: r3 vectors from the one "to" names, every lane "from"'s low 16 bits."""
         if cmd.regs[0].value == LOCAL_MEMORY:
@@ -912,14 +866,13 @@ class Engine:
         """Kind 8 under r0 2: r3 local words from "to", each copies of "from"'s low element of
         r2's width (32 / r2 bits)."""
         r = cmd.regs
-        r2, r3, r6 = (r[i].value for i in (2, 3, 6))  # the shape matched: known
+        r2, r3 = r[2].value, r[3].value  # the shape matched: known
         to, frm = cmd.to.value, _known(cmd.frm, "the fill value")
 
         def unmeasured(why: str) -> _Off:
             m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
             return _Off(why)
 
-        ran_to, tier = LOCAL_FILLS[(r2, r3, r6)]
         if cmd.channel != 0:
             raise unmeasured(f"a local fill on channel {cmd.channel}: not measured")
         if to % 4 or to not in LOCAL_FILL_TO:
@@ -931,8 +884,8 @@ class Engine:
             raise unmeasured(f"a {width}-bit local fill of {frm:#x}: not measured")
         word = sum(element << k for k in range(0, 32, width))
         size = 4 * r3
-        tier = min([tier, self.cap, cmd.tier, *(x.tier for x in r)])
-        if to != ran_to:
+        tier = min([self.cap, cmd.tier, *(x.tier for x in r)])
+        if not _ran(cmd, *LOCAL_FILLS):
             tier = min(tier, I)
         src = m.boot.source("stream fill in flight", cmd.where)
         m.boot.local.write(LOCAL_BASE + to, Bytes.unknown(size, src))
@@ -982,8 +935,10 @@ class Engine:
     def _rows(
         self, cmd: _Command, memory: int, ks: range | None = None
     ) -> tuple[list[tuple[int, int]], Confidence]:
-        """Each row's (DRAM address, memory offset), the DRAM address floored to 16 bytes, and
-        the rows' tier; of the rows `ks` only (default all)."""
+        """Each row's (DRAM address, memory offset), and the rows' tier; of the rows `ks` only
+        (default all). Row k runs at DRAM address + k r4, 32-bit wrapping, floored to 16 bytes
+        (verified on loads: a pitch of 0xfffffe00 steps back, one of 0x208 steps 0x200), and
+        at memory offset + k r1."""
         r = cmd.regs
         rows = _known(r[7], "r7")
         if rows < 1:
@@ -994,15 +949,19 @@ class Engine:
             )
         store = cmd.kind == STORE
         lane_rows = LANE_STORE_ROWS if store else LANE_LOAD_ROWS
-        lane = memory == LANE_MEMORY and rows in lane_rows and _fits(cmd, ROW_SHAPE)
-        tier = V if rows in (STORE_ROWS_ANY if store else LOAD_ROWS_ANY) or lane else I
+        lane = (
+            memory == LANE_MEMORY and rows in lane_rows and _fits(cmd.values, ROW_SHAPE)
+        )
+        # A kind of `KIND_AS` ran with its rows: its shape's tier caps the job already.
+        any_shape = rows in (STORE_ROWS_ANY if store else LOAD_ROWS_ANY)
+        tier = V if any_shape or lane or not cmd.plain else I
         dram, mem = (cmd.to, cmd.frm) if cmd.kind == STORE else (cmd.frm, cmd.to)
         dram, mem = _known(dram, "a DRAM address"), _known(mem, "a memory offset")
         pitch, dpitch = 0, 0
         if rows > 1:
             pitch, dpitch = _known(r[1], "r1"), _known(r[4], "r4")
             unit = VECTOR_BYTES if memory == LANE_MEMORY else 4
-            half = _ran(cmd, HALF_VECTOR_ROWS)
+            half = _ran(cmd, HALF_VECTOR_PITCH)
             if pitch % unit and not (half and mem % VECTOR_BYTES == 0):
                 raise _Off(f"memory pitch {pitch:#x}: not measured")
             if (
@@ -1045,7 +1004,7 @@ class Engine:
         return tier
 
     def _local_offset(self, off: int, n: int) -> int:
-        """`off` floored to its word (`LOCAL_OFFSET_FLOORED`)."""
+        """`off` floored to its word (`LOCAL_FLOORED`)."""
         off &= ~3
         if off < 0 or off + n > LOCAL_BYTES:
             raise _Off(f"local bytes {off:#x}..{off + n:#x}: not measured")
@@ -1055,61 +1014,57 @@ class Engine:
         """Checks the load, makes its destination unknown and returns its completion."""
         r = cmd.regs
         memory = _known(r[0], "r0")
-        r2, r3, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
+        _, _, r5, r6 = (_known(r[i], f"r{i}") for i in (2, 3, 5, 6))
         skip, skip_tier = 0, V
-        if r5 >> 8 and r5 & 0xFF == 0x10 and _fits(cmd, LOAD_SKIP_SHAPE):
-            ran = any(_ran(cmd, s) for s in LOAD_SKIPS_RUN)
-            skip, skip_tier = r5 >> 8, V if ran else I
+        if r5 >> 8 and r5 & 0xFF == 0x10 and _fits(cmd.values, LOAD_SKIP_SHAPE):
+            skip, skip_tier = r5 >> 8, V if _ran(cmd, *LOAD_SKIPS_RUN) else I
             r5 &= 0xFF
         if r5 not in LOAD_FORMATS or skip and skip >= r5 * r6:
             raise _Off(f"load format {r5 | skip << 8:#x}: not measured")
-        bits = LOAD_FORMATS[r5]
-        n = r5 * r6
         rows, tier = self._rows(cmd, memory)
         tier = min([tier, self.cap, cmd.tier, self._behind(rows, 16 * r6, False)])
         tier = min([tier, skip_tier, *(x.tier for x in r)])
         if r5 in PACKED_LOADS and not _ran(cmd, PACKED_LOADS[r5]):
             tier = min(tier, I)
         if memory == LANE_MEMORY:
-            if r2 not in LANE_UNITS:
-                raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
-            per = r2
-        elif memory == LOCAL_MEMORY:
-            if _fits(cmd, LOCAL_LOAD_NEVER_ENDS):
-                why = "a local load of bytes into 32-bit words never ends (inferred)"
-                m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
-                raise _Off(why)
-            if r2 not in LOCAL_WIDTHS or (bits, LOCAL_WIDTHS[r2]) not in LOCAL_LOADS:
-                raise _Off(
-                    f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured"
-                )
-            per = r2
-        else:
-            raise _Off(f"r0 {memory:#x}: not measured")
-        needed = -(-n // per)
-        if memory == LANE_MEMORY and r3 and not r6:
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
-            return self._lane_load(m, cmd, rows, bits, 0, r2, r3, tier)
-        seen = ZERO_LOADS.get((r2, r5, r6))
-        if memory == LANE_MEMORY and not r3 and seen is not None and len(rows) == 1:
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
-            return self._zero_load(m, rows[0][1], seen, needed)
-        if not r3 or not r6:
-            raise _Off(f"a {_side(memory)} load at r3 {r3}, r6 {r6}: not measured")
-        if r3 > needed:
-            why = f"a load of {r3} units for {needed} never ends"
+            return self._lane_load(m, cmd, rows, r5, tier, skip)
+        if memory == LOCAL_MEMORY:
+            return self._local_load(m, cmd, rows, r5, tier)
+        raise _Off(f"r0 {memory:#x}: not measured")
+
+    def _ends(self, m: Machine, cmd: _Command, units: int, needed: int) -> None:
+        """A load of `units` (r3) units of which its elements fill `needed`: with fewer it fills
+        its units and ends, with more it never ends (verified); raises for that and for a count
+        of 0 not measured."""
+        r6 = cmd.regs[6].value
+        if not units or not r6:
+            memory = _side(cmd.regs[0].value)
+            raise _Off(f"a {memory} load at r3 {units}, r6 {r6}: not measured")
+        if units > needed:
+            why = f"a load of {units} units for {needed} never ends"
             m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
             raise _Off(why)
-        if memory == LANE_MEMORY:
-            if r2 != 0x10 or r5 not in ZERO_FORMATS or r3 != needed:
-                tier = min(tier, LANE_UNITS[r2])
-            return self._lane_load(m, cmd, rows, bits, r6, r2, r3, tier, skip)
-        width = LOCAL_WIDTHS[r2]
-        if not ((bits, width) == (16, 32) and _ran(cmd, LOCAL_LOAD_WIDENED)):
-            tier = min(tier, LOCAL_LOADS[(bits, width)])
-        return self._local_load(m, cmd, rows, bits, r6, width, r2, r3, tier)
 
-    def _lane_load(self, m, cmd, rows, bits, lines, r2, r3, tier, skip=0):
+    def _lane_load(self, m, cmd, rows, fmt, tier, skip):
+        """A lane-memory load of format `fmt` (r5 without the skip bits): its checks, and the
+        completion. Element i of a row goes to lane i % 32 of vector i / 32, its low 16 bits, the
+        lanes past the row's elements 0 (verified)."""
+        r2, r3, r6 = (cmd.regs[i].value for i in (2, 3, 6))
+        if r2 not in LANE_UNITS:
+            raise _Off(f"r2 {r2:#x} on a lane-memory load: not measured")
+        bits, lines = LOAD_FORMATS[fmt], r6
+        needed = -(-fmt * r6 // r2)
+        seen = _found(cmd, ZERO_LOADS)
+        if r3 and not r6:
+            # It ended on the camera (inferred, three jobs); what it writes was not seen.
+            self.cap = min(self.cap, I)
+        elif seen is not None:
+            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+            return self._zero_load(m, rows[0][1], seen, needed)
+        else:
+            self._ends(m, cmd, r3, needed)
+            if r2 != 0x10 or fmt not in ZERO_FORMATS or r3 != needed:
+                tier = min(tier, LANE_UNITS[r2])
         # Each vector's last write (row, v), and the vectors written again: by a later row or
         # past the last vector. The last write lands, verified in the shapes measured
         # (`HALF_VECTOR_ROWS`, `SAME_VECTOR_ROWS`, `WRAPS`), else inferred.
@@ -1126,10 +1081,8 @@ class Engine:
                 if at in last:
                     again.add(at)
                 last[at] = (k, v)
-        shape = tuple(x.value for x in cmd.regs)
-        start = rows[0][1] // VECTOR_BYTES
-        seen = WRAPS.get((shape, start), range(0)) if cmd.plain else range(0)
-        rows_seen = _ran(cmd, HALF_VECTOR_ROWS) or _ran(cmd, SAME_VECTOR_ROWS)
+        seen = _found(cmd, WRAPS, range(0))
+        rows_seen = _ran(cmd, HALF_VECTOR_ROWS, SAME_VECTOR_ROWS)
         queue = _queue(cmd)
         # Vectors an earlier outstanding load holds: this one lands after it, in queue order.
         behind = {at: q for h, q, _ in self.held for at in last if _holds(m, h, at)}
@@ -1229,7 +1182,22 @@ class Engine:
         data = m.boot.dram.read(dram_alias(dram) + 16 * first, 16 * n)
         return first * per, _unpack(data, bits, n)
 
-    def _local_load(self, m, cmd, rows, bits, lines, width, r2, r3, tier):
+    def _local_load(self, m, cmd, rows, fmt, tier):
+        """A local-memory load of format `fmt`: its checks, and the completion."""
+        r2, r3, lines = (cmd.regs[i].value for i in (2, 3, 6))
+        bits = LOAD_FORMATS[fmt]
+        if _fits(cmd.values, LOCAL_LOAD_NEVER_ENDS):
+            why = "a local load of bytes into 32-bit words never ends (inferred)"
+            m.lapse(cmd.index, "stream", f"{cmd.where}: {why}")
+            raise _Off(why)
+        width = LOCAL_WIDTHS.get(r2)
+        if (bits, width) not in LOCAL_LOADS:
+            raise _Off(
+                f"a local load of {bits}-bit elements at r2 {r2:#x}: not measured"
+            )
+        self._ends(m, cmd, r3, -(-fmt * lines // r2))
+        if not ((bits, width) == (16, 32) and _ran(cmd, LOCAL_LOAD_WIDENED)):
+            tier = min(tier, LOCAL_LOADS[(bits, width)])
         size = 4 * r3
         src = m.boot.source("stream load in flight", f"{cmd.where}")
         floored = _floored(cmd, rows)
@@ -1281,8 +1249,10 @@ class Engine:
         if r5 not in STORE_FORMATS:
             raise _Off(f"store format {r5:#x}: not measured")
         bits, ftier = STORE_FORMATS[r5]
-        if memory in NO_MEMORY and _fits(cmd, NO_MEMORY_STORE):
-            return _nothing  # it ended and wrote nothing (verified)
+        if memory in NO_MEMORY and _fits(cmd.values, NO_MEMORY_STORE):
+            if not _ran(cmd, *NO_MEMORY_RAN):
+                self._kept(m, _known(cmd.to, "a DRAM address") & ~0xF, 16 * r6)
+            return _nothing  # it ended and wrote nothing
         n = (128 // bits if bits else 0) * r6
         _, ks = _store_reach(r)
         rows, tier = self._rows(cmd, memory, ks)
@@ -1294,26 +1264,24 @@ class Engine:
         tier = min(tier, self._behind(rows, 16 * r6, True))
         zeros = memory == LANE_MEMORY and r2 != 0x20
         if memory == LANE_MEMORY:
-            if zeros and r2 not in {z[0] for z in LANE_STORE_ZEROS}:
+            if zeros and r2 not in {z.regs[2] for z in LANE_STORE_ZEROS}:
                 raise _Off(f"r2 {r2:#x} on a lane-memory store: not measured")
-            ran = (r2, r3, r6) in LANE_STORE_ZEROS and r5 == 0x10 and r[7].value == 1
-            if zeros and not (cmd.plain and ran):
+            if zeros and not _ran(cmd, *LANE_STORE_ZEROS):
                 tier = min(tier, I)  # zeros, as at the r2 values measured
+            if not r3 and n:
+                # It ended on the camera and wrote nothing (inferred, five jobs).
+                self.cap = min(self.cap, I)
+                return _nothing
+            if _ran(cmd, *ZERO_STORES):
+                self.cap = min(self.cap, I)  # it ended on the camera (inferred)
+                self._kept(m, rows[0][0], r2 * r3 * bits // 8)
+                return _nothing
         elif memory == LOCAL_MEMORY:
             if (r2, r5) not in LOCAL_STORES:
                 raise _Off(f"a local store at r2 {r2:#x}, r5 {r5:#x}: not measured")
-            tier = min(tier, LOCAL_STORES[(r2, r5)])
+            tier = min(tier, LOCAL_STORES[(r2, r5)], _floored(cmd, rows))
         else:
             raise _Off(f"r0 {memory:#x}: not measured")
-        if memory == LANE_MEMORY and not r3 and n:
-            # It ended on the camera, writing nothing (inferred).
-            self.cap = min(self.cap, I)
-            return _nothing
-        zero = (r2, r3, r5) in ZERO_STORES and len(rows) == 1
-        if memory == LANE_MEMORY and not r6 and zero:
-            self.cap = min(self.cap, I)  # it ended on the camera (inferred)
-            self._zero_store(m, rows[0][0], r2 * r3 * bits // 8)
-            return _nothing
         if not r3 or not r6:
             raise _Off(f"a {_side(memory)} store at r3 {r3}, r6 {r6}: not measured")
         if r2 * r3 < n:
@@ -1322,17 +1290,12 @@ class Engine:
             raise _Off(why)
         if memory == LOCAL_MEMORY:
             nb = 4 // r2
-            tier = min(tier, _floored(cmd, rows))
             rows = [(dram, self._local_offset(off, n * nb)) for dram, off in rows]
-        if memory == LANE_MEMORY and not m.lanes_lost:
+        elif not m.lanes_lost:
             per = -(-n // LANE_COUNT)
+            starts = {off // VECTOR_BYTES for _, off in rows}
             self._land_loads(
-                m,
-                {
-                    (off // VECTOR_BYTES + v) % LANE_VECTORS
-                    for _, off in rows
-                    for v in range(per)
-                },
+                m, {(s + v) % LANE_VECTORS for s in starts for v in range(per)}
             )
         src = m.boot.source("store", f"the stream engine's store, {cmd.where}")
         taken = []
@@ -1393,9 +1356,9 @@ class Engine:
         return complete
 
     @staticmethod
-    def _zero_store(m: Machine, dram: int, n: int) -> None:
-        """A lane-memory store at r6 0 (`ZERO_STORES`): the `n` DRAM bytes from `dram` a full
-        count would write keep their content, at most inferred."""
+    def _kept(m: Machine, dram: int, n: int) -> None:
+        """A store that writes nothing at inferred (`ZERO_STORES`, `NO_MEMORY_RAN`): the `n` DRAM
+        bytes from `dram` it could write keep their content, at most inferred."""
         got = _read_dram(m, dram, n)
         got.taint[:] = bytes(min(t, I) for t in got.taint)
         _write_dram(m, dram, got)
@@ -1490,28 +1453,32 @@ def _last_row(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
 
 
 def _floored(cmd: _Command, rows: list[tuple[int, int]]) -> Confidence:
-    """The tier of local-memory rows at offsets floored to their word (`LOCAL_OFFSET_FLOORED`)."""
-    within = {off % 4 for _, off in rows} - {0}
-    if not within:
+    """The tier of local-memory rows at offsets floored to their word (`LOCAL_FLOORED`)."""
+    if all(off % 4 == 0 for _, off in rows):
         return V
-    ran = _ran(cmd, LOCAL_FLOORED) and within == {LOCAL_OFFSET_FLOORED}
-    return V if ran else I
+    return V if _ran(cmd, *LOCAL_FLOORED) else I
 
 
-def _ran(cmd: _Command, ran: Ran) -> bool:
-    """The command is of the shape run: handed as kind 0 / 6, of its kind and at its offset."""
-    if not cmd.plain or ran.kind not in (None, cmd.kind) or not _fits(cmd, ran.regs):
-        return False
-    at = cmd.frm if cmd.kind == STORE else cmd.to
-    return ran.at is None or at.value == ran.at
+def _form(v: int) -> int:
+    """A key's kind, by the bits it may set: `REGISTER_KEY`, `BLOCK_KEY` or `COMMAND_KEY`."""
+    if v & (BLOCK | SINGLE) == BLOCK | SINGLE:
+        return REGISTER_KEY
+    return BLOCK_KEY if v & BLOCK else COMMAND_KEY
 
 
-def _fits(cmd: _Command, shape: tuple[int | None, ...]) -> bool:
-    """The command's registers are `shape`'s (None: any)."""
-    return all(
-        w is None or (v is not None and v.value == w)
-        for v, w in zip(cmd.regs, shape, strict=True)
-    )
+def _ran(cmd: _Command, *rans: Ran) -> bool:
+    """The command is of one of the shapes run."""
+    return any(r.matches(cmd.handed, cmd.values, cmd.at) for r in rans)
+
+
+def _found(cmd: _Command, table: dict[Ran, object], default=None):
+    """The value of the first shape run in `table` the command is of."""
+    return next((x for r, x in table.items() if _ran(cmd, r)), default)
+
+
+def _fits(values: tuple[int | None, ...], shape: tuple[int | None, ...]) -> bool:
+    """Register values are `shape`'s (None in `shape`: any; None in `values`: not handed)."""
+    return all(w is None or v == w for v, w in zip(values, shape, strict=True))
 
 
 def _overlap(xs: list[tuple[int, int]], ys: list[tuple[int, int]]) -> bool:
