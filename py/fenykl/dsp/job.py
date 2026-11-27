@@ -39,7 +39,7 @@ class Step:
     """The control decision and why, or what the data op's semantics did."""
     unknown: bool = False
     """A word the stepping does not cover, recorded (lenient mode): a data op without
-    semantics, or a word in which the datapath lapsed (`emu.Datapath.lapse`)."""
+    semantics, or a word in which the datapath lapsed (`machine.Machine.lapse`)."""
     confidence: Confidence | None = None
 
     def __str__(self) -> str:
